@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = REPOSITORY_ROOT / "skill" / "a-share-research-skill" / "scripts"
+SCRIPTS = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from a_share_research.cli import main  # noqa: E402

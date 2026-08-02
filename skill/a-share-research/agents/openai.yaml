@@ -1,0 +1,4 @@
+interface:
+  display_name: "A股研究技能"
+  short_description: "Auditable A-share research with explicit evidence limits"
+  default_prompt: "Use $a-share-research to verify an SSE or SZSE security and prepare an evidence-backed valuation brief as of an explicit date."

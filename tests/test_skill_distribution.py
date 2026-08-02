@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SKILL_ROOT = REPOSITORY_ROOT / "skill" / "a-share-research-skill"
+SKILL_ROOT = REPOSITORY_ROOT / "skill" / "a-share-research"
 
 
 class SkillDistributionTests(unittest.TestCase):
@@ -19,8 +19,16 @@ class SkillDistributionTests(unittest.TestCase):
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
-                self.assertIn("skill/a-share-research-skill", readme)
+                self.assertIn("skill/a-share-research", readme)
                 self.assertIn("Python 3.12", readme)
+
+        entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("name: a-share-research\n", entry)
+
+        metadata = Path(SKILL_ROOT, "agents", "openai.yaml").read_text(encoding="utf-8")
+        self.assertIn('display_name: "A股研究技能"', metadata)
+        self.assertIn("$a-share-research ", metadata)
+        self.assertNotIn("$a-share-research-skill", metadata)
 
     def test_entry_routes_every_public_cli_workflow_with_the_exact_signature(
         self,
@@ -74,7 +82,7 @@ class SkillDistributionTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
-            installed = temporary_root / "installed" / "a-share-research-skill"
+            installed = temporary_root / "installed" / "a-share-research"
             shutil.copytree(SKILL_ROOT, installed)
             bundle = temporary_root / "caller-bundle"
             bundle.mkdir()

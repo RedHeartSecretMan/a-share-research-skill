@@ -1,19 +1,19 @@
 <div align="center">
 
-# 可信 A 股研究
+# A股研究技能
 
 **让每个研究数字都带着身份、时点、来源和计算谱系。**
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research-skill/)
+[![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research/)
 [![First release delivered](https://img.shields.io/badge/status-first%20release%20delivered-2563EB)](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[English](README_en.md) · [安装](#安装) · [能力边界](#能力边界) · [开发验证](#开发验证)
+[English](README_en.md) · [安装](#安装) · [常见用法](#常见用法) · [能力边界](#能力边界) · [开发验证](#开发验证)
 
 </div>
 
-`a-share-research-skill` 是一个 evidence-first 的 A 股研究 Skill。它用确定性 Python CLI 处理证券身份、研究时点、证据校验和估值计算，再由 Agent 把版本化 JSON 呈现为可核验的研究材料。
+`a-share-research-skill` 是项目仓库名，可安装 Skill 名为 `$a-share-research`。它以 evidence-first 的方式处理 A 股研究：确定性 Python CLI 负责证券身份、研究时点、证据校验和估值计算，再由 Agent 把版本化 JSON 呈现为可核验的研究材料。
 
 项目不把“接口返回了数据”当成“事实已经可信”，也不输出荐股、目标价、仓位建议或便宜/昂贵判断。
 
@@ -58,19 +58,19 @@ flowchart LR
 
 ## 安装
 
-唯一安装产物是 [`skill/a-share-research-skill`](skill/a-share-research-skill/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
+唯一安装产物是 [`skill/a-share-research`](skill/a-share-research/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
 
 ```text
 git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
-<skills-directory>/a-share-research-skill/
+<skills-directory>/a-share-research/
 ├── SKILL.md
 ├── agents/openai.yaml
 ├── references/
 └── scripts/
 ```
 
-运行时仅需要 Python 3.12 或更高版本的标准库，不需要安装项目包或第三方 Python 依赖。跨平台解释器选择和调用约定见 [`references/cli-contract.md`](skill/a-share-research-skill/references/cli-contract.md)。
+运行时仅需要 Python 3.12 或更高版本的标准库，不需要安装项目包或第三方 Python 依赖。跨平台解释器选择和调用约定见 [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md)。
 
 ## CLI
 
@@ -90,6 +90,26 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON，`stderr` 只输出诊断；有效的 `limited` 或 `blocked` 研究结果仍以零退出码返回。
 
+## 常见用法
+
+首版围绕四个公开工作流提供以下常见用法。安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。
+
+**找对证券**
+
+> 使用 `$a-share-research`，帮我确认“贵州茅台（600519）”对应哪个交易所和规范证券代码，并说明结果截至哪一天。
+
+**查询最近收盘价**
+
+> 使用 `$a-share-research`，查询 `SSE:600519` 截至今天最近一个完整交易日的未复权收盘价，并告诉我数据来源、是否一致以及有哪些限制。
+
+**检查研究资料**
+
+> 使用 `$a-share-research`，检查 `/path/to/evidence-bundle` 里的研究证据是否完整、口径是否一致，并按优先级告诉我还需要补什么。
+
+**计算常用估值**
+
+> 使用 `$a-share-research`，根据 `/path/to/evidence-bundle` 计算总市值、PE TTM 和 PB MRQ，并给出计算日期、公式、关键输入和证据限制；如果资料不足，直接告诉我缺什么。
+
 ## 能力边界
 
 当前首版有意保持保守：
@@ -105,7 +125,7 @@ CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON�
 ## 仓库结构
 
 ```text
-skill/a-share-research-skill/  唯一安装产物
+skill/a-share-research/        唯一安装产物
 tests/                         离线契约、回归与分发测试
 docs/adr/                      架构决策
 docs/research/                 带时间锚的来源可行性调查
@@ -121,8 +141,8 @@ CONTEXT.md                     领域语言与边界
 python3.12 -m unittest discover -s tests -p "test_*.py"
 ruff check .
 ruff format --check .
-mypy skill/a-share-research-skill/scripts
-python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research-skill
+mypy skill/a-share-research/scripts
+python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```
 
 真实来源诊断入口为 `tests/live_probe_close.py`。它不会更新夹具，也不能降低证据要求。

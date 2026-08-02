@@ -1,5 +1,5 @@
 ---
-name: a-share-research-skill
+name: a-share-research
 description: Produce auditable A-share evidence with a deterministic CLI for canonical identity resolution, latest completed unadjusted-close cross-checks, evidence-bundle validation, and provided-evidence market-capitalization, PE TTM, and PB MRQ calculations. Use when a user needs evidence-backed research on an SSE or SZSE A-share with an explicit as-of date, provenance, calculation lineage, conflicts, and limitations. Do not use for recommendations, price targets, trading, broad company research, or unsupported live-data claims.
 ---
 

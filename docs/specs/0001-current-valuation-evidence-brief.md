@@ -16,7 +16,7 @@
 
 ## 交付与运行环境
 
-- 仓库唯一安装产物位于 `skill/a-share-research-skill/`。
+- 仓库唯一安装产物位于 `skill/a-share-research/`。
 - Skill 内含平台中立的 `SKILL.md` 和模块化 Python CLI。
 - 用户运行时要求 Python 3.12 或更高版本，不依赖第三方 Python 包。
 - 支持能够加载 `SKILL.md`、运行 Python 和访问网络的 Agent；不绑定 Codex、Claude Code 或某个操作系统。
@@ -32,7 +32,7 @@ CLI 使用一个入口脚本和固定子命令。首版规划以下命令：
 示例接口：
 
 ```text
-python skill/a-share-research-skill/scripts/a_share_research.py \
+python skill/a-share-research/scripts/a_share_research.py \
   valuation --security SSE:600519 --as-of 2026-08-01
 ```
 

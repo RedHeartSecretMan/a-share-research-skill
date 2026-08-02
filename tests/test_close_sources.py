@@ -12,7 +12,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CLI = (
     REPOSITORY_ROOT / "tests" / "fixtures" / "close_sources" / "fixture_cli.py"
 )
-SCRIPTS = REPOSITORY_ROOT / "skill" / "a-share-research-skill" / "scripts"
+SCRIPTS = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from a_share_research.close_sources import (  # noqa: E402

@@ -1,19 +1,19 @@
 <div align="center">
 
-# Trustworthy A-Share Research
+# A-Share Research Skill
 
 **Every research number should carry an identity, time boundary, source, and calculation lineage.**
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research-skill/)
+[![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research/)
 [![First release delivered](https://img.shields.io/badge/status-first%20release%20delivered-2563EB)](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[中文](README.md) · [Installation](#installation) · [Boundaries](#boundaries) · [Development](#development)
+[中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Boundaries](#boundaries) · [Development](#development)
 
 </div>
 
-`a-share-research-skill` is an evidence-first research Skill for mainland-China listed securities. A deterministic Python CLI handles security identity, research time boundaries, evidence validation, and valuation calculations; an Agent then presents the versioned JSON as auditable research material.
+`a-share-research-skill` is the project repository name; the installable Skill is `$a-share-research`. It takes an evidence-first approach to mainland-China listed-security research: a deterministic Python CLI handles security identity, research time boundaries, evidence validation, and valuation calculations, then an Agent presents the versioned JSON as auditable research material.
 
 The project does not treat “an endpoint returned data” as “the fact is trustworthy.” It does not provide ratings, price targets, position sizing, buy/sell advice, or cheap/expensive judgments.
 
@@ -58,19 +58,19 @@ Research results use three overall states:
 
 ## Installation
 
-The only installable artifact is [`skill/a-share-research-skill`](skill/a-share-research-skill/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
+The only installable artifact is [`skill/a-share-research`](skill/a-share-research/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
 
 ```text
 git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
-<skills-directory>/a-share-research-skill/
+<skills-directory>/a-share-research/
 ├── SKILL.md
 ├── agents/openai.yaml
 ├── references/
 └── scripts/
 ```
 
-The runtime requires only the Python 3.12 or later standard library. It does not require installing this repository as a package or adding third-party Python dependencies. See [`references/cli-contract.md`](skill/a-share-research-skill/references/cli-contract.md) for platform-neutral interpreter selection and invocation.
+The runtime requires only the Python 3.12 or later standard library. It does not require installing this repository as a package or adding third-party Python dependencies. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for platform-neutral interpreter selection and invocation.
 
 ## CLI
 
@@ -90,6 +90,26 @@ Provided-evidence valuation research:
 
 The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
 
+## Common uses
+
+The first release supports four common uses through its four public workflows. After installation, invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first.
+
+**Identify the right security**
+
+> Use `$a-share-research` to confirm the exchange and canonical security code for “贵州茅台 (600519),” and tell me the date through which the result is valid.
+
+**Look up the latest close**
+
+> Use `$a-share-research` to find the latest completed unadjusted close for `SSE:600519` as of today, and tell me the sources, whether they agree, and any limitations.
+
+**Check research materials**
+
+> Use `$a-share-research` to check whether the research evidence in `/path/to/evidence-bundle` is complete and internally consistent, then prioritize what I still need to provide.
+
+**Calculate common valuation metrics**
+
+> Use `$a-share-research` with `/path/to/evidence-bundle` to calculate market capitalization, PE TTM, and PB MRQ. Include the calculation date, formulas, key inputs, and evidence limitations; if evidence is missing, tell me exactly what is needed.
+
 ## Boundaries
 
 The first release is deliberately conservative:
@@ -105,7 +125,7 @@ See [`CONTEXT.md`](CONTEXT.md) for the complete domain boundary and [`docs/specs
 ## Repository layout
 
 ```text
-skill/a-share-research-skill/  sole installable artifact
+skill/a-share-research/        sole installable artifact
 tests/                         offline contract, regression, and distribution tests
 docs/adr/                      architecture decisions
 docs/research/                 time-anchored source feasibility research
@@ -121,8 +141,8 @@ Default tests are fully offline. Live-source probes are opt-in diagnostics and a
 python3.12 -m unittest discover -s tests -p "test_*.py"
 ruff check .
 ruff format --check .
-mypy skill/a-share-research-skill/scripts
-python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research-skill
+mypy skill/a-share-research/scripts
+python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```
 
 The live-source diagnostic entry point is `tests/live_probe_close.py`. It never updates fixtures or lowers evidence requirements.

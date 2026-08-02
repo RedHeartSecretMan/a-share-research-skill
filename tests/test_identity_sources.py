@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = REPOSITORY_ROOT / "skill" / "a-share-research-skill" / "scripts"
+SCRIPTS = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts"
 FIXTURES = REPOSITORY_ROOT / "tests" / "fixtures" / "identity_sources"
 FIXTURE_CLI = FIXTURES / "fixture_cli.py"
 sys.path.insert(0, str(SCRIPTS))

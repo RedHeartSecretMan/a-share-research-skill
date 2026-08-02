@@ -10,7 +10,7 @@
 
 ## Solution
 
-交付一个平台中立、自包含的 `a-share-research-skill`。Skill 通过精简说明指导模型理解自然语言、解析日期、选择 CLI 子命令并解释版本化 JSON；内置 Python CLI 负责确定性的数据获取、证据校验、交叉核验和估值计算，不处理自然语言，也不调用模型。
+在独立仓库 `a-share-research-skill` 中交付一个平台中立、自包含的 `a-share-research` Skill。Skill 通过精简说明指导模型理解自然语言、解析日期、选择 CLI 子命令并解释版本化 JSON；内置 Python CLI 负责确定性的数据获取、证据校验、交叉核验和估值计算，不处理自然语言，也不调用模型。
 
 首个范围同时提供两种路径：
 

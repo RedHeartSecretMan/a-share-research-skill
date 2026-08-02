@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent
-SCRIPTS = FIXTURES.parents[2] / "skill" / "a-share-research-skill" / "scripts"
+SCRIPTS = FIXTURES.parents[2] / "skill" / "a-share-research" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from a_share_research.cli import main  # noqa: E402
