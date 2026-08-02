@@ -1,0 +1,16 @@
+{
+  "stockList": [
+    {
+      "code": "600001",
+      "category": "A股",
+      "orgId": "gssh0600001",
+      "zwjc": "同名股份"
+    },
+    {
+      "code": "000002",
+      "category": "A股",
+      "orgId": "gssz0000002",
+      "zwjc": "同名股份"
+    }
+  ]
+}

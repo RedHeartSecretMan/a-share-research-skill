@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "subject": {
+    "security": {
+      "exchange": "SSE",
+      "code": "600519",
+      "type": "A_SHARE"
+    },
+    "issuer": {
+      "name": "贵州茅台酒股份有限公司"
+    }
+  },
+  "as_of": "2026-08-01",
+  "question": "provided_unadjusted_close",
+  "evidence": [
+    {
+      "id": "close-2026-07-31",
+      "source_role": "market_observation",
+      "source_operation": "caller_provided_observation",
+      "subject": {
+        "security": "SSE:600519",
+        "issuer": "贵州茅台酒股份有限公司"
+      },
+      "observed_value": {
+        "value": "1350.60",
+        "unit": "CNY/share"
+      },
+      "basis": "unadjusted_close",
+      "evidence_time": "2026-07-31",
+      "available_at": "2026-07-31",
+      "retrieved_at": "2026-08-01T09:00:00+08:00",
+      "locator": {
+        "uri": "https://example.invalid/observations/600519/2026-07-31",
+        "observation": "daily close"
+      },
+      "limitations": [
+        "Caller supplied the observation; the CLI did not independently verify its source."
+      ]
+    }
+  ]
+}

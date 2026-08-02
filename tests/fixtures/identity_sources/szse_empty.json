@@ -1,0 +1,17 @@
+[
+  {
+    "metadata": {
+      "catalogid": "1110",
+      "name": "A股列表",
+      "tabkey": "tab1",
+      "recordcount": 0,
+      "cols": {
+        "agdm": "A股代码",
+        "agjc": "A股简称",
+        "agssrq": "A股上市日期"
+      }
+    },
+    "data": [],
+    "error": null
+  }
+]

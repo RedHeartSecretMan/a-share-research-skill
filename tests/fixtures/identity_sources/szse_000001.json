@@ -1,0 +1,23 @@
+[
+  {
+    "metadata": {
+      "catalogid": "1110",
+      "name": "A股列表",
+      "tabkey": "tab1",
+      "recordcount": 1,
+      "cols": {
+        "agdm": "A股代码",
+        "agjc": "A股简称",
+        "agssrq": "A股上市日期"
+      }
+    },
+    "data": [
+      {
+        "agdm": "000001",
+        "agjc": "<a href='https://www.szse.cn/?code=000001'><u>平安银行</u></a>",
+        "agssrq": "1991-04-03"
+      }
+    ],
+    "error": null
+  }
+]
