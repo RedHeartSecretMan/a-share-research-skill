@@ -1,10 +1,10 @@
-# 首版“当前估值证据简报”免费数据源可行性
+# 内核预览“当前估值证据简报”免费数据源可行性
 
 状态：**未通过生产数据源准入门槛；不得据此开始实现生产 Adapter**
 
 研究快照：2026-08-01（Asia/Shanghai）
 
-适用规格：[首版规格：当前估值证据简报](../specs/0001-current-valuation-evidence-brief.md)
+适用规格：[内核预览规格：当前估值证据简报](../specs/0001-current-valuation-evidence-brief.md)
 
 ## 结论先行
 

@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research/)
-[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-2563EB)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.0)
+[![Release: v0.0.1](https://img.shields.io/badge/release-v0.0.1-64748B)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.0.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [English](README_en.md) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
@@ -27,7 +27,7 @@
 - **计算可复算**：总市值、PE TTM 和 PB MRQ 使用 Decimal 与显式口径形成完整计算谱系。
 - **失败要诚实**：歧义、冲突、陈旧、错证券或关键证据缺失时返回 `limited` / `blocked`，不补猜数字。
 
-## 首版能力
+## 当前预览能力
 
 | 能力 | 输入 | 输出与边界 |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 ## 常见用法
 
-首版围绕四个公开工作流提供以下常见用法。安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。
+v0.0.1 预览围绕四个公开工作流提供以下用法。安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。
 
 **找对证券**
 
@@ -112,7 +112,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 ## 案例 Demo
 
-v0.1.0 使用两个真实证券完成了“自然语言线索 → 规范证券身份 → 最近完成收盘价 → Agent 证据说明”的完整链路，分别覆盖深交所和上交所：
+v0.0.1 使用两个真实证券验证“自然语言线索 → 规范证券身份 → 最近完成收盘价 → Agent 证据说明”的基础链路，分别覆盖深交所和上交所。这是技术验证，不是完整个股研究案例：
 
 - [蓝色光标（SZSE:300058）](examples/bluefocus.md)
 - [工业富联（SSE:601138）](examples/industrial-fulian.md)
@@ -121,7 +121,7 @@ v0.1.0 使用两个真实证券完成了“自然语言线索 → 规范证券�
 
 ## 能力边界
 
-当前首版有意保持保守：
+当前预览版本有意保持保守：
 
 - 联网身份与收盘价 tracer 仅覆盖 SSE、SZSE；BSE 不会回退到其他市场。
 - 免费联网操作均为实验来源，不等于正式生产 Adapter。
@@ -129,14 +129,14 @@ v0.1.0 使用两个真实证券完成了“自然语言线索 → 规范证券�
 - 不支持盘中实时、分钟、逐笔、交易、新闻情绪、全量公司画像或批量选股。
 - 不输出评级、目标价、买卖建议、仓位建议或自动交易指令。
 
-完整产品边界见 [`CONTEXT.md`](CONTEXT.md)，实现规格见 [`docs/specs/0002-trustworthy-a-share-research-foundation.md`](docs/specs/0002-trustworthy-a-share-research-foundation.md)。
+完整产品边界见 [`CONTEXT.md`](CONTEXT.md)，当前内核规格见 [`docs/specs/0002-trustworthy-a-share-research-foundation.md`](docs/specs/0002-trustworthy-a-share-research-foundation.md)，真正 v0.1.0 的能力与发布门槛见 [`docs/specs/0003-full-a-share-research-v0.1.0.md`](docs/specs/0003-full-a-share-research-v0.1.0.md)。
 
 ## 仓库结构
 
 ```text
 skill/a-share-research/        唯一安装产物
 tests/                         离线契约、回归与分发测试
-examples/                      v0.1.0 真实端到端案例
+examples/                      v0.0.1 身份与单日收盘价验证案例
 docs/adr/                      架构决策
 docs/research/                 带时间锚的来源可行性调查
 docs/specs/                    产品与实现规格

@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research/)
-[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-2563EB)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.0)
+[![Release: v0.0.1](https://img.shields.io/badge/release-v0.0.1-64748B)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.0.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
@@ -27,7 +27,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 - **Reproducible calculations**: market capitalization, PE TTM, and PB MRQ use Decimal arithmetic and preserve full calculation lineage.
 - **Honest failure**: ambiguity, conflict, staleness, wrong-security payloads, or missing critical evidence return `limited` / `blocked` instead of invented values.
 
-## First-release capabilities
+## Current preview capabilities
 
 | Capability | Input | Output and boundary |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ Provided-evidence valuation research:
 
 ## Common uses
 
-The first release supports four common uses through its four public workflows. After installation, invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first.
+The v0.0.1 preview supports four uses through its four public workflows. After installation, invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first.
 
 **Identify the right security**
 
@@ -112,7 +112,7 @@ The first release supports four common uses through its four public workflows. A
 
 ## Case demos
 
-v0.1.0 exercises the complete “natural-language clue → canonical identity → latest completed close → Agent evidence explanation” path against one SZSE and one SSE security:
+v0.0.1 exercises the foundational “natural-language clue → canonical identity → latest completed close → Agent evidence explanation” path against one SZSE and one SSE security. These are technical validations, not complete equity-research cases:
 
 - [BlueFocus (SZSE:300058)](examples/bluefocus.md)
 - [Industrial Fulian (SSE:601138)](examples/industrial-fulian.md)
@@ -121,7 +121,7 @@ The values are fixed live observations as of `2026-08-02`, retained to demonstra
 
 ## Boundaries
 
-The first release is deliberately conservative:
+The current preview is deliberately conservative:
 
 - Network identity and close tracers cover SSE and SZSE only; BSE never falls back to another market.
 - Free network operations are experimental sources, not production-qualified Adapters.
@@ -129,14 +129,14 @@ The first release is deliberately conservative:
 - It does not support intraday, minute, tick, trading, news sentiment, full-company profiles, or batch screening.
 - It does not provide ratings, price targets, buy/sell advice, position sizing, or automated trading instructions.
 
-See [`CONTEXT.md`](CONTEXT.md) for the complete domain boundary and [`docs/specs/0002-trustworthy-a-share-research-foundation.md`](docs/specs/0002-trustworthy-a-share-research-foundation.md) for the implementation specification.
+See [`CONTEXT.md`](CONTEXT.md) for the complete domain boundary, [`docs/specs/0002-trustworthy-a-share-research-foundation.md`](docs/specs/0002-trustworthy-a-share-research-foundation.md) for the current kernel specification, and [`docs/specs/0003-full-a-share-research-v0.1.0.md`](docs/specs/0003-full-a-share-research-v0.1.0.md) for the true v0.1.0 capability and release gates.
 
 ## Repository layout
 
 ```text
 skill/a-share-research/        sole installable artifact
 tests/                         offline contract, regression, and distribution tests
-examples/                      v0.1.0 live end-to-end cases
+examples/                      v0.0.1 identity and single-close validation cases
 docs/adr/                      architecture decisions
 docs/research/                 time-anchored source feasibility research
 docs/specs/                    product and implementation specifications

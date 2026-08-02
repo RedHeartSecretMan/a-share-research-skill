@@ -1,6 +1,6 @@
-# 首版规格：当前估值证据简报
+# 内核预览规格：当前估值证据简报
 
-状态：已被 [首个可构建规格：可信 A 股研究 Skill 基础能力](0002-trustworthy-a-share-research-foundation.md)取代。本文保留为早期自动估值方案记录，不再作为实现依据。
+状态：已被 [首个可构建规格：可信 A 股研究 Skill 基础能力](0002-trustworthy-a-share-research-foundation.md)取代。本文保留为 v0.0.1 内核的早期自动估值方案记录，不再作为完整 v0.1.0 实现依据；产品 v0.1.0 以 [完整 A 股研究技能 v0.1.0](0003-full-a-share-research-v0.1.0.md) 为准。
 
 ## 目标
 

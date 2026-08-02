@@ -1,6 +1,6 @@
 # 首个可构建规格：可信 A 股研究 Skill 基础能力
 
-交付状态：规格已发布为 [GitHub Issue #1](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/1)；实现子 Issue #2–#11 均已完成。
+交付状态：规格已发布为 [GitHub Issue #1](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/1)；实现子 Issue #2–#11 均已完成，并作为 v0.0.1 可信证据内核交付。本文不定义完整产品 v0.1.0；后者以 [完整 A 股研究技能 v0.1.0](0003-full-a-share-research-v0.1.0.md) 为准。
 
 ## Problem Statement
 

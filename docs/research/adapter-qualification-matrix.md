@@ -4,8 +4,8 @@
 
 研究快照：2026-08-01（Asia/Shanghai）
 
-适用规格：[首版规格：当前估值证据简报](../specs/0001-current-valuation-evidence-brief.md)
-前置调查：[首版免费数据源可行性](./free-source-viability.md)
+适用规格：[内核预览规格：当前估值证据简报](../specs/0001-current-valuation-evidence-brief.md)
+前置调查：[内核预览免费数据源可行性](./free-source-viability.md)
 
 ## 结论先行
 
