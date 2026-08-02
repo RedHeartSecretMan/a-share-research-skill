@@ -72,26 +72,105 @@ def _decimal(value: object, source_operation: str) -> str:
     return value
 
 
+def _volume_shares(value: object, source_operation: str, *, lot_size: int) -> str:
+    if not isinstance(value, str) or not value:
+        raise _operation_error(
+            source_operation,
+            "unknown_schema",
+            "The source response does not contain an exact volume.",
+        )
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as error:
+        raise _operation_error(
+            source_operation,
+            "unknown_schema",
+            "The source volume is not a decimal value.",
+        ) from error
+    if not parsed.is_finite() or parsed < 0:
+        raise _operation_error(
+            source_operation,
+            "unknown_schema",
+            "The source volume must be a non-negative finite decimal.",
+        )
+    shares = parsed * lot_size
+    if shares != shares.to_integral_value():
+        raise _operation_error(
+            source_operation,
+            "unknown_schema",
+            "The normalized source volume is not a whole number of shares.",
+        )
+    return format(shares.quantize(Decimal(1)), "f")
+
+
+def _ohlc(
+    open_value: object,
+    high_value: object,
+    low_value: object,
+    close_value: object,
+    source_operation: str,
+) -> tuple[str, str, str, str]:
+    values = (
+        _decimal(open_value, source_operation),
+        _decimal(high_value, source_operation),
+        _decimal(low_value, source_operation),
+        _decimal(close_value, source_operation),
+    )
+    open_price, high_price, low_price, close_price = map(Decimal, values)
+    if (
+        low_price > high_price
+        or open_price < low_price
+        or open_price > high_price
+        or close_price < low_price
+        or close_price > high_price
+    ):
+        raise _operation_error(
+            source_operation,
+            "inconsistent_price_bar",
+            "The source OHLC values are internally inconsistent.",
+        )
+    return values
+
+
 @dataclass(frozen=True)
-class CloseObservation:
-    """A normalized unadjusted price observation from one source operation."""
+class DailyBarObservation:
+    """A normalized daily OHLCV observation with an explicit adjustment basis."""
 
     source_operation: str
     source_uri: str
     security: str
     trading_date: date
-    value: str
+    open_value: str
+    high_value: str
+    low_value: str
+    close_value: str
+    volume_shares: str
     price_type: str
     trading_status: str
     evidence_time: datetime
     available_at: datetime
     retrieved_at: datetime
     availability_status: str = "inferred_from_final_daily_line"
+    corporate_action: dict[str, str] | None = None
+    adjustment: str = "unadjusted"
+
+    @property
+    def value(self) -> str:
+        """Compatibility projection used by the completed-close module."""
+
+        return self.close_value
 
     @property
     def evidence_id(self) -> str:
         return (
             f"close-{self.source_operation}-{self.security}-"
+            f"{self.trading_date.isoformat()}"
+        )
+
+    @property
+    def bar_evidence_id(self) -> str:
+        return (
+            f"bar-{self.source_operation}-{self.security}-"
             f"{self.trading_date.isoformat()}"
         )
 
@@ -120,6 +199,56 @@ class CloseObservation:
                 "uri": self.source_uri,
                 "observation": (
                     f"{self.security} unadjusted close on "
+                    f"{self.trading_date.isoformat()}"
+                ),
+            },
+            "limitations": [
+                "experimental_source_operation",
+                (
+                    "first_publication_time_not_source_verified"
+                    if self.availability_status == "inferred_from_final_daily_line"
+                    else "source_timestamp_not_independently_verified"
+                ),
+            ],
+        }
+
+    def to_bar_evidence(self) -> dict[str, object]:
+        return {
+            "id": self.bar_evidence_id,
+            "source_role": "market_observation",
+            "source_operation": self.source_operation,
+            "experimental": True,
+            "subject": {"security": self.security},
+            "observed_value": {
+                "value": {
+                    "open": self.open_value,
+                    "high": self.high_value,
+                    "low": self.low_value,
+                    "close": self.close_value,
+                    "volume": self.volume_shares,
+                },
+                "unit": {
+                    "price": "CNY/share",
+                    "volume": "shares",
+                },
+            },
+            "basis": f"{self.adjustment}_daily_ohlcv",
+            "observation": {
+                "kind": "daily_bar",
+                "trading_date": self.trading_date.isoformat(),
+                "adjustment": self.adjustment,
+                "currency": "CNY",
+                "trading_status": self.trading_status,
+                "corporate_action": self.corporate_action,
+            },
+            "evidence_time": self.evidence_time.isoformat(),
+            "available_at": self.available_at.isoformat(),
+            "availability_status": self.availability_status,
+            "retrieved_at": self.retrieved_at.isoformat(),
+            "locator": {
+                "uri": self.source_uri,
+                "observation": (
+                    f"{self.security} {self.adjustment} daily bar on "
                     f"{self.trading_date.isoformat()}"
                 ),
             },
@@ -174,6 +303,9 @@ class CloseObservation:
         }
 
 
+CloseObservation = DailyBarObservation
+
+
 class SseDailyLineOperation:
     """Observe SSE webpage daily lines without treating them as qualified."""
 
@@ -182,7 +314,7 @@ class SseDailyLineOperation:
 
     def observe(
         self, security: str, transport: HttpTransport
-    ) -> list[CloseObservation]:
+    ) -> list[DailyBarObservation]:
         exchange, code = security.split(":", 1)
         if exchange != "SSE":
             raise ValueError("SSE daily-line operation requires an SSE security")
@@ -267,13 +399,20 @@ class SseDailyLineOperation:
             session_close = datetime.combine(
                 trading_date, time(15, 0), tzinfo=CHINA_STANDARD_TIME
             )
+            open_value, high_value, low_value, close_value = _ohlc(
+                row[1], row[2], row[3], row[4], self.operation_id
+            )
             observations.append(
-                CloseObservation(
+                DailyBarObservation(
                     source_operation=self.operation_id,
                     source_uri=url,
                     security=security,
                     trading_date=trading_date,
-                    value=_decimal(row[4], self.operation_id),
+                    open_value=open_value,
+                    high_value=high_value,
+                    low_value=low_value,
+                    close_value=close_value,
+                    volume_shares=_volume_shares(row[5], self.operation_id, lot_size=1),
                     price_type="close",
                     trading_status="traded" if volume > 0 else "suspended",
                     evidence_time=session_close,
@@ -292,7 +431,7 @@ class SzseDailyLineOperation:
 
     def observe(
         self, security: str, transport: HttpTransport
-    ) -> list[CloseObservation]:
+    ) -> list[DailyBarObservation]:
         exchange, code = security.split(":", 1)
         if exchange != "SZSE":
             raise ValueError("SZSE daily-line operation requires an SZSE security")
@@ -378,13 +517,22 @@ class SzseDailyLineOperation:
             session_close = datetime.combine(
                 trading_date, time(15, 0), tzinfo=CHINA_STANDARD_TIME
             )
+            open_value, high_value, low_value, close_value = _ohlc(
+                row[1], row[4], row[3], row[2], self.operation_id
+            )
             observations.append(
-                CloseObservation(
+                DailyBarObservation(
                     source_operation=self.operation_id,
                     source_uri=url,
                     security=security,
                     trading_date=trading_date,
-                    value=_decimal(row[2], self.operation_id),
+                    open_value=open_value,
+                    high_value=high_value,
+                    low_value=low_value,
+                    close_value=close_value,
+                    volume_shares=_volume_shares(
+                        row[7], self.operation_id, lot_size=100
+                    ),
                     price_type="close",
                     trading_status="traded" if volume > 0 else "suspended",
                     evidence_time=session_close,
@@ -407,7 +555,7 @@ class TencentDailyLineOperation:
         security: str,
         as_of: date,
         transport: HttpTransport,
-    ) -> list[CloseObservation]:
+    ) -> list[DailyBarObservation]:
         exchange, code = security.split(":", 1)
         prefix = {"SSE": "sh", "SZSE": "sz"}.get(exchange)
         if prefix is None:
@@ -510,6 +658,7 @@ class TencentDailyLineOperation:
                     "unknown_schema",
                     "The Tencent daily-line row does not match the expected schema.",
                 )
+            annotation = None
             if len(row) == 7:
                 annotation = row[6]
                 if (
@@ -548,13 +697,22 @@ class TencentDailyLineOperation:
             session_close = datetime.combine(
                 trading_date, time(15, 0), tzinfo=CHINA_STANDARD_TIME
             )
+            open_value, high_value, low_value, close_value = _ohlc(
+                row[1], row[3], row[4], row[2], self.operation_id
+            )
             observations.append(
-                CloseObservation(
+                DailyBarObservation(
                     source_operation=self.operation_id,
                     source_uri=url,
                     security=security,
                     trading_date=trading_date,
-                    value=_decimal(row[2], self.operation_id),
+                    open_value=open_value,
+                    high_value=high_value,
+                    low_value=low_value,
+                    close_value=close_value,
+                    volume_shares=_volume_shares(
+                        row[5], self.operation_id, lot_size=100
+                    ),
                     price_type="intraday_last" if before_close else "close",
                     trading_status=(
                         "suspended"
@@ -571,6 +729,7 @@ class TencentDailyLineOperation:
                         if is_live_row
                         else "inferred_from_final_daily_line"
                     ),
+                    corporate_action=annotation,
                 )
             )
             observed_dates.add(trading_date)
@@ -582,12 +741,18 @@ class TencentDailyLineOperation:
         )
         if quote_is_suspended and quote_time.date() not in observed_dates:
             observations.append(
-                CloseObservation(
+                DailyBarObservation(
                     source_operation=self.operation_id,
                     source_uri=url,
                     security=security,
                     trading_date=quote_time.date(),
-                    value=quote_fields[3],
+                    open_value=quote_fields[3],
+                    high_value=quote_fields[3],
+                    low_value=quote_fields[3],
+                    close_value=quote_fields[3],
+                    volume_shares=_volume_shares(
+                        quote_fields[6], self.operation_id, lot_size=100
+                    ),
                     price_type="stale_last",
                     trading_status="suspended",
                     evidence_time=quote_time,

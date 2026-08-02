@@ -27,12 +27,14 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 - **Reproducible calculations**: market capitalization, PE TTM, and PB MRQ use Decimal arithmetic and preserve full calculation lineage.
 - **Honest failure**: ambiguity, conflict, staleness, wrong-security payloads, or missing critical evidence return `limited` / `blocked` instead of invented values.
 
-## Current preview capabilities
+## Current main capabilities (v0.1.0 in development)
 
 | Capability | Input | Output and boundary |
 | --- | --- | --- |
 | Security identity resolution | Name, abbreviation, or code clue + explicit date | Cross-checks SSE/SZSE and CNINFO observations; ambiguity, conflicts, and BSE inputs fail closed |
 | Latest completed close | Canonical `SSE:code` / `SZSE:code` + explicit date | Cross-checks exchange daily lines and Tencent observations while preserving trading date, basis, and conflicts |
+| Recent N-session trend | A-share clue + 2–250 sessions + unadjusted/forward-adjusted basis | Cross-checked OHLCV, cumulative return, drawdown, volatility, up/down sessions, volume change, and corporate actions |
+| ETF market | Six-digit SSE ETF code + explicit date | SSE ETF identity and snapshot, Tencent price cross-check, and explicit board-lot rounding differences |
 | Evidence-bundle validation | Caller-provided `manifest.json` and optional materials | Validates identity, time, units, basis, hashes, locators, and evidence relationships |
 | Provided-evidence valuation | Validated bundle + explicit date | Calculates market capitalization, PE TTM, and PB MRQ with formulas, operands, and report lineage |
 
@@ -102,7 +104,7 @@ Provided-evidence valuation research:
 
 ## Common uses
 
-The v0.0.1 preview supports four uses through its four public workflows. After installation, invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first.
+Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The latest Release remains the v0.0.1 kernel preview; the trend and ETF uses below are on the main branch under development.
 
 **Identify the right security**
 
@@ -111,6 +113,14 @@ The v0.0.1 preview supports four uses through its four public workflows. After i
 **Look up the latest close**
 
 > Use `$a-share-research` to find the latest completed unadjusted close for `SSE:600519` as of today, and tell me the sources, whether they agree, and any limitations.
+
+**Research a recent trend**
+
+> Use `$a-share-research` to research BlueFocus over the latest 10 completed sessions as of today on an unadjusted basis. Include OHLCV, cumulative return, maximum drawdown, volatility, up/down sessions, and volume change, then summarize the observed trend without giving trading advice.
+
+**Look up an ETF market quote**
+
+> Use `$a-share-research` to find the current or latest-completed quote for SSE 50ETF (510050) as of today. Include price, change, volume, amount, observation time, source agreement, and limitations.
 
 **Check research materials**
 
@@ -122,7 +132,7 @@ The v0.0.1 preview supports four uses through its four public workflows. After i
 
 ## Case demos
 
-v0.0.1 exercises the foundational “natural-language clue → canonical identity → latest completed close → Agent evidence explanation” path against one SZSE and one SSE security. These are technical validations, not complete equity-research cases:
+The cases are moving from v0.0.1 technical tracers to real user research questions. BlueFocus now covers “natural-language clue → identity → 10-session unadjusted OHLCV → metrics → trend conclusion”; Industrial Fulian will be expanded through the complete new-target workflow:
 
 - [BlueFocus (SZSE:300058)](examples/bluefocus.md)
 - [Industrial Fulian (SSE:601138)](examples/industrial-fulian.md)
@@ -136,7 +146,7 @@ The current preview is deliberately conservative:
 - Network identity and close tracers cover SSE and SZSE only; BSE never falls back to another market.
 - Free network operations are experimental sources, not production-qualified Adapters.
 - The Skill does not automatically acquire effective total shares, financial statements, TTM attributable profit, or MRQ attributable equity.
-- It does not support intraday, minute, tick, trading, news sentiment, full-company profiles, or batch screening.
+- ETF snapshots are supported; minute, tick, trading, news sentiment, full-company profiles, and batch screening are not yet supported.
 - It does not provide ratings, price targets, buy/sell advice, position sizing, or automated trading instructions.
 
 See [`CONTEXT.md`](CONTEXT.md) for the complete domain boundary, [`docs/specs/0002-trustworthy-a-share-research-foundation.md`](docs/specs/0002-trustworthy-a-share-research-foundation.md) for the current kernel specification, and [`docs/specs/0003-full-a-share-research-v0.1.0.md`](docs/specs/0003-full-a-share-research-v0.1.0.md) for the true v0.1.0 capability and release gates.
@@ -146,7 +156,7 @@ See [`CONTEXT.md`](CONTEXT.md) for the complete domain boundary, [`docs/specs/00
 ```text
 skill/a-share-research/        sole installable artifact
 tests/                         offline contract, regression, and distribution tests
-examples/                      v0.0.1 identity and single-close validation cases
+examples/                      versioned requests and real-security research cases
 docs/adr/                      architecture decisions
 docs/research/                 time-anchored source feasibility research
 docs/specs/                    product and implementation specifications
@@ -166,6 +176,13 @@ python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```
 
 The live-source diagnostic entry point is `tests/live_probe_close.py`. It never updates fixtures or lowers evidence requirements.
+
+Run the market-series slice against live sources with the two versioned requests:
+
+```text
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
+```
 
 ## License and provenance
 

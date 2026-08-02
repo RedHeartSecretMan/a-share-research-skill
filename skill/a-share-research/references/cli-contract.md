@@ -24,6 +24,12 @@ Use `pathlib.Path` or the host platform's normal path API when an Agent must con
 
 - `run --request <research-task.json> [--output <file>]`: execute the stable `research(request) -> research result` Interface. The request object contains `schema_version`, `task_type`, `subjects`, explicit `as_of`, `window`, `parameters`, and `source_policy`. Unknown tasks and unavailable optional Adapter dependencies return explicit `blocked` JSON results.
 
+Current task types:
+
+- `security_identity`: one A-share name/code clue;
+- `market_trend`: one A-share clue, `window.trading_days` from 2 to 250, and `parameters.adjustment` of `unadjusted` or `forward_adjusted`;
+- `etf_market`: one six-digit SSE ETF code clue and a current/latest-completed market snapshot.
+
 Never pass natural-language text as the request document. The Agent translates the user's question into a versioned research task and never places credentials in that document.
 
 ## Compatibility subcommands

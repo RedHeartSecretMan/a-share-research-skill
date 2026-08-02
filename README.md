@@ -27,12 +27,14 @@
 - **计算可复算**：总市值、PE TTM 和 PB MRQ 使用 Decimal 与显式口径形成完整计算谱系。
 - **失败要诚实**：歧义、冲突、陈旧、错证券或关键证据缺失时返回 `limited` / `blocked`，不补猜数字。
 
-## 当前预览能力
+## 当前 main 能力（v0.1.0 开发中）
 
 | 能力 | 输入 | 输出与边界 |
 | --- | --- | --- |
 | 证券身份解析 | 名称、简称或代码线索 + 明确日期 | 交叉核验 SSE/SZSE 与巨潮观测；歧义、冲突和 BSE 输入失败关闭 |
 | 最近完成收盘价 | 规范的 `SSE:code` / `SZSE:code` + 明确日期 | 交叉核验交易所日线与腾讯观测，保留交易日、价格口径和冲突 |
+| 最近 N 日走势 | A 股线索 + 2–250 个交易日 + 未复权/前复权口径 | 双源 OHLCV、累计涨跌、最大回撤、年化波动、涨跌天数、量能变化与公司行动说明 |
+| ETF 行情 | 上交所 ETF 六位代码 + 明确日期 | 上交所 ETF 身份和快照、腾讯价格交叉、成交量手/股舍入差说明 |
 | 证据包校验 | 调用者提供的 `manifest.json` 与可选材料 | 校验身份、时间、单位、口径、哈希、定位信息和证据关系 |
 | 提供证据估值 | 已校验证据包 + 明确日期 | 计算总市值、PE TTM、PB MRQ；保留公式、操作数和报告谱系 |
 
@@ -102,7 +104,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 ## 常见用法
 
-v0.0.1 预览围绕四个公开工作流提供以下用法。安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。
+安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。最新 Release 仍是 v0.0.1 内核预览；以下走势与 ETF 用法位于正在建设的 main。
 
 **找对证券**
 
@@ -111,6 +113,14 @@ v0.0.1 预览围绕四个公开工作流提供以下用法。安装后使用 `$a
 **查询最近收盘价**
 
 > 使用 `$a-share-research`，查询 `SSE:600519` 截至今天最近一个完整交易日的未复权收盘价，并告诉我数据来源、是否一致以及有哪些限制。
+
+**研究最近走势**
+
+> 使用 `$a-share-research`，研究蓝色光标截至今天最近 10 个完整交易日的未复权走势，给出 OHLCV、累计涨跌、最大回撤、波动、涨跌天数和量能变化，并基于这些证据总结走势；不要给买卖建议。
+
+**查询 ETF 行情**
+
+> 使用 `$a-share-research`，查询 510050 上证 50ETF 截至今天的当前或最近完成行情，告诉我现价、涨跌幅、成交量、成交额、观测时间、两源是否一致以及限制。
 
 **检查研究资料**
 
@@ -122,7 +132,7 @@ v0.0.1 预览围绕四个公开工作流提供以下用法。安装后使用 `$a
 
 ## 案例 Demo
 
-v0.0.1 使用两个真实证券验证“自然语言线索 → 规范证券身份 → 最近完成收盘价 → Agent 证据说明”的基础链路，分别覆盖深交所和上交所。这是技术验证，不是完整个股研究案例：
+案例正在从 v0.0.1 技术 tracer 升级为真正的用户研究问题。蓝色光标已经覆盖“自然语言线索 → 身份 → 10 日未复权 OHLCV → 指标 → 走势结论”，工业富联仍将在完整新标的流程中继续扩展：
 
 - [蓝色光标（SZSE:300058）](examples/bluefocus.md)
 - [工业富联（SSE:601138）](examples/industrial-fulian.md)
@@ -136,7 +146,7 @@ v0.0.1 使用两个真实证券验证“自然语言线索 → 规范证券身�
 - 联网身份与收盘价 tracer 仅覆盖 SSE、SZSE；BSE 不会回退到其他市场。
 - 免费联网操作均为实验来源，不等于正式生产 Adapter。
 - 不自动获取有效总股本、财务报表、TTM 归母净利润或 MRQ 归母净资产。
-- 不支持盘中实时、分钟、逐笔、交易、新闻情绪、全量公司画像或批量选股。
+- ETF 支持交易所快照；尚不支持分钟、逐笔、交易、新闻情绪、全量公司画像或批量选股。
 - 不输出评级、目标价、买卖建议、仓位建议或自动交易指令。
 
 完整产品边界见 [`CONTEXT.md`](CONTEXT.md)，当前内核规格见 [`docs/specs/0002-trustworthy-a-share-research-foundation.md`](docs/specs/0002-trustworthy-a-share-research-foundation.md)，真正 v0.1.0 的能力与发布门槛见 [`docs/specs/0003-full-a-share-research-v0.1.0.md`](docs/specs/0003-full-a-share-research-v0.1.0.md)。
@@ -146,7 +156,7 @@ v0.0.1 使用两个真实证券验证“自然语言线索 → 规范证券身�
 ```text
 skill/a-share-research/        唯一安装产物
 tests/                         离线契约、回归与分发测试
-examples/                      v0.0.1 身份与单日收盘价验证案例
+examples/                      版本化请求与真实证券研究案例
 docs/adr/                      架构决策
 docs/research/                 带时间锚的来源可行性调查
 docs/specs/                    产品与实现规格
@@ -166,6 +176,13 @@ python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```
 
 真实来源诊断入口为 `tests/live_probe_close.py`。它不会更新夹具，也不能降低证据要求。
+
+行情纵向切片可直接通过两个版本化请求做真实联网 smoke：
+
+```text
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
+```
 
 ## 许可证与来源
 

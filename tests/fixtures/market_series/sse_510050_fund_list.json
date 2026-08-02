@@ -1,0 +1,15 @@
+{
+  "pageHelp": {"total": 1},
+  "result": [
+    {
+      "listingDate": "20050223",
+      "subClass": "01",
+      "companyName": "华夏基金管理有限公司",
+      "fundAbbr": "50ETF",
+      "fundType": "00",
+      "fundCode": "510050",
+      "secNameFull": "上证50ETF华夏"
+    }
+  ],
+  "sqlId": "FUND_LIST"
+}

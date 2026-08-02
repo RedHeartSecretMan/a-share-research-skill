@@ -6,8 +6,10 @@ import importlib.util
 from datetime import date, datetime
 from typing import Any, Collection
 
+from .etf_market import build_etf_market_result
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
+from .market_series import build_market_trend_result
 
 
 class ResearchRuntime:
@@ -42,15 +44,46 @@ class ResearchRuntime:
             else:
                 result = self._research_identity(request)
         elif task_type == "market_trend":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "market_trend currently requires experimental source operations"
+                    ),
+                )
+            else:
+                result = build_market_trend_result(
+                    request,
+                    self._identity_transport,
+                    self._research_now,
+                )
+        elif task_type == "etf_market":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "etf_market currently requires experimental source operations"
+                    ),
+                )
+            else:
+                result = build_etf_market_result(
+                    request,
+                    self._identity_transport,
+                    self._research_now,
+                )
+        elif task_type == "intraday_market_signal":
             if not self._dependency_available("mootdx"):
                 result = _blocked_result(
                     request,
                     code="missing_optional_dependency",
                     message=(
-                        "market_series requires the optional mootdx Adapter dependency"
+                        "intraday_market_data requires the optional mootdx Adapter "
+                        "dependency"
                     ),
                     limitation_details={
-                        "capability": "market_series",
+                        "capability": "intraday_market_data",
                         "dependency": "mootdx",
                     },
                 )
@@ -58,7 +91,9 @@ class ResearchRuntime:
                 result = _blocked_result(
                     request,
                     code="capability_not_implemented",
-                    message="market_trend is registered but not implemented yet",
+                    message=(
+                        "intraday_market_signal is registered but not implemented yet"
+                    ),
                 )
         else:
             result = _blocked_result(

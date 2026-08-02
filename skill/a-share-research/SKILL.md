@@ -1,6 +1,6 @@
 ---
 name: a-share-research
-description: Produce auditable A-share evidence with a deterministic CLI for canonical identity resolution, latest completed unadjusted-close cross-checks, evidence-bundle validation, and provided-evidence market-capitalization, PE TTM, and PB MRQ calculations. Use when a user needs evidence-backed research on an SSE or SZSE A-share with an explicit as-of date, provenance, calculation lineage, conflicts, and limitations. Do not use for recommendations, price targets, trading, broad company research, or unsupported live-data claims.
+description: Produce auditable A-share and SSE ETF evidence with a deterministic CLI for canonical identity, cross-checked completed OHLCV trends, forward-adjusted trend metrics, ETF market quotes, evidence-bundle validation, and provided-evidence valuation calculations. Use when a user needs evidence-backed research with an explicit as-of date, provenance, calculation lineage, conflicts, and limitations. Do not use for recommendations, price targets, trading, or unsupported live-data claims.
 ---
 
 # A-Share Research
@@ -13,11 +13,13 @@ Use the bundled deterministic CLI to gather and calculate research evidence. Int
 2. Resolve relative dates such as “current”, “today”, or “yesterday” in China Standard Time. Pass only an explicit `YYYY-MM-DD` date to the CLI.
 3. Treat a name, abbreviation, or bare code as a security clue. Run a `security_identity` task and ask the user to choose when the result requires clarification. Never guess the exchange.
 4. Choose one research path:
+   - For a recent A-share trend, run a `market_trend` task with one security clue, a trading-day window, and explicit `unadjusted` or `forward_adjusted` basis. If an unadjusted window contains a corporate action, stop on the blocked result; do not calculate around it yourself.
+   - For an SSE ETF market quote, run an `etf_market` task with its six-digit ETF code clue. Do not route an ETF through A-share identity resolution.
    - For experimental-source identity or close research, run `resolve`, then run `close` only with the returned canonical SSE/SZSE identifier.
    - For caller-provided evidence, run `validate-bundle`, resolve every reported contract error, then run `valuation` with the same bundle and research date.
 5. Parse the versioned JSON from `stdout`. Confirm `task_type` matches the user's requested capability. After `valuation`, confirm its `research.question` matches the user's requested capability. Do not expect `research.question` from `resolve`, `close`, or `validate-bundle`. If the result covers a narrower question, explain that mismatch and present only what the CLI actually formed.
 6. Treat `stderr` and a nonzero exit as invocation, protocol, I/O, or internal failure—not as research evidence. Treat a zero-exit `limited` or `blocked` JSON result as a valid research result.
-7. Always disclose that `resolve` and `close` use experimental source operations. Their observations can expose agreement or conflict but cannot alone establish a `supported` factual claim.
+7. Always disclose when results use experimental source operations. Cross-source agreement can expose consistency or conflict but cannot alone establish a `supported` factual claim.
 8. Follow [references/evidence-contract.md](references/evidence-contract.md) when presenting claims, evidence, conflicts, and limitations.
 9. Follow [references/valuation-methodology.md](references/valuation-methodology.md) when explaining market capitalization, PE TTM, and PB MRQ.
 10. Read [references/cli-contract.md](references/cli-contract.md) when choosing commands, interpreting protocol fields, or invoking the Skill on Windows, macOS, or Linux.
@@ -31,6 +33,8 @@ Resolve `<python>` and the script path as described in [references/cli-contract.
 ```
 
 The request is structured JSON, not natural language. It includes `schema_version`, `task_type`, `subjects`, `as_of`, `window`, `parameters`, and `source_policy`. Existing commands remain compatibility entry points:
+
+Registered research tasks currently include `security_identity`, `market_trend`, and `etf_market`. `market_trend` supports `unadjusted` and `forward_adjusted`; it never silently mixes those bases.
 
 ```text
 <python> scripts/entrypoint.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
@@ -63,6 +67,7 @@ The CLI does not interpret natural language or call a model. Do not pass a natur
 - Never use information first published after the research boundary.
 - Never treat a provider-computed PE or PB as the project's calculated metric.
 - Never silently substitute float shares for total shares, forecast profit for reported profit, or adjusted price for an unadjusted close.
+- Never compare or combine adjusted and unadjusted bars. Preserve corporate-action annotations and the exact adjustment basis.
 - Never hide disagreement between otherwise applicable sources.
 - Never expose credentials in output, logs, saved results, or test artifacts.
 - Leave the final investment judgment to the researcher.
