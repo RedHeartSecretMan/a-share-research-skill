@@ -74,6 +74,16 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 ## CLI
 
+新能力统一通过稳定的研究任务 Interface 调用：
+
+```text
+<python> <skill-root>/scripts/entrypoint.py run --request <research-task.json>
+```
+
+`research-task.json` 是结构化任务，不是自然语言文本，包含版本、任务类型、标的、研究日期、窗口、参数和来源策略。未知任务、策略不允许的来源或缺失的可选 Adapter 依赖会返回明确的 `blocked` 结果。
+
+以下四个命令在迁移期保留为兼容入口。
+
 实验来源身份与收盘价研究：
 
 ```text

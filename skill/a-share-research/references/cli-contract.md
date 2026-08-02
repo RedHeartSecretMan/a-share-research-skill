@@ -20,14 +20,20 @@ Conceptually invoke:
 
 Use `pathlib.Path` or the host platform's normal path API when an Agent must construct the path programmatically. Do not manually replace `/` with `\` in user-supplied paths.
 
-## Fixed subcommands
+## Research Interface
+
+- `run --request <research-task.json> [--output <file>]`: execute the stable `research(request) -> research result` Interface. The request object contains `schema_version`, `task_type`, `subjects`, explicit `as_of`, `window`, `parameters`, and `source_policy`. Unknown tasks and unavailable optional Adapter dependencies return explicit `blocked` JSON results.
+
+Never pass natural-language text as the request document. The Agent translates the user's question into a versioned research task and never places credentials in that document.
+
+## Compatibility subcommands
 
 - `resolve --query <security-clue> --as-of <YYYY-MM-DD> [--output <file>]`: cross-check an identity clue with experimental SSE/SZSE and CNINFO operations. The exchange-specific official observation establishes the exchange; an exchange-neutral CNINFO record may corroborate code and name but never supplies a guessed venue. A name or bare code remains a clue until the JSON identifies one canonical security.
 - `close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD> [--output <file>]`: cross-check the latest completed daily unadjusted close from experimental exchange and Tencent operations.
 - `validate-bundle --bundle <bundle-directory>`: validate `manifest.json`, referenced material hashes, evidence applicability, and relationships without calculating a valuation.
 - `valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD> [--output <file>]`: rerun full bundle validation and calculate total market capitalization, PE TTM, and PB MRQ from admissible provided evidence.
 
-Never pass a natural-language research request to the CLI. Translate it into one of these commands before invocation. Never add an undocumented option or infer an exchange for `close`.
+These four commands remain compatibility entry points while capabilities migrate behind `run`. Never add an undocumented option or infer an exchange for `close`.
 
 ## Process and JSON semantics
 
@@ -45,6 +51,6 @@ A nonzero exit means invocation, protocol, I/O, or internal processing prevented
 
 ## Credentials and network behavior
 
-The first release has no credentialed Adapter and reads no credential environment variable. `resolve` and `close` access experimental public operations; `validate-bundle` and `valuation` operate on local provided evidence. Never place a key, token, password, or secret in a command argument, log, JSON result, example, or fixture.
+The current preview has no credentialed Adapter and reads no credential environment variable. `resolve`, `close`, and currently registered network research tasks use capability-scoped source operations; missing optional dependencies fail closed and name the unavailable capability. `validate-bundle` and `valuation` operate on local provided evidence. Never place a key, token, password, or secret in a command argument, request document, log, JSON result, example, or fixture.
 
 Default tests are offline and replace only the external network boundary with fixed responses. `tests/live_probe_close.py` belongs to the development repository, not the installed Skill; a maintainer must invoke it explicitly for source diagnostics. A live probe must never update fixtures or become an ordinary CI dependency.

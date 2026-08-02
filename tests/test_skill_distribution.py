@@ -43,6 +43,7 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertNotIn("scripts/a_share_research.py", entry)
 
         expected_commands = (
+            "run --request <research-task.json>",
             "resolve --query <security-clue> --as-of <YYYY-MM-DD>",
             "close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>",
             "validate-bundle --bundle <bundle-directory>",

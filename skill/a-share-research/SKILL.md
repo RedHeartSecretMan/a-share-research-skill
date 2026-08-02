@@ -9,13 +9,13 @@ Use the bundled deterministic CLI to gather and calculate research evidence. Int
 
 ## Workflow
 
-1. Identify the user's research question. Support only identity resolution, completed-daily-close research, evidence-bundle validation, and provided-evidence valuation; state unsupported scope plainly.
+1. Identify the user's research question. Translate supported work into a versioned `ResearchTask`; state unsupported scope plainly.
 2. Resolve relative dates such as “current”, “today”, or “yesterday” in China Standard Time. Pass only an explicit `YYYY-MM-DD` date to the CLI.
-3. Treat a name, abbreviation, or bare code as a security clue. Run `resolve` and ask the user to choose when the result requires clarification. Never guess the exchange.
+3. Treat a name, abbreviation, or bare code as a security clue. Run a `security_identity` task and ask the user to choose when the result requires clarification. Never guess the exchange.
 4. Choose one research path:
    - For experimental-source identity or close research, run `resolve`, then run `close` only with the returned canonical SSE/SZSE identifier.
    - For caller-provided evidence, run `validate-bundle`, resolve every reported contract error, then run `valuation` with the same bundle and research date.
-5. Parse the versioned JSON from `stdout`. After `valuation`, confirm its `research.question` matches the user's requested capability. If the bundle asks a different question, explain that mismatch and present only the result the CLI actually formed. Do not expect `research.question` from `resolve`, `close`, or `validate-bundle`.
+5. Parse the versioned JSON from `stdout`. Confirm `task_type` matches the user's requested capability. After `valuation`, confirm its `research.question` matches the user's requested capability. Do not expect `research.question` from `resolve`, `close`, or `validate-bundle`. If the result covers a narrower question, explain that mismatch and present only what the CLI actually formed.
 6. Treat `stderr` and a nonzero exit as invocation, protocol, I/O, or internal failure—not as research evidence. Treat a zero-exit `limited` or `blocked` JSON result as a valid research result.
 7. Always disclose that `resolve` and `close` use experimental source operations. Their observations can expose agreement or conflict but cannot alone establish a `supported` factual claim.
 8. Follow [references/evidence-contract.md](references/evidence-contract.md) when presenting claims, evidence, conflicts, and limitations.
@@ -24,7 +24,13 @@ Use the bundled deterministic CLI to gather and calculate research evidence. Int
 
 ## CLI
 
-Resolve `<python>` and the script path as described in [references/cli-contract.md](references/cli-contract.md), then invoke exactly one fixed subcommand:
+Resolve `<python>` and the script path as described in [references/cli-contract.md](references/cli-contract.md). Use the stable research Interface for new workflows:
+
+```text
+<python> scripts/entrypoint.py run --request <research-task.json>
+```
+
+The request is structured JSON, not natural language. It includes `schema_version`, `task_type`, `subjects`, `as_of`, `window`, `parameters`, and `source_policy`. Existing commands remain compatibility entry points:
 
 ```text
 <python> scripts/entrypoint.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
@@ -35,7 +41,7 @@ Resolve `<python>` and the script path as described in [references/cli-contract.
 
 Treat `scripts/entrypoint.py` as the Skill's only public runtime entry point. Resolve its path relative to this `SKILL.md`; do not invoke implementation modules directly or assume a platform-specific home directory or shell.
 
-The CLI does not interpret natural language or call a model. Do not pass a natural-language research request, credentials, or secrets as arguments. The first release has no credentialed Adapter and reads no credentials. If a qualified Adapter later documents an optional credential, provide it only through that Adapter's named environment variable—never a command argument—and never repeat its value in output or diagnostics.
+The CLI does not interpret natural language or call a model. Do not pass a natural-language research request, credentials, or secrets as arguments or JSON fields. A missing optional Adapter dependency produces an explicit `blocked` result. If a qualified Adapter later documents an optional credential, provide it only through that Adapter's named environment variable—never a command argument—and never repeat its value in output or diagnostics.
 
 ## Present the result
 

@@ -7,13 +7,14 @@ import json
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, NoReturn, Sequence
+from typing import Any, Collection, NoReturn, Sequence
 
 from .bundle_validation import JsonNumberToken, build_bundle_validation_result
 from .close_observation import build_close_result
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
 from .provided_evidence import build_provided_evidence_result
+from .research_runtime import research
 from .valuation import build_valuation_result
 
 
@@ -49,6 +50,10 @@ def _canonical_security(value: str) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="a_share_research")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run = subparsers.add_parser("run")
+    run.add_argument("--request", type=Path, required=True)
+    run.add_argument("--output", type=Path)
 
     resolve = subparsers.add_parser("resolve")
     resolve.add_argument("--query", required=True)
@@ -105,15 +110,31 @@ def _reject_json_number(_: str) -> NoReturn:
     raise ValueError("JSON numbers must be decimal strings with explicit units")
 
 
+def _load_research_request(request_path: Path) -> dict[str, Any]:
+    with request_path.open(encoding="utf-8") as request_file:
+        loaded = json.load(request_file)
+    if not isinstance(loaded, dict):
+        raise ValueError("research request must be a JSON object")
+    return loaded
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     identity_transport: HttpTransport | None = None,
     research_now: datetime | None = None,
+    available_optional_dependencies: Collection[str] | None = None,
 ) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        if arguments.command == "resolve":
+        if arguments.command == "run":
+            result = research(
+                _load_research_request(arguments.request),
+                identity_transport=identity_transport,
+                research_now=research_now,
+                available_optional_dependencies=available_optional_dependencies,
+            )
+        elif arguments.command == "resolve":
             result = resolve_security_identity(
                 arguments.query,
                 arguments.as_of,
@@ -142,10 +163,16 @@ def main(
             else:
                 result = build_provided_evidence_result(manifest, arguments.as_of)
     except OSError as error:
-        print(f"error: cannot read bundle manifest: {error}", file=sys.stderr)
+        input_name = (
+            "research request" if arguments.command == "run" else "bundle manifest"
+        )
+        print(f"error: cannot read {input_name}: {error}", file=sys.stderr)
         return 1
     except ValueError as error:
-        print(f"error: invalid bundle protocol: {error}", file=sys.stderr)
+        protocol_name = (
+            "research task" if arguments.command == "run" else "bundle protocol"
+        )
+        print(f"error: invalid {protocol_name}: {error}", file=sys.stderr)
         return 2
     serialized = json.dumps(
         result,

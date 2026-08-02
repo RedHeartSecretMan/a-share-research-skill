@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -204,6 +205,45 @@ class IdentitySourceOperationTests(unittest.TestCase):
 
 
 class IdentityResolutionCliTests(unittest.TestCase):
+    def invoke_task(
+        self,
+        task: dict[str, object],
+        scenario: str = "default",
+    ) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["A_SHARE_RESEARCH_TEST_SCENARIO"] = scenario
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            request_path = Path(temporary_directory, "research-task.json")
+            request_path.write_text(
+                json.dumps(task, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(FIXTURE_CLI),
+                    "run",
+                    "--request",
+                    str(request_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+        return completed
+
+    def run_task(
+        self,
+        task: dict[str, object],
+        scenario: str = "default",
+    ) -> dict[str, object]:
+        completed = self.invoke_task(task, scenario)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        return json.loads(completed.stdout)
+
     def run_resolve(
         self,
         query: str,
@@ -247,6 +287,152 @@ class IdentityResolutionCliTests(unittest.TestCase):
             [item["source_operation"] for item in result["evidence"]],
             ["sse_stock_list@1", "cninfo_security_dictionary@1"],
         )
+
+    def test_run_routes_versioned_identity_task_through_public_runtime(self) -> None:
+        result = self.run_task(
+            {
+                "schema_version": "1.0",
+                "task_type": "security_identity",
+                "subjects": [{"clue": "600519"}],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            }
+        )
+
+        self.assertEqual(result["schema_version"], "1.0")
+        self.assertEqual(result["task_type"], "security_identity")
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["candidates"][0]["security"]["exchange"], "SSE")
+        self.assertEqual(result["candidates"][0]["security"]["code"], "600519")
+        self.assertEqual(
+            [item["source_operation"] for item in result["evidence"]],
+            ["sse_stock_list@1", "cninfo_security_dictionary@1"],
+        )
+
+    def test_run_returns_explicit_blocked_result_for_unknown_task(self) -> None:
+        result = self.run_task(
+            {
+                "schema_version": "1.0",
+                "task_type": "vendor_magic_endpoint",
+                "subjects": [{"clue": "600519"}],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            }
+        )
+
+        self.assertEqual(result["schema_version"], "1.0")
+        self.assertEqual(result["task_type"], "vendor_magic_endpoint")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["conflicts"], [])
+        self.assertEqual(result["source_errors"], [])
+        self.assertEqual(result["degradations"], [])
+        self.assertEqual(result["limitations"][0]["code"], "unsupported_task_type")
+
+    def test_run_blocks_before_using_disallowed_experimental_sources(self) -> None:
+        result = self.run_task(
+            {
+                "schema_version": "1.0",
+                "task_type": "security_identity",
+                "subjects": [{"clue": "600519"}],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {},
+                "source_policy": {
+                    "allow_experimental": False,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            }
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["evidence"], [])
+        self.assertEqual(
+            result["limitations"][0]["code"],
+            "source_policy_not_satisfied",
+        )
+
+    def test_run_rejects_invalid_research_date_as_protocol_error(self) -> None:
+        completed = self.invoke_task(
+            {
+                "schema_version": "1.0",
+                "task_type": "security_identity",
+                "subjects": [{"clue": "600519"}],
+                "as_of": "today",
+                "window": None,
+                "parameters": {},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            }
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, "")
+        self.assertIn(
+            "error: invalid research task: research as_of must use explicit",
+            completed.stderr,
+        )
+
+    def test_run_blocks_an_invalid_security_without_network_guessing(self) -> None:
+        result = self.run_task(
+            {
+                "schema_version": "1.0",
+                "task_type": "security_identity",
+                "subjects": [{"clue": "60051"}],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            }
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["limitations"][0]["code"], "invalid_security_clue")
+
+    def test_run_reports_missing_optional_adapter_dependency(self) -> None:
+        result = self.run_task(
+            {
+                "schema_version": "1.0",
+                "task_type": "market_trend",
+                "subjects": [{"security": "SZSE:300058"}],
+                "as_of": "2026-08-02",
+                "window": {"trading_days": 10},
+                "parameters": {"adjustment": "unadjusted"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            }
+        )
+
+        self.assertEqual(result["task_type"], "market_trend")
+        self.assertEqual(result["status"], "blocked")
+        limitation = result["limitations"][0]
+        self.assertEqual(limitation["code"], "missing_optional_dependency")
+        self.assertEqual(limitation["capability"], "market_series")
+        self.assertEqual(limitation["dependency"], "mootdx")
 
     def test_szse_and_cninfo_return_one_canonical_candidate(self) -> None:
         result = self.run_resolve("000001", "szse_success")

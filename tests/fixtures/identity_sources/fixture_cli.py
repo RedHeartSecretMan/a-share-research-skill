@@ -103,4 +103,10 @@ class FixtureTransport:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:], identity_transport=FixtureTransport()))
+    raise SystemExit(
+        main(
+            sys.argv[1:],
+            identity_transport=FixtureTransport(),
+            available_optional_dependencies=set(),
+        )
+    )

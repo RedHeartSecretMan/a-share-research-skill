@@ -1,0 +1,195 @@
+"""Deep module interface for versioned A-share research tasks."""
+
+from __future__ import annotations
+
+import importlib.util
+from datetime import date, datetime
+from typing import Any, Collection
+
+from .identity_resolution import resolve_security_identity
+from .identity_sources import HttpTransport, UrlLibTransport
+
+
+class ResearchRuntime:
+    """Route stable research tasks while hiding source-specific operations."""
+
+    def __init__(
+        self,
+        *,
+        identity_transport: HttpTransport | None = None,
+        research_now: datetime | None = None,
+        available_optional_dependencies: Collection[str] | None = None,
+    ) -> None:
+        self._identity_transport = identity_transport or UrlLibTransport()
+        self._research_now = research_now
+        self._available_optional_dependencies = available_optional_dependencies
+
+    def research(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Execute one versioned research task."""
+
+        _validate_request_envelope(request)
+        task_type = request["task_type"]
+        if task_type == "security_identity":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "security_identity currently requires experimental "
+                        "source operations"
+                    ),
+                )
+            else:
+                result = self._research_identity(request)
+        elif task_type == "market_trend":
+            if not self._dependency_available("mootdx"):
+                result = _blocked_result(
+                    request,
+                    code="missing_optional_dependency",
+                    message=(
+                        "market_series requires the optional mootdx Adapter dependency"
+                    ),
+                    limitation_details={
+                        "capability": "market_series",
+                        "dependency": "mootdx",
+                    },
+                )
+            else:
+                result = _blocked_result(
+                    request,
+                    code="capability_not_implemented",
+                    message="market_trend is registered but not implemented yet",
+                )
+        else:
+            result = _blocked_result(
+                request,
+                code="unsupported_task_type",
+                message=f"Research task type is not supported: {task_type}",
+            )
+        return _complete_result(result, task_type)
+
+    def _research_identity(self, request: dict[str, Any]) -> dict[str, Any]:
+        subjects = request["subjects"]
+        if len(subjects) != 1:
+            raise ValueError("security_identity requires exactly one subject")
+        subject = subjects[0]
+        if not isinstance(subject, dict):
+            raise ValueError("each research subject must be a JSON object")
+        clue = subject.get("clue")
+        if not isinstance(clue, str) or not clue.strip():
+            raise ValueError("security_identity subject requires a non-empty clue")
+        return resolve_security_identity(
+            clue.strip(),
+            request["as_of"],
+            self._identity_transport,
+        )
+
+    def _dependency_available(self, dependency: str) -> bool:
+        if self._available_optional_dependencies is not None:
+            return dependency in self._available_optional_dependencies
+        return importlib.util.find_spec(dependency) is not None
+
+
+def research(
+    request: dict[str, Any],
+    *,
+    identity_transport: HttpTransport | None = None,
+    research_now: datetime | None = None,
+    available_optional_dependencies: Collection[str] | None = None,
+) -> dict[str, Any]:
+    """Run a task through the public research module interface."""
+
+    return ResearchRuntime(
+        identity_transport=identity_transport,
+        research_now=research_now,
+        available_optional_dependencies=available_optional_dependencies,
+    ).research(request)
+
+
+def _validate_request_envelope(request: dict[str, Any]) -> None:
+    required = {
+        "schema_version",
+        "task_type",
+        "subjects",
+        "as_of",
+        "window",
+        "parameters",
+        "source_policy",
+    }
+    missing = sorted(required.difference(request))
+    if missing:
+        raise ValueError(f"research task is missing fields: {', '.join(missing)}")
+    if request["schema_version"] != "1.0":
+        raise ValueError("unsupported research task schema_version")
+    if not isinstance(request["task_type"], str) or not request["task_type"]:
+        raise ValueError("research task_type must be a non-empty string")
+    if not isinstance(request["subjects"], list):
+        raise ValueError("research subjects must be a JSON array")
+    as_of = request["as_of"]
+    if not isinstance(as_of, str):
+        raise ValueError("research as_of must use explicit YYYY-MM-DD format")
+    try:
+        parsed_as_of = date.fromisoformat(as_of)
+    except ValueError as error:
+        raise ValueError(
+            "research as_of must use explicit YYYY-MM-DD format"
+        ) from error
+    if parsed_as_of.isoformat() != as_of:
+        raise ValueError("research as_of must use explicit YYYY-MM-DD format")
+    if not isinstance(request["parameters"], dict):
+        raise ValueError("research parameters must be a JSON object")
+    if not isinstance(request["source_policy"], dict):
+        raise ValueError("research source_policy must be a JSON object")
+    required_policy_fields = {
+        "allow_experimental",
+        "allow_credentials",
+        "allow_fallback",
+    }
+    missing_policy_fields = sorted(
+        required_policy_fields.difference(request["source_policy"])
+    )
+    if missing_policy_fields:
+        raise ValueError(
+            "research source_policy is missing fields: "
+            + ", ".join(missing_policy_fields)
+        )
+    if any(
+        not isinstance(request["source_policy"][field], bool)
+        for field in required_policy_fields
+    ):
+        raise ValueError("research source_policy fields must be booleans")
+
+
+def _blocked_result(
+    request: dict[str, Any],
+    *,
+    code: str,
+    message: str,
+    limitation_details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    limitation = {"code": code, "message": message}
+    if limitation_details:
+        limitation.update(limitation_details)
+    return {
+        "schema_version": request["schema_version"],
+        "status": "blocked",
+        "subjects": request["subjects"],
+        "evidence": [],
+        "conflicts": [],
+        "source_errors": [],
+        "degradations": [],
+        "limitations": [limitation],
+    }
+
+
+def _complete_result(result: dict[str, Any], task_type: str) -> dict[str, Any]:
+    completed = {
+        **result,
+        "task_type": task_type,
+    }
+    completed.setdefault("evidence", [])
+    completed.setdefault("conflicts", [])
+    completed.setdefault("source_errors", [])
+    completed.setdefault("degradations", [])
+    completed.setdefault("limitations", [])
+    return completed

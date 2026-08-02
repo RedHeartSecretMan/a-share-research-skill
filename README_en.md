@@ -74,6 +74,16 @@ The runtime requires only the Python 3.12 or later standard library. It does not
 
 ## CLI
 
+New capabilities use the stable research-task Interface:
+
+```text
+<python> <skill-root>/scripts/entrypoint.py run --request <research-task.json>
+```
+
+`research-task.json` is a structured task, not natural-language text. It carries the version, task type, subjects, research date, window, parameters, and source policy. Unknown tasks, policy-disallowed sources, and missing optional Adapter dependencies return explicit `blocked` results.
+
+The following four commands remain compatibility entry points during migration.
+
 Experimental-source identity and close research:
 
 ```text
