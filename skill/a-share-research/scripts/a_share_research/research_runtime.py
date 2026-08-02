@@ -22,6 +22,8 @@ from .content_contract import (
 )
 from .content_registry import build_default_content_operations
 from .etf_market import build_etf_market_result
+from .etf_option_contract import OptionSourceOperation
+from .etf_options import build_etf_options_result
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
 from .market_series import build_market_trend_result
@@ -48,6 +50,8 @@ class ResearchRuntime:
         capital_transport: CapitalHttpTransport | None = None,
         market_signal_operations: Collection[MarketSignalSourceOperation] | None = None,
         market_signal_transport: MarketSignalHttpTransport | None = None,
+        etf_option_operations: Collection[OptionSourceOperation] | None = None,
+        etf_option_transport: HttpTransport | None = None,
     ) -> None:
         self._identity_transport = identity_transport or UrlLibTransport()
         self._research_now = research_now
@@ -66,6 +70,10 @@ class ResearchRuntime:
             else tuple(market_signal_operations)
         )
         self._market_signal_transport = market_signal_transport or UrlLibTransport()
+        self._etf_option_operations = (
+            None if etf_option_operations is None else tuple(etf_option_operations)
+        )
+        self._etf_option_transport = etf_option_transport or UrlLibTransport()
 
     def research(self, request: dict[str, Any]) -> dict[str, Any]:
         """Execute one versioned research task."""
@@ -114,6 +122,26 @@ class ResearchRuntime:
                     self._identity_transport,
                     self._research_now,
                 )
+        elif task_type == "etf_options":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "etf_options currently requires experimental source operations"
+                    ),
+                )
+            else:
+                etf_option_operations = self._etf_option_operations
+                if etf_option_operations is None:
+                    from .etf_option_registry import (
+                        build_default_etf_option_operations,
+                    )
+
+                    etf_option_operations = build_default_etf_option_operations(
+                        self._etf_option_transport
+                    )
+                result = build_etf_options_result(request, etf_option_operations)
         elif task_type == "security_valuation":
             if not request["source_policy"]["allow_experimental"]:
                 result = _blocked_result(
@@ -281,6 +309,8 @@ def research(
     capital_transport: CapitalHttpTransport | None = None,
     market_signal_operations: Collection[MarketSignalSourceOperation] | None = None,
     market_signal_transport: MarketSignalHttpTransport | None = None,
+    etf_option_operations: Collection[OptionSourceOperation] | None = None,
+    etf_option_transport: HttpTransport | None = None,
 ) -> dict[str, Any]:
     """Run a task through the public research module interface."""
 
@@ -294,6 +324,8 @@ def research(
         capital_transport=capital_transport,
         market_signal_operations=market_signal_operations,
         market_signal_transport=market_signal_transport,
+        etf_option_operations=etf_option_operations,
+        etf_option_transport=etf_option_transport,
     ).research(request)
 
 

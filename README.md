@@ -35,6 +35,7 @@
 | 最近完成收盘价 | 规范的 `SSE:code` / `SZSE:code` + 明确日期 | 交叉核验交易所日线与腾讯观测，保留交易日、价格口径和冲突 |
 | 最近 N 日走势 | A 股线索 + 2–250 个交易日 + 未复权/前复权口径 | 双源 OHLCV、累计涨跌、最大回撤、年化波动、涨跌天数、量能变化与公司行动说明 |
 | ETF 行情 | 上交所 ETF 六位代码 + 明确日期 | 上交所 ETF 身份和快照、腾讯价格交叉、成交量手/股舍入差说明 |
+| ETF 期权 | 510050 / 510300 / 510500 / 588000 + 单一观测日 + ATM/期权链、到期日与行情时点模式 | 分开保留标准 `M` 与调整 `A` 系列、认购/认沽报价、并列 ATM、供应商报告 Greeks/IV、四态 coverage、来源时点与限制 |
 | 自动单票估值 | A 股线索 + 已确认证券类别数 + 当前北京时间日期 + 情景目标 PE | 保留三表完整数值行和季度序列，取得当前总股本快照与一致预期，计算总市值、PE TTM、PB MRQ、前向 PE、预测增长、PEG 与 PE 消化时间 |
 | 同口径批量估值 | 2–10 个不同 A 股线索 + 共同日期/目标 PE | 按输入顺序保留全部标的；统一价格与指标口径，显式呈现不可计算、无估值意义及阻断行 |
 | 研究内容检索 | 主题/行业或单只 A 股 + 发表时间窗 + 材料类型 | 个股/行业研报、一致预期、F10、新闻、巨潮/上交所/深交所公告、市场快讯和互动易；保留观点角色、发布时间、获取时间、文档身份与定位 |
@@ -127,6 +128,18 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 > 使用 `$a-share-research`，查询 510050 上证 50ETF 截至今天的当前或最近完成行情，告诉我现价、涨跌幅、成交量、成交额、观测时间、两源是否一致以及限制。
 
+**研究 ETF 期权**
+
+> 使用 `$a-share-research`，查看 510050 上证 50ETF 最近未到期月份、最近完整交易时点的 ATM 认购和认沽，保留报价状态、买卖价、最新价、成交量、持仓量、供应商报告 Greeks/IV、单位、观测时间、来源与限制。
+
+> 使用 `$a-share-research`，查看 510300 沪深 300ETF 在指定到期日由来源观察到的期权链，使用最近完整行情；将标准 `M` 与调整 `A` 系列分开，并保留同距并列 ATM 和合约总量限制。
+
+> 使用 `$a-share-research`，查看 510500 中证 500ETF 最近未到期月份由来源观察到的期权链，允许最新日内行情，并明确交易时段是否完成以及覆盖是否完整。
+
+> 使用 `$a-share-research`，查看 588000 科创 50ETF 在指定到期日的 ATM 期权，允许最新日内行情；如果来源返回了其他 ETF、缺少合约或无可用报价，直接阻断而不是回退或补猜。
+
+这里的“供应商报告”表示 Delta、Gamma、Theta、Vega 和隐含波动率由来源直接给出，不是本项目本地运行 BSM，也不是交易所计算值。Gamma、Theta、Vega 的供应商原生单位尚未独立核验；IV 使用小数比例。当前来源不提供权威合约总量、完整合约单位或调整条款，也没有合格的独立 fallback，因此结果必须保留 coverage 与限制。
+
 **检查研究资料**
 
 > 使用 `$a-share-research`，检查 `/path/to/evidence-bundle` 里的研究证据是否完整、口径是否一致，并按优先级告诉我还需要补什么。
@@ -205,6 +218,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 - 研报、新闻、公告、快讯、互动易和 F10 当前是实验来源，结果最高为 `limited`；PDF 定位不等于已下载或解析，只有显式开启文档验证后才能声称完成获取检查。
 - 资金流、龙虎榜、解禁、两融、大宗、股东户数和分红当前也属于实验来源；供应商派生的资金方向是市场信号，不是权威披露。滚动板块资金不暴露首个交易日时会保留 `period.start: null`；来源不暴露首次公开时间时只允许当前获取日研究，不得倒用于历史回测。2024 年 8 月 19 日起无法按旧口径取得北向每日净买额时，任务会显式阻断而不是补零。
 - 题材、板块、行业轮动、涨跌停、监控、异常波动和热度也来自实验来源。供应商监控池不冒充交易所官方名单，编辑理由和热度标签不证明因果或基本面；只有完整空池才能报告 `observed_empty`，裸供应商代码不能用于监控异动交叉。
+- ETF 期权当前只覆盖 50ETF、300ETF、500ETF 与科创 50ETF 的实验来源快照。供应商报告 Greeks/IV 不是项目本地模型或交易所计算；权威合约总量、合约单位、调整条款和独立 fallback 尚不可用，`M` / `A` 系列、报价状态、单位、时点、来源与 coverage 必须原样披露。
 - iWencai 语义检索必须由来源策略允许，并只从 `IWENCAI_API_KEY` 读取凭据；凭据不会进入请求 JSON 或输出。
 - ETF 支持交易所快照；尚不支持分钟、逐笔、交易、新闻情绪评分、全量公司画像或批量选股。
 - 不输出评级、目标价、买卖建议、仓位建议或自动交易指令。
@@ -242,6 +256,10 @@ python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```text
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json

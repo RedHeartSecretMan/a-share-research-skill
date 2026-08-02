@@ -13,6 +13,7 @@ from .bundle_validation import JsonNumberToken, build_bundle_validation_result
 from .capital_contract import CapitalHttpTransport, CapitalSourceOperation
 from .close_observation import build_close_result
 from .content_contract import ContentHttpTransport, ContentSourceOperation
+from .etf_option_contract import OptionSourceOperation
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
 from .market_signal_contract import (
@@ -136,6 +137,8 @@ def main(
     capital_transport: CapitalHttpTransport | None = None,
     market_signal_operations: Collection[MarketSignalSourceOperation] | None = None,
     market_signal_transport: MarketSignalHttpTransport | None = None,
+    etf_option_operations: Collection[OptionSourceOperation] | None = None,
+    etf_option_transport: HttpTransport | None = None,
 ) -> int:
     arguments = _parser().parse_args(argv)
     try:
@@ -151,6 +154,8 @@ def main(
                 capital_transport=capital_transport,
                 market_signal_operations=market_signal_operations,
                 market_signal_transport=market_signal_transport,
+                etf_option_operations=etf_option_operations,
+                etf_option_transport=etf_option_transport,
             )
         elif arguments.command == "resolve":
             result = resolve_security_identity(

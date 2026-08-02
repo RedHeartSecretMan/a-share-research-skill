@@ -35,6 +35,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 | Latest completed close | Canonical `SSE:code` / `SZSE:code` + explicit date | Cross-checks exchange daily lines and Tencent observations while preserving trading date, basis, and conflicts |
 | Recent N-session trend | A-share clue + 2–250 sessions + unadjusted/forward-adjusted basis | Cross-checked OHLCV, cumulative return, drawdown, volatility, up/down sessions, volume change, and corporate actions |
 | ETF market | Six-digit SSE ETF code + explicit date | SSE ETF identity and snapshot, Tencent price cross-check, and explicit board-lot rounding differences |
+| ETF options | 510050 / 510300 / 510500 / 588000 + one observation date + ATM/chain, expiry, and quote-time modes | Separate standard `M` and adjusted `A` series, call/put quotes, tied ATM strikes, provider-reported Greeks/IV, four-state coverage, source time, and limitations |
 | Automatic security valuation | A-share clue + established security-class count + current China Standard Time date + scenario target PE | Preserves complete numeric rows from all three statements and quarterly series, then acquires current shares and consensus to calculate reported and forward metrics |
 | Same-basis valuation comparison | 2–10 unique A-share clues + shared date/target PE | Preserves every requested row with one price and metric basis; unavailable, meaningless, and blocked metrics remain explicit |
 | Research-content retrieval | Theme/industry or one A-share + publication window + material types | Stock/industry reports, consensus, F10, news, CNINFO/SSE/SZSE announcements, market flashes, and investor Q&A with role, time, document identity, and locators preserved |
@@ -127,6 +128,18 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 > Use `$a-share-research` to find the current or latest-completed quote for SSE 50ETF (510050) as of today. Include price, change, volume, amount, observation time, source agreement, and limitations.
 
+**Research ETF options**
+
+> Use `$a-share-research` to show the nearest-unexpired ATM call and put for SSE 50ETF (510050) at the latest completed session. Preserve quote state, bid, ask, last, volume, open interest, provider-reported Greeks/IV, units, observation time, source, and limitations.
+
+> Use `$a-share-research` to show the source-observed option chain for CSI 300ETF (510300) at an exact expiry using latest-completed quotes. Keep standard `M` and adjusted `A` series separate and preserve tied ATM strikes and the contract-total limitation.
+
+> Use `$a-share-research` to show the nearest-unexpired source-observed option chain for CSI 500ETF (510500), allowing the latest intraday quote and stating whether the session and coverage are complete.
+
+> Use `$a-share-research` to show ATM options for STAR 50ETF (588000) at an exact expiry, allowing the latest intraday quote. If the source identifies another ETF, omits contracts, or has no usable quote, block instead of falling back or estimating.
+
+“Provider-reported” means Delta, Gamma, Theta, Vega, and implied volatility come directly from the source; they are neither local BSM calculations by this project nor exchange-calculated values. Provider-native units for Gamma, Theta, and Vega are not independently verified; IV is a decimal fraction. The current source exposes no authoritative contract total, complete contract-unit definition, or adjustment terms and has no qualified independent fallback, so coverage and limitations must remain visible.
+
 **Check research materials**
 
 > Use `$a-share-research` to check whether the research evidence in `/path/to/evidence-bundle` is complete and internally consistent, then prioritize what I still need to provide.
@@ -205,6 +218,7 @@ The current preview is deliberately conservative:
 - Reports, news, announcements, flashes, investor Q&A, and F10 currently use experimental sources, so results are at most `limited`. A PDF locator does not prove download or parsing; only an explicit document-verification run may claim retrieval was checked.
 - Fund flow, dragon-tiger records, lockups, margin data, block trades, shareholder counts, and distributions also use experimental sources. Provider-derived fund direction is a market signal, not authoritative disclosure. A rolling board metric keeps `period.start: null` when the first session is not exposed; a source with unknown first-availability time is usable only for research on its current retrieval date, never as a historical backtest input. When the post-19-August-2024 regime does not expose the old daily northbound net-buy metric, the task blocks explicitly instead of inserting zero.
 - Themes, board membership, industry rotation, limit pools, monitoring, abnormal movement, and heat also use experimental sources. A provider watchlist is not an official exchange list, and editorial reasons or popularity labels do not prove causality or fundamentals. Only a completely collected zero pool is `observed_empty`, and provider-local codes cannot establish a monitoring intersection.
+- ETF options currently cover experimental snapshots for 50ETF, 300ETF, 500ETF, and STAR 50ETF only. Provider-reported Greeks/IV are neither local-model nor exchange calculations; authoritative contract totals, contract units, adjustment terms, and an independent fallback remain unavailable. Preserve `M` / `A` series, quote state, units, timing, source, and coverage.
 - Semantic iWencai search requires source-policy permission and reads credentials only from `IWENCAI_API_KEY`; values never enter request JSON or output.
 - ETF snapshots are supported; minute, tick, trading, news-sentiment scoring, full-company profiles, and batch screening are not yet supported.
 - It does not provide ratings, price targets, buy/sell advice, position sizing, or automated trading instructions.
@@ -242,6 +256,10 @@ Run each vertical slice explicitly against live sources with versioned requests:
 ```text
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json
