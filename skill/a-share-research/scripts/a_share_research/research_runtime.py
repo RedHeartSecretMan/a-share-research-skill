@@ -33,6 +33,7 @@ from .market_signal_contract import (
 )
 from .market_signals import build_market_signals_result
 from .research_content import build_research_content_result
+from .research_workflows import build_research_workflow_result
 
 
 class ResearchRuntime:
@@ -79,8 +80,30 @@ class ResearchRuntime:
         """Execute one versioned research task."""
 
         _validate_request_envelope(request)
+        return self._dispatch_validated(request, allow_workflow=True)
+
+    def _run_leaf_task(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Run an internally compiled leaf task through this Runtime."""
+
+        _validate_request_envelope(request)
+        if request["task_type"] == "research_workflow":
+            raise ValueError("research_workflow steps must be leaf ResearchTasks")
+        return self._dispatch_validated(request, allow_workflow=False)
+
+    def _dispatch_validated(
+        self,
+        request: dict[str, Any],
+        *,
+        allow_workflow: bool,
+    ) -> dict[str, Any]:
+        """Dispatch an envelope that has already passed common validation."""
+
         task_type = request["task_type"]
-        if task_type == "security_identity":
+        if task_type == "research_workflow":
+            if not allow_workflow:
+                raise ValueError("nested research_workflow tasks are not allowed")
+            result = build_research_workflow_result(request, self._run_leaf_task)
+        elif task_type == "security_identity":
             if not request["source_policy"]["allow_experimental"]:
                 result = _blocked_result(
                     request,

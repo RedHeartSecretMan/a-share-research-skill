@@ -41,6 +41,7 @@
 | 研究内容检索 | 主题/行业或单只 A 股 + 发表时间窗 + 材料类型 | 个股/行业研报、一致预期、F10、新闻、巨潮/上交所/深交所公告、市场快讯和互动易；保留观点角色、发布时间、获取时间、文档身份与定位 |
 | 资金、筹码与公司事件 | 单只 A 股或全市场/板块范围 + 观测时间窗 + 数据类型 | 北向披露缺口、个股/板块资金流、个股及全市场龙虎榜、未来 90 日解禁、两融、大宗、股东户数和分红送转；逐项保留周期、单位、方向与市场范围 |
 | 市场题材与交易信号 | 单只 A 股线索或全市场范围 + 明确观测日 + 信号类型 | 强势题材、个股板块归属、行业轮动、涨跌停池、重点监控、严重异常波动、规范身份交叉和市场热度；保留规则、归因来源、四态 coverage、冲突与限制 |
+| 四套研究流程 | 单票、多票、主题关键词或一个新标的 + 显式研究窗口 | 只编排现有研究任务，逐步保留状态、证据、冲突、来源错误与限制；身份阻断时停止依赖步骤，其他单步不可用时不伪装成完整结果 |
 | 证据包校验 | 调用者提供的 `manifest.json` 与可选材料 | 校验身份、时间、单位、口径、哈希、定位信息和证据关系 |
 | 提供证据估值 | 已校验证据包 + 明确日期 | 计算总市值、PE TTM、PB MRQ；保留公式、操作数和报告谱系 |
 
@@ -110,7 +111,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 ## 常见用法
 
-安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。最新 Release 仍是 v0.0.1 内核预览；以下走势与 ETF 用法位于正在建设的 main。
+安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。最新 Release 仍是 v0.0.1 内核预览；以下新增走势、ETF 与研究流程用法位于正在建设的 main。
 
 **找对证券**
 
@@ -148,17 +149,21 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 > 使用 `$a-share-research`，根据 `/path/to/evidence-bundle` 计算总市值、PE TTM 和 PB MRQ，并给出计算日期、公式、关键输入和证据限制；如果资料不足，直接告诉我缺什么。
 
-**自动研究单票估值**
+**运行单票估值流程**
 
 > 使用 `$a-share-research`，研究工业富联截至今天的估值。先确认发行主体是否只有一个需要计价的普通股证券类别；以最近完整交易日未复权收盘价为准，计算总市值、PE TTM、PB MRQ、首个预测年度前向 PE、预测 EPS 增长、PEG，以及回落到 30 倍 PE 的理论消化时间；区分镜像财务观测、机构一致预期和情景假设，不要给买卖建议。
 
-**同口径比较多只股票**
+**运行批量估值对比流程**
 
 > 使用 `$a-share-research`，按同一个日期、未复权收盘价口径和 30 倍目标 PE，对比工业富联、贵州茅台、宁德时代、美的集团和五粮液。先确认每个发行主体的证券类别范围；保留每只股票的缺失项和限制，不要因为某项不可计算就删掉标的。
 
-**查主题研报**
+**运行主题研报流程**
 
 > 使用 `$a-share-research`，检索最近 90 天“人形机器人、丝杠、减速器”相关研报，按发布时间列出标题、作者、来源和 PDF 定位；合并同一文档的重复结果，并把机构观点与已披露事实分开。
+
+**运行新标的研究流程**
+
+> 使用 `$a-share-research`，把工业富联作为新标的做一轮完整研究：先核验身份，再依次查看机构研报与一致预期、当前估值、供应商板块归属、最近 5 日资金流、龙虎榜、未来 90 日解禁和融资融券。每一步都保留证据时点、公开时点、获取时间、状态和限制；某一步不可用时继续执行不依赖它的步骤，但不要把流程说成完整或已支撑。
 
 **研究个股公告与新闻**
 
@@ -195,6 +200,8 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 **查看涨跌停、监控、异常与热度**
 
 > 使用 `$a-share-research`，分别查看最近完整交易日的涨停、炸板、跌停和连板生态，当前供应商重点监控池，带规则代码的严重异常波动记录，以及当前市场热度。只有规范证券身份和监控窗口重叠时才形成监控异动交叉；来源失败或覆盖不完整时不要回答“没有”。
+
+四套研究流程分别是单票估值、同口径批量估值、主题研报和新标的研究。它们没有新的取数捷径，只是按版本化计划编排已有研究任务；顶层 `limited` / `blocked` 与逐步缺口必须同时呈现。工业富联新标的流程的固定路径为“身份 → 机构覆盖 → 估值 → 板块归属 → 资金流 → 龙虎榜 → 解禁 → 两融”，其中未来解禁使用独立且不超过 90 天的显式窗口。
 
 ## 案例 Demo
 
@@ -260,6 +267,10 @@ python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/r
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-single-security-valuation.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json

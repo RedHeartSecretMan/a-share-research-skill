@@ -41,6 +41,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 | Research-content retrieval | Theme/industry or one A-share + publication window + material types | Stock/industry reports, consensus, F10, news, CNINFO/SSE/SZSE announcements, market flashes, and investor Q&A with role, time, document identity, and locators preserved |
 | Capital, positioning, and company events | One A-share or a market/board scope + observation window + data types | Northbound disclosure gaps, stock/board fund flow, stock and market dragon-tiger records, 90-day lockups, margin data, block trades, shareholder counts, and distributions with period, unit, direction, and market scope preserved |
 | Market themes and trading signals | One A-share clue or market-wide scope + explicit observation date + signal types | Strong-stock themes, security board membership, industry rotation, limit pools, focus monitoring, severe abnormal movements, canonical-identity intersections, and market heat with rules, attribution provenance, four-state coverage, conflicts, and limitations preserved |
+| Four research workflows | One security, several securities, theme keywords, or one new security + explicit research windows | Orchestrates existing research tasks only and preserves every step's status, evidence, conflicts, source errors, and limitations; identity failure gates dependent steps without disguising other unavailable steps as complete |
 | Evidence-bundle validation | Caller-provided `manifest.json` and optional materials | Validates identity, time, units, basis, hashes, locators, and evidence relationships |
 | Provided-evidence valuation | Validated bundle + explicit date | Calculates market capitalization, PE TTM, and PB MRQ with formulas, operands, and report lineage |
 
@@ -110,7 +111,7 @@ Provided-evidence valuation research:
 
 ## Common uses
 
-Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The latest Release remains the v0.0.1 kernel preview; the trend and ETF uses below are on the main branch under development.
+Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The latest Release remains the v0.0.1 kernel preview; the new trend, ETF, and research-workflow uses below are on the main branch under development.
 
 **Identify the right security**
 
@@ -148,17 +149,21 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 > Use `$a-share-research` with `/path/to/evidence-bundle` to calculate market capitalization, PE TTM, and PB MRQ. Include the calculation date, formulas, key inputs, and evidence limitations; if evidence is missing, tell me exactly what is needed.
 
-**Research one security's valuation automatically**
+**Run the single-security valuation workflow**
 
 > Use `$a-share-research` to research Industrial Fulian's valuation as of today. First establish whether the issuer has only one priced ordinary-share class. Use the latest completed unadjusted close and calculate market cap, PE TTM, PB MRQ, first-forecast-year PE, forecast EPS growth, PEG, and the theoretical time to reach 30x PE. Separate mirrored statement observations, consensus opinions, and scenario assumptions; do not give trading advice.
 
-**Compare several securities on one basis**
+**Run the same-basis valuation-comparison workflow**
 
 > Use `$a-share-research` to compare Industrial Fulian, Kweichow Moutai, CATL, Midea Group, and Wuliangye using the same date, unadjusted-close basis, and 30x target PE. Establish each issuer's class scope first and preserve every missing item and limitation instead of dropping a security.
 
-**Find thematic research reports**
+**Run the theme-report workflow**
 
 > Use `$a-share-research` to find reports published in the last 90 days about humanoid robots, lead screws, and reducers. List publication time, title, author, source, and PDF locator; merge duplicate documents and keep institutional opinions separate from disclosed facts.
+
+**Run the new-security research workflow**
+
+> Use `$a-share-research` to run a complete new-security review for Industrial Fulian: establish identity, then review institutional reports and consensus, current valuation, provider board membership, latest five-session fund flow, dragon-tiger records, scheduled lockups over the next 90 days, and margin trading. Preserve evidence, source time, status, and limitations for every step. If one step is unavailable, continue steps that do not depend on it without describing the workflow as complete or supported.
 
 **Research a security's announcements and news**
 
@@ -195,6 +200,8 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 **Review limit pools, monitoring, anomalies, and heat**
 
 > Use `$a-share-research` in separate tasks to review the latest completed session's limit-up, break, limit-down, and consecutive-limit ecology, the current provider focus-monitoring pool, severe abnormal movements with rule codes, and current market heat. Form a monitoring intersection only from matching canonical security identity and an overlapping monitoring window; never translate source failure or incomplete coverage into “none.”
+
+The four workflows are single-security valuation, same-basis valuation comparison, theme-report research, and new-security research. They add no data shortcut: each runs a versioned plan of existing ResearchTasks, and the overall `limited` / `blocked` state must be presented together with step-level gaps. Industrial Fulian's fixed new-security path is “identity → institutional coverage → valuation → board membership → fund flow → dragon-tiger → lockup → margin trading”; the future lockup step uses its own explicit window capped at 90 days.
 
 ## Case demos
 
@@ -260,6 +267,10 @@ python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/r
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-single-security-valuation.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json
