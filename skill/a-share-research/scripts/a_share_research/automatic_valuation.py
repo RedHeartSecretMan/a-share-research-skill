@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
 from typing import Any, cast
@@ -26,6 +27,11 @@ TOTAL_ASSETS = "资产总计"
 TOTAL_LIABILITIES = "负债合计"
 OPERATING_CASH_FLOW = "经营活动产生的现金流量净额"
 NET_CASH_CHANGE = "现金及现金等价物净增加额"
+STATEMENT_FIELDS = {
+    "income": (REVENUE, ATTRIBUTABLE_PROFIT),
+    "balance": (TOTAL_ASSETS, TOTAL_LIABILITIES, ATTRIBUTABLE_EQUITY),
+    "cashflow": (OPERATING_CASH_FLOW, NET_CASH_CHANGE),
+}
 FOUR_PLACES = Decimal("0.0001")
 COMPARISON_METRIC_ORDER = [
     "market_capitalization",
@@ -38,15 +44,43 @@ COMPARISON_METRIC_ORDER = [
 ]
 
 
+@dataclass(frozen=True)
+class SelectedReportedFinancials:
+    income: FinancialStatementObservation
+    balance: FinancialStatementObservation
+    cashflow: FinancialStatementObservation
+    profit_reports: tuple[FinancialStatementObservation, ...]
+    ttm_profit: Decimal
+    mrq_equity: Decimal
+    period_method: str
+
+
 def build_security_valuation_result(
     request: dict[str, Any],
     transport: HttpTransport,
     now: datetime | None = None,
+    stock_info_operation: EastmoneyStockInfoOperation | None = None,
 ) -> dict[str, Any]:
     research_now = now or datetime.now(CHINA_STANDARD_TIME)
     research_date = date.fromisoformat(request["as_of"])
     target_pe = _target_pe(request["parameters"])
-    security_class_count = request["parameters"].get("issuer_security_class_count", 1)
+    request_subjects = request["subjects"]
+    request_subject = (
+        request_subjects[0]
+        if len(request_subjects) == 1 and isinstance(request_subjects[0], dict)
+        else {}
+    )
+    security_class_count = request_subject.get("issuer_security_class_count")
+    if security_class_count is None:
+        return _blocked(
+            request,
+            "issuer_security_class_scope_not_established",
+            (
+                "Issuer valuation requires an explicit security-class count; "
+                "the runtime will not assume that one A-share is the issuer's "
+                "only priced ordinary-share class."
+            ),
+        )
     if (
         not isinstance(security_class_count, int)
         or isinstance(security_class_count, bool)
@@ -94,6 +128,15 @@ def build_security_valuation_result(
     source_errors = list(identity.get("source_errors", []))
     conflicts = list(identity.get("conflicts", []))
     limitations = list(identity.get("limitations", []))
+    limitations.append(
+        {
+            "code": "issuer_security_class_count_is_task_declaration",
+            "message": (
+                "The single-class scope is supplied by the research task and is "
+                "not independently established by current source operations."
+            ),
+        }
+    )
     if research_date != research_now.date():
         return _blocked(
             request,
@@ -131,7 +174,9 @@ def build_security_valuation_result(
         )
 
     try:
-        stock_info = EastmoneyStockInfoOperation().observe(security, transport)
+        stock_info = (stock_info_operation or EastmoneyStockInfoOperation()).observe(
+            security, transport
+        )
     except SourceOperationError as error:
         source_errors.append(_source_error(error))
         return _blocked(
@@ -164,7 +209,8 @@ def build_security_valuation_result(
             limitations=limitations,
         )
 
-    selected: dict[str, Any] | None = None
+    statements: dict[str, list[FinancialStatementObservation]] = {}
+    selected: SelectedReportedFinancials | None = None
     try:
         statements = SinaFinancialStatementsOperation().observe(
             security, research_date, transport
@@ -281,27 +327,46 @@ def build_security_valuation_result(
     metrics: dict[str, Any] = {"market_capitalization": _metric(market_cap, "CNY", 3)}
     ttm_profit: Decimal | None = None
     mrq_equity: Decimal | None = None
+    if statements:
+        evidence.extend(_statement_evidence(statements))
+        limitations.extend(
+            [
+                {
+                    "code": "financial_statements_are_provider_mirror_observations",
+                    "message": (
+                        "Statement values are observations from a provider mirror, "
+                        "not independently retrieved authoritative disclosures."
+                    ),
+                },
+                {
+                    "code": "statement_version_semantics_not_independently_verified",
+                    "message": (
+                        "Each period is unique in the source snapshot, but correction "
+                        "and replacement semantics are not independently qualified."
+                    ),
+                },
+            ]
+        )
     if selected is not None:
-        evidence.extend(_statement_evidence(selected))
         financial_statement_highlights = _statement_highlights(selected)
-        ttm_profit = selected["ttm_profit"]
-        mrq_equity = selected["mrq_equity"]
+        ttm_profit = selected.ttm_profit
+        mrq_equity = selected.mrq_equity
         reported_financials = {
             "ttm_attributable_profit": {
                 "value": format(ttm_profit, "f"),
                 "unit": "CNY",
-                "period_method": selected["period_method"],
+                "period_method": selected.period_method,
                 "evidence_periods": [
-                    item.period.isoformat() for item in selected["profit_reports"]
+                    item.period.isoformat() for item in selected.profit_reports
                 ],
             },
             "mrq_attributable_equity": {
                 "value": format(mrq_equity, "f"),
                 "unit": "CNY",
-                "period": selected["balance"].period.isoformat(),
-                "publication_date": selected["balance"].publication_date.isoformat(),
+                "period": selected.balance.period.isoformat(),
+                "publication_date": selected.balance.publication_date.isoformat(),
                 "scope": "consolidated_attributable_to_owners_of_parent",
-                "audit_status": selected["balance"].audit_status,
+                "audit_status": selected.balance.audit_status,
             },
         }
         metrics["pe_ttm"] = (
@@ -421,6 +486,15 @@ def build_security_valuation_result(
             ),
         }
     )
+    limitations.append(
+        {
+            "code": "effective_share_start_time_unverified",
+            "message": (
+                "Total shares are a current snapshot observation; their underlying "
+                "corporate-action effective start time is not established."
+            ),
+        }
+    )
     if consensus is not None:
         limitations.append(
             {
@@ -481,10 +555,14 @@ def build_security_valuation_result(
             "effective_total_shares": {
                 "value": stock_info.total_shares,
                 "unit": "shares",
-                "effective_at": stock_info.retrieved_at.isoformat(),
+                "effective_at": None,
+                "observed_at": stock_info.retrieved_at.isoformat(),
+                "effective_status": "current_snapshot_observation",
             },
         },
         "financial_statement_highlights": financial_statement_highlights,
+        "financial_statements": _financial_statement_series(statements),
+        "quarterly_snapshots": _quarterly_snapshots(statements),
         "reported_financials": reported_financials,
         "forecast": forecast_output,
         "metrics": metrics,
@@ -492,7 +570,7 @@ def build_security_valuation_result(
         "evidence": evidence,
         "conflicts": conflicts,
         "source_errors": source_errors,
-        "degradations": [],
+        "degradations": list(stock_info.degradations),
         "limitations": _deduplicate_limitations(limitations),
     }
 
@@ -520,14 +598,21 @@ def build_valuation_comparison_result(
     evidence: list[Any] = []
     conflicts: list[Any] = []
     source_errors: list[Any] = []
+    degradations: list[Any] = []
     limitations: list[dict[str, Any]] = []
+    stock_info_operation = EastmoneyStockInfoOperation()
     for subject in subjects:
         single_request = {
             **request,
             "task_type": "security_valuation",
             "subjects": [subject],
         }
-        result = build_security_valuation_result(single_request, transport, now)
+        result = build_security_valuation_result(
+            single_request,
+            transport,
+            now,
+            stock_info_operation,
+        )
         result_subjects = result.get("subjects", [])
         resolved_subject = (
             result_subjects[0]
@@ -577,6 +662,7 @@ def build_valuation_comparison_result(
         evidence.extend(result.get("evidence", []))
         conflicts.extend(result.get("conflicts", []))
         source_errors.extend(result.get("source_errors", []))
+        degradations.extend(result.get("degradations", []))
         limitations.extend(result.get("limitations", []))
     successful_rows = [row for row in rows if row["status"] != "blocked"]
     return {
@@ -600,7 +686,7 @@ def build_valuation_comparison_result(
         "evidence": _deduplicate_evidence(evidence),
         "conflicts": conflicts,
         "source_errors": source_errors,
-        "degradations": [],
+        "degradations": degradations,
         "limitations": _deduplicate_limitations(limitations),
     }
 
@@ -632,7 +718,7 @@ def _target_pe(parameters: dict[str, Any]) -> Decimal:
 
 def _select_reported_financials(
     statements: dict[str, list[FinancialStatementObservation]],
-) -> dict[str, Any]:
+) -> SelectedReportedFinancials:
     income = statements["income"]
     balance = statements["balance"]
     cashflow = statements["cashflow"]
@@ -694,46 +780,89 @@ def _select_reported_financials(
             f"FY{previous_fy.period.year} + {latest_income.period.year}{quarter} - "
             f"{comparative.period.year}{quarter} comparative"
         )
+    return SelectedReportedFinancials(
+        income=latest_income,
+        balance=latest_balance,
+        cashflow=latest_cashflow,
+        profit_reports=tuple(profit_reports),
+        ttm_profit=ttm_profit,
+        mrq_equity=Decimal(latest_balance.values[ATTRIBUTABLE_EQUITY]),
+        period_method=period_method,
+    )
+
+
+def _statement_evidence(
+    statements: dict[str, list[FinancialStatementObservation]],
+) -> list[dict[str, Any]]:
+    return [
+        report.to_evidence(STATEMENT_FIELDS[statement_type])
+        for statement_type, reports in statements.items()
+        for report in reports
+    ]
+
+
+def _report_summary(report: FinancialStatementObservation) -> dict[str, Any]:
     return {
-        "income": latest_income,
-        "balance": latest_balance,
-        "cashflow": latest_cashflow,
-        "profit_reports": profit_reports,
-        "ttm_profit": ttm_profit,
-        "mrq_equity": Decimal(latest_balance.values[ATTRIBUTABLE_EQUITY]),
-        "period_method": period_method,
+        "period": report.period.isoformat(),
+        "publication_date": report.publication_date.isoformat(),
+        "scope": report.report_scope,
+        "audit_status": report.audit_status,
+        "version_identifier": report.update_time,
+        "version_relationship": "unique_period_snapshot_from_source_response",
+        "values": {
+            field: {"value": report.values[field], "unit": "CNY"}
+            for field in STATEMENT_FIELDS[report.statement_type]
+            if field in report.values
+        },
+        "evidence_id": report.evidence_id,
     }
 
 
-def _statement_evidence(selected: dict[str, Any]) -> list[dict[str, Any]]:
-    evidence = []
-    seen: set[str] = set()
-    for report in [
-        *selected["profit_reports"],
-        selected["balance"],
-        selected["cashflow"],
-    ]:
-        if report.evidence_id in seen:
-            continue
-        seen.add(report.evidence_id)
-        fields = {
-            "income": (REVENUE, ATTRIBUTABLE_PROFIT),
-            "balance": (TOTAL_ASSETS, TOTAL_LIABILITIES, ATTRIBUTABLE_EQUITY),
-            "cashflow": (OPERATING_CASH_FLOW, NET_CASH_CHANGE),
-        }[report.statement_type]
-        evidence.append(report.to_evidence(fields))
-    return evidence
+def _financial_statement_series(
+    statements: dict[str, list[FinancialStatementObservation]],
+) -> dict[str, list[dict[str, Any]]]:
+    return {
+        statement_type: [_report_summary(report) for report in reports]
+        for statement_type, reports in statements.items()
+    }
 
 
-def _statement_highlights(selected: dict[str, Any]) -> dict[str, Any]:
+def _quarterly_snapshots(
+    statements: dict[str, list[FinancialStatementObservation]],
+) -> list[dict[str, Any]]:
+    reports_by_period = {
+        statement_type: {report.period: report for report in reports}
+        for statement_type, reports in statements.items()
+    }
+    periods = sorted(
+        {period for reports in reports_by_period.values() for period in reports},
+        reverse=True,
+    )
+    return [
+        {
+            "period": period.isoformat(),
+            "complete": all(
+                period in reports_by_period.get(statement_type, {})
+                for statement_type in STATEMENT_FIELDS
+            ),
+            "statements": {
+                statement_type: _report_summary(reports[period])
+                for statement_type, reports in reports_by_period.items()
+                if period in reports
+            },
+        }
+        for period in periods
+    ]
+
+
+def _statement_highlights(selected: SelectedReportedFinancials) -> dict[str, Any]:
     output = {}
-    for key in ("income", "balance", "cashflow"):
-        report = selected[key]
-        fields = {
-            "income": (REVENUE, ATTRIBUTABLE_PROFIT),
-            "balance": (TOTAL_ASSETS, TOTAL_LIABILITIES, ATTRIBUTABLE_EQUITY),
-            "cashflow": (OPERATING_CASH_FLOW, NET_CASH_CHANGE),
-        }[key]
+    for key, report in (
+        ("income", selected.income),
+        ("balance", selected.balance),
+        ("cashflow", selected.cashflow),
+    ):
+        fields = STATEMENT_FIELDS[key]
         output[key] = {
             "period": report.period.isoformat(),
             "publication_date": report.publication_date.isoformat(),

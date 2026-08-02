@@ -16,6 +16,8 @@ market_cap = unadjusted_close × effective_total_shares
 
 Use ordinary shares effective at the research boundary, including tradable and restricted shares of the modeled class. Do not substitute float shares or an unverified period-end share count. Block issuer-wide valuation for multi-class or multi-market issuers until every relevant class, currency, share count, and price is modeled.
 
+The automatic free-source task currently observes a current total-share snapshot but does not independently establish the underlying corporate-action effective start time. It keeps `effective_at` separate from `observed_at`, marks this limitation, and must not reuse that snapshot for a historical research date. It also requires the task to declare the issuer's security-class count; absence or a value above one blocks issuer-wide valuation.
+
 ## PE TTM
 
 ```text

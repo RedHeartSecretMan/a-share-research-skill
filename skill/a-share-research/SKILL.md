@@ -15,8 +15,8 @@ Use the bundled deterministic CLI to gather and calculate research evidence. Int
 4. Choose one research path:
    - For a recent A-share trend, run a `market_trend` task with one security clue, a trading-day window, and explicit `unadjusted` or `forward_adjusted` basis. If an unadjusted window contains a corporate action, stop on the blocked result; do not calculate around it yourself.
    - For an SSE ETF market quote, run an `etf_market` task with its six-digit ETF code clue. Do not route an ETF through A-share identity resolution.
-   - For one current A-share valuation, run `security_valuation` with one clue and a positive decimal-string `target_pe`. This task acquires total shares, reported statements, and consensus EPS, then calculates market capitalization, PE TTM, PB MRQ, forward PE, forecast EPS growth, PEG, and PE digestion years. It only accepts the current China Standard Time research date because its shares and consensus observations are current snapshots.
-   - For a same-basis comparison, run `valuation_compare` with 2–10 unique A-share clues and the same `target_pe`. Preserve input order and show unavailable or meaningless metrics instead of dropping rows.
+   - For one current A-share valuation, run `security_valuation` with one clue, a positively established `issuer_security_class_count`, and a positive decimal-string `target_pe`. This task acquires a current total-share snapshot, valuation-relevant three-statement series, quarterly snapshots, and consensus EPS, then calculates market capitalization, PE TTM, PB MRQ, forward PE, forecast EPS growth, PEG, and PE digestion years. It only accepts the current China Standard Time research date because its shares and consensus observations are current snapshots.
+   - For a same-basis comparison, run `valuation_compare` with 2–10 unique A-share clues, an explicit class count for every subject, and the same `target_pe`. Preserve input order and show unavailable or meaningless metrics instead of dropping rows.
    - For experimental-source identity or close research, run `resolve`, then run `close` only with the returned canonical SSE/SZSE identifier.
    - For caller-provided evidence, run `validate-bundle`, resolve every reported contract error, then run `valuation` with the same bundle and research date.
 5. Parse the versioned JSON from `stdout`. Confirm `task_type` matches the user's requested capability. After `valuation`, confirm its `research.question` matches the user's requested capability. Do not expect `research.question` from `resolve`, `close`, or `validate-bundle`. If the result covers a narrower question, explain that mismatch and present only what the CLI actually formed.
@@ -71,6 +71,7 @@ The CLI does not interpret natural language or call a model. Do not pass a natur
 - Never describe consensus EPS as a reported fact. Keep its forecast year, aggregation method, institution count, and source limitation visible.
 - Never describe `target_pe` or PE digestion years as an objective fair-value conclusion; the target is a user-supplied scenario parameter.
 - Never silently substitute float shares for total shares, forecast profit for reported profit, or adjusted price for an unadjusted close.
+- Never invent `issuer_security_class_count`. If the issuer's ordinary-share classes or listing venues have not been established, accept the blocked result and request evidence instead of assuming one.
 - Never compare or combine adjusted and unadjusted bars. Preserve corporate-action annotations and the exact adjustment basis.
 - Never hide disagreement between otherwise applicable sources.
 - Never expose credentials in output, logs, saved results, or test artifacts.

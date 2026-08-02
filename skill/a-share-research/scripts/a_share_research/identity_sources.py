@@ -9,7 +9,7 @@ from html.parser import HTMLParser
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -40,10 +40,13 @@ class TransportError(Exception):
 class UrlLibTransport:
     """Standard-library HTTP transport for installed runtime use."""
 
+    def __init__(self) -> None:
+        self._opener = build_opener()
+
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         request = Request(url, headers=headers, method="GET")
         try:
-            with urlopen(request, timeout=20) as opened:
+            with self._opener.open(request, timeout=20) as opened:
                 body = opened.read(MAX_RESPONSE_BYTES + 1)
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise TransportError(
@@ -303,7 +306,7 @@ class _TextExtractor(HTMLParser):
 def _plain_text(value: str) -> str:
     parser = _TextExtractor()
     parser.feed(value)
-    return "".join(parser.parts).strip()
+    return "".join("".join(parser.parts).split())
 
 
 class SzseStockListOperation:

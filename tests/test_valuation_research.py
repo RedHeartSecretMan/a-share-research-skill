@@ -18,11 +18,17 @@ class SecurityValuationProcessTests(unittest.TestCase):
     def run_valuation(
         self, scenario: str = "default", **parameter_overrides: object
     ) -> dict[str, object]:
-        parameters = {"target_pe": "30", **parameter_overrides}
+        parameters = {"target_pe": "30"}
+        subject = {"clue": "工业富联", "issuer_security_class_count": 1}
+        if "issuer_security_class_count" in parameter_overrides:
+            subject["issuer_security_class_count"] = parameter_overrides.pop(
+                "issuer_security_class_count"
+            )
+        parameters.update(parameter_overrides)
         request = {
             "schema_version": "1.0",
             "task_type": "security_valuation",
-            "subjects": [{"clue": "工业富联"}],
+            "subjects": [subject],
             "as_of": "2026-08-02",
             "window": None,
             "parameters": parameters,
@@ -90,9 +96,16 @@ class SecurityValuationProcessTests(unittest.TestCase):
                 "effective_total_shares": {
                     "value": "19844092284",
                     "unit": "shares",
-                    "effective_at": "2026-08-02T18:30:00+08:00",
+                    "effective_at": None,
+                    "observed_at": "2026-08-02T18:30:00+08:00",
+                    "effective_status": "current_snapshot_observation",
                 },
             },
+        )
+        self.assertEqual(result["quarterly_snapshots"][0]["period"], "2026-03-31")
+        self.assertEqual(
+            set(result["quarterly_snapshots"][0]["statements"]),
+            {"income", "balance", "cashflow"},
         )
         self.assertEqual(
             result["reported_financials"]["ttm_attributable_profit"],
@@ -102,6 +115,14 @@ class SecurityValuationProcessTests(unittest.TestCase):
                 "period_method": "FY2025 + 2026Q1 - 2025Q1 comparative",
                 "evidence_periods": ["2025-12-31", "2026-03-31", "2025-03-31"],
             },
+        )
+        self.assertEqual(
+            {
+                item["source_role"]
+                for item in result["evidence"]
+                if item.get("source_operation") == "sina_financial_statements@1"
+            },
+            {"market_observation"},
         )
         self.assertEqual(
             result["reported_financials"]["mrq_attributable_equity"],
@@ -282,6 +303,45 @@ class SecurityValuationProcessTests(unittest.TestCase):
         )
         self.assertEqual(result["metrics"], {})
 
+    def test_unknown_security_class_scope_blocks_before_issuer_valuation(self) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "security_valuation",
+            "subjects": [{"clue": "工业富联"}],
+            "as_of": "2026-08-02",
+            "window": None,
+            "parameters": {"target_pe": "30"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            request_path = Path(temporary_directory, "research-task.json")
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(FIXTURE_CLI),
+                    "run",
+                    "--request",
+                    str(request_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["limitations"][-1]["code"],
+            "issuer_security_class_scope_not_established",
+        )
+
 
 class ValuationComparisonProcessTests(unittest.TestCase):
     def test_five_security_comparison_uses_one_date_and_one_metric_basis(self) -> None:
@@ -289,11 +349,11 @@ class ValuationComparisonProcessTests(unittest.TestCase):
             "schema_version": "1.0",
             "task_type": "valuation_compare",
             "subjects": [
-                {"clue": "工业富联"},
-                {"clue": "贵州茅台"},
-                {"clue": "中国平安"},
-                {"clue": "蓝色光标"},
-                {"clue": "平安银行"},
+                {"clue": "工业富联", "issuer_security_class_count": 1},
+                {"clue": "贵州茅台", "issuer_security_class_count": 1},
+                {"clue": "中国平安", "issuer_security_class_count": 1},
+                {"clue": "蓝色光标", "issuer_security_class_count": 1},
+                {"clue": "平安银行", "issuer_security_class_count": 1},
             ],
             "as_of": "2026-08-02",
             "window": None,

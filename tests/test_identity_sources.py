@@ -85,6 +85,21 @@ class IdentitySourceOperationTests(unittest.TestCase):
         self.assertEqual(evidence["observation"]["name"], "平安银行")
         self.assertEqual(evidence["observation"]["valid_from"], "1991-04-03")
 
+    def test_szse_display_whitespace_does_not_create_a_false_name_conflict(
+        self,
+    ) -> None:
+        spaced_name = (
+            Path(FIXTURES, "szse_000001.json")
+            .read_text(encoding="utf-8")
+            .replace("平安银行", "平 安 银 行")
+        )
+        transport = FixtureTransport(spaced_name.encode())
+
+        observations = SzseStockListOperation().observe("平安银行", transport)
+
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0].name, "平安银行")
+
     def test_cninfo_dictionary_normalizes_identity_observation(self) -> None:
         transport = FixtureTransport(Path(FIXTURES, "cninfo_stocks.json").read_bytes())
 

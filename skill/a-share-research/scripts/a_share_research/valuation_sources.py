@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
-from typing import Any
+from time import monotonic, sleep
+from typing import Any, Callable
 from urllib.parse import urlencode
 
 from .identity_sources import (
@@ -101,6 +102,7 @@ class StockInfoObservation:
     provider_price: str
     source_uri: str
     retrieved_at: datetime
+    degradations: tuple[dict[str, str], ...] = ()
 
     @property
     def evidence_id(self) -> str:
@@ -138,6 +140,7 @@ class StockInfoObservation:
                 "experimental_source_operation",
                 "effective_start_time_not_independently_verified",
                 "provider_market_cap_is_cross_check_only",
+                *(["bounded_retry_or_fallback_used"] if self.degradations else []),
             ],
         }
 
@@ -148,6 +151,29 @@ class EastmoneyStockInfoOperation:
         "https://push2delay.eastmoney.com/api/qt/stock/get",
         "https://push2.eastmoney.com/api/qt/stock/get",
     )
+
+    def __init__(
+        self,
+        *,
+        minimum_interval_seconds: float = 1.0,
+        retry_delays: tuple[float, ...] = (0.5, 1.5),
+        clock: Callable[[], float] = monotonic,
+        sleeper: Callable[[float], None] = sleep,
+    ) -> None:
+        self._minimum_interval_seconds = minimum_interval_seconds
+        self._retry_delays = retry_delays
+        self._clock = clock
+        self._sleeper = sleeper
+        self._last_request_at: float | None = None
+
+    def _pace(self) -> None:
+        if self._last_request_at is not None:
+            remaining = self._minimum_interval_seconds - (
+                self._clock() - self._last_request_at
+            )
+            if remaining > 0:
+                self._sleeper(remaining)
+        self._last_request_at = self._clock()
 
     def observe(self, security: str, transport: HttpTransport) -> StockInfoObservation:
         exchange, code = security.split(":", 1)
@@ -164,8 +190,11 @@ class EastmoneyStockInfoOperation:
         )
         response: HttpResponse | None = None
         url = ""
-        for index, endpoint in enumerate(self.endpoints):
+        degradations: list[dict[str, str]] = []
+        request_plan = (self.endpoints[0], self.endpoints[0], self.endpoints[1])
+        for index, endpoint in enumerate(request_plan):
             url = f"{endpoint}?{query}"
+            self._pace()
             try:
                 response = _request(
                     self.operation_id,
@@ -177,9 +206,18 @@ class EastmoneyStockInfoOperation:
             except SourceOperationError as error:
                 if (
                     error.code != "upstream_unavailable"
-                    or index == len(self.endpoints) - 1
+                    or index == len(request_plan) - 1
                 ):
                     raise
+                degradations.append(
+                    {
+                        "source_operation": self.operation_id,
+                        "code": error.code,
+                        "message": str(error),
+                        "attempt": str(index + 1),
+                    }
+                )
+                self._sleeper(self._retry_delays[index])
         if response is None:
             raise AssertionError("stock-information endpoint selection is incomplete")
         payload = _json(self.operation_id, response)
@@ -203,7 +241,7 @@ class EastmoneyStockInfoOperation:
             )
         return StockInfoObservation(
             security=security,
-            name=name,
+            name="".join(name.split()),
             total_shares=_decimal(data.get("f84"), self.operation_id, positive=True),
             provider_market_cap=_decimal(
                 data.get("f116"), self.operation_id, positive=True
@@ -211,6 +249,7 @@ class EastmoneyStockInfoOperation:
             provider_price=_decimal(data.get("f43"), self.operation_id, positive=True),
             source_uri=url,
             retrieved_at=response.retrieved_at,
+            degradations=tuple(degradations),
         )
 
 
@@ -244,7 +283,7 @@ class FinancialStatementObservation:
         }
         return {
             "id": self.evidence_id,
-            "source_role": "authoritative_disclosure",
+            "source_role": "market_observation",
             "source_operation": "sina_financial_statements@1",
             "experimental": True,
             "subject": {"security": self.security},
@@ -257,6 +296,8 @@ class FinancialStatementObservation:
                 "audit_status": self.audit_status,
                 "data_source": self.data_source,
                 "source_update_time": self.update_time,
+                "version_identifier": self.update_time,
+                "version_relationship": "unique_period_snapshot_from_source_response",
             },
             "evidence_time": self.period.isoformat(),
             "available_at": self.publication_date.isoformat(),
@@ -270,7 +311,8 @@ class FinancialStatementObservation:
             },
             "limitations": [
                 "experimental_source_operation",
-                "report_version_relationship_not_independently_verified",
+                "authoritative_origin_not_independently_verified",
+                "source_version_relationship_semantics_not_independently_verified",
             ],
         }
 

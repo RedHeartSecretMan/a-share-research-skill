@@ -29,8 +29,8 @@ Current task types:
 - `security_identity`: one A-share name/code clue;
 - `market_trend`: one A-share clue, `window.trading_days` from 2 to 250, and `parameters.adjustment` of `unadjusted` or `forward_adjusted`;
 - `etf_market`: one six-digit SSE ETF code clue and a current/latest-completed market snapshot.
-- `security_valuation`: one A-share clue, the current China Standard Time date, and a positive decimal-string `parameters.target_pe`; returns automatic reported and forward valuation metrics;
-- `valuation_compare`: two to ten unique A-share clues on the same current date and `target_pe`; returns one ordered, same-basis comparison table without dropping limited or blocked rows.
+- `security_valuation`: one A-share clue whose subject includes a positively established integer `issuer_security_class_count`, the current China Standard Time date, and a positive decimal-string `parameters.target_pe`; an absent class scope blocks instead of defaulting to one;
+- `valuation_compare`: two to ten unique A-share clues with an explicit class count per subject, on the same current date and `target_pe`; returns one ordered, same-basis comparison table without dropping limited or blocked rows.
 
 Never pass natural-language text as the request document. The Agent translates the user's question into a versioned research task and never places credentials in that document.
 

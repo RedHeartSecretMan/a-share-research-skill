@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "task_type": "security_valuation",
-  "subjects": [{"clue": "工业富联"}],
+  "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
   "as_of": "2026-08-02",
   "window": null,
   "parameters": {"target_pe": "30"},
