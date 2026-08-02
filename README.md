@@ -39,6 +39,7 @@
 | 同口径批量估值 | 2–10 个不同 A 股线索 + 共同日期/目标 PE | 按输入顺序保留全部标的；统一价格与指标口径，显式呈现不可计算、无估值意义及阻断行 |
 | 研究内容检索 | 主题/行业或单只 A 股 + 发表时间窗 + 材料类型 | 个股/行业研报、一致预期、F10、新闻、巨潮/上交所/深交所公告、市场快讯和互动易；保留观点角色、发布时间、获取时间、文档身份与定位 |
 | 资金、筹码与公司事件 | 单只 A 股或全市场/板块范围 + 观测时间窗 + 数据类型 | 北向披露缺口、个股/板块资金流、个股及全市场龙虎榜、未来 90 日解禁、两融、大宗、股东户数和分红送转；逐项保留周期、单位、方向与市场范围 |
+| 市场题材与交易信号 | 单只 A 股线索或全市场范围 + 明确观测日 + 信号类型 | 强势题材、个股板块归属、行业轮动、涨跌停池、重点监控、严重异常波动、规范身份交叉和市场热度；保留规则、归因来源、四态 coverage、冲突与限制 |
 | 证据包校验 | 调用者提供的 `manifest.json` 与可选材料 | 校验身份、时间、单位、口径、哈希、定位信息和证据关系 |
 | 提供证据估值 | 已校验证据包 + 明确日期 | 计算总市值、PE TTM、PB MRQ；保留公式、操作数和报告谱系 |
 
@@ -174,6 +175,14 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 > 使用 `$a-share-research`，告诉我当前公开口径下还能核验哪些北向资金数据、哪些净流入字段已经不再披露。缺失字段必须标为披露不可用，不得把空值或 0 当作净流入为零。
 
+**研究题材、板块与行业轮动**
+
+> 使用 `$a-share-research`，分开查询最近完整交易日的强势股票及来源给出的题材理由、蓝色光标当前属于哪些供应商板块，以及当日行业涨跌排名。区分编辑性理由、板块归属和市场快照，不要把题材标签写成公司基本面事实。
+
+**查看涨跌停、监控、异常与热度**
+
+> 使用 `$a-share-research`，分别查看最近完整交易日的涨停、炸板、跌停和连板生态，当前供应商重点监控池，带规则代码的严重异常波动记录，以及当前市场热度。只有规范证券身份和监控窗口重叠时才形成监控异动交叉；来源失败或覆盖不完整时不要回答“没有”。
+
 ## 案例 Demo
 
 案例从真实用户研究问题出发。蓝色光标覆盖“自然语言线索 → 身份 → 10 日未复权 OHLCV → 指标 → 走势结论”；工业富联覆盖“身份 → 价格与股本 → 财务三表 → 一致预期 → 报告与前向估值”：
@@ -195,6 +204,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 - 一致预期是机构观点聚合，不是公司已披露事实；目标 PE 是用户情景参数，不是公允价值结论。
 - 研报、新闻、公告、快讯、互动易和 F10 当前是实验来源，结果最高为 `limited`；PDF 定位不等于已下载或解析，只有显式开启文档验证后才能声称完成获取检查。
 - 资金流、龙虎榜、解禁、两融、大宗、股东户数和分红当前也属于实验来源；供应商派生的资金方向是市场信号，不是权威披露。滚动板块资金不暴露首个交易日时会保留 `period.start: null`；来源不暴露首次公开时间时只允许当前获取日研究，不得倒用于历史回测。2024 年 8 月 19 日起无法按旧口径取得北向每日净买额时，任务会显式阻断而不是补零。
+- 题材、板块、行业轮动、涨跌停、监控、异常波动和热度也来自实验来源。供应商监控池不冒充交易所官方名单，编辑理由和热度标签不证明因果或基本面；只有完整空池才能报告 `observed_empty`，裸供应商代码不能用于监控异动交叉。
 - iWencai 语义检索必须由来源策略允许，并只从 `IWENCAI_API_KEY` 读取凭据；凭据不会进入请求 JSON 或输出。
 - ETF 支持交易所快照；尚不支持分钟、逐笔、交易、新闻情绪评分、全量公司画像或批量选股。
 - 不输出评级、目标价、买卖建议、仓位建议或自动交易指令。
@@ -227,7 +237,7 @@ python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 
 真实来源诊断入口为 `tests/live_probe_close.py`。它不会更新夹具，也不能降低证据要求。
 
-行情纵向切片可直接通过两个版本化请求做真实联网 smoke：
+各纵向切片可通过版本化请求做显式的真实联网 smoke：
 
 ```text
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
@@ -245,9 +255,19 @@ python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/r
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-dragon-tiger.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-lockup-90-day.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-capital-events.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-strong-stock-themes.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-board-membership.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-industry-rotation.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-limit-ecology.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-focus-monitoring.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-severe-abnormal-movements.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-monitoring-intersection.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
 `theme-report-search.json` 需要调用者先允许凭据型来源，并通过 `IWENCAI_API_KEY` 提供本地凭据；其他请求不得复用或输出该值。`bluefocus-f10.json` 用于验证可选 `mootdx` 能力，未安装依赖时应得到显式阻断结果。
+
+市场信号 8 个场景的 2026-08-02 实际执行结果与环境限制记录在 [联网 smoke 记录](docs/research/market-signals-smoke-2026-08-02.md)。
 
 ## 许可证与来源
 

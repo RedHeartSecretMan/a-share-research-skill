@@ -15,6 +15,10 @@ from .close_observation import build_close_result
 from .content_contract import ContentHttpTransport, ContentSourceOperation
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
+from .market_signal_contract import (
+    MarketSignalHttpTransport,
+    MarketSignalSourceOperation,
+)
 from .provided_evidence import build_provided_evidence_result
 from .research_runtime import research
 from .valuation import build_valuation_result
@@ -130,6 +134,8 @@ def main(
     content_transport: ContentHttpTransport | None = None,
     capital_operations: Collection[CapitalSourceOperation] | None = None,
     capital_transport: CapitalHttpTransport | None = None,
+    market_signal_operations: Collection[MarketSignalSourceOperation] | None = None,
+    market_signal_transport: MarketSignalHttpTransport | None = None,
 ) -> int:
     arguments = _parser().parse_args(argv)
     try:
@@ -143,6 +149,8 @@ def main(
                 content_transport=content_transport,
                 capital_operations=capital_operations,
                 capital_transport=capital_transport,
+                market_signal_operations=market_signal_operations,
+                market_signal_transport=market_signal_transport,
             )
         elif arguments.command == "resolve":
             result = resolve_security_identity(

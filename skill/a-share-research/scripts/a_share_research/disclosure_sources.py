@@ -521,13 +521,16 @@ class CninfoAnnouncementOperation:
         issuer = query.subject.get("issuer")
         if isinstance(issuer, dict):
             identifier = issuer.get("identifier")
+            identifier_value = (
+                identifier.get("value") if isinstance(identifier, dict) else None
+            )
             if (
                 isinstance(identifier, dict)
                 and identifier.get("scheme") == "CNINFO_ORG_ID"
-                and isinstance(identifier.get("value"), str)
-                and identifier["value"].strip()
+                and isinstance(identifier_value, str)
+                and identifier_value.strip()
             ):
-                return identifier["value"].strip()
+                return identifier_value.strip()
         parameter_org_id = query.parameters.get("cninfo_org_id")
         if isinstance(parameter_org_id, str) and parameter_org_id.strip():
             return parameter_org_id.strip()

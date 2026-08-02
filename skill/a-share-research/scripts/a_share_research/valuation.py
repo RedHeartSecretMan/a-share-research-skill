@@ -355,11 +355,12 @@ def _common_valuation_time(
     price_input = valuation_inputs["common_valuation_price"]
     if price_input["status"] != "applicable":
         return None
-    return next(
+    evidence_time = next(
         evidence_by_id[evidence_id]["evidence_time"]
         for evidence_id in price_input["evidence_ids"]
         if evidence_by_id[evidence_id]["basis"] == "unadjusted_close"
     )
+    return evidence_time if isinstance(evidence_time, str) else None
 
 
 def _pe_ttm(

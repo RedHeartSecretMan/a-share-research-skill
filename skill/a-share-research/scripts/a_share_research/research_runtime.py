@@ -25,6 +25,11 @@ from .etf_market import build_etf_market_result
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
 from .market_series import build_market_trend_result
+from .market_signal_contract import (
+    MarketSignalHttpTransport,
+    MarketSignalSourceOperation,
+)
+from .market_signals import build_market_signals_result
 from .research_content import build_research_content_result
 
 
@@ -41,6 +46,8 @@ class ResearchRuntime:
         content_transport: ContentHttpTransport | None = None,
         capital_operations: Collection[CapitalSourceOperation] | None = None,
         capital_transport: CapitalHttpTransport | None = None,
+        market_signal_operations: Collection[MarketSignalSourceOperation] | None = None,
+        market_signal_transport: MarketSignalHttpTransport | None = None,
     ) -> None:
         self._identity_transport = identity_transport or UrlLibTransport()
         self._research_now = research_now
@@ -53,6 +60,12 @@ class ResearchRuntime:
             None if capital_operations is None else tuple(capital_operations)
         )
         self._capital_transport = capital_transport or UrlLibTransport()
+        self._market_signal_operations = (
+            None
+            if market_signal_operations is None
+            else tuple(market_signal_operations)
+        )
+        self._market_signal_transport = market_signal_transport or UrlLibTransport()
 
     def research(self, request: dict[str, Any]) -> dict[str, Any]:
         """Execute one versioned research task."""
@@ -179,6 +192,31 @@ class ResearchRuntime:
                     capital_operations,
                     self._identity_transport,
                 )
+        elif task_type == "market_signals":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "market_signals currently requires experimental source "
+                        "operations"
+                    ),
+                )
+            else:
+                market_signal_operations = self._market_signal_operations
+                if market_signal_operations is None:
+                    from .market_signal_registry import (
+                        build_default_market_signal_operations,
+                    )
+
+                    market_signal_operations = build_default_market_signal_operations(
+                        self._market_signal_transport
+                    )
+                result = build_market_signals_result(
+                    request,
+                    market_signal_operations,
+                    self._identity_transport,
+                )
         elif task_type == "intraday_market_signal":
             if not self._dependency_available("mootdx"):
                 result = _blocked_result(
@@ -241,6 +279,8 @@ def research(
     content_transport: ContentHttpTransport | None = None,
     capital_operations: Collection[CapitalSourceOperation] | None = None,
     capital_transport: CapitalHttpTransport | None = None,
+    market_signal_operations: Collection[MarketSignalSourceOperation] | None = None,
+    market_signal_transport: MarketSignalHttpTransport | None = None,
 ) -> dict[str, Any]:
     """Run a task through the public research module interface."""
 
@@ -252,6 +292,8 @@ def research(
         content_transport=content_transport,
         capital_operations=capital_operations,
         capital_transport=capital_transport,
+        market_signal_operations=market_signal_operations,
+        market_signal_transport=market_signal_transport,
     ).research(request)
 
 
