@@ -34,6 +34,21 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("$a-share-research ", metadata)
         self.assertNotIn("$a-share-research-skill", metadata)
 
+    def test_release_installation_is_pinned_to_v0_1_0(self) -> None:
+        for readme_name in ("README.md", "README_en.md"):
+            with self.subTest(readme=readme_name):
+                readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
+                self.assertIn(
+                    "git clone --depth 1 --branch v0.1.0 --single-branch ",
+                    readme,
+                )
+                self.assertIn(
+                    "https://github.com/RedHeartSecretMan/a-share-research-skill.git",
+                    readme,
+                )
+                self.assertNotIn("v0.1.0 in development", readme)
+                self.assertNotIn("v0.1.0 开发中", readme)
+
     def test_entry_routes_every_public_cli_workflow_with_the_exact_signature(
         self,
     ) -> None:

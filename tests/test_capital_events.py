@@ -15,6 +15,7 @@ from a_share_research.capital_contract import (  # noqa: E402
     CapitalObservation,
     CapitalQuery,
     CapitalSourceBatch,
+    CapitalSourceFailure,
 )
 from a_share_research.capital_events import build_capital_events_result  # noqa: E402
 from a_share_research.capital_registry import (  # noqa: E402
@@ -179,6 +180,137 @@ def observation(
 
 
 class CapitalEventsTests(unittest.TestCase):
+    def test_identity_block_preserves_indeterminate_coverage_for_every_type(
+        self,
+    ) -> None:
+        result = build_capital_events_result(
+            capital_request(
+                ["stock_fund_flow", "margin_trading"],
+                subjects=[{"clue": "不存在的证券"}],
+            ),
+            [],
+            BluefocusIdentityTransport(),
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["brief"]["coverage"],
+            {
+                "stock_fund_flow": {
+                    "state": "indeterminate",
+                    "observation_count": 0,
+                    "source_operations": [],
+                },
+                "margin_trading": {
+                    "state": "indeterminate",
+                    "observation_count": 0,
+                    "source_operations": [],
+                },
+            },
+        )
+
+    def test_contract_complete_empty_type_is_distinct_from_source_failure(
+        self,
+    ) -> None:
+        class CompleteEmptyNorthboundOperation:
+            operation_id = "complete_empty_northbound@1"
+            supported_data_types = frozenset({"northbound_flow"})
+
+            def collect(self, query: CapitalQuery) -> CapitalSourceBatch:
+                return CapitalSourceBatch(
+                    operation_id=self.operation_id,
+                    complete=True,
+                )
+
+        result = build_capital_events_result(
+            capital_request(["market_dragon_tiger", "northbound_flow"]),
+            [
+                FixedCapitalOperation((observation(),)),
+                CompleteEmptyNorthboundOperation(),
+            ],
+            BluefocusIdentityTransport(),
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(
+            result["brief"]["coverage"]["northbound_flow"],
+            {
+                "state": "observed_empty",
+                "observation_count": 0,
+                "source_operations": ["complete_empty_northbound@1"],
+            },
+        )
+        self.assertEqual(result["source_errors"], [])
+        self.assertNotIn("requested_data_type_unavailable", _limitation_codes(result))
+        self.assertNotIn("capital_events_unavailable", _limitation_codes(result))
+
+    def test_one_unavailable_requested_type_blocks_without_dropping_other_results(
+        self,
+    ) -> None:
+        class FailedMarginOperation:
+            operation_id = "failed_margin@1"
+            supported_data_types = frozenset({"margin_trading"})
+
+            def collect(self, query: CapitalQuery) -> CapitalSourceBatch:
+                return CapitalSourceBatch(
+                    operation_id=self.operation_id,
+                    source_errors=(
+                        CapitalSourceFailure(
+                            self.operation_id,
+                            "upstream_unavailable",
+                            "The source request could not be completed.",
+                        ),
+                    ),
+                    complete=False,
+                )
+
+        stock_flow = observation(data_type="stock_fund_flow")
+        result = build_capital_events_result(
+            capital_request(
+                ["stock_fund_flow", "margin_trading"],
+                subjects=[{"clue": "蓝色光标"}],
+            ),
+            [FixedCapitalOperation((stock_flow,)), FailedMarginOperation()],
+            BluefocusIdentityTransport(),
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            [item["data_type"] for item in result["observations"]],
+            ["stock_fund_flow"],
+        )
+        self.assertEqual(result["brief"]["data_type_counts"], {"stock_fund_flow": 1})
+        self.assertEqual(
+            result["brief"]["coverage"],
+            {
+                "stock_fund_flow": {
+                    "state": "partial",
+                    "observation_count": 1,
+                    "source_operations": ["fixed_capital@1"],
+                },
+                "margin_trading": {
+                    "state": "indeterminate",
+                    "observation_count": 0,
+                    "source_operations": ["failed_margin@1"],
+                },
+            },
+        )
+        self.assertEqual(
+            [
+                (item["source_operation"], item["code"])
+                for item in result["source_errors"]
+            ],
+            [("failed_margin@1", "upstream_unavailable")],
+        )
+        self.assertEqual(
+            next(
+                item["data_types"]
+                for item in result["limitations"]
+                if item["code"] == "requested_data_type_unavailable"
+            ),
+            ["margin_trading"],
+        )
+
     def test_unknown_availability_rejects_observation_retrieved_after_research_day(
         self,
     ) -> None:

@@ -171,6 +171,7 @@ def build_security_valuation_result(
             source_errors=source_errors,
             conflicts=conflicts,
             limitations=limitations,
+            metrics=_price_unavailable_metrics(),
         )
 
     try:
@@ -188,6 +189,17 @@ def build_security_valuation_result(
             source_errors=source_errors,
             conflicts=conflicts,
             limitations=limitations,
+            metrics={
+                metric: {
+                    "status": "not_calculable",
+                    "reason": (
+                        "effective_total_shares_unavailable"
+                        if metric in {"market_capitalization", "pe_ttm", "pb_mrq"}
+                        else "not_evaluated_after_critical_input_failure"
+                    ),
+                }
+                for metric in COMPARISON_METRIC_ORDER
+            },
         )
 
     if stock_info.name != candidate["name"]:
@@ -505,6 +517,22 @@ def build_security_valuation_result(
                 ),
             }
         )
+    critical_input_gaps = []
+    if selected is None:
+        critical_input_gaps.append("reported_financial_statements")
+    if consensus is None or not forecasts:
+        critical_input_gaps.append("consensus_eps_forecast")
+    if critical_input_gaps:
+        limitations.append(
+            {
+                "code": "automatic_valuation_critical_inputs_unavailable",
+                "message": (
+                    "At least one requested automatic-valuation input has no "
+                    "qualified fallback, so the valuation is blocked."
+                ),
+                "inputs": critical_input_gaps,
+            }
+        )
     if (
         selected is not None
         and forecasts
@@ -538,7 +566,7 @@ def build_security_valuation_result(
         ]
     return {
         "schema_version": request["schema_version"],
-        "status": "limited",
+        "status": "blocked" if critical_input_gaps else "limited",
         "subjects": [subject],
         "research": {
             "as_of": request["as_of"],
@@ -665,6 +693,21 @@ def build_valuation_comparison_result(
         degradations.extend(result.get("degradations", []))
         limitations.extend(result.get("limitations", []))
     successful_rows = [row for row in rows if row["status"] != "blocked"]
+    blocked_rows = [row for row in rows if row["status"] == "blocked"]
+    if blocked_rows:
+        limitations.append(
+            {
+                "code": "valuation_comparison_contains_blocked_rows",
+                "message": (
+                    "At least one requested security has a blocked valuation and "
+                    "remains in the comparison."
+                ),
+                "blocked_subjects": [
+                    {"security": row["security"], "name": row["name"]}
+                    for row in blocked_rows
+                ],
+            }
+        )
     return {
         "schema_version": request["schema_version"],
         "status": "limited" if successful_rows else "blocked",
@@ -1007,6 +1050,7 @@ def _blocked(
     conflicts: list[Any] | None = None,
     source_errors: list[Any] | None = None,
     limitations: list[dict[str, Any]] | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result_limitations = list(limitations or [])
     result_limitations.append({"code": code, "message": message})
@@ -1017,11 +1061,25 @@ def _blocked(
         "valuation_basis": {"status": "unresolved"},
         "reported_financials": {},
         "forecast": {},
-        "metrics": {},
+        "metrics": metrics or {},
         "calculations": [],
         "evidence": evidence or [],
         "conflicts": conflicts or [],
         "source_errors": source_errors or [],
         "degradations": [],
         "limitations": _deduplicate_limitations(result_limitations),
+    }
+
+
+def _price_unavailable_metrics() -> dict[str, dict[str, str]]:
+    return {
+        metric: {
+            "status": "not_calculable",
+            "reason": (
+                "not_evaluated_after_critical_input_failure"
+                if metric == "forecast_eps_growth"
+                else "valuation_price_not_established"
+            ),
+        }
+        for metric in COMPARISON_METRIC_ORDER
     }

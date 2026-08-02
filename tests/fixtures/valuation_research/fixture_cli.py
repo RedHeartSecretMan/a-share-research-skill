@@ -248,6 +248,13 @@ class ValuationFixtureTransport:
             payload = json.loads(body)
             payload["data"]["f116"] = "1"
             body = _json_response(payload)
+        if "yunhq.sse.com.cn" in parsed.netloc and scenario == "missing_price":
+            payload = json.loads(body)
+            payload["total"] = 0
+            payload["kline"] = []
+            body = _json_response(payload)
+        if "eastmoney.com" in parsed.netloc and scenario == "missing_shares":
+            body = _json_response({"data": None})
         if "eastmoney.com" in parsed.netloc and scenario == "provider_mcap_rounding":
             payload = json.loads(body, parse_float=Decimal)
             payload["data"]["f116"] = str(
@@ -279,7 +286,16 @@ class ValuationFixtureTransport:
                     ]
                 )
             body = json.dumps(payload, ensure_ascii=False).encode()
-        if filename == "ths_601138_worth.html" and scenario == "missing_forecast":
+        if (
+            filename is not None
+            and filename.startswith("sina_")
+            and scenario == "missing_financials"
+        ):
+            body = b""
+        if filename == "ths_601138_worth.html" and (
+            scenario == "missing_forecast"
+            or (scenario == "one_missing_forecast" and "/601138/" in parsed.path)
+        ):
             body = b"<html><body><p>No forecast coverage</p></body></html>"
         return HttpResponse(
             status=200,

@@ -166,7 +166,7 @@ def build_research_content_result(
 
     return {
         "schema_version": request["schema_version"],
-        "status": "limited" if materials else "blocked",
+        "status": "blocked" if missing_material_types else "limited",
         "subjects": identity["subjects"],
         "materials": materials,
         "brief": brief,
@@ -833,5 +833,13 @@ def _limitation_message(code: str) -> str:
         ),
         "semantic_search_completeness_unproven": (
             "Semantic search results do not prove complete coverage of matching material."
+        ),
+        "title_keyword_filter_not_semantic_search": (
+            "The free theme-report baseline applies exact title substring filtering, "
+            "not semantic search."
+        ),
+        "theme_report_universe_incomplete": (
+            "The provider-wide stock-report feed does not prove a complete theme "
+            "research universe."
         ),
     }.get(code, "The material carries a source-specific limitation.")

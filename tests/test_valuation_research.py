@@ -213,12 +213,12 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["pb_mrq"]["status"], "calculated")
         self.assertEqual(result["metrics"]["forward_pe"]["status"], "calculated")
 
-    def test_missing_consensus_forecast_keeps_reported_valuation_available(
+    def test_missing_consensus_forecast_blocks_but_keeps_reported_valuation(
         self,
     ) -> None:
         result = self.run_valuation("missing_forecast")
 
-        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["metrics"]["pe_ttm"]["status"], "calculated")
         self.assertEqual(
             result["metrics"]["forward_pe"],
@@ -230,11 +230,75 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self.assertIn(
             "unknown_schema", {item["code"] for item in result["source_errors"]}
         )
+        self.assertIn(
+            "automatic_valuation_critical_inputs_unavailable",
+            {item["code"] for item in result["limitations"]},
+        )
 
-    def test_parent_only_statement_scope_does_not_enter_reported_metrics(self) -> None:
+    def test_missing_price_blocks_and_keeps_unavailable_metric_contract(self) -> None:
+        result = self.run_valuation("missing_price")
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["metrics"],
+            {
+                "market_capitalization": {
+                    "status": "not_calculable",
+                    "reason": "valuation_price_not_established",
+                },
+                "pe_ttm": {
+                    "status": "not_calculable",
+                    "reason": "valuation_price_not_established",
+                },
+                "pb_mrq": {
+                    "status": "not_calculable",
+                    "reason": "valuation_price_not_established",
+                },
+                "forward_pe": {
+                    "status": "not_calculable",
+                    "reason": "valuation_price_not_established",
+                },
+                "forecast_eps_growth": {
+                    "status": "not_calculable",
+                    "reason": "not_evaluated_after_critical_input_failure",
+                },
+                "peg": {
+                    "status": "not_calculable",
+                    "reason": "valuation_price_not_established",
+                },
+                "pe_digestion_years": {
+                    "status": "not_calculable",
+                    "reason": "valuation_price_not_established",
+                },
+            },
+        )
+        self.assertTrue(result["evidence"])
+
+    def test_missing_shares_blocks_and_keeps_price_evidence(self) -> None:
+        result = self.run_valuation("missing_shares")
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["metrics"]["market_capitalization"],
+            {
+                "status": "not_calculable",
+                "reason": "effective_total_shares_unavailable",
+            },
+        )
+        self.assertEqual(
+            {item["source_operation"] for item in result["evidence"]},
+            {
+                "sse_stock_list@1",
+                "cninfo_security_dictionary@1",
+                "sse_daily_line@1",
+                "tencent_daily_line@1",
+            },
+        )
+
+    def test_unusable_financial_statements_block_but_keep_forward_metrics(self) -> None:
         result = self.run_valuation("financial_scope_conflict")
 
-        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["status"], "blocked")
         self.assertEqual(
             result["metrics"]["pe_ttm"],
             {
@@ -246,6 +310,22 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self.assertIn(
             "financial_scope_mismatch",
             {item["code"] for item in result["source_errors"]},
+        )
+        critical_gap = next(
+            item
+            for item in result["limitations"]
+            if item["code"] == "automatic_valuation_critical_inputs_unavailable"
+        )
+        self.assertEqual(critical_gap["inputs"], ["reported_financial_statements"])
+
+    def test_missing_financial_source_blocks_but_keeps_forward_metrics(self) -> None:
+        result = self.run_valuation("missing_financials")
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["metrics"]["pe_ttm"]["status"], "not_calculable")
+        self.assertEqual(result["metrics"]["forward_pe"]["status"], "calculated")
+        self.assertIn(
+            "empty_response", {item["code"] for item in result["source_errors"]}
         )
 
     def test_provider_market_cap_conflict_does_not_replace_project_calculation(
@@ -353,6 +433,66 @@ class SecurityValuationProcessTests(unittest.TestCase):
 
 
 class ValuationComparisonProcessTests(unittest.TestCase):
+    def test_comparison_keeps_blocked_row_and_discloses_partial_coverage(self) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "valuation_compare",
+            "subjects": [
+                {"clue": "工业富联", "issuer_security_class_count": 1},
+                {"clue": "贵州茅台", "issuer_security_class_count": 1},
+            ],
+            "as_of": "2026-08-02",
+            "window": None,
+            "parameters": {"target_pe": "30"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            request_path = Path(temporary_directory, "research-task.json")
+            request_path.write_text(
+                json.dumps(request, ensure_ascii=False), encoding="utf-8"
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(FIXTURE_CLI),
+                    "run",
+                    "--request",
+                    str(request_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "A_SHARE_RESEARCH_TEST_SCENARIO": "one_missing_forecast",
+                },
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(
+            [row["status"] for row in result["rows"]], ["blocked", "limited"]
+        )
+        self.assertEqual(
+            result["rows"][0]["metrics"]["forward_pe"]["status"],
+            "not_calculable",
+        )
+        partial = next(
+            item
+            for item in result["limitations"]
+            if item["code"] == "valuation_comparison_contains_blocked_rows"
+        )
+        self.assertEqual(
+            partial["blocked_subjects"],
+            [{"security": "SSE:601138", "name": "工业富联"}],
+        )
+
     def test_five_security_comparison_uses_one_date_and_one_metric_basis(self) -> None:
         request = {
             "schema_version": "1.0",

@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Release: v0.0.1](https://img.shields.io/badge/release-v0.0.1-64748B)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.0.1)
+[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
@@ -27,7 +27,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 - **Reproducible calculations**: market capitalization, PE TTM, and PB MRQ use Decimal arithmetic and preserve full calculation lineage.
 - **Honest failure**: ambiguity, conflict, staleness, wrong-security payloads, or missing critical evidence return `limited` / `blocked` instead of invented values.
 
-## Current main capabilities (v0.1.0 in development)
+## v0.1.0 capabilities
 
 | Capability | Input | Output and boundary |
 | --- | --- | --- |
@@ -70,7 +70,7 @@ Research results use three overall states:
 The only installable artifact is [`skill/a-share-research`](skill/a-share-research/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
 
 ```text
-git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.1.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -111,7 +111,7 @@ Provided-evidence valuation research:
 
 ## Common uses
 
-Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The latest Release remains the v0.0.1 kernel preview; the new trend, ETF, and research-workflow uses below are on the main branch under development.
+Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The uses below match the task contracts shipped in the stable v0.1.0 Release.
 
 **Identify the right security**
 
@@ -205,7 +205,7 @@ The four workflows are single-security valuation, same-basis valuation compariso
 
 ## Case demos
 
-The cases start from real user research questions. BlueFocus covers “natural-language clue → identity → 10-session unadjusted OHLCV → metrics → trend conclusion”; Industrial Fulian covers “identity → price and shares → financial statements → consensus → reported and forward valuation”:
+The cases start from real user research questions. BlueFocus cross-explains a 10-session trend with dragon-tiger, lockup, board, announcement, and news evidence; Industrial Fulian runs the eight-step new-security workflow across identity, institutional material, valuation, boards, fund flow, dragon-tiger, lockups, and margin trading:
 
 - [BlueFocus (SZSE:300058)](examples/bluefocus.md)
 - [Industrial Fulian (SSE:601138)](examples/industrial-fulian.md)
@@ -214,7 +214,7 @@ The values are fixed live observations as of `2026-08-02`, retained to demonstra
 
 ## Boundaries
 
-The current preview is deliberately conservative:
+The current version is deliberately conservative:
 
 - Network identity and close tracers cover SSE and SZSE only; BSE never falls back to another market.
 - Free network operations are experimental sources, not production-qualified Adapters.
@@ -226,7 +226,7 @@ The current preview is deliberately conservative:
 - Fund flow, dragon-tiger records, lockups, margin data, block trades, shareholder counts, and distributions also use experimental sources. Provider-derived fund direction is a market signal, not authoritative disclosure. A rolling board metric keeps `period.start: null` when the first session is not exposed; a source with unknown first-availability time is usable only for research on its current retrieval date, never as a historical backtest input. When the post-19-August-2024 regime does not expose the old daily northbound net-buy metric, the task blocks explicitly instead of inserting zero.
 - Themes, board membership, industry rotation, limit pools, monitoring, abnormal movement, and heat also use experimental sources. A provider watchlist is not an official exchange list, and editorial reasons or popularity labels do not prove causality or fundamentals. Only a completely collected zero pool is `observed_empty`, and provider-local codes cannot establish a monitoring intersection.
 - ETF options currently cover experimental snapshots for 50ETF, 300ETF, 500ETF, and STAR 50ETF only. Provider-reported Greeks/IV are neither local-model nor exchange calculations; authoritative contract totals, contract units, adjustment terms, and an independent fallback remain unavailable. Preserve `M` / `A` series, quote state, units, timing, source, and coverage.
-- Semantic iWencai search requires source-policy permission and reads credentials only from `IWENCAI_API_KEY`; values never enter request JSON or output.
+- Theme-report research defaults to exact title-keyword filtering over the Eastmoney market-wide report feed; this is not semantic search and does not prove a complete theme universe. Semantic iWencai search is an optional enhancement when source policy permits it and reads credentials only from `IWENCAI_API_KEY`; values never enter request JSON or output.
 - ETF snapshots are supported; minute, tick, trading, news-sentiment scoring, full-company profiles, and batch screening are not yet supported.
 - It does not provide ratings, price targets, buy/sell advice, position sizing, or automated trading instructions.
 
@@ -294,7 +294,7 @@ python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/r
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
-`theme-report-search.json` requires source-policy permission and a local credential supplied only through `IWENCAI_API_KEY`; no other request may reuse or expose that value. `bluefocus-f10.json` exercises the optional `mootdx` capability and should return an explicit blocked result when the dependency is absent.
+Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the optional `mootdx` capability and should return an explicit blocked result when the dependency is absent.
 
 The dated results and environment limitations for all eight market-signal scenarios are recorded in the [2026-08-02 live smoke record](docs/research/market-signals-smoke-2026-08-02.md).
 

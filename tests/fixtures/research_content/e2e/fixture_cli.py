@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 FIXTURES = Path(__file__).resolve().parent
 REPOSITORY_ROOT = FIXTURES.parents[3]
@@ -68,6 +68,12 @@ class FixtureContentTransport:
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         host = urlsplit(url).netloc
+        if self.scenario == "theme_report" and host == "reportapi.eastmoney.com":
+            page = int(parse_qs(urlsplit(url).query)["pageNo"][0])
+            return _response(
+                REPORT_FIXTURES / f"eastmoney_stock_page_{page}.json",
+                content_type="text/plain",
+            )
         if self.scenario == "bluefocus_disclosures_news":
             if host == "search-api-web.eastmoney.com":
                 self._news_page += 1

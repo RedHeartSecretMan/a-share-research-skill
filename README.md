@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Release: v0.0.1](https://img.shields.io/badge/release-v0.0.1-64748B)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.0.1)
+[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [English](README_en.md) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
@@ -27,7 +27,7 @@
 - **计算可复算**：总市值、PE TTM 和 PB MRQ 使用 Decimal 与显式口径形成完整计算谱系。
 - **失败要诚实**：歧义、冲突、陈旧、错证券或关键证据缺失时返回 `limited` / `blocked`，不补猜数字。
 
-## 当前 main 能力（v0.1.0 开发中）
+## v0.1.0 能力
 
 | 能力 | 输入 | 输出与边界 |
 | --- | --- | --- |
@@ -70,7 +70,7 @@ flowchart LR
 唯一安装产物是 [`skill/a-share-research`](skill/a-share-research/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
 
 ```text
-git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.1.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -111,7 +111,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 ## 常见用法
 
-安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。最新 Release 仍是 v0.0.1 内核预览；以下新增走势、ETF 与研究流程用法位于正在建设的 main。
+安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。以下用法与稳定 Release v0.1.0 的实际任务契约一致。
 
 **找对证券**
 
@@ -205,7 +205,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 ## 案例 Demo
 
-案例从真实用户研究问题出发。蓝色光标覆盖“自然语言线索 → 身份 → 10 日未复权 OHLCV → 指标 → 走势结论”；工业富联覆盖“身份 → 价格与股本 → 财务三表 → 一致预期 → 报告与前向估值”：
+案例从真实用户研究问题出发。蓝色光标覆盖 10 日走势与龙虎榜、解禁、板块、公告新闻的交叉解释；工业富联覆盖身份、机构材料、估值、板块、资金、龙虎榜、解禁与两融的八步新标的研究：
 
 - [蓝色光标（SZSE:300058）](examples/bluefocus.md)
 - [工业富联（SSE:601138）](examples/industrial-fulian.md)
@@ -214,7 +214,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 ## 能力边界
 
-当前预览版本有意保持保守：
+当前版本有意保持保守：
 
 - 联网身份与收盘价 tracer 仅覆盖 SSE、SZSE；BSE 不会回退到其他市场。
 - 免费联网操作均为实验来源，不等于正式生产 Adapter。
@@ -226,7 +226,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 - 资金流、龙虎榜、解禁、两融、大宗、股东户数和分红当前也属于实验来源；供应商派生的资金方向是市场信号，不是权威披露。滚动板块资金不暴露首个交易日时会保留 `period.start: null`；来源不暴露首次公开时间时只允许当前获取日研究，不得倒用于历史回测。2024 年 8 月 19 日起无法按旧口径取得北向每日净买额时，任务会显式阻断而不是补零。
 - 题材、板块、行业轮动、涨跌停、监控、异常波动和热度也来自实验来源。供应商监控池不冒充交易所官方名单，编辑理由和热度标签不证明因果或基本面；只有完整空池才能报告 `observed_empty`，裸供应商代码不能用于监控异动交叉。
 - ETF 期权当前只覆盖 50ETF、300ETF、500ETF 与科创 50ETF 的实验来源快照。供应商报告 Greeks/IV 不是项目本地模型或交易所计算；权威合约总量、合约单位、调整条款和独立 fallback 尚不可用，`M` / `A` 系列、报价状态、单位、时点、来源与 coverage 必须原样披露。
-- iWencai 语义检索必须由来源策略允许，并只从 `IWENCAI_API_KEY` 读取凭据；凭据不会进入请求 JSON 或输出。
+- 主题研报默认使用东财全市场研报流做标题关键词精确匹配；这不是语义搜索，也不证明主题宇宙完整。iWencai 语义检索仅是来源策略允许时的可选增强，并只从 `IWENCAI_API_KEY` 读取凭据；凭据不会进入请求 JSON 或输出。
 - ETF 支持交易所快照；尚不支持分钟、逐笔、交易、新闻情绪评分、全量公司画像或批量选股。
 - 不输出评级、目标价、买卖建议、仓位建议或自动交易指令。
 
@@ -294,7 +294,7 @@ python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/r
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
-`theme-report-search.json` 需要调用者先允许凭据型来源，并通过 `IWENCAI_API_KEY` 提供本地凭据；其他请求不得复用或输出该值。`bluefocus-f10.json` 用于验证可选 `mootdx` 能力，未安装依赖时应得到显式阻断结果。
+`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证可选 `mootdx` 能力，未安装依赖时应得到显式阻断结果。
 
 市场信号 8 个场景的 2026-08-02 实际执行结果与环境限制记录在 [联网 smoke 记录](docs/research/market-signals-smoke-2026-08-02.md)。
 

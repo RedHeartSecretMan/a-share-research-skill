@@ -71,7 +71,6 @@ class EastmoneyReportOperation:
             material_type
             for material_type in query.material_types
             if material_type in self.supported_material_types
-            and not (material_type == "research_report" and query.subject is None)
         )
         if not requested:
             return SourceBatch(operation_id=self.operation_id)
@@ -132,11 +131,21 @@ class EastmoneyReportOperation:
                 ),
                 complete=False,
             )
+        limitations: list[str] = []
+        if not complete:
+            limitations.append("pagination_incomplete")
+        if "research_report" in requested and query.subject is None:
+            limitations.extend(
+                (
+                    "title_keyword_filter_not_semantic_search",
+                    "theme_report_universe_incomplete",
+                )
+            )
         return SourceBatch(
             operation_id=self.operation_id,
             observations=tuple(observations),
             degradations=tuple(degradations),
-            limitations=("pagination_incomplete",) if not complete else (),
+            limitations=tuple(limitations),
             complete=complete,
         )
 
@@ -148,8 +157,18 @@ class EastmoneyReportOperation:
         code: str | None = None
         expected_name: str | None = None
         industry_code: str | None = None
+        theme_title_filter = (
+            material_type == "research_report" and query.subject is None
+        )
         if material_type == "research_report":
-            code, expected_name = _canonical_stock_subject(query.subject)
+            if theme_title_filter:
+                if not query.keywords:
+                    raise _ReportSourceError(
+                        "invalid_query",
+                        "Theme report discovery requires at least one title keyword.",
+                    )
+            else:
+                code, expected_name = _canonical_stock_subject(query.subject)
             q_type = "0"
         else:
             industry_code = _required_industry_code(query.parameters)
@@ -166,6 +185,7 @@ class EastmoneyReportOperation:
                 industry_code=industry_code,
                 query=query,
                 page_number=page_number,
+                page_size=100 if theme_title_filter else min(query.limit, 100),
             )
             request = partial(
                 self._transport.get,
@@ -215,22 +235,27 @@ class EastmoneyReportOperation:
                         )
                     )
                     continue
-                observations.append(
-                    _report_observation(
-                        row=row,
-                        material_type=material_type,
-                        subject=query.subject
-                        if material_type == "research_report"
-                        else None,
-                        expected_code=code,
-                        expected_name=expected_name,
-                        expected_industry_code=industry_code,
-                        current_year=page.current_year,
-                        source_uri=url,
-                        retrieved_at=response.retrieved_at,
-                    )
+                if theme_title_filter and not any(
+                    keyword in _required_text(row, "title")
+                    for keyword in query.keywords
+                ):
+                    continue
+                observation = _report_observation(
+                    row=row,
+                    material_type=material_type,
+                    subject=query.subject
+                    if material_type == "research_report"
+                    else None,
+                    expected_code=code,
+                    expected_name=expected_name,
+                    expected_industry_code=industry_code,
+                    current_year=page.current_year,
+                    source_uri=url,
+                    retrieved_at=response.retrieved_at,
                 )
-                if len(observations) >= query.limit:
+                if len(observations) < query.limit:
+                    observations.append(observation)
+                if not theme_title_filter and len(observations) >= query.limit:
                     return (
                         observations,
                         degradations,
@@ -713,10 +738,11 @@ def _report_url(
     industry_code: str | None,
     query: ContentQuery,
     page_number: int,
+    page_size: int,
 ) -> str:
     parameters = {
         "industryCode": industry_code or "*",
-        "pageSize": str(min(query.limit, 100)),
+        "pageSize": str(page_size),
         "industry": "*",
         "rating": "*",
         "ratingChange": "*",
@@ -881,8 +907,9 @@ def _report_observation(
     if material_type == "research_report":
         provider_code = _required_text(row, "stockCode")
         provider_name = _required_text(row, "stockName")
-        if provider_code != expected_code or (
-            expected_name is not None and provider_name != expected_name
+        if expected_code is not None and (
+            provider_code != expected_code
+            or (expected_name is not None and provider_name != expected_name)
         ):
             raise _ReportSourceError(
                 "identity_mismatch",

@@ -47,7 +47,10 @@ def workflow_request(
 
 class ResearchWorkflowsCliE2ETests(unittest.TestCase):
     def run_workflow(
-        self, request: dict[str, Any]
+        self,
+        request: dict[str, Any],
+        *,
+        extra_environment: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
         with tempfile.TemporaryDirectory() as temporary_directory:
             request_path = Path(temporary_directory, "workflow-request.json")
@@ -64,7 +67,11 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
                     str(request_path),
                 ],
                 cwd=REPOSITORY_ROOT,
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                env={
+                    **os.environ,
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    **(extra_environment or {}),
+                },
                 check=False,
                 capture_output=True,
                 text=True,
@@ -127,7 +134,9 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         )
         self.assertIn(result["status"], {"limited", "supported"})
 
-    def test_theme_report_research_uses_fixed_content_adapter(self) -> None:
+    def test_theme_report_research_uses_free_baseline_when_credential_is_missing(
+        self,
+    ) -> None:
         completed, result = self.run_workflow(
             workflow_request(
                 "theme_report_research",
@@ -137,7 +146,7 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
                     "published_from": "2026-05-05",
                     "published_to": "2026-08-02",
                     "limit": 20,
-                    "verify_documents": True,
+                    "verify_documents": False,
                 },
                 allow_credentials=True,
             )
@@ -148,13 +157,54 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         content = result["steps"][0]["result"]
         self.assertEqual(content["task_type"], "research_content")
         self.assertEqual(
-            content["brief"]["material_type_counts"], {"research_report": 1}
+            content["brief"]["material_type_counts"], {"research_report": 2}
         )
         self.assertEqual(
-            content["materials"][0]["source_operation"],
-            "iwencai_content_search@1",
+            {item["source_operation"] for item in content["materials"]},
+            {"eastmoney_reports@1"},
+        )
+        self.assertIn(
+            ("iwencai_content_search@1", "missing_credential"),
+            {
+                (item["source_operation"], item["code"])
+                for item in content["source_errors"]
+            },
         )
         self.assertEqual(result["status"], "limited")
+
+    def test_theme_report_research_keeps_iwencai_as_optional_enhancement(
+        self,
+    ) -> None:
+        completed, result = self.run_workflow(
+            workflow_request(
+                "theme_report_research",
+                subjects=[],
+                inputs={
+                    "query": ["AI服务器", "算力产业链"],
+                    "published_from": "2026-05-05",
+                    "published_to": "2026-08-02",
+                    "limit": 20,
+                    "verify_documents": False,
+                },
+                allow_credentials=True,
+            ),
+            extra_environment={
+                "FIXTURE_IWENCAI_API_KEY": "fixture-only-key",
+                "FIXTURE_IWENCAI_BASE_URL": "https://iwencai.fixture.test",
+            },
+        )
+
+        self.assert_successful_process(completed)
+        content = result["steps"][0]["result"]
+        self.assertEqual(content["status"], "limited")
+        self.assertEqual(
+            {item["source_operation"] for item in content["materials"]},
+            {"eastmoney_reports@1", "iwencai_content_search@1"},
+        )
+        self.assertNotIn(
+            "missing_credential",
+            {item["code"] for item in content["source_errors"]},
+        )
 
     def test_industrial_fulian_new_security_runs_all_eight_steps(self) -> None:
         completed, result = self.run_workflow(

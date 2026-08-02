@@ -44,8 +44,12 @@ def build_capital_events_result(
     degradations: list[dict[str, Any]] = []
     observations: list[CapitalObservation] = []
     batch_limitations: set[str] = set()
+    coverage_batches: dict[str, list[tuple[str, int, bool, bool]]] = {
+        data_type: [] for data_type in query.data_types
+    }
     for operation in operations:
-        if not operation.supported_data_types.intersection(query.data_types):
+        applicable_types = operation.supported_data_types.intersection(query.data_types)
+        if not applicable_types:
             continue
         batch = operation.collect(query)
         valid, schema_errors = _validate_observations(
@@ -53,6 +57,19 @@ def build_capital_events_result(
             batch.observations,
             query,
         )
+        valid_in_window = [item for item in valid if _within_window(item, query)]
+        has_errors = bool(schema_errors or batch.source_errors)
+        for data_type in query.data_types:
+            if data_type not in applicable_types:
+                continue
+            coverage_batches[data_type].append(
+                (
+                    batch.operation_id,
+                    sum(item.data_type == data_type for item in valid_in_window),
+                    batch.complete,
+                    has_errors,
+                )
+            )
         observations.extend(valid)
         source_errors.extend(item.to_result() for item in schema_errors)
         source_errors.extend(item.to_result() for item in batch.source_errors)
@@ -70,6 +87,11 @@ def build_capital_events_result(
     for item in selected:
         data_type = item["data_type"]
         type_counts[data_type] = type_counts.get(data_type, 0) + 1
+    coverage = _coverage_by_data_type(
+        query.data_types,
+        type_counts,
+        coverage_batches,
+    )
 
     limitation_codes = batch_limitations | {
         code for item in accepted for code in item.limitations
@@ -103,7 +125,11 @@ def build_capital_events_result(
                 "data_types": truncated_types,
             }
         )
-    missing_types = sorted(set(query.data_types).difference(type_counts))
+    missing_types = sorted(
+        data_type
+        for data_type, item in coverage.items()
+        if item["state"] == "indeterminate"
+    )
     if missing_types:
         limitations.append(
             {
@@ -116,7 +142,7 @@ def build_capital_events_result(
             }
         )
     limitations.extend(identity["limitations"])
-    if not selected:
+    if not selected and missing_types:
         limitations.append(
             {
                 "code": "capital_events_unavailable",
@@ -133,13 +159,14 @@ def build_capital_events_result(
     )
     return {
         "schema_version": request["schema_version"],
-        "status": "limited" if selected else "blocked",
+        "status": "blocked" if missing_types else "limited",
         "subjects": identity["subjects"],
         "observations": selected,
         "brief": {
             "observation_count": len(selected),
             "data_types": list(query.data_types),
             "data_type_counts": type_counts,
+            "coverage": coverage,
         },
         "evidence": [
             *identity["evidence"],
@@ -150,6 +177,36 @@ def build_capital_events_result(
         "degradations": degradations,
         "limitations": limitations,
     }
+
+
+def _coverage_by_data_type(
+    data_types: tuple[str, ...],
+    type_counts: dict[str, int],
+    batches: dict[str, list[tuple[str, int, bool, bool]]],
+) -> dict[str, dict[str, Any]]:
+    coverage: dict[str, dict[str, Any]] = {}
+    for data_type in data_types:
+        contributions = batches[data_type]
+        observation_count = type_counts.get(data_type, 0)
+        complete_source = any(
+            complete and not has_errors for _, _, complete, has_errors in contributions
+        )
+        complete_nonempty_source = any(
+            count > 0 and complete and not has_errors
+            for _, count, complete, has_errors in contributions
+        )
+        if observation_count:
+            state = "observed_nonempty" if complete_nonempty_source else "partial"
+        elif complete_source:
+            state = "observed_empty"
+        else:
+            state = "indeterminate"
+        coverage[data_type] = {
+            "state": state,
+            "observation_count": observation_count,
+            "source_operations": list(dict.fromkeys(item[0] for item in contributions)),
+        }
+    return coverage
 
 
 def _normalize_query(request: dict[str, Any]) -> CapitalQuery:
@@ -521,6 +578,11 @@ def _to_evidence(observation: CapitalObservation) -> dict[str, Any]:
 def _blocked_identity_result(
     request: dict[str, Any], query: CapitalQuery, identity: dict[str, Any]
 ) -> dict[str, Any]:
+    coverage = _coverage_by_data_type(
+        query.data_types,
+        {},
+        {data_type: [] for data_type in query.data_types},
+    )
     return {
         "schema_version": request["schema_version"],
         "status": "blocked",
@@ -530,6 +592,7 @@ def _blocked_identity_result(
             "observation_count": 0,
             "data_types": list(query.data_types),
             "data_type_counts": {},
+            "coverage": coverage,
         },
         "evidence": identity["evidence"],
         "conflicts": identity["conflicts"],

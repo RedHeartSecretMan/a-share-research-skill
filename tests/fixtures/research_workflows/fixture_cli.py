@@ -129,10 +129,8 @@ def _content_operations() -> list[object]:
     )
     iwencai = IwencaiContentSearchOperation(
         IwencaiFixtureTransport("iwencai_report_success.json"),
-        environ={
-            "IWENCAI_API_KEY": "fixture-only-key",
-            "IWENCAI_BASE_URL": "https://iwencai.fixture.test",
-        },
+        credential_env="FIXTURE_IWENCAI_API_KEY",
+        base_url_env="FIXTURE_IWENCAI_BASE_URL",
         trace_id_factory=lambda: "fixed-workflow-trace",
     )
     return [eastmoney, iwencai]

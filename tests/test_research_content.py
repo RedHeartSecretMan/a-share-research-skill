@@ -6,7 +6,7 @@ from pathlib import Path
 from re import fullmatch
 from typing import Any
 from unittest.mock import patch
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from tests.skill_imports import add_skill_scripts_to_path
 
@@ -164,9 +164,18 @@ class ThemeContentTransport:
         / "reports"
         / "iwencai_report_success.json"
     )
+    report_fixtures = fixture.parent
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
-        raise AssertionError("theme report search should not call a stock-report URL")
+        page = int(parse_qs(urlparse(url).query)["pageNo"][0])
+        return HttpResponse(
+            status=200,
+            content_type="text/plain",
+            body=(
+                self.report_fixtures / f"eastmoney_stock_page_{page}.json"
+            ).read_bytes(),
+            retrieved_at=datetime(2026, 8, 2, 18, 30, tzinfo=CHINA_STANDARD_TIME),
+        )
 
     def post(
         self,
@@ -1100,7 +1109,7 @@ class ResearchContentProcessTests(unittest.TestCase):
             content_operations=(PartialOperation(),),
         ).research(request)
 
-        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["status"], "blocked")
         missing = next(
             item
             for item in result["limitations"]
@@ -1108,6 +1117,203 @@ class ResearchContentProcessTests(unittest.TestCase):
         )
         self.assertEqual(missing["material_types"], ["stock_news"])
         self.assertEqual(result["brief"]["material_type_counts"], {"announcement": 1})
+
+    def test_missing_requested_type_blocks_without_discarding_other_materials_or_diagnostics(
+        self,
+    ) -> None:
+        class NewsOperation:
+            operation_id = "fixed_news@1"
+            supported_material_types = frozenset({"stock_news"})
+
+            def collect(self, query: ContentQuery) -> SourceBatch:
+                assert query.subject is not None
+                return SourceBatch(
+                    operation_id=self.operation_id,
+                    observations=(
+                        ContentObservation(
+                            material_type="stock_news",
+                            source_operation=self.operation_id,
+                            source_role="attributed_opinion",
+                            source_document_id="NEWS-1",
+                            title="新闻材料",
+                            published_at="2026-07-31T16:00:00+08:00",
+                            retrieved_at=datetime(
+                                2026, 8, 2, 19, 30, tzinfo=CHINA_STANDARD_TIME
+                            ),
+                            locator_uri="https://example.test/NEWS-1",
+                            subject=query.subject,
+                            author="新闻来源",
+                            summary=None,
+                            document_locator=None,
+                            attributes={},
+                            limitations=(),
+                        ),
+                    ),
+                )
+
+        class CninfoAnnouncementOperation:
+            operation_id = "cninfo_announcement@1"
+            supported_material_types = frozenset({"announcement"})
+
+            def collect(self, query: ContentQuery) -> SourceBatch:
+                return SourceBatch(
+                    operation_id=self.operation_id,
+                    source_errors=(
+                        SourceFailure(
+                            source_operation=self.operation_id,
+                            code="unknown_schema",
+                            message="The announcement response schema is unknown.",
+                        ),
+                    ),
+                )
+
+        class SzseAnnouncementOperation:
+            operation_id = "szse_announcement@1"
+            supported_material_types = frozenset({"announcement"})
+
+            def collect(self, query: ContentQuery) -> SourceBatch:
+                return SourceBatch(
+                    operation_id=self.operation_id,
+                    source_errors=(
+                        SourceFailure(
+                            source_operation=self.operation_id,
+                            code="pagination_incomplete",
+                            message="Announcement pagination is incomplete.",
+                        ),
+                    ),
+                )
+
+        request = self.research_report_request()
+        request["subjects"] = [{"clue": "蓝色光标"}]
+        request["parameters"] = {
+            "material_types": ["announcement", "stock_news"],
+            "query": [],
+            "limit": 20,
+        }
+        result = ResearchRuntime(
+            identity_transport=BluefocusIdentityTransport(),
+            content_operations=(
+                NewsOperation(),
+                CninfoAnnouncementOperation(),
+                SzseAnnouncementOperation(),
+            ),
+        ).research(request)
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            [material["material_type"] for material in result["materials"]],
+            ["stock_news"],
+        )
+        self.assertEqual(result["brief"]["material_type_counts"], {"stock_news": 1})
+        self.assertEqual(
+            [
+                (error["source_operation"], error["code"])
+                for error in result["source_errors"]
+            ],
+            [
+                ("cninfo_announcement@1", "unknown_schema"),
+                ("szse_announcement@1", "pagination_incomplete"),
+            ],
+        )
+        missing = next(
+            item
+            for item in result["limitations"]
+            if item["code"] == "requested_material_type_unavailable"
+        )
+        self.assertEqual(missing["material_types"], ["announcement"])
+
+    def test_parallel_source_can_cover_type_without_hiding_peer_diagnostic(
+        self,
+    ) -> None:
+        class SuccessfulMixedOperation:
+            operation_id = "successful_mixed@1"
+            supported_material_types = frozenset({"announcement", "stock_news"})
+
+            def collect(self, query: ContentQuery) -> SourceBatch:
+                assert query.subject is not None
+                return SourceBatch(
+                    operation_id=self.operation_id,
+                    observations=tuple(
+                        ContentObservation(
+                            material_type=material_type,
+                            source_operation=self.operation_id,
+                            source_role=source_role,
+                            source_document_id=document_id,
+                            title=document_id,
+                            published_at="2026-07-31T16:00:00+08:00",
+                            retrieved_at=datetime(
+                                2026, 8, 2, 19, 30, tzinfo=CHINA_STANDARD_TIME
+                            ),
+                            locator_uri=f"https://example.test/{document_id}",
+                            subject=query.subject,
+                            author="来源",
+                            summary=None,
+                            document_locator=None,
+                            attributes={},
+                            limitations=(),
+                        )
+                        for material_type, source_role, document_id in (
+                            (
+                                "announcement",
+                                "authoritative_disclosure",
+                                "ANN-1",
+                            ),
+                            ("stock_news", "attributed_opinion", "NEWS-1"),
+                        )
+                    ),
+                )
+
+        class FailedAnnouncementOperation:
+            operation_id = "failed_announcement@1"
+            supported_material_types = frozenset({"announcement"})
+
+            def collect(self, query: ContentQuery) -> SourceBatch:
+                return SourceBatch(
+                    operation_id=self.operation_id,
+                    source_errors=(
+                        SourceFailure(
+                            source_operation=self.operation_id,
+                            code="upstream_unavailable",
+                            message="The parallel announcement source is unavailable.",
+                        ),
+                    ),
+                )
+
+        request = self.research_report_request()
+        request["subjects"] = [{"clue": "蓝色光标"}]
+        request["parameters"] = {
+            "material_types": ["announcement", "stock_news"],
+            "query": [],
+            "limit": 20,
+        }
+        result = ResearchRuntime(
+            identity_transport=BluefocusIdentityTransport(),
+            content_operations=(
+                FailedAnnouncementOperation(),
+                SuccessfulMixedOperation(),
+            ),
+        ).research(request)
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(
+            result["brief"]["material_type_counts"],
+            {"stock_news": 1, "announcement": 1},
+        )
+        self.assertEqual(
+            [
+                (error["source_operation"], error["code"])
+                for error in result["source_errors"]
+            ],
+            [("failed_announcement@1", "upstream_unavailable")],
+        )
+        self.assertIn(
+            "experimental_research_content_sources",
+            {item["code"] for item in result["limitations"]},
+        )
+        self.assertNotIn(
+            "requested_material_type_unavailable",
+            {item["code"] for item in result["limitations"]},
+        )
 
     def test_current_material_with_unknown_publication_time_is_retained_as_limited(
         self,
@@ -1188,7 +1394,10 @@ class ResearchContentProcessTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "limited")
         self.assertEqual(len(result["materials"]), 1)
-        self.assertEqual(result["materials"][0]["material_type"], "research_report")
+        self.assertEqual(
+            result["materials"][0]["source_operation"],
+            "iwencai_content_search@1",
+        )
         self.assertEqual(result["source_errors"], [])
         self.assertEqual(transport.authorization, "Bearer test-secret-not-for-output")
         self.assertNotIn("test-secret-not-for-output", str(result))

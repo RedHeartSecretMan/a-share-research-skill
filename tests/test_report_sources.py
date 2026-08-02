@@ -176,6 +176,19 @@ def industry_query(*, limit: int = 20) -> ContentQuery:
     )
 
 
+def theme_query(*, limit: int = 20) -> ContentQuery:
+    return ContentQuery(
+        material_types=("research_report",),
+        keywords=("AI服务器",),
+        as_of="2026-08-02",
+        published_from="2026-05-01",
+        published_to="2026-08-02",
+        limit=limit,
+        subject=None,
+        parameters={},
+    )
+
+
 def semantic_query(
     material_type: str = "research_report",
     *,
@@ -262,27 +275,97 @@ class EastmoneyReportOperationTests(unittest.TestCase):
             ["rate_limit_backoff"],
         )
 
-    def test_theme_report_query_without_subject_is_not_applicable(self) -> None:
-        transport = EastmoneyFixtureTransport({1: "eastmoney_stock_page_1.json"})
-        query = ContentQuery(
-            material_types=("research_report",),
-            keywords=("人形机器人",),
-            as_of="2026-08-02",
-            published_from="2026-05-01",
-            published_to="2026-08-02",
-            limit=20,
-            subject=None,
-            parameters={},
+    def test_theme_report_uses_free_full_market_title_keyword_baseline(self) -> None:
+        transport = EastmoneyFixtureTransport(
+            {
+                1: "eastmoney_stock_page_1.json",
+                2: "eastmoney_stock_page_2.json",
+            }
         )
 
         batch = EastmoneyReportOperation(
             transport, request_gate=no_wait_gate()
-        ).collect(query)
+        ).collect(theme_query())
 
         self.assertTrue(batch.complete)
-        self.assertEqual(batch.observations, ())
         self.assertEqual(batch.source_errors, ())
-        self.assertEqual(transport.urls, [])
+        self.assertEqual(
+            [item.title for item in batch.observations],
+            [
+                "AI服务器销售占比提升，毛利预期持续改善",
+                "AI服务器需求强劲，收入及净利润持续高增",
+            ],
+        )
+        request = parse_qs(urlparse(transport.urls[0]).query)
+        self.assertEqual(request["qType"], ["0"])
+        self.assertEqual(request["industryCode"], ["*"])
+        self.assertEqual(request["pageSize"], ["100"])
+        self.assertNotIn("code", request)
+        self.assertEqual(
+            batch.limitations,
+            (
+                "title_keyword_filter_not_semantic_search",
+                "theme_report_universe_incomplete",
+            ),
+        )
+
+    def test_theme_report_limit_does_not_stop_window_pagination(self) -> None:
+        transport = EastmoneyFixtureTransport(
+            {
+                1: "eastmoney_stock_page_1.json",
+                2: "eastmoney_stock_page_2.json",
+            }
+        )
+
+        batch = EastmoneyReportOperation(
+            transport, request_gate=no_wait_gate()
+        ).collect(theme_query(limit=1))
+
+        self.assertTrue(batch.complete)
+        self.assertEqual(len(batch.observations), 1)
+        self.assertEqual(len(transport.urls), 2)
+        self.assertEqual(
+            [parse_qs(urlparse(url).query)["pageNo"] for url in transport.urls],
+            [["1"], ["2"]],
+        )
+
+    def test_theme_report_keeps_provider_identity_without_exchange_inference(
+        self,
+    ) -> None:
+        transport = EastmoneyFixtureTransport(
+            {
+                1: "eastmoney_stock_page_1.json",
+                2: "eastmoney_stock_page_2.json",
+            }
+        )
+
+        batch = EastmoneyReportOperation(
+            transport, request_gate=no_wait_gate()
+        ).collect(theme_query(limit=1))
+
+        material = batch.observations[0]
+        self.assertIsNone(material.subject)
+        self.assertEqual(material.attributes["provider_stock_code"], "601138")
+        self.assertEqual(material.attributes["provider_stock_name"], "工业富联")
+        self.assertNotIn("exchange", material.attributes)
+
+    def test_theme_report_source_failure_is_not_treated_as_an_empty_theme(
+        self,
+    ) -> None:
+        transport = EastmoneyFixtureTransport(
+            {1: TransportError("upstream_unavailable", "sanitized unavailable")}
+        )
+
+        batch = EastmoneyReportOperation(
+            transport, request_gate=no_wait_gate()
+        ).collect(theme_query())
+
+        self.assertFalse(batch.complete)
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(
+            [(item.code, item.message) for item in batch.source_errors],
+            [("upstream_unavailable", "sanitized unavailable")],
+        )
 
     def test_theme_and_industry_request_still_collects_the_industry(self) -> None:
         transport = EastmoneyFixtureTransport({1: "eastmoney_industry_page_1.json"})
@@ -307,7 +390,11 @@ class EastmoneyReportOperationTests(unittest.TestCase):
             [item.material_type for item in batch.observations],
             ["industry_report"],
         )
-        request = parse_qs(urlparse(transport.urls[0]).query)
+        request = next(
+            parse_qs(urlparse(url).query)
+            for url in transport.urls
+            if parse_qs(urlparse(url).query)["qType"] == ["1"]
+        )
         self.assertEqual(request["qType"], ["1"])
 
     def test_stock_reports_cover_the_window_with_attributed_pdf_materials(
