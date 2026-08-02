@@ -1,0 +1,21 @@
+{
+  "pageNo": 1,
+  "pageSize": 20,
+  "total": 1,
+  "totalPage": 1,
+  "rows": [
+    {
+      "indexId": "Q-WRONG",
+      "mainContent": "不属于请求证券的问题",
+      "pubDate": 1785460153000,
+      "updateDate": 1785485553000,
+      "stockCode": "000001",
+      "companyShortName": "平安银行",
+      "attachedId": null,
+      "attachedContent": null,
+      "attachedAuthor": null,
+      "attachedPubDate": null
+    }
+  ],
+  "count": true
+}

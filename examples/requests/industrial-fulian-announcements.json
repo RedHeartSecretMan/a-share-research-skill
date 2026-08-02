@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "task_type": "research_content",
+  "subjects": [
+    {
+      "clue": "工业富联"
+    }
+  ],
+  "as_of": "2026-08-02",
+  "window": {
+    "published_from": "2026-05-01",
+    "published_to": "2026-08-02"
+  },
+  "parameters": {
+    "material_types": ["announcement"],
+    "query": [],
+    "limit": 5,
+    "verify_documents": true
+  },
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": false
+  }
+}

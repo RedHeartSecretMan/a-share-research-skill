@@ -1,0 +1,19 @@
+{
+  "errno": 0,
+  "msg": "",
+  "data": {
+    "roll_data": [
+      {
+        "id": 2443575,
+        "ctime": 1785669965,
+        "modified_time": 1785670099,
+        "title": "A股市场晚间快讯",
+        "brief": "公开市场事件摘要",
+        "content": "公开市场事件正文",
+        "shareurl": "https://www.cls.cn/detail/2443575",
+        "stock_list": [],
+        "subjects": []
+      }
+    ]
+  }
+}

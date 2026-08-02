@@ -1,0 +1,45 @@
+{
+  "hits": 4,
+  "size": 2,
+  "data": [
+    {
+      "title": "算力基础设施景气延续",
+      "publishDate": "2026-05-02 00:00:00.000",
+      "orgSName": "华安证券",
+      "orgCode": "80000064",
+      "infoCode": "AP202605021800000002",
+      "stockCode": "601138",
+      "stockName": "工业富联",
+      "indvInduCode": "1037",
+      "indvInduName": "消费电子",
+      "predictThisYearEps": "3.20",
+      "predictNextYearEps": "4.35",
+      "predictNextTwoYearEps": "5.30",
+      "emRatingName": "增持",
+      "reportType": 2,
+      "attachPages": 6,
+      "attachSize": 512
+    },
+    {
+      "title": "一季度业绩点评",
+      "publishDate": "2026-04-30 00:00:00.000",
+      "orgSName": "开源证券",
+      "orgCode": "80000118",
+      "infoCode": "AP202604301800000003",
+      "stockCode": "601138",
+      "stockName": "工业富联",
+      "indvInduCode": "1037",
+      "indvInduName": "消费电子",
+      "predictThisYearEps": "3.15",
+      "predictNextYearEps": "4.25",
+      "predictNextTwoYearEps": "5.10",
+      "emRatingName": "增持",
+      "reportType": 2,
+      "attachPages": 5,
+      "attachSize": 450
+    }
+  ],
+  "TotalPage": 2,
+  "pageNo": 2,
+  "currentYear": 2026
+}

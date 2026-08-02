@@ -1,0 +1,23 @@
+{
+  "hits": 1,
+  "size": 1,
+  "data": [
+    {
+      "title": "不属于请求证券的研报",
+      "publishDate": "2026-06-18 00:00:00.000",
+      "orgSName": "测试证券",
+      "infoCode": "AP202606181800000010",
+      "stockCode": "600519",
+      "stockName": "贵州茅台",
+      "indvInduCode": "1037",
+      "indvInduName": "消费电子",
+      "emRatingName": "增持",
+      "reportType": 2,
+      "attachPages": 5,
+      "attachSize": 437
+    }
+  ],
+  "TotalPage": 1,
+  "pageNo": 1,
+  "currentYear": 2026
+}

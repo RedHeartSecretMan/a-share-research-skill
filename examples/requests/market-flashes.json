@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "task_type": "research_content",
+  "subjects": [],
+  "as_of": "2026-08-02",
+  "window": {
+    "published_from": "2026-08-02",
+    "published_to": "2026-08-02"
+  },
+  "parameters": {
+    "material_types": ["market_flash"],
+    "query": [],
+    "limit": 20
+  },
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": true
+  }
+}

@@ -4,7 +4,7 @@ Read this reference when selecting a command, invoking the bundled runtime, or i
 
 ## Portable invocation
 
-The runtime requires Python 3.12 or later and only the Python standard library. Select an interpreter available on the host:
+The core runtime requires Python 3.12 or later and only the Python standard library; optional source capabilities may declare their own dependency. Select an interpreter available on the host:
 
 - Windows: `py -3.12`
 - macOS: `python3`
@@ -31,6 +31,7 @@ Current task types:
 - `etf_market`: one six-digit SSE ETF code clue and a current/latest-completed market snapshot.
 - `security_valuation`: one A-share clue whose subject includes a positively established integer `issuer_security_class_count`, the current China Standard Time date, and a positive decimal-string `parameters.target_pe`; an absent class scope blocks instead of defaulting to one;
 - `valuation_compare`: two to ten unique A-share clues with an explicit class count per subject, on the same current date and `target_pe`; returns one ordered, same-basis comparison table without dropping limited or blocked rows.
+- `research_content`: a publication window plus one or more material types. `research_report` accepts one security clue or a theme query; the runtime resolves a clue internally and returns the canonical subject. `industry_report` requires `parameters.industry_code` and no subject; `market_flash` is a subject-free standalone request; `consensus_material`, `issuer_profile`, `stock_news`, `announcement`, and `investor_qa` require one security clue. `parameters.limit` accepts 1–100 and applies per material type. Run `issuer_profile` separately from historical `investor_qa`, because F10 is a current snapshot with unknown publication time. Its request window must include the current retrieval date; retrieval time is used for the window check without inventing publication metadata. For `investor_qa`, optional `parameters.theme_keywords` contains 1–20 candidate labels used only for local literal-frequency aggregation; it does not filter the source query. Set `parameters.verify_documents` to `true` only when PDF retrieval should be actively verified; ordinary discovery returns locators without downloading every document.
 
 Never pass natural-language text as the request document. The Agent translates the user's question into a versioned research task and never places credentials in that document.
 
@@ -59,6 +60,6 @@ A nonzero exit means invocation, protocol, I/O, or internal processing prevented
 
 ## Credentials and network behavior
 
-The current preview has no credentialed Adapter and reads no credential environment variable. `resolve`, `close`, and currently registered network research tasks use capability-scoped source operations; missing optional dependencies fail closed and name the unavailable capability. `validate-bundle` and `valuation` operate on local provided evidence. Never place a key, token, password, or secret in a command argument, request document, log, JSON result, example, or fixture.
+Most registered source operations are credential-free. Semantic iWencai content search is enabled only when `source_policy.allow_credentials` is true and reads `IWENCAI_API_KEY`; `IWENCAI_BASE_URL` may select an explicitly configured compatible endpoint. The values never belong in a request document, command argument, log, result, example, or fixture. F10 retrieval uses the optional `mootdx` dependency; absence or request failure is reported explicitly rather than replaced by another source. `resolve`, `close`, and other network research tasks use capability-scoped source operations. `validate-bundle` and `valuation` operate on local provided evidence.
 
 Default tests are offline and replace only the external network boundary with fixed responses. `tests/live_probe_close.py` belongs to the development repository, not the installed Skill; a maintainer must invoke it explicitly for source diagnostics. A live probe must never update fixtures or become an ordinary CI dependency.

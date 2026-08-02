@@ -10,10 +10,16 @@ from .automatic_valuation import (
     build_security_valuation_result,
     build_valuation_comparison_result,
 )
+from .content_contract import (
+    ContentHttpTransport,
+    ContentSourceOperation,
+)
+from .content_registry import build_default_content_operations
 from .etf_market import build_etf_market_result
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
 from .market_series import build_market_trend_result
+from .research_content import build_research_content_result
 
 
 class ResearchRuntime:
@@ -25,10 +31,16 @@ class ResearchRuntime:
         identity_transport: HttpTransport | None = None,
         research_now: datetime | None = None,
         available_optional_dependencies: Collection[str] | None = None,
+        content_operations: Collection[ContentSourceOperation] | None = None,
+        content_transport: ContentHttpTransport | None = None,
     ) -> None:
         self._identity_transport = identity_transport or UrlLibTransport()
         self._research_now = research_now
         self._available_optional_dependencies = available_optional_dependencies
+        self._content_operations = (
+            None if content_operations is None else tuple(content_operations)
+        )
+        self._content_transport = content_transport or UrlLibTransport()
 
     def research(self, request: dict[str, Any]) -> dict[str, Any]:
         """Execute one versioned research task."""
@@ -109,6 +121,31 @@ class ResearchRuntime:
                     self._identity_transport,
                     self._research_now,
                 )
+        elif task_type == "research_content":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "research_content currently requires experimental "
+                        "source operations"
+                    ),
+                )
+            else:
+                operations = self._content_operations
+                if operations is None:
+                    operations = build_default_content_operations(
+                        self._content_transport,
+                        allow_credentials=request["source_policy"]["allow_credentials"],
+                        allow_fallback=request["source_policy"]["allow_fallback"],
+                        research_now=self._research_now,
+                    )
+                result = build_research_content_result(
+                    request,
+                    operations,
+                    self._identity_transport,
+                    self._content_transport,
+                )
         elif task_type == "intraday_market_signal":
             if not self._dependency_available("mootdx"):
                 result = _blocked_result(
@@ -167,6 +204,8 @@ def research(
     identity_transport: HttpTransport | None = None,
     research_now: datetime | None = None,
     available_optional_dependencies: Collection[str] | None = None,
+    content_operations: Collection[ContentSourceOperation] | None = None,
+    content_transport: ContentHttpTransport | None = None,
 ) -> dict[str, Any]:
     """Run a task through the public research module interface."""
 
@@ -174,6 +213,8 @@ def research(
         identity_transport=identity_transport,
         research_now=research_now,
         available_optional_dependencies=available_optional_dependencies,
+        content_operations=content_operations,
+        content_transport=content_transport,
     ).research(request)
 
 

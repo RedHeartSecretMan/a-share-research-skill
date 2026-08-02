@@ -1,0 +1,16 @@
+{
+  "status_code": 0,
+  "status_msg": "success",
+  "data": [
+    {
+      "uid": "iwencai-report-1",
+      "title": "AI服务器产业链深度研究",
+      "publish_date": "2026-07-31",
+      "score": 0.91,
+      "extra": "{\"organization\": \"研究机构甲\"}",
+      "stock_infos": [
+        {"code": "601138", "name": "工业富联"}
+      ]
+    }
+  ]
+}

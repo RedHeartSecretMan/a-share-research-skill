@@ -1,0 +1,5 @@
+{
+  "status_code": 10003,
+  "status_msg": "credential rejected: never expose upstream details",
+  "data": []
+}

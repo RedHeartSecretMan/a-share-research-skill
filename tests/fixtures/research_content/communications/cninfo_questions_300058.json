@@ -1,0 +1,37 @@
+{
+  "pageNo": 1,
+  "pageSize": 20,
+  "total": 2,
+  "totalPage": 1,
+  "rows": [
+    {
+      "indexId": "Q-1",
+      "mainContent": "公司近期业务进展如何？",
+      "pubDate": 1785460153000,
+      "updateDate": 1785485553000,
+      "stockCode": "300058",
+      "companyShortName": "蓝色光标",
+      "authorName": "投资者",
+      "attachedId": null,
+      "attachedContent": null,
+      "attachedAuthor": null,
+      "attachedPubDate": null,
+      "qaStatus": "0"
+    },
+    {
+      "indexId": "Q-2",
+      "mainContent": "请说明公开披露材料的位置。",
+      "pubDate": 1785376800000,
+      "updateDate": 1785467100000,
+      "stockCode": "300058",
+      "companyShortName": "蓝色光标",
+      "authorName": "投资者",
+      "attachedId": "A-2",
+      "attachedContent": "请以公司公开披露材料为准。",
+      "attachedAuthor": "蓝色光标",
+      "attachedPubDate": 1785466800000,
+      "qaStatus": "1"
+    }
+  ],
+  "count": true
+}

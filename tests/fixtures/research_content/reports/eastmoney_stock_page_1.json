@@ -1,0 +1,45 @@
+{
+  "hits": 4,
+  "size": 2,
+  "data": [
+    {
+      "title": "AI服务器销售占比提升，毛利预期持续改善",
+      "publishDate": "2026-06-18 15:42:17.123",
+      "orgSName": "金元证券",
+      "orgCode": "80000189",
+      "infoCode": "AP202606181823651321",
+      "stockCode": "601138",
+      "stockName": "工业富联",
+      "indvInduCode": "1037",
+      "indvInduName": "消费电子",
+      "predictThisYearEps": "3.06",
+      "predictNextYearEps": "4.30",
+      "predictNextTwoYearEps": "5.41",
+      "emRatingName": "增持",
+      "reportType": 2,
+      "attachPages": 5,
+      "attachSize": 437
+    },
+    {
+      "title": "AI服务器需求强劲，收入及净利润持续高增",
+      "publishDate": "2026-05-20 00:00:00.000",
+      "orgSName": "山西证券",
+      "orgCode": "80000229",
+      "infoCode": "AP202605201800000001",
+      "stockCode": "601138",
+      "stockName": "工业富联",
+      "indvInduCode": "1037",
+      "indvInduName": "消费电子",
+      "predictThisYearEps": "3.10",
+      "predictNextYearEps": "4.20",
+      "predictNextTwoYearEps": "5.20",
+      "emRatingName": "买入",
+      "reportType": 2,
+      "attachPages": 4,
+      "attachSize": 389
+    }
+  ],
+  "TotalPage": 2,
+  "pageNo": 1,
+  "currentYear": 2026
+}

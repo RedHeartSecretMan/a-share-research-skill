@@ -1,0 +1,37 @@
+{
+  "hits": 2,
+  "size": 2,
+  "data": [
+    {
+      "title": "研究日期之后的研报",
+      "publishDate": "2026-08-03 00:00:00.000",
+      "orgSName": "未来证券",
+      "infoCode": "AP202608031800000011",
+      "stockCode": "601138",
+      "stockName": "工业富联",
+      "indvInduCode": "1037",
+      "indvInduName": "消费电子",
+      "emRatingName": "增持",
+      "reportType": 2,
+      "attachPages": 5,
+      "attachSize": 437
+    },
+    {
+      "title": "研究边界内的研报",
+      "publishDate": "2026-07-31 00:00:00.000",
+      "orgSName": "边界证券",
+      "infoCode": "AP202607311800000012",
+      "stockCode": "601138",
+      "stockName": "工业富联",
+      "indvInduCode": "1037",
+      "indvInduName": "消费电子",
+      "emRatingName": "增持",
+      "reportType": 2,
+      "attachPages": 5,
+      "attachSize": 437
+    }
+  ],
+  "TotalPage": 1,
+  "pageNo": 1,
+  "currentYear": 2026
+}

@@ -5,7 +5,7 @@
 **Every research number should carry an identity, time boundary, source, and calculation lineage.**
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research/)
+[![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
 [![Release: v0.0.1](https://img.shields.io/badge/release-v0.0.1-64748B)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.0.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
@@ -37,6 +37,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 | ETF market | Six-digit SSE ETF code + explicit date | SSE ETF identity and snapshot, Tencent price cross-check, and explicit board-lot rounding differences |
 | Automatic security valuation | A-share clue + established security-class count + current China Standard Time date + scenario target PE | Preserves complete numeric rows from all three statements and quarterly series, then acquires current shares and consensus to calculate reported and forward metrics |
 | Same-basis valuation comparison | 2–10 unique A-share clues + shared date/target PE | Preserves every requested row with one price and metric basis; unavailable, meaningless, and blocked metrics remain explicit |
+| Research-content retrieval | Theme/industry or one A-share + publication window + material types | Stock/industry reports, consensus, F10, news, CNINFO/SSE/SZSE announcements, market flashes, and investor Q&A with role, time, document identity, and locators preserved |
 | Evidence-bundle validation | Caller-provided `manifest.json` and optional materials | Validates identity, time, units, basis, hashes, locators, and evidence relationships |
 | Provided-evidence valuation | Validated bundle + explicit date | Calculates market capitalization, PE TTM, and PB MRQ with formulas, operands, and report lineage |
 
@@ -74,7 +75,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 └── scripts/
 ```
 
-The runtime requires only the Python 3.12 or later standard library. It does not require installing this repository as a package or adding third-party Python dependencies. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for platform-neutral interpreter selection and invocation.
+The core runtime requires only the Python 3.12 or later standard library and does not require installing this repository as a package. F10 retrieval is optional and requires `mootdx`; absence is reported explicitly instead of silently substituting data. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for platform-neutral interpreter selection and invocation.
 
 ## CLI
 
@@ -140,6 +141,22 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 > Use `$a-share-research` to compare Industrial Fulian, Kweichow Moutai, CATL, Midea Group, and Wuliangye using the same date, unadjusted-close basis, and 30x target PE. Establish each issuer's class scope first and preserve every missing item and limitation instead of dropping a security.
 
+**Find thematic research reports**
+
+> Use `$a-share-research` to find reports published in the last 90 days about humanoid robots, lead screws, and reducers. List publication time, title, author, source, and PDF locator; merge duplicate documents and keep institutional opinions separate from disclosed facts.
+
+**Research a security's announcements and news**
+
+> Use `$a-share-research` to find BlueFocus announcements and stock news from the last 30 days. Prefer CNINFO or exchange original-document locators, explain the timeline, distinguish disclosure from media reporting, and state every remaining evidence gap.
+
+**Review market flashes**
+
+> Use `$a-share-research` to summarize today's market flashes through the current retrieval time, preserving each source and original publication time. Do not interpret source failure as “there was no news.”
+
+**Review investor Q&A**
+
+> Use `$a-share-research` to group the most common themes in BlueFocus investor Q&A over the last 90 days. First propose candidate themes from the raw material, then rerun auditable literal-frequency counts for those labels. Keep question time, company reply time, and original locator separate; present company replies as attributed statements rather than automatically verified facts.
+
 ## Case demos
 
 The cases start from real user research questions. BlueFocus covers “natural-language clue → identity → 10-session unadjusted OHLCV → metrics → trend conclusion”; Industrial Fulian covers “identity → price and shares → financial statements → consensus → reported and forward valuation”:
@@ -159,7 +176,9 @@ The current preview is deliberately conservative:
 - The share count is a current observation, not an independently verified effective event; statements are provider-mirror observations whose correction/replacement semantics remain unqualified.
 - Security-class count is never silently assumed. Unknown scope or A/H, A/B, or other multi-class issuers block issuer-wide valuation.
 - Consensus is aggregated opinion, not a reported company fact; target PE is a user scenario input, not a fair-value conclusion.
-- ETF snapshots are supported; minute, tick, trading, news sentiment, full-company profiles, and batch screening are not yet supported.
+- Reports, news, announcements, flashes, investor Q&A, and F10 currently use experimental sources, so results are at most `limited`. A PDF locator does not prove download or parsing; only an explicit document-verification run may claim retrieval was checked.
+- Semantic iWencai search requires source-policy permission and reads credentials only from `IWENCAI_API_KEY`; values never enter request JSON or output.
+- ETF snapshots are supported; minute, tick, trading, news-sentiment scoring, full-company profiles, and batch screening are not yet supported.
 - It does not provide ratings, price targets, buy/sell advice, position sizing, or automated trading instructions.
 
 See [`CONTEXT.md`](CONTEXT.md) for the complete domain boundary, [`docs/specs/0002-trustworthy-a-share-research-foundation.md`](docs/specs/0002-trustworthy-a-share-research-foundation.md) for the current kernel specification, and [`docs/specs/0003-full-a-share-research-v0.1.0.md`](docs/specs/0003-full-a-share-research-v0.1.0.md) for the true v0.1.0 capability and release gates.
@@ -197,7 +216,15 @@ python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/r
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-announcements-news.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-research-reports.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-announcements.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-flashes.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-investor-qa.json
 ```
+
+`theme-report-search.json` requires source-policy permission and a local credential supplied only through `IWENCAI_API_KEY`; no other request may reuse or expose that value. `bluefocus-f10.json` exercises the optional `mootdx` capability and should return an explicit blocked result when the dependency is absent.
 
 ## License and provenance
 

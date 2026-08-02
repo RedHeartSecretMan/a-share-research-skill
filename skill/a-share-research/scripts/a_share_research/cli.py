@@ -11,6 +11,7 @@ from typing import Any, Collection, NoReturn, Sequence
 
 from .bundle_validation import JsonNumberToken, build_bundle_validation_result
 from .close_observation import build_close_result
+from .content_contract import ContentHttpTransport, ContentSourceOperation
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
 from .provided_evidence import build_provided_evidence_result
@@ -124,6 +125,8 @@ def main(
     identity_transport: HttpTransport | None = None,
     research_now: datetime | None = None,
     available_optional_dependencies: Collection[str] | None = None,
+    content_operations: Collection[ContentSourceOperation] | None = None,
+    content_transport: ContentHttpTransport | None = None,
 ) -> int:
     arguments = _parser().parse_args(argv)
     try:
@@ -133,6 +136,8 @@ def main(
                 identity_transport=identity_transport,
                 research_now=research_now,
                 available_optional_dependencies=available_optional_dependencies,
+                content_operations=content_operations,
+                content_transport=content_transport,
             )
         elif arguments.command == "resolve":
             result = resolve_security_identity(

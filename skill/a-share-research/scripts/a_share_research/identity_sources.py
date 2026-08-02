@@ -45,6 +45,18 @@ class UrlLibTransport:
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         request = Request(url, headers=headers, method="GET")
+        return self._open(request)
+
+    def post(
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: bytes,
+    ) -> HttpResponse:
+        request = Request(url, headers=headers, data=body, method="POST")
+        return self._open(request)
+
+    def _open(self, request: Request) -> HttpResponse:
         try:
             with self._opener.open(request, timeout=20) as opened:
                 body = opened.read(MAX_RESPONSE_BYTES + 1)
@@ -62,6 +74,11 @@ class UrlLibTransport:
                     ),
                 )
         except HTTPError as error:
+            if error.code == 429:
+                raise TransportError(
+                    "rate_limited",
+                    "The source rate limit was reached.",
+                ) from error
             raise TransportError(
                 "upstream_http_error",
                 f"The source returned HTTP status {error.code}.",

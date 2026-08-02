@@ -1,0 +1,35 @@
+{
+  "hits": 2,
+  "size": 2,
+  "data": [
+    {
+      "title": "脑机接口：从科幻照进现实，下一个科技赛道已启航",
+      "publishDate": "2026-07-31 00:00:00.000",
+      "orgSName": "深圳汉鼎智库咨询服务",
+      "orgCode": "81701682",
+      "infoCode": "AP202607311827523170",
+      "industryCode": "1037",
+      "industryName": "消费电子",
+      "emRatingName": "",
+      "reportType": 3,
+      "attachPages": 2,
+      "attachSize": 322
+    },
+    {
+      "title": "消费电子行业年度回顾",
+      "publishDate": "2026-04-30 00:00:00.000",
+      "orgSName": "开源证券",
+      "orgCode": "80000118",
+      "infoCode": "AP202604301800000004",
+      "industryCode": "1037",
+      "industryName": "消费电子",
+      "emRatingName": "持有",
+      "reportType": 3,
+      "attachPages": 8,
+      "attachSize": 700
+    }
+  ],
+  "TotalPage": 1,
+  "pageNo": 1,
+  "currentYear": 2026
+}
