@@ -70,6 +70,16 @@ class FixtureTransport:
             "www.szse.cn": "szse_empty.json",
             "www.cninfo.com.cn": "cninfo_numeric_org.json",
         },
+        "bluefocus_name": {
+            "query.sse.com.cn": "sse_empty.json",
+            "www.szse.cn": "szse_300058.json",
+            "www.cninfo.com.cn": "cninfo_current_orgs.json",
+        },
+        "industrial_fulian_name": {
+            "query.sse.com.cn": "sse_601138.json",
+            "www.szse.cn": "szse_empty.json",
+            "www.cninfo.com.cn": "cninfo_current_orgs.json",
+        },
     }
 
     def __init__(self) -> None:

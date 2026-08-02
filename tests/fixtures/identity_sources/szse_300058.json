@@ -1,0 +1,23 @@
+[
+  {
+    "metadata": {
+      "catalogid": "1110",
+      "name": "A股列表",
+      "tabkey": "tab1",
+      "recordcount": 1,
+      "cols": {
+        "agdm": "A股代码",
+        "agjc": "A股简称",
+        "agssrq": "A股上市日期"
+      }
+    },
+    "data": [
+      {
+        "agdm": "300058",
+        "agjc": "<a href='https://www.szse.cn/?code=300058'><u>蓝色光标</u></a>",
+        "agssrq": "2010-02-26"
+      }
+    ],
+    "error": null
+  }
+]

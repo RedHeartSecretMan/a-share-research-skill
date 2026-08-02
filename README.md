@@ -6,10 +6,10 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research/)
-[![First release delivered](https://img.shields.io/badge/status-first%20release%20delivered-2563EB)](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/1)
+[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-2563EB)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[English](README_en.md) · [安装](#安装) · [常见用法](#常见用法) · [能力边界](#能力边界) · [开发验证](#开发验证)
+[English](README_en.md) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
 
 </div>
 
@@ -77,18 +77,18 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 实验来源身份与收盘价研究：
 
 ```text
-<python> <skill-root>/scripts/a_share_research.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
-<python> <skill-root>/scripts/a_share_research.py close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>
+<python> <skill-root>/scripts/entrypoint.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
+<python> <skill-root>/scripts/entrypoint.py close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>
 ```
 
 提供证据估值研究：
 
 ```text
-<python> <skill-root>/scripts/a_share_research.py validate-bundle --bundle <bundle-directory>
-<python> <skill-root>/scripts/a_share_research.py valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD>
+<python> <skill-root>/scripts/entrypoint.py validate-bundle --bundle <bundle-directory>
+<python> <skill-root>/scripts/entrypoint.py valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD>
 ```
 
-CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON，`stderr` 只输出诊断；有效的 `limited` 或 `blocked` 研究结果仍以零退出码返回。
+`scripts/entrypoint.py` 是 Skill 唯一的公共运行入口；其他 Python 模块均为内部实现。CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON，`stderr` 只输出诊断；有效的 `limited` 或 `blocked` 研究结果仍以零退出码返回。
 
 ## 常见用法
 
@@ -110,6 +110,15 @@ CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON�
 
 > 使用 `$a-share-research`，根据 `/path/to/evidence-bundle` 计算总市值、PE TTM 和 PB MRQ，并给出计算日期、公式、关键输入和证据限制；如果资料不足，直接告诉我缺什么。
 
+## 案例 Demo
+
+v0.1.0 使用两个真实证券完成了“自然语言线索 → 规范证券身份 → 最近完成收盘价 → Agent 证据说明”的完整链路，分别覆盖深交所和上交所：
+
+- [蓝色光标（SZSE:300058）](examples/bluefocus.md)
+- [工业富联（SSE:601138）](examples/industrial-fulian.md)
+
+案例中的数值是截至 `2026-08-02` 的固定现场记录，用于展示输出口径与限制；重新运行时应以新的显式研究日期和 CLI 返回证据为准。
+
 ## 能力边界
 
 当前首版有意保持保守：
@@ -127,6 +136,7 @@ CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON�
 ```text
 skill/a-share-research/        唯一安装产物
 tests/                         离线契约、回归与分发测试
+examples/                      v0.1.0 真实端到端案例
 docs/adr/                      架构决策
 docs/research/                 带时间锚的来源可行性调查
 docs/specs/                    产品与实现规格

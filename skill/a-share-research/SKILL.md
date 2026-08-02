@@ -27,13 +27,13 @@ Use the bundled deterministic CLI to gather and calculate research evidence. Int
 Resolve `<python>` and the script path as described in [references/cli-contract.md](references/cli-contract.md), then invoke exactly one fixed subcommand:
 
 ```text
-<python> scripts/a_share_research.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
-<python> scripts/a_share_research.py close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>
-<python> scripts/a_share_research.py validate-bundle --bundle <bundle-directory>
-<python> scripts/a_share_research.py valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD>
+<python> scripts/entrypoint.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
+<python> scripts/entrypoint.py close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>
+<python> scripts/entrypoint.py validate-bundle --bundle <bundle-directory>
+<python> scripts/entrypoint.py valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD>
 ```
 
-Resolve the script path relative to this `SKILL.md`; do not assume a platform-specific home directory or shell.
+Treat `scripts/entrypoint.py` as the Skill's only public runtime entry point. Resolve its path relative to this `SKILL.md`; do not invoke implementation modules directly or assume a platform-specific home directory or shell.
 
 The CLI does not interpret natural language or call a model. Do not pass a natural-language research request, credentials, or secrets as arguments. The first release has no credentialed Adapter and reads no credentials. If a qualified Adapter later documents an optional credential, provide it only through that Adapter's named environment variable—never a command argument—and never repeat its value in output or diagnostics.
 
@@ -53,6 +53,7 @@ The CLI does not interpret natural language or call a model. Do not pass a natur
 ## Integrity rules
 
 - Never infer an exchange from code prefixes alone after identity resolution fails.
+- Never describe an issuer relationship as verified when the resolved candidate reports `issuer.security_relationship` as `unverified`.
 - Never use information first published after the research boundary.
 - Never treat a provider-computed PE or PB as the project's calculated metric.
 - Never silently substitute float shares for total shares, forecast profit for reported profit, or adjusted price for an unadjusted close.

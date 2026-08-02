@@ -15,10 +15,8 @@ from .identity_sources import (
 def _same_security(
     official: IdentityObservation, dictionary: IdentityObservation
 ) -> bool:
-    return (
-        official.code == dictionary.code
-        and dictionary.exchange == official.exchange
-        and dictionary.issuer_relationship_verified
+    return official.code == dictionary.code and (
+        dictionary.exchange is None or dictionary.exchange == official.exchange
     )
 
 
@@ -58,7 +56,7 @@ def _is_valid_clue(query: str, exchange_hint: str | None, clue: str) -> bool:
 def resolve_security_identity(
     query: str, as_of: str, transport: HttpTransport
 ) -> dict[str, object]:
-    """Resolve one clue only when an exchange and CNINFO observation agree."""
+    """Resolve one clue when official and CNINFO security observations agree."""
 
     exchange_hint, clue = _parse_clue(query)
     research = {
@@ -239,11 +237,20 @@ def resolve_security_identity(
                 "name": official.name,
                 "issuer": {
                     "name": official.issuer_name,
-                    "identifier": {
-                        "scheme": "CNINFO_ORG_ID",
-                        "value": cninfo.issuer_identifier,
-                    },
-                    "security_relationship": "verified",
+                    "identifier": (
+                        {
+                            "scheme": "CNINFO_ORG_ID",
+                            "value": cninfo.issuer_identifier,
+                        }
+                        if cninfo.issuer_relationship_verified
+                        else None
+                    ),
+                    "security_relationship": (
+                        "verified"
+                        if official.issuer_relationship_verified
+                        or cninfo.issuer_relationship_verified
+                        else "unverified"
+                    ),
                 },
                 "identity_status": "cross_checked_experimental",
                 "evidence_ids": [
@@ -303,6 +310,21 @@ def resolve_security_identity(
                 ),
             }
         ]
+        issuer = candidates[0]["issuer"]
+        if (
+            isinstance(issuer, dict)
+            and issuer.get("security_relationship") == "unverified"
+        ):
+            limitations.append(
+                {
+                    "code": "issuer_relationship_unverified",
+                    "message": (
+                        "The security identity is cross-checked, but the "
+                        "available observations do not independently verify "
+                        "the associated issuer relationship."
+                    ),
+                }
+            )
     elif len(candidates) > 1:
         status = "blocked"
         limitations = [

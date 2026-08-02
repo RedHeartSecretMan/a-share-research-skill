@@ -16,6 +16,10 @@ class SkillDistributionTests(unittest.TestCase):
     def test_repository_publishes_only_the_nested_installable_skill(self) -> None:
         self.assertFalse(Path(REPOSITORY_ROOT, "SKILL.md").exists())
 
+        scripts = Path(SKILL_ROOT, "scripts")
+        self.assertTrue(Path(scripts, "entrypoint.py").is_file())
+        self.assertFalse(Path(scripts, "a_share_research.py").exists())
+
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
@@ -34,6 +38,9 @@ class SkillDistributionTests(unittest.TestCase):
         self,
     ) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("scripts/entrypoint.py", entry)
+        self.assertNotIn("scripts/a_share_research.py", entry)
 
         expected_commands = (
             "resolve --query <security-clue> --as-of <YYYY-MM-DD>",
@@ -73,6 +80,7 @@ class SkillDistributionTests(unittest.TestCase):
             "macOS: `python3`",
             "Linux: `python3`",
             "Resolve `<skill-root>` from the loaded `SKILL.md` location",
+            "only public runtime entry point is `<skill-root>/scripts/entrypoint.py`",
         ):
             with self.subTest(instruction=instruction):
                 self.assertIn(instruction, reference)
@@ -111,7 +119,7 @@ class SkillDistributionTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-I",
-                    str(installed / "scripts" / "a_share_research.py"),
+                    str(installed / "scripts" / "entrypoint.py"),
                     "validate-bundle",
                     "--bundle",
                     str(bundle),

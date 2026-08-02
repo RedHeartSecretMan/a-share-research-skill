@@ -73,7 +73,7 @@
 - Use one Python CLI entry point with fixed subcommands. The first spec owns identity resolution, close observation, evidence-bundle validation and evidence-bundle valuation; it does not accept natural language.
 - Require explicit `as_of` dates on research operations. The Agent resolves relative dates in China Standard Time before invoking the CLI.
 - Use exchange-qualified canonical security identifiers. Bare codes and names are clues for identity resolution, never sufficient research identifiers.
-- Make SSE/SZSE official stock-list operations and the CNINFO security dictionary the first experimental identity sources. Require cross-source agreement on exchange, code and name before returning a unique identity candidate.
+- Make SSE/SZSE official stock-list operations and the CNINFO security dictionary the first experimental identity sources. Require an exchange-specific official observation plus CNINFO agreement on code and name before returning a unique identity candidate. CNINFO may remain exchange-neutral, but an explicit exchange conflict must block; never infer the exchange from a code prefix or opaque `orgId`.
 - Make SSE/SZSE webpage daily-line operations and Tencent quote observations the first experimental close sources. Compare security identity, trading date and close; do not compare only numeric proximity.
 - Treat all first-source operations as experimental. They may supply observations and detect conflicts, but they cannot independently establish a supported factual claim until their operation-level contract, semantics, failure behavior and permission are qualified.
 - Fail closed on BSE for the first tracer. Preserve BSE current/legacy-code cases as negative tests and never fall back to SSE or SZSE.

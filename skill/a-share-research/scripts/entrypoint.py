@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI entry point for the bundled A-share research runtime."""
+"""Public entry point for the bundled A-share research runtime."""
 
 from __future__ import annotations
 

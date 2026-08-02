@@ -6,10 +6,10 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Runtime: stdlib only](https://img.shields.io/badge/runtime-stdlib%20only-0F766E)](skill/a-share-research/)
-[![First release delivered](https://img.shields.io/badge/status-first%20release%20delivered-2563EB)](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/1)
+[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-2563EB)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Boundaries](#boundaries) · [Development](#development)
+[中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
 
 </div>
 
@@ -77,18 +77,18 @@ The runtime requires only the Python 3.12 or later standard library. It does not
 Experimental-source identity and close research:
 
 ```text
-<python> <skill-root>/scripts/a_share_research.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
-<python> <skill-root>/scripts/a_share_research.py close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>
+<python> <skill-root>/scripts/entrypoint.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
+<python> <skill-root>/scripts/entrypoint.py close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>
 ```
 
 Provided-evidence valuation research:
 
 ```text
-<python> <skill-root>/scripts/a_share_research.py validate-bundle --bundle <bundle-directory>
-<python> <skill-root>/scripts/a_share_research.py valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD>
+<python> <skill-root>/scripts/entrypoint.py validate-bundle --bundle <bundle-directory>
+<python> <skill-root>/scripts/entrypoint.py valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD>
 ```
 
-The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
+`scripts/entrypoint.py` is the Skill's only public runtime entry point; every other Python module is an implementation detail. The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
 
 ## Common uses
 
@@ -110,6 +110,15 @@ The first release supports four common uses through its four public workflows. A
 
 > Use `$a-share-research` with `/path/to/evidence-bundle` to calculate market capitalization, PE TTM, and PB MRQ. Include the calculation date, formulas, key inputs, and evidence limitations; if evidence is missing, tell me exactly what is needed.
 
+## Case demos
+
+v0.1.0 exercises the complete “natural-language clue → canonical identity → latest completed close → Agent evidence explanation” path against one SZSE and one SSE security:
+
+- [BlueFocus (SZSE:300058)](examples/bluefocus.md)
+- [Industrial Fulian (SSE:601138)](examples/industrial-fulian.md)
+
+The values are fixed live observations as of `2026-08-02`, retained to demonstrate result semantics and limitations. A rerun must use a new explicit research date and the evidence returned by the CLI.
+
 ## Boundaries
 
 The first release is deliberately conservative:
@@ -127,6 +136,7 @@ See [`CONTEXT.md`](CONTEXT.md) for the complete domain boundary and [`docs/specs
 ```text
 skill/a-share-research/        sole installable artifact
 tests/                         offline contract, regression, and distribution tests
+examples/                      v0.1.0 live end-to-end cases
 docs/adr/                      architecture decisions
 docs/research/                 time-anchored source feasibility research
 docs/specs/                    product and implementation specifications

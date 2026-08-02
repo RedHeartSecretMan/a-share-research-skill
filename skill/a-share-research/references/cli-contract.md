@@ -10,19 +10,19 @@ The runtime requires Python 3.12 or later and only the Python standard library. 
 - macOS: `python3`
 - Linux: `python3`
 
-Resolve `<skill-root>` from the loaded `SKILL.md` location. The entry point is `<skill-root>/scripts/a_share_research.py`. Do not assume a particular Agent, home directory, installation directory, working directory, or shell. Quote the resolved path when it contains spaces.
+Resolve `<skill-root>` from the loaded `SKILL.md` location. The Skill's only public runtime entry point is `<skill-root>/scripts/entrypoint.py`; modules under `<skill-root>/scripts/a_share_research/` are implementation details and must not be invoked directly. Do not assume a particular Agent, home directory, installation directory, working directory, or shell. Quote the resolved path when it contains spaces.
 
 Conceptually invoke:
 
 ```text
-<python> <skill-root>/scripts/a_share_research.py <subcommand> <arguments>
+<python> <skill-root>/scripts/entrypoint.py <subcommand> <arguments>
 ```
 
 Use `pathlib.Path` or the host platform's normal path API when an Agent must construct the path programmatically. Do not manually replace `/` with `\` in user-supplied paths.
 
 ## Fixed subcommands
 
-- `resolve --query <security-clue> --as-of <YYYY-MM-DD> [--output <file>]`: cross-check an identity clue with experimental SSE/SZSE and CNINFO operations. A name or bare code remains a clue until the JSON identifies one canonical security.
+- `resolve --query <security-clue> --as-of <YYYY-MM-DD> [--output <file>]`: cross-check an identity clue with experimental SSE/SZSE and CNINFO operations. The exchange-specific official observation establishes the exchange; an exchange-neutral CNINFO record may corroborate code and name but never supplies a guessed venue. A name or bare code remains a clue until the JSON identifies one canonical security.
 - `close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD> [--output <file>]`: cross-check the latest completed daily unadjusted close from experimental exchange and Tencent operations.
 - `validate-bundle --bundle <bundle-directory>`: validate `manifest.json`, referenced material hashes, evidence applicability, and relationships without calculating a valuation.
 - `valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD> [--output <file>]`: rerun full bundle validation and calculate total market capitalization, PE TTM, and PB MRQ from admissible provided evidence.

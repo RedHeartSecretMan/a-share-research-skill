@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-CLI = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts" / "a_share_research.py"
+CLI = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts" / "entrypoint.py"
 MINIMAL_BUNDLE = REPOSITORY_ROOT / "tests" / "fixtures" / "minimal_evidence_bundle"
 
 

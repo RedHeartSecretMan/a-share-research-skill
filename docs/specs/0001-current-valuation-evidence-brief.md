@@ -32,7 +32,7 @@ CLI 使用一个入口脚本和固定子命令。首版规划以下命令：
 示例接口：
 
 ```text
-python skill/a-share-research/scripts/a_share_research.py \
+python skill/a-share-research/scripts/entrypoint.py \
   valuation --security SSE:600519 --as-of 2026-08-01
 ```
 

@@ -279,12 +279,11 @@ class IdentityResolutionCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "limited")
         self.assertEqual(result["candidates"][0]["security"]["exchange"], "SSE")
 
-    def test_unknown_cninfo_market_remains_unresolved(self) -> None:
+    def test_opaque_cninfo_org_id_can_cross_check_official_exchange(self) -> None:
         result = self.run_resolve("中国平安", "unknown_org")
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["candidates"], [])
-        self.assertEqual(result["limitations"][0]["code"], "identity_not_resolved")
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["candidates"][0]["security"]["exchange"], "SSE")
         dictionary_evidence = next(
             item
             for item in result["evidence"]
@@ -295,6 +294,36 @@ class IdentityResolutionCliTests(unittest.TestCase):
             dictionary_evidence["subject"]["security_clue"],
             {"code": "601318"},
         )
+
+    def test_bluefocus_live_shape_resolves_without_guessing_exchange(self) -> None:
+        result = self.run_resolve("蓝色光标", "bluefocus_name")
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(len(result["candidates"]), 1)
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["security"]["exchange"], "SZSE")
+        self.assertEqual(candidate["security"]["code"], "300058")
+        self.assertEqual(candidate["name"], "蓝色光标")
+        self.assertIsNone(candidate["issuer"]["identifier"])
+        self.assertEqual(candidate["issuer"]["security_relationship"], "unverified")
+        self.assertEqual(len(result["evidence"]), 2)
+        self.assertIn(
+            "issuer_relationship_unverified",
+            {item["code"] for item in result["limitations"]},
+        )
+
+    def test_industrial_fulian_live_shape_resolves_from_sse_identity(self) -> None:
+        result = self.run_resolve("工业富联", "industrial_fulian_name")
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(len(result["candidates"]), 1)
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["security"]["exchange"], "SSE")
+        self.assertEqual(candidate["security"]["code"], "601138")
+        self.assertEqual(candidate["name"], "工业富联")
+        self.assertIsNone(candidate["issuer"]["identifier"])
+        self.assertEqual(candidate["issuer"]["security_relationship"], "verified")
+        self.assertEqual(len(result["evidence"]), 2)
 
     def test_current_sources_cannot_backfill_a_historical_identity(self) -> None:
         result = self.run_resolve("600519", as_of="2026-08-01")
