@@ -10,7 +10,7 @@
 <python> <skill-root>/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
 ```
 
-请求使用 `security_valuation` 任务，并显式声明本案例已经确认发行主体只有一个需要计价的普通股证券类别。Skill 先把名称解析为规范证券标识，再交叉核验最近完整交易日价格；当前总股本快照、估值相关三表/季度序列和一致预期均由任务自动取得，不需要用户预先制作 evidence bundle。类别范围未知时，运行时不会默认猜成一个类别。
+请求使用 `security_valuation` 任务，并显式声明本案例已经确认发行主体只有一个需要计价的普通股证券类别。Skill 先把名称解析为规范证券标识，再交叉核验最近完整交易日价格；当前总股本快照、三表完整数值行/季度序列和一致预期均由任务自动取得，不需要用户预先制作 evidence bundle。类别范围未知时，运行时不会默认猜成一个类别。
 
 ## Agent 示例答复
 

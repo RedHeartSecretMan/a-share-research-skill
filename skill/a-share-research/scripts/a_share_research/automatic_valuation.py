@@ -814,6 +814,10 @@ def _report_summary(report: FinancialStatementObservation) -> dict[str, Any]:
             for field in STATEMENT_FIELDS[report.statement_type]
             if field in report.values
         },
+        "items": [
+            {"label": item.label, "value": item.value, "unit": "CNY"}
+            for item in report.items
+        ],
         "evidence_id": report.evidence_id,
     }
 

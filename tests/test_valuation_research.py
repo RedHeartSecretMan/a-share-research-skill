@@ -282,6 +282,15 @@ class SecurityValuationProcessTests(unittest.TestCase):
             "duplicate_financial_item",
             {item["code"] for item in result["source_errors"]},
         )
+        latest_income_items = result["financial_statements"]["income"][0]["items"]
+        self.assertEqual(
+            [
+                item["value"]
+                for item in latest_income_items
+                if item["label"] == "利息收入"
+            ],
+            ["1", "2"],
+        )
 
     def test_duplicate_required_statement_label_remains_inapplicable(self) -> None:
         result = self.run_valuation("required_duplicate_financial_item")

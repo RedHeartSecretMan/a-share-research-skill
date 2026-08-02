@@ -254,6 +254,12 @@ class EastmoneyStockInfoOperation:
 
 
 @dataclass(frozen=True)
+class FinancialStatementItem:
+    label: str
+    value: str
+
+
+@dataclass(frozen=True)
 class FinancialStatementObservation:
     security: str
     statement_type: str
@@ -265,6 +271,7 @@ class FinancialStatementObservation:
     data_source: str
     update_time: str
     values: dict[str, str]
+    items: tuple[FinancialStatementItem, ...]
     source_uri: str
     retrieved_at: datetime
 
@@ -288,6 +295,10 @@ class FinancialStatementObservation:
             "experimental": True,
             "subject": {"security": self.security},
             "observed_value": {"value": values, "unit": self.currency},
+            "full_statement_items": [
+                {"label": item.label, "value": item.value, "unit": self.currency}
+                for item in self.items
+            ],
             "basis": f"reported_{self.statement_type}_statement",
             "report": {
                 "period": self.period.isoformat(),
@@ -441,6 +452,7 @@ class SinaFinancialStatementsOperation:
                 self.operation_id, "unknown_schema", "Report rows are missing."
             )
         values: dict[str, str] = {}
+        items: list[FinancialStatementItem] = []
         for row in rows:
             if not isinstance(row, dict):
                 raise _error(
@@ -450,6 +462,8 @@ class SinaFinancialStatementsOperation:
             value = row.get("item_value")
             if not isinstance(title, str) or not title or value in (None, ""):
                 continue
+            parsed_value = _decimal(value, self.operation_id)
+            items.append(FinancialStatementItem(label=title, value=parsed_value))
             if title not in REQUIRED_FINANCIAL_ITEMS[statement_type]:
                 continue
             if title in values:
@@ -458,8 +472,8 @@ class SinaFinancialStatementsOperation:
                     "duplicate_financial_item",
                     "A report contains a duplicate financial item.",
                 )
-            values[title] = _decimal(value, self.operation_id)
-        if not values:
+            values[title] = parsed_value
+        if not items:
             raise _error(
                 self.operation_id,
                 "empty_observation",
@@ -481,6 +495,7 @@ class SinaFinancialStatementsOperation:
                 else str(update_time)
             ),
             values=values,
+            items=tuple(items),
             source_uri=source_uri,
             retrieved_at=retrieved_at,
         )
