@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "result": {
+    "pages": 1,
+    "count": 2,
+    "data": [
+      {
+        "SECURITY_CODE": "600519",
+        "END_DATE": "2026-06-30 00:00:00",
+        "PRE_END_DATE": "2026-03-31 00:00:00",
+        "HOLDER_NUM": 150000,
+        "HOLDER_NUM_CHANGE": -5000,
+        "HOLDER_NUM_RATIO": -3.2258,
+        "AVG_FREE_SHARES": 833.3300
+      },
+      {
+        "SECURITY_CODE": "600519",
+        "END_DATE": "2026-03-31 00:00:00",
+        "PRE_END_DATE": "2025-12-31 00:00:00",
+        "HOLDER_NUM": 155000,
+        "HOLDER_NUM_CHANGE": 2000,
+        "HOLDER_NUM_RATIO": 1.3072,
+        "AVG_FREE_SHARES": 806.4500
+      }
+    ]
+  }
+}

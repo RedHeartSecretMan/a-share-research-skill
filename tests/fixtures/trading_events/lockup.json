@@ -1,0 +1,26 @@
+{
+  "success": true,
+  "code": 0,
+  "result": {
+    "pages": 1,
+    "count": 2,
+    "data": [
+      {
+        "SECURITY_CODE": "300058",
+        "FREE_DATE": "2026-07-15 00:00:00",
+        "FREE_SHARES_TYPE": "股权激励限售股份",
+        "FREE_SHARES": 120.5,
+        "ABLE_FREE_SHARES": 100.25,
+        "FREE_RATIO": 0.0042
+      },
+      {
+        "SECURITY_CODE": "300058",
+        "FREE_DATE": "2026-08-20 00:00:00",
+        "FREE_SHARES_TYPE": "定向增发机构配售股份",
+        "FREE_SHARES": 5000,
+        "ABLE_FREE_SHARES": 4800,
+        "FREE_RATIO": 0.12
+      }
+    ]
+  }
+}

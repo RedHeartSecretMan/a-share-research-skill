@@ -10,6 +10,12 @@ from .automatic_valuation import (
     build_security_valuation_result,
     build_valuation_comparison_result,
 )
+from .capital_contract import (
+    CapitalHttpTransport,
+    CapitalSourceOperation,
+)
+from .capital_events import build_capital_events_result
+from .capital_registry import build_default_capital_operations
 from .content_contract import (
     ContentHttpTransport,
     ContentSourceOperation,
@@ -33,6 +39,8 @@ class ResearchRuntime:
         available_optional_dependencies: Collection[str] | None = None,
         content_operations: Collection[ContentSourceOperation] | None = None,
         content_transport: ContentHttpTransport | None = None,
+        capital_operations: Collection[CapitalSourceOperation] | None = None,
+        capital_transport: CapitalHttpTransport | None = None,
     ) -> None:
         self._identity_transport = identity_transport or UrlLibTransport()
         self._research_now = research_now
@@ -41,6 +49,10 @@ class ResearchRuntime:
             None if content_operations is None else tuple(content_operations)
         )
         self._content_transport = content_transport or UrlLibTransport()
+        self._capital_operations = (
+            None if capital_operations is None else tuple(capital_operations)
+        )
+        self._capital_transport = capital_transport or UrlLibTransport()
 
     def research(self, request: dict[str, Any]) -> dict[str, Any]:
         """Execute one versioned research task."""
@@ -132,9 +144,9 @@ class ResearchRuntime:
                     ),
                 )
             else:
-                operations = self._content_operations
-                if operations is None:
-                    operations = build_default_content_operations(
+                content_operations = self._content_operations
+                if content_operations is None:
+                    content_operations = build_default_content_operations(
                         self._content_transport,
                         allow_credentials=request["source_policy"]["allow_credentials"],
                         allow_fallback=request["source_policy"]["allow_fallback"],
@@ -142,9 +154,30 @@ class ResearchRuntime:
                     )
                 result = build_research_content_result(
                     request,
-                    operations,
+                    content_operations,
                     self._identity_transport,
                     self._content_transport,
+                )
+        elif task_type == "capital_events":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "capital_events currently requires experimental source "
+                        "operations"
+                    ),
+                )
+            else:
+                capital_operations = self._capital_operations
+                if capital_operations is None:
+                    capital_operations = build_default_capital_operations(
+                        self._capital_transport
+                    )
+                result = build_capital_events_result(
+                    request,
+                    capital_operations,
+                    self._identity_transport,
                 )
         elif task_type == "intraday_market_signal":
             if not self._dependency_available("mootdx"):
@@ -206,6 +239,8 @@ def research(
     available_optional_dependencies: Collection[str] | None = None,
     content_operations: Collection[ContentSourceOperation] | None = None,
     content_transport: ContentHttpTransport | None = None,
+    capital_operations: Collection[CapitalSourceOperation] | None = None,
+    capital_transport: CapitalHttpTransport | None = None,
 ) -> dict[str, Any]:
     """Run a task through the public research module interface."""
 
@@ -215,6 +250,8 @@ def research(
         available_optional_dependencies=available_optional_dependencies,
         content_operations=content_operations,
         content_transport=content_transport,
+        capital_operations=capital_operations,
+        capital_transport=capital_transport,
     ).research(request)
 
 

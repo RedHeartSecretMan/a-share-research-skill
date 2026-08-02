@@ -1,0 +1,13 @@
+{
+  "success": true,
+  "code": 0,
+  "result": {
+    "pages": 1,
+    "count": 3,
+    "data": [
+      {"SECURITY_CODE": "300058", "TRADE_DATE": "2026-07-31 00:00:00", "OPERATEDEPT_CODE": "201", "OPERATEDEPT_NAME": "卖方营业部一", "BUY": 1000000, "SELL": 60000000, "NET": -59000000},
+      {"SECURITY_CODE": "300058", "TRADE_DATE": "2026-07-31 00:00:00", "OPERATEDEPT_CODE": "0", "OPERATEDEPT_NAME": "机构专用", "BUY": 2000000, "SELL": 12000000, "NET": -10000000},
+      {"SECURITY_CODE": "300058", "TRADE_DATE": "2026-07-31 00:00:00", "OPERATEDEPT_CODE": "203", "OPERATEDEPT_NAME": "卖方营业部三", "BUY": 3000000, "SELL": 9000000, "NET": -6000000}
+    ]
+  }
+}

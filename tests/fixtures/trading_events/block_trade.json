@@ -1,0 +1,30 @@
+{
+  "success": true,
+  "code": 0,
+  "result": {
+    "pages": 1,
+    "count": 2,
+    "data": [
+      {
+        "SECURITY_CODE": "300058",
+        "TRADE_DATE": "2026-08-01 00:00:00",
+        "DEAL_PRICE": 10.5,
+        "CLOSE_PRICE": 10,
+        "DEAL_VOLUME": 200,
+        "DEAL_AMT": 2100,
+        "BUYER_NAME": "买方营业部",
+        "SELLER_NAME": "卖方营业部"
+      },
+      {
+        "SECURITY_CODE": "300058",
+        "TRADE_DATE": "2026-07-20 00:00:00",
+        "DEAL_PRICE": 9.8,
+        "CLOSE_PRICE": 10,
+        "DEAL_VOLUME": 100,
+        "DEAL_AMT": 980,
+        "BUYER_NAME": "机构专用",
+        "SELLER_NAME": "另一营业部"
+      }
+    ]
+  }
+}

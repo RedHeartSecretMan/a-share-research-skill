@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "task_type": "capital_events",
+  "subjects": [{"clue": "贵州茅台"}],
+  "as_of": "2026-08-02",
+  "window": {
+    "observed_from": "2026-07-29",
+    "observed_to": "2026-07-31"
+  },
+  "parameters": {
+    "data_types": ["margin_trading"],
+    "limit": 3
+  },
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": false
+  }
+}

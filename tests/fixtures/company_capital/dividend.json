@@ -1,0 +1,21 @@
+{
+  "success": true,
+  "result": {
+    "pages": 1,
+    "count": 1,
+    "data": [
+      {
+        "SECURITY_CODE": "600519",
+        "REPORT_DATE": "2025-12-31 00:00:00",
+        "PLAN_NOTICE_DATE": "2026-04-02 00:00:00",
+        "EQUITY_RECORD_DATE": "2026-06-18 00:00:00",
+        "EX_DIVIDEND_DATE": "2026-06-19 00:00:00",
+        "PAY_CASH_DATE": "2026-06-19 00:00:00",
+        "PRETAX_BONUS_RMB": 27.6100,
+        "BONUS_RATIO": 0,
+        "TRANSFER_RATIO": 0,
+        "ASSIGN_PROGRESS": "实施"
+      }
+    ]
+  }
+}

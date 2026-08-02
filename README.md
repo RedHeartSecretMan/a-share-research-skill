@@ -38,6 +38,7 @@
 | 自动单票估值 | A 股线索 + 已确认证券类别数 + 当前北京时间日期 + 情景目标 PE | 保留三表完整数值行和季度序列，取得当前总股本快照与一致预期，计算总市值、PE TTM、PB MRQ、前向 PE、预测增长、PEG 与 PE 消化时间 |
 | 同口径批量估值 | 2–10 个不同 A 股线索 + 共同日期/目标 PE | 按输入顺序保留全部标的；统一价格与指标口径，显式呈现不可计算、无估值意义及阻断行 |
 | 研究内容检索 | 主题/行业或单只 A 股 + 发表时间窗 + 材料类型 | 个股/行业研报、一致预期、F10、新闻、巨潮/上交所/深交所公告、市场快讯和互动易；保留观点角色、发布时间、获取时间、文档身份与定位 |
+| 资金、筹码与公司事件 | 单只 A 股或全市场/板块范围 + 观测时间窗 + 数据类型 | 北向披露缺口、个股/板块资金流、个股及全市场龙虎榜、未来 90 日解禁、两融、大宗、股东户数和分红送转；逐项保留周期、单位、方向与市场范围 |
 | 证据包校验 | 调用者提供的 `manifest.json` 与可选材料 | 校验身份、时间、单位、口径、哈希、定位信息和证据关系 |
 | 提供证据估值 | 已校验证据包 + 明确日期 | 计算总市值、PE TTM、PB MRQ；保留公式、操作数和报告谱系 |
 
@@ -157,6 +158,22 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 > 使用 `$a-share-research`，整理蓝色光标最近 90 天互动易中投资者最常问的主题。先从原始问答提出候选主题，再用候选主题词做可复核的字面频次统计；分别保留提问时间、公司回复时间和原文定位，公司回复按署名陈述呈现，不自动当作已核验事实。
 
+**看个股与板块资金**
+
+> 使用 `$a-share-research`，分两次运行：查看工业富联最近 5 个完整交易日的主力及分档资金净流入；再列出供应商当前榜单所对应交易日的行业板块主力净流入前 10 名。分别说明统计周期、金额单位、正负方向、适用市场、榜单获取时间和交易时段完整性是否可确认；不要把供应商资金分类当作公司基本面事实。
+
+**查龙虎榜和解禁**
+
+> 使用 `$a-share-research`，检查蓝色光标最近 30 天是否上过龙虎榜，列出最近一次买卖席位 TOP5 和机构净额；再单独检查未来 90 天限售解禁。保留上榜原因、席位金额单位、解禁股数及占比口径，来源为空时不要回答“没有”。
+
+**研究两融、筹码和分红**
+
+> 使用 `$a-share-research`，整理工业富联最近的融资融券余额、大宗交易、股东户数变化和历史分红送转。区分交易日、报告期和实施日，逐个指标给出单位与方向；股东户数变化只描述筹码分布现象，不推断主力行为。
+
+**核对北向披露边界**
+
+> 使用 `$a-share-research`，告诉我当前公开口径下还能核验哪些北向资金数据、哪些净流入字段已经不再披露。缺失字段必须标为披露不可用，不得把空值或 0 当作净流入为零。
+
 ## 案例 Demo
 
 案例从真实用户研究问题出发。蓝色光标覆盖“自然语言线索 → 身份 → 10 日未复权 OHLCV → 指标 → 走势结论”；工业富联覆盖“身份 → 价格与股本 → 财务三表 → 一致预期 → 报告与前向估值”：
@@ -177,6 +194,7 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 - 发行主体证券类别数不允许默认猜测；缺少明确范围或存在 A/H、A/B 等多类别时，发行主体整体估值阻断。
 - 一致预期是机构观点聚合，不是公司已披露事实；目标 PE 是用户情景参数，不是公允价值结论。
 - 研报、新闻、公告、快讯、互动易和 F10 当前是实验来源，结果最高为 `limited`；PDF 定位不等于已下载或解析，只有显式开启文档验证后才能声称完成获取检查。
+- 资金流、龙虎榜、解禁、两融、大宗、股东户数和分红当前也属于实验来源；供应商派生的资金方向是市场信号，不是权威披露。滚动板块资金不暴露首个交易日时会保留 `period.start: null`；来源不暴露首次公开时间时只允许当前获取日研究，不得倒用于历史回测。2024 年 8 月 19 日起无法按旧口径取得北向每日净买额时，任务会显式阻断而不是补零。
 - iWencai 语义检索必须由来源策略允许，并只从 `IWENCAI_API_KEY` 读取凭据；凭据不会进入请求 JSON 或输出。
 - ETF 支持交易所快照；尚不支持分钟、逐笔、交易、新闻情绪评分、全量公司画像或批量选股。
 - 不输出评级、目标价、买卖建议、仓位建议或自动交易指令。
@@ -222,6 +240,11 @@ python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/r
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-announcements.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-flashes.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-investor-qa.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-5-day-fund-flow.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industry-board-5-day-fund-flow.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-dragon-tiger.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-lockup-90-day.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-capital-events.json
 ```
 
 `theme-report-search.json` 需要调用者先允许凭据型来源，并通过 `IWENCAI_API_KEY` 提供本地凭据；其他请求不得复用或输出该值。`bluefocus-f10.json` 用于验证可选 `mootdx` 能力，未安装依赖时应得到显式阻断结果。

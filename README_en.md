@@ -38,6 +38,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 | Automatic security valuation | A-share clue + established security-class count + current China Standard Time date + scenario target PE | Preserves complete numeric rows from all three statements and quarterly series, then acquires current shares and consensus to calculate reported and forward metrics |
 | Same-basis valuation comparison | 2–10 unique A-share clues + shared date/target PE | Preserves every requested row with one price and metric basis; unavailable, meaningless, and blocked metrics remain explicit |
 | Research-content retrieval | Theme/industry or one A-share + publication window + material types | Stock/industry reports, consensus, F10, news, CNINFO/SSE/SZSE announcements, market flashes, and investor Q&A with role, time, document identity, and locators preserved |
+| Capital, positioning, and company events | One A-share or a market/board scope + observation window + data types | Northbound disclosure gaps, stock/board fund flow, stock and market dragon-tiger records, 90-day lockups, margin data, block trades, shareholder counts, and distributions with period, unit, direction, and market scope preserved |
 | Evidence-bundle validation | Caller-provided `manifest.json` and optional materials | Validates identity, time, units, basis, hashes, locators, and evidence relationships |
 | Provided-evidence valuation | Validated bundle + explicit date | Calculates market capitalization, PE TTM, and PB MRQ with formulas, operands, and report lineage |
 
@@ -157,6 +158,22 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 > Use `$a-share-research` to group the most common themes in BlueFocus investor Q&A over the last 90 days. First propose candidate themes from the raw material, then rerun auditable literal-frequency counts for those labels. Keep question time, company reply time, and original locator separate; present company replies as attributed statements rather than automatically verified facts.
 
+**Review stock and board fund flow**
+
+> Use `$a-share-research` in two separate tasks: review Industrial Fulian's main and order-size fund flows over the latest five completed sessions; then list the ten highest industry-board main inflows for the trading date attached to the provider's current ranking. State the period, amount unit, sign direction, market scope, retrieval time, and whether session completeness is established; do not present provider-defined flow buckets as company fundamentals.
+
+**Check dragon-tiger records and lockups**
+
+> Use `$a-share-research` to check whether BlueFocus appeared on the dragon-tiger list in the last 30 days, including the latest buy/sell top five and institution net amount. In a separate task, check scheduled lockups over the next 90 days. Preserve trigger reason, seat amount unit, released shares, and ratio basis; do not translate a failed or empty source into “none.”
+
+**Review leverage, positioning, and distributions**
+
+> Use `$a-share-research` to review Industrial Fulian's recent margin balances, block trades, shareholder-count changes, and distribution history. Distinguish trading dates, reporting periods, and implementation dates; keep every unit and direction explicit, and do not infer trading intent from shareholder-count changes.
+
+**Check the northbound disclosure boundary**
+
+> Use `$a-share-research` to explain which northbound metrics remain verifiable under the current disclosure regime and which net-flow fields are unavailable. Missing values must remain disclosure gaps and must never be converted to zero.
+
 ## Case demos
 
 The cases start from real user research questions. BlueFocus covers “natural-language clue → identity → 10-session unadjusted OHLCV → metrics → trend conclusion”; Industrial Fulian covers “identity → price and shares → financial statements → consensus → reported and forward valuation”:
@@ -177,6 +194,7 @@ The current preview is deliberately conservative:
 - Security-class count is never silently assumed. Unknown scope or A/H, A/B, or other multi-class issuers block issuer-wide valuation.
 - Consensus is aggregated opinion, not a reported company fact; target PE is a user scenario input, not a fair-value conclusion.
 - Reports, news, announcements, flashes, investor Q&A, and F10 currently use experimental sources, so results are at most `limited`. A PDF locator does not prove download or parsing; only an explicit document-verification run may claim retrieval was checked.
+- Fund flow, dragon-tiger records, lockups, margin data, block trades, shareholder counts, and distributions also use experimental sources. Provider-derived fund direction is a market signal, not authoritative disclosure. A rolling board metric keeps `period.start: null` when the first session is not exposed; a source with unknown first-availability time is usable only for research on its current retrieval date, never as a historical backtest input. When the post-19-August-2024 regime does not expose the old daily northbound net-buy metric, the task blocks explicitly instead of inserting zero.
 - Semantic iWencai search requires source-policy permission and reads credentials only from `IWENCAI_API_KEY`; values never enter request JSON or output.
 - ETF snapshots are supported; minute, tick, trading, news-sentiment scoring, full-company profiles, and batch screening are not yet supported.
 - It does not provide ratings, price targets, buy/sell advice, position sizing, or automated trading instructions.
@@ -222,6 +240,11 @@ python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/r
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-announcements.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-flashes.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-investor-qa.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-5-day-fund-flow.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industry-board-5-day-fund-flow.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-dragon-tiger.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-lockup-90-day.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-capital-events.json
 ```
 
 `theme-report-search.json` requires source-policy permission and a local credential supplied only through `IWENCAI_API_KEY`; no other request may reuse or expose that value. `bluefocus-f10.json` exercises the optional `mootdx` capability and should return an explicit blocked result when the dependency is absent.

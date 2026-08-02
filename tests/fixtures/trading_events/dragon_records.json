@@ -1,0 +1,24 @@
+{
+  "success": true,
+  "code": 0,
+  "result": {
+    "pages": 1,
+    "count": 2,
+    "data": [
+      {
+        "SECURITY_CODE": "300058",
+        "TRADE_DATE": "2026-07-31 00:00:00",
+        "EXPLANATION": "日涨幅达到15%的前5只证券",
+        "BILLBOARD_NET_AMT": 125000000.123456789012345678,
+        "TURNOVERRATE": 8.25
+      },
+      {
+        "SECURITY_CODE": "300058",
+        "TRADE_DATE": "2026-07-15 00:00:00",
+        "EXPLANATION": "连续三个交易日涨幅偏离值累计达到30%",
+        "BILLBOARD_NET_AMT": -25000000,
+        "TURNOVERRATE": 6.5
+      }
+    ]
+  }
+}

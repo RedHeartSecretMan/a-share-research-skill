@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Collection, NoReturn, Sequence
 
 from .bundle_validation import JsonNumberToken, build_bundle_validation_result
+from .capital_contract import CapitalHttpTransport, CapitalSourceOperation
 from .close_observation import build_close_result
 from .content_contract import ContentHttpTransport, ContentSourceOperation
 from .identity_resolution import resolve_security_identity
@@ -127,6 +128,8 @@ def main(
     available_optional_dependencies: Collection[str] | None = None,
     content_operations: Collection[ContentSourceOperation] | None = None,
     content_transport: ContentHttpTransport | None = None,
+    capital_operations: Collection[CapitalSourceOperation] | None = None,
+    capital_transport: CapitalHttpTransport | None = None,
 ) -> int:
     arguments = _parser().parse_args(argv)
     try:
@@ -138,6 +141,8 @@ def main(
                 available_optional_dependencies=available_optional_dependencies,
                 content_operations=content_operations,
                 content_transport=content_transport,
+                capital_operations=capital_operations,
+                capital_transport=capital_transport,
             )
         elif arguments.command == "resolve":
             result = resolve_security_identity(

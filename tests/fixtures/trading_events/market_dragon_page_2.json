@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "code": 0,
+  "result": {
+    "pages": 2,
+    "count": 2,
+    "data": [
+      {
+        "SECURITY_CODE": "600519",
+        "SECURITY_NAME_ABBR": "贵州茅台",
+        "TRADE_DATE": "2026-08-01 00:00:00",
+        "EXPLANATION": "有价格涨跌幅限制的日收盘价格跌幅偏离值达到7%",
+        "CLOSE_PRICE": 1400.5,
+        "CHANGE_RATE": -7.1,
+        "BILLBOARD_NET_AMT": -20000000,
+        "BILLBOARD_BUY_AMT": 80000000,
+        "BILLBOARD_SELL_AMT": 100000000,
+        "TURNOVERRATE": 1.2
+      }
+    ]
+  }
+}

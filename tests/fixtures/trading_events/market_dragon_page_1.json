@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "code": 0,
+  "result": {
+    "pages": 2,
+    "count": 2,
+    "data": [
+      {
+        "SECURITY_CODE": "300058",
+        "SECURITY_NAME_ABBR": "蓝色光标",
+        "TRADE_DATE": "2026-08-01 00:00:00",
+        "EXPLANATION": "日涨幅达到15%的前5只证券",
+        "CLOSE_PRICE": 12.34,
+        "CHANGE_RATE": 16.25,
+        "BILLBOARD_NET_AMT": 50000000,
+        "BILLBOARD_BUY_AMT": 150000000,
+        "BILLBOARD_SELL_AMT": 100000000,
+        "TURNOVERRATE": 9.5
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "task_type": "capital_events",
+  "subjects": [{"clue": "蓝色光标"}],
+  "as_of": "2026-08-02",
+  "window": {
+    "observed_from": "2026-07-01",
+    "observed_to": "2026-08-02"
+  },
+  "parameters": {
+    "data_types": ["dragon_tiger"],
+    "limit": 20
+  },
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": false
+  }
+}
