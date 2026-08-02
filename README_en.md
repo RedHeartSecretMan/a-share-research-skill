@@ -35,6 +35,8 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 | Latest completed close | Canonical `SSE:code` / `SZSE:code` + explicit date | Cross-checks exchange daily lines and Tencent observations while preserving trading date, basis, and conflicts |
 | Recent N-session trend | A-share clue + 2–250 sessions + unadjusted/forward-adjusted basis | Cross-checked OHLCV, cumulative return, drawdown, volatility, up/down sessions, volume change, and corporate actions |
 | ETF market | Six-digit SSE ETF code + explicit date | SSE ETF identity and snapshot, Tencent price cross-check, and explicit board-lot rounding differences |
+| Automatic security valuation | A-share clue + current China Standard Time date + scenario target PE | Acquires effective shares, financial statements, and consensus EPS; calculates market cap, PE TTM, PB MRQ, forward PE, forecast growth, PEG, and PE digestion time |
+| Same-basis valuation comparison | 2–10 unique A-share clues + shared date/target PE | Preserves every requested row with one price and metric basis; unavailable, meaningless, and blocked metrics remain explicit |
 | Evidence-bundle validation | Caller-provided `manifest.json` and optional materials | Validates identity, time, units, basis, hashes, locators, and evidence relationships |
 | Provided-evidence valuation | Validated bundle + explicit date | Calculates market capitalization, PE TTM, and PB MRQ with formulas, operands, and report lineage |
 
@@ -130,9 +132,17 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 > Use `$a-share-research` with `/path/to/evidence-bundle` to calculate market capitalization, PE TTM, and PB MRQ. Include the calculation date, formulas, key inputs, and evidence limitations; if evidence is missing, tell me exactly what is needed.
 
+**Research one security's valuation automatically**
+
+> Use `$a-share-research` to research Industrial Fulian's valuation as of today. Use the latest completed unadjusted close and calculate market cap, PE TTM, PB MRQ, 2026 forward PE, forecast EPS growth, PEG, and the theoretical time to reach 30x PE. Separate reported facts, consensus opinions, and scenario assumptions; do not give trading advice.
+
+**Compare several securities on one basis**
+
+> Use `$a-share-research` to compare Industrial Fulian, Kweichow Moutai, CATL, Midea Group, and BYD using the same date, unadjusted-close basis, and 30x target PE. Preserve every missing item and limitation instead of dropping a security.
+
 ## Case demos
 
-The cases are moving from v0.0.1 technical tracers to real user research questions. BlueFocus now covers “natural-language clue → identity → 10-session unadjusted OHLCV → metrics → trend conclusion”; Industrial Fulian will be expanded through the complete new-target workflow:
+The cases start from real user research questions. BlueFocus covers “natural-language clue → identity → 10-session unadjusted OHLCV → metrics → trend conclusion”; Industrial Fulian covers “identity → price and shares → financial statements → consensus → reported and forward valuation”:
 
 - [BlueFocus (SZSE:300058)](examples/bluefocus.md)
 - [Industrial Fulian (SSE:601138)](examples/industrial-fulian.md)
@@ -145,7 +155,8 @@ The current preview is deliberately conservative:
 
 - Network identity and close tracers cover SSE and SZSE only; BSE never falls back to another market.
 - Free network operations are experimental sources, not production-qualified Adapters.
-- The Skill does not automatically acquire effective total shares, financial statements, TTM attributable profit, or MRQ attributable equity.
+- Automatic valuation currently accepts only the current research date; shares, statements, and consensus operations remain experimental, so results are at most `limited`.
+- Consensus is aggregated opinion, not a reported company fact; target PE is a user scenario input, not a fair-value conclusion.
 - ETF snapshots are supported; minute, tick, trading, news sentiment, full-company profiles, and batch screening are not yet supported.
 - It does not provide ratings, price targets, buy/sell advice, position sizing, or automated trading instructions.
 
@@ -182,6 +193,8 @@ Run the market-series slice against live sources with the two versioned requests
 ```text
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
 ```
 
 ## License and provenance

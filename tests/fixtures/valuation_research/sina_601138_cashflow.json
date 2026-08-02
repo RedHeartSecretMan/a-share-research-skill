@@ -1,0 +1,21 @@
+{
+  "result": {
+    "data": {
+      "report_list": {
+        "20260331": {
+          "rType": "合并期末",
+          "rCurrency": "CNY",
+          "data_source": "定期报告",
+          "is_audit": "未审计",
+          "audit_opinion": "",
+          "publish_date": "20260429",
+          "update_time": 1777371242,
+          "data": [
+            {"item_title": "经营活动产生的现金流量净额", "item_value": "25024028000.000000", "item_tongbi": null},
+            {"item_title": "现金及现金等价物净增加额", "item_value": "-11002140000.000000", "item_tongbi": null}
+          ]
+        }
+      }
+    }
+  }
+}

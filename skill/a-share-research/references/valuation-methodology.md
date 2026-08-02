@@ -44,3 +44,27 @@ If attributable equity is less than or equal to zero, return `no_valuation_meani
 ## Cross-check values
 
 A provider-supplied market cap, PE, or PB may be retained as separate market-observation evidence for comparison. It cannot replace the project's operands, formula, or calculated result. Surface discrepancies rather than silently forcing agreement.
+
+## Consensus and forward metrics
+
+Consensus EPS is a source-aggregated forecast opinion, not a reported company fact. Retain the forecast year, mean EPS, contributing institution count, retrieval time, and source limitation. Require at least two applicable forecast years and at least three institutions in each of the first two years.
+
+```text
+forward_pe = unadjusted_close / first_forecast_year_consensus_eps
+forecast_eps_growth = next_forecast_year_eps / first_forecast_year_eps - 1
+peg = forward_pe / forecast_eps_growth_percent
+```
+
+Nonpositive forecast EPS or growth has `no_valuation_meaning` where applicable; missing or inapplicable forecasts are `not_calculable`. Do not substitute reported profit for forecast EPS or silently switch forecast years.
+
+## PE digestion scenario
+
+```text
+pe_digestion_years = ln(forward_pe / target_pe) / ln(1 + forecast_eps_growth)
+```
+
+Return zero when forward PE is already at or below the user-supplied target. `target_pe` is a scenario assumption, not a factual fair-value anchor, rating, target price, or recommendation. Always show it beside the result.
+
+## Same-basis comparison
+
+Compare two to ten securities using one research date, the latest completed unadjusted close for each security, one metric definition set, and one `target_pe`. Preserve every requested row. A missing forecast, nonpositive denominator, or blocked identity must remain explicit in that row instead of being filtered out or ranked as if comparable.

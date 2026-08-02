@@ -6,6 +6,10 @@ import importlib.util
 from datetime import date, datetime
 from typing import Any, Collection
 
+from .automatic_valuation import (
+    build_security_valuation_result,
+    build_valuation_comparison_result,
+)
 from .etf_market import build_etf_market_result
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
@@ -69,6 +73,38 @@ class ResearchRuntime:
                 )
             else:
                 result = build_etf_market_result(
+                    request,
+                    self._identity_transport,
+                    self._research_now,
+                )
+        elif task_type == "security_valuation":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "security_valuation currently requires experimental "
+                        "source operations"
+                    ),
+                )
+            else:
+                result = build_security_valuation_result(
+                    request,
+                    self._identity_transport,
+                    self._research_now,
+                )
+        elif task_type == "valuation_compare":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "valuation_compare currently requires experimental "
+                        "source operations"
+                    ),
+                )
+            else:
+                result = build_valuation_comparison_result(
                     request,
                     self._identity_transport,
                     self._research_now,

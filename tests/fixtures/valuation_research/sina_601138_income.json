@@ -1,0 +1,46 @@
+{
+  "result": {
+    "data": {
+      "report_list": {
+        "20260331": {
+          "rType": "合并期末",
+          "rCurrency": "CNY",
+          "data_source": "定期报告",
+          "is_audit": "未审计",
+          "audit_opinion": "",
+          "publish_date": "20260429",
+          "update_time": 1777371242,
+          "data": [
+            {"item_title": "营业收入", "item_value": "251078078000.000000", "item_tongbi": 0.56518},
+            {"item_title": "归属于母公司所有者的净利润", "item_value": "10594857000.000000", "item_tongbi": 1.02549}
+          ]
+        },
+        "20251231": {
+          "rType": "合并期末",
+          "rCurrency": "CNY",
+          "data_source": "定期报告",
+          "is_audit": "是",
+          "audit_opinion": "标准无保留意见",
+          "publish_date": "20260311",
+          "update_time": 1773136400,
+          "data": [
+            {"item_title": "营业收入", "item_value": "1000000000000.000000", "item_tongbi": 0.10},
+            {"item_title": "归属于母公司所有者的净利润", "item_value": "35285561000.000000", "item_tongbi": 0.20}
+          ]
+        },
+        "20250331": {
+          "rType": "合并期末",
+          "rCurrency": "CNY",
+          "data_source": "定期报告",
+          "is_audit": "未审计",
+          "audit_opinion": "",
+          "publish_date": "20260429",
+          "update_time": 1777371242,
+          "data": [
+            {"item_title": "归属于母公司所有者的净利润", "item_value": "5230775000.000000", "item_tongbi": null}
+          ]
+        }
+      }
+    }
+  }
+}

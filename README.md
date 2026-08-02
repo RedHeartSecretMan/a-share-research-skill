@@ -35,6 +35,8 @@
 | 最近完成收盘价 | 规范的 `SSE:code` / `SZSE:code` + 明确日期 | 交叉核验交易所日线与腾讯观测，保留交易日、价格口径和冲突 |
 | 最近 N 日走势 | A 股线索 + 2–250 个交易日 + 未复权/前复权口径 | 双源 OHLCV、累计涨跌、最大回撤、年化波动、涨跌天数、量能变化与公司行动说明 |
 | ETF 行情 | 上交所 ETF 六位代码 + 明确日期 | 上交所 ETF 身份和快照、腾讯价格交叉、成交量手/股舍入差说明 |
+| 自动单票估值 | A 股线索 + 当前北京时间日期 + 情景目标 PE | 自动取得有效总股本、财务三表和一致预期 EPS，计算总市值、PE TTM、PB MRQ、前向 PE、预测增长、PEG 与 PE 消化时间 |
+| 同口径批量估值 | 2–10 个不同 A 股线索 + 共同日期/目标 PE | 按输入顺序保留全部标的；统一价格与指标口径，显式呈现不可计算、无估值意义及阻断行 |
 | 证据包校验 | 调用者提供的 `manifest.json` 与可选材料 | 校验身份、时间、单位、口径、哈希、定位信息和证据关系 |
 | 提供证据估值 | 已校验证据包 + 明确日期 | 计算总市值、PE TTM、PB MRQ；保留公式、操作数和报告谱系 |
 
@@ -130,9 +132,17 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 > 使用 `$a-share-research`，根据 `/path/to/evidence-bundle` 计算总市值、PE TTM 和 PB MRQ，并给出计算日期、公式、关键输入和证据限制；如果资料不足，直接告诉我缺什么。
 
+**自动研究单票估值**
+
+> 使用 `$a-share-research`，研究工业富联截至今天的估值。以最近完整交易日未复权收盘价为准，计算总市值、PE TTM、PB MRQ、2026 年前向 PE、预测 EPS 增长、PEG，以及回落到 30 倍 PE 的理论消化时间；区分财报事实、机构一致预期和情景假设，不要给买卖建议。
+
+**同口径比较多只股票**
+
+> 使用 `$a-share-research`，按同一个日期、未复权收盘价口径和 30 倍目标 PE，对比工业富联、贵州茅台、宁德时代、美的集团和比亚迪。保留每只股票的缺失项和限制，不要因为某项不可计算就删掉标的。
+
 ## 案例 Demo
 
-案例正在从 v0.0.1 技术 tracer 升级为真正的用户研究问题。蓝色光标已经覆盖“自然语言线索 → 身份 → 10 日未复权 OHLCV → 指标 → 走势结论”，工业富联仍将在完整新标的流程中继续扩展：
+案例从真实用户研究问题出发。蓝色光标覆盖“自然语言线索 → 身份 → 10 日未复权 OHLCV → 指标 → 走势结论”；工业富联覆盖“身份 → 价格与股本 → 财务三表 → 一致预期 → 报告与前向估值”：
 
 - [蓝色光标（SZSE:300058）](examples/bluefocus.md)
 - [工业富联（SSE:601138）](examples/industrial-fulian.md)
@@ -145,7 +155,8 @@ git clone https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 - 联网身份与收盘价 tracer 仅覆盖 SSE、SZSE；BSE 不会回退到其他市场。
 - 免费联网操作均为实验来源，不等于正式生产 Adapter。
-- 不自动获取有效总股本、财务报表、TTM 归母净利润或 MRQ 归母净资产。
+- 自动估值当前只接受当日研究边界；股本、财务与一致预期来源仍属实验操作，结果最高为 `limited`。
+- 一致预期是机构观点聚合，不是公司已披露事实；目标 PE 是用户情景参数，不是公允价值结论。
 - ETF 支持交易所快照；尚不支持分钟、逐笔、交易、新闻情绪、全量公司画像或批量选股。
 - 不输出评级、目标价、买卖建议、仓位建议或自动交易指令。
 
@@ -182,6 +193,8 @@ python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```text
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
 python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
+python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
 ```
 
 ## 许可证与来源
