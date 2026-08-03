@@ -36,11 +36,15 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("when the question calls for interpretation", metadata)
         self.assertIn("the result is not blocked", metadata)
 
-    def test_installation_is_pinned_to_current_main_delivery(self) -> None:
+    def test_installation_is_pinned_to_v020_release(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
+                    "git clone --depth 1 --branch v0.2.0 --single-branch ",
+                    readme,
+                )
+                self.assertNotIn(
                     "git clone --depth 1 --branch main --single-branch ",
                     readme,
                 )
@@ -56,6 +60,10 @@ class SkillDistributionTests(unittest.TestCase):
                     ),
                     readme,
                 )
+                self.assertIn(
+                    "https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.2.0",
+                    readme,
+                )
 
         chinese_readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
         english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
@@ -63,6 +71,62 @@ class SkillDistributionTests(unittest.TestCase):
         )
         self.assertIn("mootdx", chinese_readme)
         self.assertIn("mootdx", english_readme)
+
+    def test_v020_examples_include_the_intraday_public_seam(self) -> None:
+        examples_readme = Path(REPOSITORY_ROOT, "examples", "README.md").read_text(
+            encoding="utf-8"
+        )
+        first_nonblank = next(
+            line for line in examples_readme.splitlines() if line.strip()
+        )
+        self.assertEqual(first_nonblank, "# v0.2.0 真实案例")
+        self.assertIn("[盘中行情快照](intraday-snapshot.md)", examples_readme)
+        self.assertIn(
+            "[盘中请求](requests/intraday-market-snapshot.json)", examples_readme
+        )
+
+        case = Path(REPOSITORY_ROOT, "examples", "intraday-snapshot.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertTrue(case.startswith("# "))
+        for required_text in (
+            "entrypoint.py run --request",
+            "当前北京时间交易日",
+            "limited",
+            "blocked",
+            "mootdx==0.11.7",
+        ):
+            with self.subTest(required_text=required_text):
+                self.assertIn(required_text, case)
+
+        request = json.loads(
+            Path(
+                REPOSITORY_ROOT,
+                "examples",
+                "requests",
+                "intraday-market-snapshot.json",
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(request["schema_version"], "1.0")
+        self.assertEqual(request["task_type"], "intraday_market_signal")
+        self.assertEqual(request["subjects"], [{"security": "SSE:600519"}])
+        self.assertIsNone(request["window"])
+        self.assertEqual(request["parameters"], {})
+        self.assertTrue(request["source_policy"]["allow_experimental"])
+        self.assertFalse(request["source_policy"]["allow_fallback"])
+
+    def test_v020_release_audit_is_linked_from_both_readmes(self) -> None:
+        audit_relative_path = "docs/research/v0.2.0-release-audit-2026-08-03.md"
+        audit = Path(REPOSITORY_ROOT, audit_relative_path)
+        self.assertTrue(audit.is_file())
+        self.assertTrue(
+            audit.read_text(encoding="utf-8").startswith("# v0.2.0 发布审计")
+        )
+
+        for readme_name in ("README.md", "README_en.md"):
+            with self.subTest(readme=readme_name):
+                readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
+                self.assertIn(audit_relative_path, readme)
 
     def test_release_demos_present_agent_judgment_and_conditional_triggers(
         self,
@@ -209,6 +273,21 @@ class SkillDistributionTests(unittest.TestCase):
             "Linux: prefer `python3.12`; use `python3` only when it reports Python 3.12 or later",
             "Resolve `<skill-root>` from the loaded `SKILL.md` location",
             "only public runtime entry point is `<skill-root>/scripts/entrypoint.py`",
+        ):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, reference)
+
+    def test_cli_reference_keeps_intraday_probe_out_of_normal_ci(self) -> None:
+        reference = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
+            encoding="utf-8"
+        )
+
+        for instruction in (
+            "tests/live_probe_intraday.py",
+            "--confirm-live --as-of YYYY-MM-DD",
+            "one SSE and one SZSE A-share",
+            "never update fixtures",
+            "ordinary CI dependency",
         ):
             with self.subTest(instruction=instruction):
                 self.assertIn(instruction, reference)

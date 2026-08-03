@@ -881,7 +881,7 @@ def _optional_int(row: dict[str, Any], field: str) -> int | None:
             "unknown_schema",
             f"A source report {field} is invalid.",
         )
-    return value
+    return int(value)
 
 
 def _report_observation(

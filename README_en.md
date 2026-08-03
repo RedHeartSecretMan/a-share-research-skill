@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Delivery: v0.2.0](https://img.shields.io/badge/delivery-v0.2.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/main)
+[![Release: v0.2.0](https://img.shields.io/badge/release-v0.2.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.2.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
@@ -27,7 +27,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 - **Reproducible calculations**: market capitalization, PE TTM, and PB MRQ use Decimal arithmetic and preserve full calculation lineage.
 - **Honest failure**: ambiguity, conflict, staleness, wrong-security payloads, or missing critical evidence return `limited` / `blocked` instead of invented values.
 
-## v0.1.1 and v0.2.0 capabilities
+## v0.2.0 capabilities
 
 | Capability | Input | Output and boundary |
 | --- | --- | --- |
@@ -75,7 +75,7 @@ This section is only a user-facing orientation. The normative rules for research
 The only installable artifact is [`skill/a-share-research`](skill/a-share-research/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
 
 ```text
-git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -134,6 +134,10 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 **Look up the latest close**
 
 > Use `$a-share-research` to find the latest completed unadjusted close for `SSE:600519` as of today, and tell me the sources, whether they agree, and any limitations.
+
+**Inspect an intraday market snapshot**
+
+> Use `$a-share-research` to inspect the research-grade intraday snapshot for `SSE:600519` at the current point today. Preserve the trading session, price type, both source-observation times, latest price, open/high/low, previous-close semantics, cumulative volume and amount, field lineage, conflicts, and limitations. If the session is not applicable or either source lacks sufficient evidence, return `blocked` instead of substituting the latest close.
 
 **Research a recent trend**
 
@@ -215,8 +219,9 @@ The cases start from real user research questions. BlueFocus cross-explains a 10
 
 - [BlueFocus (SZSE:300058)](examples/bluefocus.md)
 - [Industrial Fulian (SSE:601138)](examples/industrial-fulian.md)
+- [Research-grade intraday snapshot (SSE:600519)](examples/intraday-snapshot.md)
 
-The values are fixed live observations as of `2026-08-02`, retained to demonstrate result semantics and limitations. A rerun must use a new explicit research date and the evidence returned by the CLI.
+The BlueFocus and Industrial Fulian cases keep fixed records anchored to `2026-08-02` and separately label the status and gaps of `2026-08-03` real-source smoke runs; the intraday case records only the request contract and stores no provider response. A rerun must use a new explicit research date and the evidence returned by the CLI.
 
 ## Boundaries
 
@@ -233,10 +238,10 @@ The current version is deliberately conservative:
 - Themes, board membership, industry rotation, limit pools, monitoring, abnormal movement, and heat also use experimental sources. A provider watchlist is not an official exchange list, and editorial reasons or popularity labels do not prove causality or fundamentals. Only a completely collected zero pool is `observed_empty`, and provider-local codes cannot establish a monitoring intersection.
 - ETF options currently cover experimental snapshots for 50ETF, 300ETF, 500ETF, and STAR 50ETF only. Provider-reported Greeks/IV are neither local-model nor exchange calculations; authoritative contract totals, contract units, adjustment terms, and an independent fallback remain unavailable. Preserve `M` / `A` series, quote state, units, timing, source, and coverage.
 - Theme-report research defaults to exact title-keyword filtering over the Eastmoney market-wide report feed; this is not semantic search and does not prove a complete theme universe. Semantic iWencai search is an optional enhancement when source policy permits it and reads credentials only from `IWENCAI_API_KEY`; values never enter request JSON or output.
-- ETF snapshots are supported; minute, tick, trading, news-sentiment scoring, full-company profiles, and batch screening are not yet supported.
+- Research-grade intraday snapshots for one SSE/SZSE A-share and ETF snapshots are supported; minute bars, ticks, continuous feeds, trading, news-sentiment scoring, full-company profiles, and batch screening are not.
 - Research analysis and advice follow the installed [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md); this README does not define a second operational policy.
 
-See [`CONTEXT.md`](CONTEXT.md) for the complete product domain and terminology. [`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) is the superseded early v0.0.1 valuation-kernel proposal; [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) defines the delivered v0.0.1 trustworthy-evidence kernel; [`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) defines the complete v0.1.0 capability and release gates; [`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) defines the v0.1.1 presentation-boundary and documentation release revision; and [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) defines the implemented v0.2.0 research-grade intraday snapshot available through `intraday_market_signal`.
+See [`CONTEXT.md`](CONTEXT.md) for the complete product domain and terminology. [`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) is the superseded early v0.0.1 valuation-kernel proposal; [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) defines the delivered v0.0.1 trustworthy-evidence kernel; [`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) defines the complete v0.1.0 capability and release gates; [`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) defines the v0.1.1 presentation-boundary and documentation release revision; and [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) defines the implemented v0.2.0 research-grade intraday snapshot available through `intraday_market_signal`. Release gates and read-back evidence are recorded separately in the [`v0.2.0 release audit`](docs/research/v0.2.0-release-audit-2026-08-03.md); one live probe never qualifies an experimental source for production.
 
 ## Repository layout
 
@@ -274,6 +279,7 @@ Run each vertical slice explicitly against live sources with versioned requests:
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-market-snapshot.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
@@ -307,7 +313,7 @@ Run each vertical slice explicitly against live sources with versioned requests:
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
-Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the integrated F10 capability that requires the optional `mootdx` dependency and should return an explicit blocked result when the dependency is absent.
+`intraday-market-snapshot.json` records the v0.2.0 release-date request shape. Before a later run, copy it and replace `as_of` with that run's current China Standard Time date; historical dates, non-trading dates, and non-applicable sessions intentionally return `blocked`. Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the integrated F10 capability that requires the optional `mootdx` dependency and should return an explicit blocked result when the dependency is absent.
 
 The dated results and environment limitations for all eight market-signal scenarios are recorded in the [2026-08-02 live smoke record](docs/research/market-signals-smoke-2026-08-02.md).
 

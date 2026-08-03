@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Delivery: v0.2.0](https://img.shields.io/badge/delivery-v0.2.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/main)
+[![Release: v0.2.0](https://img.shields.io/badge/release-v0.2.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.2.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [English](README_en.md) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
@@ -27,7 +27,7 @@
 - **计算可复算**：总市值、PE TTM 和 PB MRQ 使用 Decimal 与显式口径形成完整计算谱系。
 - **失败要诚实**：歧义、冲突、陈旧、错证券或关键证据缺失时返回 `limited` / `blocked`，不补猜数字。
 
-## v0.1.1 与 v0.2.0 能力
+## v0.2.0 能力
 
 | 能力 | 输入 | 输出与边界 |
 | --- | --- | --- |
@@ -75,7 +75,7 @@ CLI 负责证据、确定性计算、状态和限制；Agent 可以在未被整�
 唯一安装产物是 [`skill/a-share-research`](skill/a-share-research/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
 
 ```text
-git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -134,6 +134,10 @@ F10 上市公司资料检索和 `intraday_market_signal` 盘中快照是 v0.1.1/
 **查询最近收盘价**
 
 > 使用 `$a-share-research`，查询 `SSE:600519` 截至今天最近一个完整交易日的未复权收盘价，并告诉我数据来源、是否一致以及有哪些限制。
+
+**查询盘中行情快照**
+
+> 使用 `$a-share-research`，查询 `SSE:600519` 今天当前时点的研究级盘中行情快照。保留交易会话、价格类型、两路来源观测时间、最新价、开高低、昨收语义、累计成交量和成交额、字段血缘、冲突与限制；如果当前不是适用盘中会话，或任一来源证据不足，返回 `blocked`，不要用最近收盘价替代。
 
 **研究最近走势**
 
@@ -215,8 +219,9 @@ F10 上市公司资料检索和 `intraday_market_signal` 盘中快照是 v0.1.1/
 
 - [蓝色光标（SZSE:300058）](examples/bluefocus.md)
 - [工业富联（SSE:601138）](examples/industrial-fulian.md)
+- [研究级盘中行情快照（SSE:600519）](examples/intraday-snapshot.md)
 
-案例中的数值是截至 `2026-08-02` 的固定现场记录，用于展示输出口径与限制；重新运行时应以新的显式研究日期和 CLI 返回证据为准。
+蓝色光标和工业富联案例的固定记录均锚定 `2026-08-02`，并另行标注 `2026-08-03` 真实来源 smoke 的状态与缺口；盘中案例只记录请求契约，不保存来源响应。重新运行时应以新的显式研究日期和 CLI 返回证据为准。
 
 ## 能力边界
 
@@ -233,10 +238,10 @@ F10 上市公司资料检索和 `intraday_market_signal` 盘中快照是 v0.1.1/
 - 题材、板块、行业轮动、涨跌停、监控、异常波动和热度也来自实验来源。供应商监控池不冒充交易所官方名单，编辑理由和热度标签不证明因果或基本面；只有完整空池才能报告 `observed_empty`，裸供应商代码不能用于监控异动交叉。
 - ETF 期权当前只覆盖 50ETF、300ETF、500ETF 与科创 50ETF 的实验来源快照。供应商报告 Greeks/IV 不是项目本地模型或交易所计算；权威合约总量、合约单位、调整条款和独立 fallback 尚不可用，`M` / `A` 系列、报价状态、单位、时点、来源与 coverage 必须原样披露。
 - 主题研报默认使用东财全市场研报流做标题关键词精确匹配；这不是语义搜索，也不证明主题宇宙完整。iWencai 语义检索仅是来源策略允许时的可选增强，并只从 `IWENCAI_API_KEY` 读取凭据；凭据不会进入请求 JSON 或输出。
-- ETF 支持交易所快照；尚不支持分钟、逐笔、交易、新闻情绪评分、全量公司画像或批量选股。
+- 单只 SSE/SZSE A 股的研究级盘中行情快照和 ETF 交易所快照已经支持；尚不支持分钟、逐笔、持续行情、交易、新闻情绪评分、全量公司画像或批量选股。
 - 研究分析与建议遵循安装产物的 [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md)；README 不另行定义第二套执行规则。
 
-完整产品领域与术语见 [`CONTEXT.md`](CONTEXT.md)；[`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) 是已被取代的 v0.0.1 早期估值内核方案；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 定义实际交付的 v0.0.1 可信证据内核；[`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) 定义完整 v0.1.0 能力与发布门槛；[`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) 定义 v0.1.1 的呈现边界与文档发布修订；[`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 定义已实现并可通过 `intraday_market_signal` 使用的 v0.2.0 研究级盘中行情快照。
+完整产品领域与术语见 [`CONTEXT.md`](CONTEXT.md)；[`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) 是已被取代的 v0.0.1 早期估值内核方案；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 定义实际交付的 v0.0.1 可信证据内核；[`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) 定义完整 v0.1.0 能力与发布门槛；[`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) 定义 v0.1.1 的呈现边界与文档发布修订；[`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 定义已实现并可通过 `intraday_market_signal` 使用的 v0.2.0 研究级盘中行情快照。发布门禁与回读证据单独记录在 [`v0.2.0 发布审计`](docs/research/v0.2.0-release-audit-2026-08-03.md)，不把一次 live probe 当作来源生产准入。
 
 ## 仓库结构
 
@@ -274,6 +279,7 @@ mypy skill/a-share-research/scripts
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-market-snapshot.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
@@ -307,7 +313,7 @@ mypy skill/a-share-research/scripts
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
-`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证需要可选 `mootdx` 依赖的 F10 能力，未安装依赖时应得到显式阻断结果。
+`intraday-market-snapshot.json` 记录 v0.2.0 发布日的请求形态。以后运行前必须先复制它，并把 `as_of` 改成当次运行的北京时间当前日期；历史日期、非交易日和非适用会话会按契约返回 `blocked`。`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证需要可选 `mootdx` 依赖的 F10 能力，未安装依赖时应得到显式阻断结果。
 
 市场信号 8 个场景的 2026-08-02 实际执行结果与环境限制记录在 [联网 smoke 记录](docs/research/market-signals-smoke-2026-08-02.md)。
 
