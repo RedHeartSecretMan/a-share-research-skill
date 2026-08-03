@@ -27,14 +27,14 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 - **Reproducible calculations**: market capitalization, PE TTM, and PB MRQ use Decimal arithmetic and preserve full calculation lineage.
 - **Honest failure**: ambiguity, conflict, staleness, wrong-security payloads, or missing critical evidence return `limited` / `blocked` instead of invented values.
 
-## v0.2.0 capabilities
+## Capabilities
 
 | Capability | Input | Output and boundary |
 | --- | --- | --- |
 | Security identity resolution | Name, abbreviation, or code clue + explicit date | Cross-checks SSE/SZSE and CNINFO observations; ambiguity, conflicts, and BSE inputs fail closed |
 | Latest completed close | Canonical `SSE:code` / `SZSE:code` + explicit date | Cross-checks exchange daily lines and Tencent observations while preserving trading date, basis, and conflicts |
 | Recent N-session trend | A-share clue + 2–250 sessions + unadjusted/forward-adjusted basis | Cross-checked OHLCV, cumulative return, drawdown, volatility, up/down sessions, volume change, and corporate actions |
-| Intraday market snapshot (v0.2.0) | Current China Standard Time trading date + one canonical `SSE:code` / `SZSE:code` A-share | One TongdaXin/Tencent experimental cross-check with session, price type, source times, units, conflicts, and explicit `limited` / `blocked` boundaries |
+| Intraday market snapshot | Current China Standard Time trading date + one canonical `SSE:code` / `SZSE:code` A-share | One TongdaXin/Tencent experimental cross-check with session, price type, source times, units, conflicts, and explicit `limited` / `blocked` boundaries |
 | ETF market | Six-digit SSE ETF code + explicit date | SSE ETF identity and snapshot, Tencent price cross-check, and explicit board-lot rounding differences |
 | ETF options | 510050 / 510300 / 510500 / 588000 + one observation date + ATM/chain, expiry, and quote-time modes | Separate standard `M` and adjusted `A` series, call/put quotes, tied ATM strikes, provider-reported Greeks/IV, four-state coverage, source time, and limitations |
 | Automatic security valuation | A-share clue + established security-class count + current China Standard Time date + scenario target PE | Preserves complete numeric rows from all three statements and quarterly series, then acquires current shares and consensus to calculate reported and forward metrics |
