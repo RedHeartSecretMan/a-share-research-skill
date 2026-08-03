@@ -243,6 +243,75 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("Agent analysis", boundary)
         self.assertIn("research judgment", boundary)
 
+    def test_installed_skill_routes_only_explicit_replay_prediction_requests(
+        self,
+    ) -> None:
+        entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+        boundary = Path(SKILL_ROOT, "references", "analysis-boundary.md").read_text(
+            encoding="utf-8"
+        )
+        case = Path(
+            REPOSITORY_ROOT, "examples", "intraday-replay-prediction.md"
+        ).read_text(encoding="utf-8")
+
+        for document in (entry, boundary, case):
+            with self.subTest(document=document[:32]):
+                self.assertIn("intraday_replay", document)
+                self.assertIn("explicit", document.lower())
+                self.assertIn("next trading day", document)
+                self.assertIn("next 5 trading days", document)
+                self.assertIn("continuation", document)
+                self.assertIn("range", document)
+                self.assertIn("reversal", document)
+                self.assertIn("upside", document)
+                self.assertIn("downside", document)
+                self.assertIn("invalidation", document)
+                self.assertIn("uncertainty", document)
+
+        for required_gate in (
+            "canonical identity",
+            "20 complete daily trading sessions",
+            "usable close",
+            "unadjusted",
+            "unresolved core source conflict",
+            "coverage is indeterminate",
+            "whole morning",
+            "whole afternoon",
+            "confirmed suspension",
+            "limited",
+        ):
+            with self.subTest(required_gate=required_gate):
+                self.assertIn(required_gate, boundary)
+
+        self.assertIn("does not add prediction fields", entry)
+        self.assertIn("historical query or replay request", entry)
+        self.assertIn("optional context", boundary)
+        self.assertIn("exact probabilities", boundary)
+        self.assertIn("position sizing", boundary)
+        self.assertIn("automatic trading", boundary)
+
+    def test_prediction_case_covers_refusal_partial_context_and_action_boundaries(
+        self,
+    ) -> None:
+        case = Path(
+            REPOSITORY_ROOT, "examples", "intraday-replay-prediction.md"
+        ).read_text(encoding="utf-8")
+
+        for required_path in (
+            "正常预测",
+            "证据不足拒绝",
+            "部分证据",
+            "可选上下文缺失",
+            "禁止投资行动",
+        ):
+            with self.subTest(required_path=required_path):
+                self.assertIn(required_path, case)
+
+        self.assertIn("facts", case)
+        self.assertIn("calculations", case)
+        self.assertIn("replay analysis", case)
+        self.assertIn("prediction", case)
+
     def test_installation_docs_scope_mootdx_to_intraday_capability(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
