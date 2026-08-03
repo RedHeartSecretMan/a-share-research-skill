@@ -150,6 +150,14 @@ class IntradayLiveProbeTests(unittest.TestCase):
             live_probe._result_from_process(0, json.dumps(valid_limited), ""),
             valid_limited,
         )
+        supported_payload = {**valid_limited, "status": "supported"}
+        supported_result = live_probe._result_from_process(
+            0, json.dumps(supported_payload), ""
+        )
+        self.assertEqual(supported_result["status"], "blocked")
+        self.assertEqual(
+            supported_result["_failures"][0]["code"], "probe_protocol_failure"
+        )
 
     def test_probe_rejects_same_exchange_override(self) -> None:
         with patch.object(live_probe, "run_probe") as run_probe:

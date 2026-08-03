@@ -307,11 +307,8 @@ def _result_from_process(returncode: int, stdout: str, stderr: str) -> dict[str,
         not isinstance(value, dict)
         or value.get("schema_version") != "1.0"
         or value.get("task_type") != "intraday_market_signal"
-        or value.get("status") not in {"supported", "limited", "blocked"}
-        or (
-            value.get("status") in {"supported", "limited"}
-            and not _has_observation_contract(value)
-        )
+        or value.get("status") not in {"limited", "blocked"}
+        or (value.get("status") == "limited" and not _has_observation_contract(value))
         or (value.get("status") == "blocked" and not _has_blocked_contract(value))
     ):
         return {
