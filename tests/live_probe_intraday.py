@@ -33,6 +33,7 @@ _EXPECTED_SOURCE_OPERATIONS = {
     "tencent_intraday_snapshot@1",
 }
 _DECIMAL_VALUE = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+_INTEGER_VALUE = re.compile(r"^(?:0|[1-9][0-9]*)$")
 _OBSERVATION_TIME_FIELDS = {
     "tongdaxin_baseline",
     "tencent_cross_check",
@@ -40,16 +41,34 @@ _OBSERVATION_TIME_FIELDS = {
     "pair_gap_seconds",
     "observation_boundary",
 }
-_SNAPSHOT_UNIT_FIELDS = {
-    "latest_price",
-    "open",
-    "high",
-    "low",
-    "previous_close",
-    "cumulative_volume",
-    "cumulative_amount",
-    "change_amount",
-    "change_percent",
+_SNAPSHOT_UNITS = {
+    "latest_price": "CNY/share",
+    "open": "CNY/share",
+    "high": "CNY/share",
+    "low": "CNY/share",
+    "previous_close": "CNY/share",
+    "cumulative_volume": "shares",
+    "cumulative_amount": "CNY",
+    "change_amount": "CNY/share",
+    "change_percent": "percent",
+}
+_SESSION_STATES = {
+    "opening_auction",
+    "continuous",
+    "midday_break",
+    "closing_auction",
+}
+_TRADING_STATUSES = {
+    "traded",
+    "suspended",
+    "not_traded",
+    "no_trade",
+    "auction",
+}
+_PRICE_TYPES = {"latest_traded", "indicative_auction", "not_applicable"}
+_SECURITY_PREFIXES = {
+    "SSE": ("600", "601", "603", "605", "688", "689"),
+    "SZSE": ("000", "001", "002", "003", "300", "301"),
 }
 _KNOWN_FAILURE_CODES = {
     "ambiguous_amount_scope",
@@ -58,6 +77,7 @@ _KNOWN_FAILURE_CODES = {
     "ambiguous_volume_unit",
     "ambiguous_zero_value",
     "empty_response",
+    "empty_observation",
     "experimental_intraday_sources",
     "inapplicable_session",
     "incompatible_observation_boundary",
@@ -90,7 +110,9 @@ _KNOWN_FAILURE_CODES = {
     "intraday_trading_status_mismatch",
     "inconsistent_price_bar",
     "missing_optional_dependency",
+    "midday_break_morning_observation",
     "operation_failure",
+    "operation_identity_mismatch",
     "probe_process_failure",
     "probe_protocol_failure",
     "probe_timeout",
@@ -119,6 +141,7 @@ _SAFE_FAILURE_MESSAGES = {
     "probe_process_failure": "The public probe process did not complete.",
     "probe_protocol_failure": "The public probe returned an invalid JSON result.",
     "probe_timeout": "The public probe timed out before producing a result.",
+    "midday_break_morning_observation": "The snapshot uses the last compatible morning observation.",
 }
 
 
@@ -204,12 +227,27 @@ def _snapshot_value_matches(
     *,
     strictly_positive: bool = False,
     allow_not_applicable: bool = True,
+    nonnegative: bool = False,
+    integral: bool = False,
+    max_decimal_places: int | None = None,
 ) -> bool:
     if not isinstance(item, Mapping) or item.get("unit") != unit:
         return False
     value = item.get("value")
     if isinstance(value, str) and _DECIMAL_VALUE.fullmatch(value):
-        return not strictly_positive or Decimal(value) > 0
+        if integral and not _INTEGER_VALUE.fullmatch(value):
+            return False
+        number = Decimal(value)
+        if strictly_positive and number <= 0:
+            return False
+        if nonnegative and number < 0:
+            return False
+        if (
+            max_decimal_places is not None
+            and max(0, -number.as_tuple().exponent) > max_decimal_places
+        ):
+            return False
+        return True
     return (
         allow_not_applicable
         and value is None
@@ -226,29 +264,129 @@ def _previous_close_matches(item: object, *, allow_not_applicable: bool) -> bool
             "CNY/share",
             strictly_positive=True,
             allow_not_applicable=allow_not_applicable,
+            max_decimal_places=2,
         )
     reported_value = item.get("reported_value")
-    return isinstance(reported_value, str) and bool(
-        _DECIMAL_VALUE.fullmatch(reported_value) and Decimal(reported_value) > 0
+    return (
+        isinstance(reported_value, str)
+        and bool(_DECIMAL_VALUE.fullmatch(reported_value))
+        and Decimal(reported_value) > 0
+        and max(0, -Decimal(reported_value).as_tuple().exponent) <= 2
     )
+
+
+def _iso_date(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
+def _observation_times_are_safe(value: Mapping[str, object]) -> bool:
+    required = {
+        "tongdaxin_baseline",
+        "tencent_cross_check",
+        "retrieved_at",
+        "pair_gap_seconds",
+    }
+    if not required.issubset(value):
+        return False
+    for key, item in value.items():
+        if not _observation_time_item_is_safe(key, item):
+            return False
+    return True
+
+
+def _observation_time_item_is_safe(key: object, item: object) -> bool:
+    if not isinstance(key, str) or key not in _OBSERVATION_TIME_FIELDS:
+        return False
+    if not isinstance(item, str):
+        return False
+    if key == "pair_gap_seconds":
+        return (
+            bool(_DECIMAL_VALUE.fullmatch(item))
+            and Decimal(item) >= 0
+            and Decimal(item) <= 60
+        )
+    if key == "observation_boundary":
+        return item == "morning_last_compatible_pair"
+    try:
+        parsed = datetime.fromisoformat(item)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def _subject_is_safe(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    security = value.get("security")
+    if not isinstance(security, Mapping):
+        return False
+    exchange = security.get("exchange")
+    code = security.get("code")
+    return (
+        _security_text_is_safe(f"{exchange}:{code}")
+        and security.get("type") == "A_SHARE"
+    )
+
+
+def _security_text_is_safe(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    exchange, separator, code = value.partition(":")
+    return (
+        separator == ":"
+        and exchange in _SECURITY_PREFIXES
+        and len(code) == 6
+        and code.isdigit()
+        and code.startswith(_SECURITY_PREFIXES[exchange])
+    )
+
+
+def _evidence_is_safe(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if not isinstance(value.get("id"), str) or not value["id"]:
+        return False
+    if value.get("source_operation") not in _EXPECTED_SOURCE_OPERATIONS:
+        return False
+    subject = value.get("subject")
+    if not isinstance(subject, Mapping) or not _security_text_is_safe(
+        subject.get("security")
+    ):
+        return False
+    observation = value.get("observation")
+    if not isinstance(observation, Mapping) or not isinstance(
+        observation.get("kind"), str
+    ):
+        return False
+    locator = value.get("locator")
+    if not isinstance(locator, Mapping) or not isinstance(locator.get("uri"), str):
+        return False
+    retrieved_at = value.get("retrieved_at")
+    if not isinstance(retrieved_at, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(retrieved_at)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
 
 
 def _has_observation_contract(value: Mapping[str, object]) -> bool:
     subject = value.get("subject")
-    if not isinstance(subject, Mapping) or not isinstance(
-        subject.get("security"), Mapping
-    ):
+    if not _subject_is_safe(subject):
         return False
-    if not all(
-        isinstance(value.get(field), str)
-        for field in (
-            "as_of",
-            "trading_date",
-            "session_state",
-            "trading_status",
-            "price_type",
-        )
-    ):
+    if not _iso_date(value.get("as_of")) or not _iso_date(value.get("trading_date")):
+        return False
+    if value.get("session_state") not in _SESSION_STATES:
+        return False
+    if value.get("trading_status") not in _TRADING_STATUSES:
+        return False
+    if value.get("price_type") not in _PRICE_TYPES:
         return False
     source_operations = value.get("source_operations")
     if not _nonempty_string_list(source_operations):
@@ -261,16 +399,12 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
     observation_times = value.get("observation_times")
     if not isinstance(observation_times, Mapping) or not observation_times:
         return False
-    if not {
-        "tongdaxin_baseline",
-        "tencent_cross_check",
-        "retrieved_at",
-        "pair_gap_seconds",
-    }.issubset(observation_times):
+    if not _observation_times_are_safe(observation_times):
         return False
-    if not all(
-        isinstance(key, str) and isinstance(item, str)
-        for key, item in observation_times.items()
+    if (
+        value.get("session_state") == "midday_break"
+        and observation_times.get("observation_boundary")
+        != "morning_last_compatible_pair"
     ):
         return False
     snapshot = value.get("snapshot")
@@ -284,9 +418,9 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
         "cumulative_volume": "shares",
         "cumulative_amount": "CNY",
     }
-    snapshot_fields = set(snapshot_units)
+    snapshot_fields = set(snapshot_units) | {"previous_close"}
     if not snapshot_fields.issubset(snapshot) or not set(snapshot).issubset(
-        _SNAPSHOT_UNIT_FIELDS
+        set(_SNAPSHOT_UNITS)
     ):
         return False
     allow_not_applicable = (
@@ -297,17 +431,41 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
         }
         or value.get("price_type") == "not_applicable"
     )
+    zero_trade_statuses = {"suspended", "not_traded", "no_trade", "not_applicable"}
+    cumulative_must_be_positive = value.get("trading_status") not in zero_trade_statuses
     if not all(
         _snapshot_value_matches(
             snapshot.get(field),
             unit,
-            strictly_positive=field in {"latest_price", "open", "high", "low"},
+            strictly_positive=(
+                field in {"latest_price", "open", "high", "low"}
+                or (
+                    field in {"cumulative_volume", "cumulative_amount"}
+                    and cumulative_must_be_positive
+                )
+            ),
             allow_not_applicable=allow_not_applicable,
+            nonnegative=field in {"cumulative_volume", "cumulative_amount"},
+            integral=field == "cumulative_volume",
+            max_decimal_places=(
+                0
+                if field == "cumulative_volume"
+                else 2
+                if field
+                in {
+                    "latest_price",
+                    "open",
+                    "high",
+                    "low",
+                    "cumulative_amount",
+                }
+                else None
+            ),
         )
         for field, unit in snapshot_units.items()
     ):
         return False
-    if "previous_close" in snapshot and not _previous_close_matches(
+    if not _previous_close_matches(
         snapshot.get("previous_close"), allow_not_applicable=allow_not_applicable
     ):
         return False
@@ -317,7 +475,10 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
     }
     if not all(
         _snapshot_value_matches(
-            snapshot.get(field), unit, allow_not_applicable=allow_not_applicable
+            snapshot.get(field),
+            unit,
+            allow_not_applicable=allow_not_applicable,
+            max_decimal_places=2,
         )
         for field, unit in optional_units.items()
         if field in snapshot
@@ -328,7 +489,41 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
         for field in ("evidence", "conflicts", "source_errors", "limitations")
     ):
         return False
-    return _diagnostic_list(value.get("limitations"))
+    evidence = value.get("evidence")
+    if (
+        not isinstance(evidence, list)
+        or not evidence
+        or not all(_evidence_is_safe(item) for item in evidence)
+    ):
+        return False
+    if {
+        item["source_operation"] for item in evidence if isinstance(item, Mapping)
+    } != _EXPECTED_SOURCE_OPERATIONS:
+        return False
+    field_lineage = value.get("field_lineage")
+    brief = value.get("brief")
+    evidence_ids = {item["id"] for item in evidence if isinstance(item, Mapping)}
+    lineage_ids: set[str] = set()
+    if isinstance(field_lineage, Mapping):
+        for lineage in field_lineage.values():
+            if not isinstance(lineage, Mapping):
+                return False
+            ids = lineage.get("evidence_ids")
+            if (
+                not isinstance(ids, list)
+                or not ids
+                or not all(isinstance(item, str) and bool(item) for item in ids)
+            ):
+                return False
+            lineage_ids.update(ids)
+    return (
+        isinstance(field_lineage, Mapping)
+        and bool(field_lineage)
+        and evidence_ids.issubset(lineage_ids)
+        and isinstance(brief, Mapping)
+        and brief.get("status") == "limited"
+        and _diagnostic_list(value.get("limitations"))
+    )
 
 
 def _has_blocked_contract(value: Mapping[str, object]) -> bool:
@@ -383,7 +578,41 @@ def _run_public_request(request: Mapping[str, object]) -> tuple[int, str, str]:
     return completed.returncode, completed.stdout, completed.stderr
 
 
-def _result_from_process(returncode: int, stdout: str, stderr: str) -> dict[str, Any]:
+def _result_matches_request(
+    value: Mapping[str, object], expected_security: str, expected_as_of: str
+) -> bool:
+    status = value.get("status")
+    if status == "limited":
+        subject = value.get("subject")
+        if not isinstance(subject, Mapping):
+            return False
+        security = subject.get("security")
+        if not isinstance(security, Mapping):
+            return False
+        actual_security = f"{security.get('exchange')}:{security.get('code')}"
+        return (
+            actual_security == expected_security
+            and security.get("type") == "A_SHARE"
+            and value.get("as_of") == expected_as_of
+            and value.get("trading_date") == expected_as_of
+        )
+    subjects = value.get("subjects")
+    return (
+        isinstance(subjects, list)
+        and len(subjects) == 1
+        and isinstance(subjects[0], Mapping)
+        and subjects[0].get("security") == expected_security
+    )
+
+
+def _result_from_process(
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    *,
+    expected_security: str | None = None,
+    expected_as_of: str | None = None,
+) -> dict[str, Any]:
     if returncode == 124:
         return {
             "status": "blocked",
@@ -408,6 +637,11 @@ def _result_from_process(returncode: int, stdout: str, stderr: str) -> dict[str,
         or value.get("status") not in {"limited", "blocked"}
         or (value.get("status") == "limited" and not _has_observation_contract(value))
         or (value.get("status") == "blocked" and not _has_blocked_contract(value))
+        or (
+            expected_security is not None
+            and expected_as_of is not None
+            and not _result_matches_request(value, expected_security, expected_as_of)
+        )
     ):
         return {
             "status": "blocked",
@@ -458,6 +692,7 @@ def _timing(result: Mapping[str, object]) -> dict[str, str]:
             isinstance(key, str)
             and key in _OBSERVATION_TIME_FIELDS
             and isinstance(value, str)
+            and _observation_time_item_is_safe(key, value)
         )
     }
 
@@ -470,13 +705,33 @@ def _units(result: Mapping[str, object]) -> dict[str, str]:
     for field, item in snapshot.items():
         if (
             isinstance(field, str)
-            and field in _SNAPSHOT_UNIT_FIELDS
+            and field in _SNAPSHOT_UNITS
             and isinstance(item, Mapping)
         ):
             unit = item.get("unit")
-            if isinstance(unit, str):
+            if unit == _SNAPSHOT_UNITS[field]:
                 units[field] = unit
     return units
+
+
+def _subject_summary(security: str, result: Mapping[str, object]) -> dict[str, object]:
+    subject = result.get("subject")
+    if isinstance(subject, Mapping):
+        security_value = subject.get("security")
+        if isinstance(security_value, Mapping):
+            return {
+                "security": {
+                    field: security_value[field]
+                    for field in ("exchange", "code", "type")
+                    if isinstance(security_value.get(field), str)
+                }
+            }
+    exchange, code = security.split(":", 1)
+    return {"security": {"exchange": exchange, "code": code}}
+
+
+def _safe_enum(value: object, allowed: set[str]) -> str | None:
+    return value if isinstance(value, str) and value in allowed else None
 
 
 def _price_agreement(result: Mapping[str, object]) -> dict[str, object]:
@@ -525,24 +780,19 @@ def summarize_observation(
     """Return only the dated, non-sensitive fields useful to a maintainer."""
 
     session = {
-        "state": result.get("session_state"),
-        "trading_status": result.get("trading_status"),
-        "price_type": result.get("price_type"),
+        "state": _safe_enum(result.get("session_state"), _SESSION_STATES),
+        "trading_status": _safe_enum(result.get("trading_status"), _TRADING_STATUSES),
+        "price_type": _safe_enum(result.get("price_type"), _PRICE_TYPES),
     }
+    observed_date = result.get("trading_date")
+    if not _iso_date(observed_date):
+        observed_date = None
     return {
-        "subject": result.get(
-            "subject",
-            {
-                "security": {
-                    "exchange": security.split(":", 1)[0],
-                    "code": security.split(":", 1)[1],
-                }
-            },
-        ),
+        "subject": _subject_summary(security, result),
         "source_identity": _source_identity(result),
         "date": {
             "requested": as_of,
-            "observed": result.get("trading_date"),
+            "observed": observed_date,
         },
         "timing": _timing(result),
         "session": session,
@@ -567,7 +817,11 @@ def run_probe(
     observations: list[dict[str, object]] = []
     for security in securities:
         process_result = _run_public_request(build_probe_request(security, as_of))
-        result = _result_from_process(*process_result)
+        result = _result_from_process(
+            *process_result,
+            expected_security=security,
+            expected_as_of=as_of,
+        )
         observations.append(summarize_observation(security, as_of, result))
     return {
         "schema_version": "1.0",

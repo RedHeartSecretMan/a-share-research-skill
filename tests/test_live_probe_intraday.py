@@ -128,7 +128,13 @@ class IntradayLiveProbeTests(unittest.TestCase):
             "schema_version": "1.0",
             "task_type": "intraday_market_signal",
             "status": "limited",
-            "subject": {"security": {"exchange": "SSE", "code": "600519"}},
+            "subject": {
+                "security": {
+                    "exchange": "SSE",
+                    "code": "600519",
+                    "type": "A_SHARE",
+                }
+            },
             "as_of": "2026-08-03",
             "trading_date": "2026-08-03",
             "session_state": "continuous",
@@ -160,15 +166,135 @@ class IntradayLiveProbeTests(unittest.TestCase):
                     "unit": "CNY",
                 },
             },
-            "evidence": [],
+            "evidence": [
+                {
+                    "id": "intraday-test-1",
+                    "source_operation": "tongdaxin_intraday_snapshot@1",
+                    "subject": {"security": "SSE:600519"},
+                    "observation": {"kind": "intraday_quote"},
+                    "locator": {"uri": "provider://redacted"},
+                    "retrieved_at": "2026-08-03T10:30:05+08:00",
+                },
+                {
+                    "id": "intraday-test-2",
+                    "source_operation": "tencent_intraday_snapshot@1",
+                    "subject": {"security": "SSE:600519"},
+                    "observation": {"kind": "intraday_core_price_cross_check"},
+                    "locator": {"uri": "provider://redacted-cross-check"},
+                    "retrieved_at": "2026-08-03T10:30:05+08:00",
+                },
+            ],
+            "field_lineage": {
+                "subject": {"evidence_ids": ["intraday-test-1", "intraday-test-2"]}
+            },
+            "brief": {
+                "status": "limited",
+                "evidence_ids": ["intraday-test-1", "intraday-test-2"],
+            },
             "conflicts": [],
             "source_errors": [],
             "limitations": [{"code": "experimental_intraday_sources"}],
         }
         self.assertEqual(
-            live_probe._result_from_process(0, json.dumps(valid_limited), ""),
+            live_probe._result_from_process(
+                0,
+                json.dumps(valid_limited),
+                "",
+                expected_security="SSE:600519",
+                expected_as_of="2026-08-03",
+            ),
             valid_limited,
         )
+        missing_cross_source = {
+            **valid_limited,
+            "evidence": valid_limited["evidence"][:1],  # type: ignore[index]
+        }
+        missing_cross_result = live_probe._result_from_process(
+            0, json.dumps(missing_cross_source), ""
+        )
+        self.assertEqual(missing_cross_result["status"], "blocked")
+        self.assertEqual(
+            missing_cross_result["_failures"][0]["code"],
+            "probe_protocol_failure",
+        )
+        for incomplete_lineage in (
+            {**valid_limited, "evidence": []},
+            {**valid_limited, "field_lineage": {}},
+            {**valid_limited, "brief": {"status": "blocked"}},
+        ):
+            incomplete_lineage_result = live_probe._result_from_process(
+                0, json.dumps(incomplete_lineage), ""
+            )
+            self.assertEqual(incomplete_lineage_result["status"], "blocked")
+            self.assertEqual(
+                incomplete_lineage_result["_failures"][0]["code"],
+                "probe_protocol_failure",
+            )
+        for mismatched in (
+            {**valid_limited, "as_of": "2026-08-02", "trading_date": "2026-08-02"},
+            {
+                **valid_limited,
+                "subject": {
+                    "security": {
+                        "exchange": "SZSE",
+                        "code": "000001",
+                        "type": "A_SHARE",
+                    }
+                },
+            },
+        ):
+            mismatched_result = live_probe._result_from_process(
+                0,
+                json.dumps(mismatched),
+                "",
+                expected_security="SSE:600519",
+                expected_as_of="2026-08-03",
+            )
+            self.assertEqual(mismatched_result["status"], "blocked")
+            self.assertEqual(
+                mismatched_result["_failures"][0]["code"],
+                "probe_protocol_failure",
+            )
+        malformed_envelopes = [
+            {
+                **valid_limited,
+                "subject": {
+                    "security": {
+                        "exchange": "SSE",
+                        "code": "Bearer",
+                        "type": "A_SHARE",
+                    }
+                },
+            },
+            {**valid_limited, "session_state": "Bearer:secret"},
+            {**valid_limited, "trading_status": "Bearer:secret"},
+            {**valid_limited, "price_type": "Bearer:secret"},
+            {**valid_limited, "session_state": "midday_break"},
+            {**valid_limited, "as_of": "Bearer:secret"},
+            {
+                **valid_limited,
+                "observation_times": {
+                    **valid_limited["observation_times"],  # type: ignore[arg-type]
+                    "retrieved_at": "Bearer:secret",
+                },
+            },
+            {
+                **valid_limited,
+                "observation_times": {
+                    **valid_limited["observation_times"],  # type: ignore[arg-type]
+                    "pair_gap_seconds": "61",
+                },
+            },
+        ]
+        for malformed_envelope in malformed_envelopes:
+            malformed_result = live_probe._result_from_process(
+                0, json.dumps(malformed_envelope), ""
+            )
+            self.assertEqual(malformed_result["status"], "blocked")
+            self.assertEqual(
+                malformed_result["_failures"][0]["code"],
+                "probe_protocol_failure",
+            )
         incomplete_snapshot = {
             **valid_limited,
             "snapshot": {
@@ -184,10 +310,27 @@ class IntradayLiveProbeTests(unittest.TestCase):
             incomplete_snapshot_result["_failures"][0]["code"],
             "probe_protocol_failure",
         )
+        missing_previous_close = {
+            **valid_limited,
+            "snapshot": {
+                field: item
+                for field, item in valid_limited["snapshot"].items()  # type: ignore[union-attr]
+                if field != "previous_close"
+            },
+        }
+        missing_previous_result = live_probe._result_from_process(
+            0, json.dumps(missing_previous_close), ""
+        )
+        self.assertEqual(missing_previous_result["status"], "blocked")
+        self.assertEqual(
+            missing_previous_result["_failures"][0]["code"],
+            "probe_protocol_failure",
+        )
         for malformed_latest in (
             {"value": "Bearer:secret", "unit": "CNY/share"},
             {"value": "1", "unit": "https://provider.example/secret"},
             {"value": "-1", "unit": "CNY/share"},
+            {"value": "1.234", "unit": "CNY/share"},
             {"value": None, "unit": "CNY/share", "status": "not_applicable"},
         ):
             malformed_snapshot = {
@@ -219,6 +362,26 @@ class IntradayLiveProbeTests(unittest.TestCase):
         self.assertEqual(
             unknown_result["_failures"][0]["code"], "probe_protocol_failure"
         )
+        for field, malformed_value in (
+            ("cumulative_volume", {"value": "1.5", "unit": "shares"}),
+            ("cumulative_amount", {"value": "-1", "unit": "CNY"}),
+            ("cumulative_volume", {"value": "0", "unit": "shares"}),
+        ):
+            malformed_cumulative = {
+                **valid_limited,
+                "snapshot": {
+                    **valid_limited["snapshot"],  # type: ignore[arg-type]
+                    field: malformed_value,
+                },
+            }
+            malformed_cumulative_result = live_probe._result_from_process(
+                0, json.dumps(malformed_cumulative), ""
+            )
+            self.assertEqual(malformed_cumulative_result["status"], "blocked")
+            self.assertEqual(
+                malformed_cumulative_result["_failures"][0]["code"],
+                "probe_protocol_failure",
+            )
         undisclosed_limitations = {**valid_limited, "limitations": []}
         undisclosed_result = live_probe._result_from_process(
             0, json.dumps(undisclosed_limitations), ""
@@ -333,6 +496,16 @@ class IntradayLiveProbeTests(unittest.TestCase):
 
         self.assertEqual(failure["source_operation"], "unknown")
         self.assertEqual(failure["code"], "probe_failure")
+        for code in ("empty_observation", "operation_identity_mismatch"):
+            self.assertEqual(
+                live_probe.sanitize_failure(
+                    {
+                        "source_operation": "tongdaxin_intraday_snapshot@1",
+                        "code": code,
+                    }
+                )["code"],
+                code,
+            )
 
     def test_probe_requires_explicit_opt_in_and_as_of(self) -> None:
         with patch.object(live_probe, "run_probe") as run_probe:
