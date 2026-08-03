@@ -214,7 +214,12 @@ def _result_from_process(returncode: int, stdout: str, stderr: str) -> dict[str,
             "status": "blocked",
             "_failures": [sanitize_failure({"code": "probe_protocol_failure"})],
         }
-    if not isinstance(value, dict):
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != "1.0"
+        or value.get("task_type") != "intraday_market_signal"
+        or value.get("status") not in {"supported", "limited", "blocked"}
+    ):
         return {
             "status": "blocked",
             "_failures": [sanitize_failure({"code": "probe_protocol_failure"})],

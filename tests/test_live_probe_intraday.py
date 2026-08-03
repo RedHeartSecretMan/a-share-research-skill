@@ -76,6 +76,15 @@ class IntradayLiveProbeTests(unittest.TestCase):
         self.assertEqual(observation["units"]["latest_price"], "CNY/share")  # type: ignore[index]
         self.assertEqual(observation["failures"], [])
 
+    def test_probe_rejects_json_without_research_result_contract(self) -> None:
+        for payload in ({}, {"schema_version": "1.0", "status": "limited"}):
+            with self.subTest(payload=payload):
+                result = live_probe._result_from_process(0, json.dumps(payload), "")
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(
+                    result["_failures"][0]["code"], "probe_protocol_failure"
+                )
+
     def test_probe_rejects_same_exchange_override(self) -> None:
         with patch.object(live_probe, "run_probe") as run_probe:
             with self.assertRaises(SystemExit) as invalid_sse:
