@@ -233,7 +233,7 @@ F10 上市公司资料检索是 v0.1.1 已集成、但需要额外依赖的能�
 - ETF 支持交易所快照；尚不支持分钟、逐笔、交易、新闻情绪评分、全量公司画像或批量选股。
 - 研究分析与建议遵循安装产物的 [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md)；README 不另行定义第二套执行规则。
 
-完整产品领域与术语见 [`CONTEXT.md`](CONTEXT.md)；[`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) 是已被取代的 v0.0.1 早期估值内核方案；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 定义实际交付的 v0.0.1 可信证据内核；[`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) 定义完整 v0.1.0 能力与发布门槛；[`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) 定义 v0.1.1 的呈现边界与文档发布修订。
+完整产品领域与术语见 [`CONTEXT.md`](CONTEXT.md)；[`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) 是已被取代的 v0.0.1 早期估值内核方案；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 定义实际交付的 v0.0.1 可信证据内核；[`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) 定义完整 v0.1.0 能力与发布门槛；[`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) 定义 v0.1.1 的呈现边界与文档发布修订；[`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 定义尚待实现的 v0.2.0 研究级盘中行情快照。
 
 ## 仓库结构
 

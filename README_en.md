@@ -233,7 +233,7 @@ The current version is deliberately conservative:
 - ETF snapshots are supported; minute, tick, trading, news-sentiment scoring, full-company profiles, and batch screening are not yet supported.
 - Research analysis and advice follow the installed [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md); this README does not define a second operational policy.
 
-See [`CONTEXT.md`](CONTEXT.md) for the complete product domain and terminology. [`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) is the superseded early v0.0.1 valuation-kernel proposal; [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) defines the delivered v0.0.1 trustworthy-evidence kernel; [`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) defines the complete v0.1.0 capability and release gates; and [`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) defines the v0.1.1 presentation-boundary and documentation release revision.
+See [`CONTEXT.md`](CONTEXT.md) for the complete product domain and terminology. [`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) is the superseded early v0.0.1 valuation-kernel proposal; [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) defines the delivered v0.0.1 trustworthy-evidence kernel; [`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) defines the complete v0.1.0 capability and release gates; [`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) defines the v0.1.1 presentation-boundary and documentation release revision; and [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) defines the not-yet-implemented v0.2.0 research-grade intraday snapshot.
 
 ## Repository layout
 
