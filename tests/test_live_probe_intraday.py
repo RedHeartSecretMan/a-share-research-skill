@@ -47,6 +47,8 @@ class IntradayLiveProbeTests(unittest.TestCase):
             "observation_times": {
                 "tongdaxin_baseline": "2026-08-03T10:30:00+08:00",
                 "tencent_cross_check": "2026-08-03T10:29:58+08:00",
+                "retrieved_at": "2026-08-03T10:30:05+08:00",
+                "pair_gap_seconds": "2",
             },
             "snapshot": {
                 "latest_price": {"value": "1680.25", "unit": "CNY/share"},
@@ -134,6 +136,8 @@ class IntradayLiveProbeTests(unittest.TestCase):
             "observation_times": {
                 "tongdaxin_baseline": "2026-08-03T10:30:00+08:00",
                 "tencent_cross_check": "2026-08-03T10:29:58+08:00",
+                "retrieved_at": "2026-08-03T10:30:05+08:00",
+                "pair_gap_seconds": "2",
             },
             "snapshot": {
                 "latest_price": {},
@@ -149,6 +153,21 @@ class IntradayLiveProbeTests(unittest.TestCase):
         self.assertEqual(
             live_probe._result_from_process(0, json.dumps(valid_limited), ""),
             valid_limited,
+        )
+        incomplete_timing = {
+            **valid_limited,
+            "observation_times": {
+                "tongdaxin_baseline": "2026-08-03T10:30:00+08:00",
+                "tencent_cross_check": "2026-08-03T10:29:58+08:00",
+            },
+        }
+        incomplete_timing_result = live_probe._result_from_process(
+            0, json.dumps(incomplete_timing), ""
+        )
+        self.assertEqual(incomplete_timing_result["status"], "blocked")
+        self.assertEqual(
+            incomplete_timing_result["_failures"][0]["code"],
+            "probe_protocol_failure",
         )
         supported_payload = {**valid_limited, "status": "supported"}
         supported_result = live_probe._result_from_process(

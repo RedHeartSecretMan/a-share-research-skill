@@ -205,7 +205,12 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
     observation_times = value.get("observation_times")
     if not isinstance(observation_times, Mapping) or not observation_times:
         return False
-    if not {"tongdaxin_baseline", "tencent_cross_check"}.issubset(observation_times):
+    if not {
+        "tongdaxin_baseline",
+        "tencent_cross_check",
+        "retrieved_at",
+        "pair_gap_seconds",
+    }.issubset(observation_times):
         return False
     if not all(
         isinstance(key, str) and isinstance(item, str)
@@ -215,12 +220,15 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
     snapshot = value.get("snapshot")
     if not isinstance(snapshot, Mapping):
         return False
-    if not {
+    core_fields = {
         "latest_price",
         "open",
         "high",
         "low",
-    }.issubset(snapshot):
+    }
+    if not core_fields.issubset(snapshot) or not all(
+        isinstance(snapshot.get(field), Mapping) for field in core_fields
+    ):
         return False
     return all(
         isinstance(value.get(field), list)
