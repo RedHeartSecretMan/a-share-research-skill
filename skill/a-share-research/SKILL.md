@@ -10,7 +10,7 @@ Use the bundled CLI to gather and calculate evidence, then answer only within th
 ## Research sequence
 
 1. Define the exact question and resolve every relative date to an explicit China Standard Time `YYYY-MM-DD`. Completion: the question, subject scope, time boundary, and requested outputs are explicit.
-2. Select the matching `ResearchTask` from [references/cli-contract.md](references/cli-contract.md). Use `security_identity` for identity-only questions; route prices and trends, current-date intraday snapshots, ETF or ETF options, valuation, research materials, capital events, market signals, and preset plans only to their documented task types. Completion: `task_type`, subject scope, window, parameters, and source policy match the question exactly.
+2. Select the matching `ResearchTask` from [references/cli-contract.md](references/cli-contract.md). Use `security_identity` for identity-only questions; route prices and trends, current-date intraday snapshots, completed-day `intraday_replay`, ETF or ETF options, valuation, research materials, capital events, market signals, and preset plans only to their documented task types. Completion: `task_type`, subject scope, window, parameters, and source policy match the question exactly.
 3. Treat a name, abbreviation, or bare code as a clue. Use only the canonical subject returned by identity resolution. If resolution needs a user choice, ask for it; if identity is blocked, stop dependent research. Completion: the subject is canonical or the unresolved identity is reported as the blocker.
 4. Invoke the public entry point resolved relative to this file:
 
@@ -47,6 +47,10 @@ Agent analysis remains outside the deterministic task: a `limited` result may su
 ## Intraday replay boundary
 
 Use `intraday_replay` for one canonical SSE/SZSE A share and one explicit completed trading date. The optional `mootdx==0.11.7` candidate source is experimental forever in this capability: unknown timestamp, calendar, unit, price-basis, or auction semantics remain blocked, while independently usable evidence remains `limited`. The deterministic result does not forecast or recommend action; read `records`, `auction_results`, `coverage`, `daily_boundary`, `summary`, `source_errors`, and `unavailable_fields` before forming any separately labelled research judgment.
+
+Terminology: A complete intraday trading-day series is the ordered unadjusted minute transaction record for one completed exchange session; an intraday replay summary is calculated from that record; intraday replay analysis is the Agent's explanation of the completed path; an evidence-constrained scenario prediction is formed only after an explicit future-judgment request passes the evidence floor. Keep these layers separate from an intraday market snapshot.
+
+Use `--output <file>` only when the caller explicitly asks to persist the normalized ResearchResult. Without that option, `intraday_replay` creates no result file, cache, database, or global provider configuration.
 
 ## Intraday replay scenario prediction (Agent layer)
 

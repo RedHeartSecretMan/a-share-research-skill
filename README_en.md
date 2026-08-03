@@ -29,12 +29,15 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 
 ## Capabilities
 
+An intraday market snapshot is one observation on the current China Standard Time trading date; a complete intraday trading-day series is the ordered unadjusted minute transaction record for a completed session; an intraday replay summary is calculated from that series; intraday replay analysis is the Agent's explanation of the completed path; and an evidence-constrained scenario prediction is formed only after an explicit future-judgment request passes its evidence floor. These are distinct capabilities and do not share unqualified fields.
+
 | Capability | Input | Output and boundary |
 | --- | --- | --- |
 | Security identity resolution | Name, abbreviation, or code clue + explicit date | Cross-checks SSE/SZSE and CNINFO observations; ambiguity, conflicts, and BSE inputs fail closed |
 | Latest completed close | Canonical `SSE:code` / `SZSE:code` + explicit date | Cross-checks exchange daily lines and Tencent observations while preserving trading date, basis, and conflicts |
 | Recent N-session trend | A-share clue + 2–250 sessions + unadjusted/forward-adjusted basis | Cross-checked OHLCV, cumulative return, drawdown, volatility, up/down sessions, volume change, and corporate actions |
 | Intraday market snapshot | Current China Standard Time trading date + one canonical `SSE:code` / `SZSE:code` A-share | One TongdaXin/Tencent experimental cross-check with session, price type, source times, units, conflicts, and explicit `limited` / `blocked` boundaries |
+| Complete intraday replay | One canonical SSE/SZSE A-share + one explicit completed trading date | Returns minute records, trading phases, coverage, daily-boundary evidence, replay summary, evidence lineage, and unavailable-field reasons; experimental sources remain at most `limited` |
 | ETF market | Six-digit SSE ETF code + explicit date | SSE ETF identity and snapshot, Tencent price cross-check, and explicit board-lot rounding differences |
 | ETF options | 510050 / 510300 / 510500 / 588000 + one observation date + ATM/chain, expiry, and quote-time modes | Separate standard `M` and adjusted `A` series, call/put quotes, tied ATM strikes, provider-reported Greeks/IV, four-state coverage, source time, and limitations |
 | Automatic security valuation | A-share clue + established security-class count + current China Standard Time date + scenario target PE | Preserves complete numeric rows from all three statements and quarterly series, then acquires current shares and consensus to calculate reported and forward metrics |
@@ -86,15 +89,15 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 
 The core runtime requires only the Python 3.12 or later standard library and does not require installing this repository as a package. Below, `<python>` means an interpreter already confirmed to be version 3.12 or later: Windows normally uses `py -3.12`; macOS and Linux should prefer `python3.12`, and should use `python3` only after `python3 --version` confirms the requirement. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for the complete invocation contract.
 
-F10 issuer-profile retrieval and the `intraday_market_signal` snapshot are capability-scoped optional capabilities and require an extra dependency. Install the release-audited version into the same Python environment that runs the corresponding Skill capability when needed:
+F10 issuer-profile retrieval, the `intraday_market_signal` snapshot, and `intraday_replay` are capability-scoped optional capabilities and require an extra dependency. Install the release-audited version into the same Python environment that runs the corresponding Skill capability when needed:
 
 ```text
 <python> -m pip install "mootdx==0.11.7"
 ```
 
-The standard-library core installation does not include `mootdx`. When it is absent, only F10, `intraday_market_signal`, and steps explicitly dependent on them report `missing_optional_dependency` or return `blocked`; other research capabilities remain available. The runtime must not silently switch sources, fabricate empty data, or widen the blocked scope. The maintainer-only live probe uses an ephemeral home and does not create project-owned global configuration.
+The standard-library core installation does not include `mootdx`. When it is absent, only F10, `intraday_market_signal`, `intraday_replay`, and steps explicitly dependent on them report `missing_optional_dependency` or return `blocked`; other research capabilities remain available. The runtime must not silently switch sources, fabricate empty data, or widen the blocked scope. The maintainer-only live probe uses an ephemeral home and does not create project-owned global configuration.
 
-The F10 and `intraday_market_signal` integrations each pin `mootdx==0.11.7` within their capability scope. Its other quote interfaces do not become default sources or fallbacks merely because they ship in the same library. Each source operation must separately qualify identity, timing, units, failure semantics, and licensing, and must improve the evidence chain before integration; intraday never silently switches source when evidence is unavailable.
+The F10, `intraday_market_signal`, and `intraday_replay` integrations each pin `mootdx==0.11.7` within their capability scope. Its other quote interfaces do not become default sources or fallbacks merely because they ship in the same library. Each source operation must separately qualify identity, timing, units, failure semantics, and licensing, and must improve the evidence chain before integration; intraday never silently switches source when evidence is unavailable.
 
 ## CLI
 
@@ -107,6 +110,8 @@ All capabilities use the stable research-task Interface:
 `research-task.json` is a structured task, not natural-language text. It carries the version, task type, subjects, research date, window, parameters, and source policy. Unknown tasks, policy-disallowed sources, and missing optional Adapter dependencies return explicit `blocked` results.
 
 `run --request` is the only supported public invocation. Callers do not need to know source endpoints, internal modules, or historical subcommands. `scripts/entrypoint.py` is the Skill's only public runtime entry point; every other Python module is an implementation detail. The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
+
+Only an explicit `--output <file>` option persists the normalized ResearchResult; without it, the runtime creates no result file, implicit cache, database, or global provider configuration.
 
 The intraday snapshot uses `task_type: "intraday_market_signal"`, exactly one canonical `SSE:<code>` or `SZSE:<code>` A-share, the current China Standard Time trading date, `window: null`, and `source_policy.allow_experimental: true`. `limited` means the snapshot remains answerable but experimental-source qualification or another disclosed limitation remains; `blocked` means identity, session, timing, or core-source evidence is insufficient. Agent analysis may interpret only a non-blocked result within the returned fields and limitations; it is not a trading feed, prediction, or action instruction.
 
@@ -279,11 +284,15 @@ The live-source diagnostic entry point is `tests/live_probe_close.py`. The maint
 
 It covers one SSE and one SZSE A-share and emits only a dated observation report with source identity, timing, session, price agreement, units, status, and sanitized failures. It is excluded from ordinary CI, writes no fixtures, persists no provider response, accepts no credentials, and creates no project-owned global configuration.
 
+The complete intraday replay probe is `tests/live_probe_intraday_replay.py`; it additionally requires `--replay-date YYYY-MM-DD`. It covers one SSE and one SZSE A-share, uses an ephemeral home, emits only allow-listed sanitized statuses and failure codes; operators must never update fixtures, persist provider responses, or promote one successful observation to production qualification.
+
 Run each vertical slice explicitly against live sources with versioned requests:
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-market-snapshot.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-sse.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-szse.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
