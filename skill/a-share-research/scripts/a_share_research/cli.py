@@ -17,7 +17,10 @@ from .etf_option_contract import OptionSourceOperation
 from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
 from .intraday_contract import IntradaySourceOperation
-from .intraday_replay_contract import IntradayReplaySourceOperation
+from .intraday_replay_contract import (
+    IntradayReplayDailySourceOperation,
+    IntradayReplaySourceOperation,
+)
 from .market_signal_contract import (
     MarketSignalHttpTransport,
     MarketSignalSourceOperation,
@@ -144,6 +147,8 @@ def main(
     intraday_operations: Collection[IntradaySourceOperation] | None = None,
     intraday_transport: HttpTransport | None = None,
     intraday_replay_operations: Collection[IntradayReplaySourceOperation] | None = None,
+    intraday_replay_daily_operations: Collection[IntradayReplayDailySourceOperation]
+    | None = None,
 ) -> int:
     arguments = _parser().parse_args(argv)
     try:
@@ -164,6 +169,7 @@ def main(
                 intraday_operations=intraday_operations,
                 intraday_transport=intraday_transport,
                 intraday_replay_operations=intraday_replay_operations,
+                intraday_replay_daily_operations=intraday_replay_daily_operations,
             )
         elif arguments.command == "resolve":
             result = resolve_security_identity(

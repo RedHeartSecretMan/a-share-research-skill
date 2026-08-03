@@ -65,6 +65,8 @@ class IntradayReplaySourceBatch:
     session_contract: str | None = None
     coverage_bound: str | None = None
     closing_auction_semantics: str | None = None
+    trading_status: str = "traded"
+    price_minimum_tick: str | None = None
 
 
 class IntradayReplaySourceError(Exception):
@@ -82,6 +84,52 @@ class IntradayReplaySourceOperation(Protocol):
     operation_id: str
 
     def collect(self, query: IntradayReplayQuery) -> IntradayReplaySourceBatch: ...
+
+
+@dataclass(frozen=True)
+class IntradayReplayDailySourceBatch:
+    """One independent daily-boundary observation for the replay date."""
+
+    operation_id: str
+    contract_version: str
+    security: str
+    trading_date: date
+    retrieved_at: datetime
+    experimental: bool
+    price_adjustment: str
+    price_unit: str
+    price_precision: str
+    volume_unit: str
+    amount_unit: str
+    open_price: object | None
+    high_price: object | None
+    low_price: object | None
+    close_price: object | None
+    volume: object | None
+    amount: object | None
+    actual_close_price: object | None = None
+    trading_status: str = "traded"
+    source_role: str = "daily_boundary_cross_check"
+    timestamp_timezone: str = "Asia/Shanghai"
+    volume_lot_size: str | None = None
+    amount_scale: str = "1"
+    amount_precision: str = "0.01"
+    price_minimum_tick: str | None = None
+    evidence_locator: str | None = None
+    previous_trading_date: date | None = None
+    previous_close: object | None = None
+    previous_close_basis: str | None = None
+    ex_right_reference: object | None = None
+    ex_right_reference_date: date | None = None
+    comparison_explanations: tuple[tuple[str, str], ...] = ()
+
+
+class IntradayReplayDailySourceOperation(Protocol):
+    """Independent daily operation used only at the replay boundary."""
+
+    operation_id: str
+
+    def collect(self, query: IntradayReplayQuery) -> IntradayReplayDailySourceBatch: ...
 
 
 def source_error_result(error: IntradayReplaySourceError) -> dict[str, Any]:
