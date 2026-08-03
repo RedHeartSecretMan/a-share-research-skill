@@ -55,6 +55,11 @@ class IntradayLiveProbeTests(unittest.TestCase):
                 "open": {"value": "1675.00", "unit": "CNY/share"},
                 "high": {"value": "1688.00", "unit": "CNY/share"},
                 "low": {"value": "1670.50", "unit": "CNY/share"},
+                "previous_close": {
+                    "status": "unavailable",
+                    "reported_value": "1668.00",
+                    "unit": "CNY/share",
+                },
                 "cumulative_volume": {"value": "1234500", "unit": "shares"},
             },
             "conflicts": [],
@@ -144,6 +149,11 @@ class IntradayLiveProbeTests(unittest.TestCase):
                 "open": {"value": "1675.00", "unit": "CNY/share"},
                 "high": {"value": "1688.00", "unit": "CNY/share"},
                 "low": {"value": "1670.50", "unit": "CNY/share"},
+                "previous_close": {
+                    "status": "unavailable",
+                    "reported_value": "1668.00",
+                    "unit": "CNY/share",
+                },
                 "cumulative_volume": {"value": "1234500", "unit": "shares"},
                 "cumulative_amount": {
                     "value": "2071234567.89",
@@ -173,6 +183,41 @@ class IntradayLiveProbeTests(unittest.TestCase):
         self.assertEqual(
             incomplete_snapshot_result["_failures"][0]["code"],
             "probe_protocol_failure",
+        )
+        for malformed_latest in (
+            {"value": "Bearer:secret", "unit": "CNY/share"},
+            {"value": "1", "unit": "https://provider.example/secret"},
+            {"value": "-1", "unit": "CNY/share"},
+            {"value": None, "unit": "CNY/share", "status": "not_applicable"},
+        ):
+            malformed_snapshot = {
+                **valid_limited,
+                "snapshot": {
+                    **valid_limited["snapshot"],  # type: ignore[arg-type]
+                    "latest_price": malformed_latest,
+                },
+            }
+            malformed_result = live_probe._result_from_process(
+                0, json.dumps(malformed_snapshot), ""
+            )
+            self.assertEqual(malformed_result["status"], "blocked")
+            self.assertEqual(
+                malformed_result["_failures"][0]["code"],
+                "probe_protocol_failure",
+            )
+        unknown_snapshot = {
+            **valid_limited,
+            "snapshot": {
+                **valid_limited["snapshot"],  # type: ignore[arg-type]
+                "raw_payload": {"value": "secret", "unit": "CNY"},
+            },
+        }
+        unknown_result = live_probe._result_from_process(
+            0, json.dumps(unknown_snapshot), ""
+        )
+        self.assertEqual(unknown_result["status"], "blocked")
+        self.assertEqual(
+            unknown_result["_failures"][0]["code"], "probe_protocol_failure"
         )
         undisclosed_limitations = {**valid_limited, "limitations": []}
         undisclosed_result = live_probe._result_from_process(

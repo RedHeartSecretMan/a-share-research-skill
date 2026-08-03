@@ -12,10 +12,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -29,6 +31,25 @@ DEFAULT_SZSE = "SZSE:000001"
 _EXPECTED_SOURCE_OPERATIONS = {
     "tongdaxin_intraday_snapshot@1",
     "tencent_intraday_snapshot@1",
+}
+_DECIMAL_VALUE = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+_OBSERVATION_TIME_FIELDS = {
+    "tongdaxin_baseline",
+    "tencent_cross_check",
+    "retrieved_at",
+    "pair_gap_seconds",
+    "observation_boundary",
+}
+_SNAPSHOT_UNIT_FIELDS = {
+    "latest_price",
+    "open",
+    "high",
+    "low",
+    "previous_close",
+    "cumulative_volume",
+    "cumulative_amount",
+    "change_amount",
+    "change_percent",
 }
 _KNOWN_FAILURE_CODES = {
     "ambiguous_amount_scope",
@@ -177,6 +198,41 @@ def _diagnostic_list(value: object) -> bool:
     )
 
 
+def _snapshot_value_matches(
+    item: object,
+    unit: str,
+    *,
+    strictly_positive: bool = False,
+    allow_not_applicable: bool = True,
+) -> bool:
+    if not isinstance(item, Mapping) or item.get("unit") != unit:
+        return False
+    value = item.get("value")
+    if isinstance(value, str) and _DECIMAL_VALUE.fullmatch(value):
+        return not strictly_positive or Decimal(value) > 0
+    return (
+        allow_not_applicable
+        and value is None
+        and item.get("status") == "not_applicable"
+    )
+
+
+def _previous_close_matches(item: object, *, allow_not_applicable: bool) -> bool:
+    if not isinstance(item, Mapping) or item.get("unit") != "CNY/share":
+        return False
+    if "value" in item:
+        return _snapshot_value_matches(
+            item,
+            "CNY/share",
+            strictly_positive=True,
+            allow_not_applicable=allow_not_applicable,
+        )
+    reported_value = item.get("reported_value")
+    return isinstance(reported_value, str) and bool(
+        _DECIMAL_VALUE.fullmatch(reported_value) and Decimal(reported_value) > 0
+    )
+
+
 def _has_observation_contract(value: Mapping[str, object]) -> bool:
     subject = value.get("subject")
     if not isinstance(subject, Mapping) or not isinstance(
@@ -220,22 +276,51 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
     snapshot = value.get("snapshot")
     if not isinstance(snapshot, Mapping):
         return False
-    snapshot_fields = {
-        "latest_price",
-        "open",
-        "high",
-        "low",
-        "cumulative_volume",
-        "cumulative_amount",
+    snapshot_units = {
+        "latest_price": "CNY/share",
+        "open": "CNY/share",
+        "high": "CNY/share",
+        "low": "CNY/share",
+        "cumulative_volume": "shares",
+        "cumulative_amount": "CNY",
     }
-    if not snapshot_fields.issubset(snapshot):
+    snapshot_fields = set(snapshot_units)
+    if not snapshot_fields.issubset(snapshot) or not set(snapshot).issubset(
+        _SNAPSHOT_UNIT_FIELDS
+    ):
         return False
+    allow_not_applicable = (
+        value.get("trading_status")
+        in {
+            "suspended",
+            "not_applicable",
+        }
+        or value.get("price_type") == "not_applicable"
+    )
     if not all(
-        isinstance(snapshot.get(field), Mapping)
-        and "value" in snapshot[field]
-        and isinstance(snapshot[field].get("unit"), str)
-        and bool(snapshot[field]["unit"])
-        for field in snapshot_fields
+        _snapshot_value_matches(
+            snapshot.get(field),
+            unit,
+            strictly_positive=field in {"latest_price", "open", "high", "low"},
+            allow_not_applicable=allow_not_applicable,
+        )
+        for field, unit in snapshot_units.items()
+    ):
+        return False
+    if "previous_close" in snapshot and not _previous_close_matches(
+        snapshot.get("previous_close"), allow_not_applicable=allow_not_applicable
+    ):
+        return False
+    optional_units = {
+        "change_amount": "CNY/share",
+        "change_percent": "percent",
+    }
+    if not all(
+        _snapshot_value_matches(
+            snapshot.get(field), unit, allow_not_applicable=allow_not_applicable
+        )
+        for field, unit in optional_units.items()
+        if field in snapshot
     ):
         return False
     if not all(
@@ -369,7 +454,11 @@ def _timing(result: Mapping[str, object]) -> dict[str, str]:
     return {
         str(key): str(value)
         for key, value in values.items()
-        if isinstance(key, str) and isinstance(value, str)
+        if (
+            isinstance(key, str)
+            and key in _OBSERVATION_TIME_FIELDS
+            and isinstance(value, str)
+        )
     }
 
 
@@ -379,7 +468,11 @@ def _units(result: Mapping[str, object]) -> dict[str, str]:
         return {}
     units: dict[str, str] = {}
     for field, item in snapshot.items():
-        if isinstance(field, str) and isinstance(item, Mapping):
+        if (
+            isinstance(field, str)
+            and field in _SNAPSHOT_UNIT_FIELDS
+            and isinstance(item, Mapping)
+        ):
             unit = item.get("unit")
             if isinstance(unit, str):
                 units[field] = unit
