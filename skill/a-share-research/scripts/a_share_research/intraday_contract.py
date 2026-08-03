@@ -52,7 +52,7 @@ def session_at(value: datetime) -> str | None:
 
 @dataclass(frozen=True)
 class IntradayObservation:
-    """One source operation's normalized continuous-auction observation."""
+    """One source operation's normalized intraday observation."""
 
     source_operation: str
     security: str
@@ -75,6 +75,7 @@ class IntradayObservation:
     # A source timestamp proves when a quote was observed; an unknown cache
     # state must never be silently treated as fresh by the adjudicator.
     cache_state: str | None = None
+    observation_boundary: str | None = None
 
 
 class IntradaySourceError(Exception):

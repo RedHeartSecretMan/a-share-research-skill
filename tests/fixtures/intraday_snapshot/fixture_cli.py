@@ -31,11 +31,12 @@ def _retrieved_at_for_scenario() -> datetime:
         "pre_open": (8, 30, 5),
         "opening_auction": (9, 20, 5),
         "midday_break": (12, 0, 5),
+        "midday_pair_gap": (12, 0, 5),
         "closing_auction": (14, 58, 5),
         "post_close": (15, 30, 5),
     }
     hour, minute, second = times.get(scenario, (10, 30, 5))
-    day = 8 if scenario == "non_trading" else 3
+    day = 8 if scenario == "non_trading" else 4 if scenario == "weekday_holiday" else 3
     return datetime(2026, 8, day, hour, minute, second, tzinfo=CHINA_STANDARD_TIME)
 
 
@@ -73,6 +74,7 @@ class FixtureTongdaxinClient:
                 "last_close": "1668.00",
                 "vol": "12345",
                 "amount": "2071234567.89",
+                "cache_state": "source_timestamp",
             }
             if code == "600519"
             else {
@@ -83,6 +85,7 @@ class FixtureTongdaxinClient:
                 "last_close": "12.18",
                 "vol": "9876",
                 "amount": "12187654.32",
+                "cache_state": "source_timestamp",
             }
         )
         scenario = os.environ.get("A_SHARE_INTRADAY_SCENARIO")
@@ -90,9 +93,12 @@ class FixtureTongdaxinClient:
             values["price_type"] = "indicative_auction"
         if scenario == "unknown_cache":
             values["cache_state"] = "unknown"
+        if scenario == "missing_cache":
+            values.pop("cache_state")
         observed_times = {
             "opening_auction": "09:20:00",
             "midday_break": "11:29:50",
+            "midday_pair_gap": "11:28:00",
             "closing_auction": "14:58:00",
             "source_stale": "10:28:00",
             "session_mismatch": "10:30:00",
@@ -182,6 +188,7 @@ class FixtureTransport:
         quote_times = {
             "opening_auction": "20260803092002",
             "midday_break": "20260803112955",
+            "midday_pair_gap": "20260803112600",
             "closing_auction": "20260803145802",
             "source_stale": "20260803102800",
             "pair_gap": "20260803102800",
@@ -190,6 +197,8 @@ class FixtureTransport:
         quote[30] = quote_times.get(scenario, "20260803102958")
         if scenario in {"opening_auction", "closing_auction", "session_mismatch"}:
             quote[31] = "indicative_auction"
+        elif scenario == "unknown_price_type":
+            quote[31] = "unknown_price_type"
         if scenario == "core_price_mismatch":
             current[2] = "1680.26"
             quote[3] = "1680.26"

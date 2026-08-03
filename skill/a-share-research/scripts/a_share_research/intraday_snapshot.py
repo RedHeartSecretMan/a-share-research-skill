@@ -107,7 +107,7 @@ def build_intraday_snapshot_result(
         "as_of": query.as_of.isoformat(),
         "trading_date": baseline.trading_date.isoformat(),
         "session_state": result_session,
-        "trading_status": "traded",
+        "trading_status": baseline.trading_status,
         "price_type": baseline.price_type,
         "snapshot": {
             "latest_price": {"value": baseline.latest_price, "unit": "CNY/share"},
@@ -329,6 +329,14 @@ def _pair_incompatibility(
                 "intraday_session_mismatch",
                 "The midday result must retain compatible morning continuous observations.",
             )
+        if any(
+            item.observation_boundary != "morning_last_compatible"
+            for item in (baseline, cross_check)
+        ):
+            return (
+                "intraday_morning_observation_not_last",
+                "The midday result requires each source to identify its morning-last observation boundary.",
+            )
     elif any(
         item.session_state != expected_session for item in (baseline, cross_check)
     ):
@@ -336,10 +344,25 @@ def _pair_incompatibility(
             "intraday_session_mismatch",
             "Intraday source observations are not in the current trading session.",
         )
-    if any(item.trading_status != "traded" for item in (baseline, cross_check)):
+    expected_trading_status = (
+        "auction"
+        if expected_session in {"opening_auction", "closing_auction"}
+        else "traded"
+    )
+    if expected_trading_status == "auction":
+        status_compatible = all(
+            item.trading_status in {"auction", "unknown", "not_traded"}
+            for item in (baseline, cross_check)
+        )
+    else:
+        status_compatible = all(
+            item.trading_status == expected_trading_status
+            for item in (baseline, cross_check)
+        )
+    if not status_compatible:
         return (
             "intraday_trading_status_mismatch",
-            "Intraday source observations do not establish traded status.",
+            "Intraday source observations do not establish the current session status.",
         )
     expected_price_type = (
         "indicative_auction"
@@ -399,31 +422,39 @@ def _freshness_conflicts(
                     "evidence_ids": [item["id"] for item in observation.evidence],
                 }
             )
-    if result_session not in {"opening_auction", "continuous", "closing_auction"}:
-        return conflicts
-    for observation in observations:
-        age = (observation.retrieved_at - observation.observed_at).total_seconds()
-        if age < 0:
-            conflicts.append(
-                {
-                    "code": "intraday_observation_time_invalid",
-                    "message": "A source observation occurs after its retrieval time.",
-                    "source_operation": observation.source_operation,
-                    "evidence_ids": [item["id"] for item in observation.evidence],
-                }
-            )
-        elif age > 60:
-            conflicts.append(
-                {
-                    "code": "intraday_observation_too_old",
-                    "message": "An active-session source observation is older than 60 seconds.",
-                    "source_operation": observation.source_operation,
-                    "age_seconds": _seconds_text(age),
-                    "evidence_ids": [item["id"] for item in observation.evidence],
-                }
-            )
+    if result_session in {"opening_auction", "continuous", "closing_auction"}:
+        for observation in observations:
+            age = (observation.retrieved_at - observation.observed_at).total_seconds()
+            if age < 0:
+                conflicts.append(
+                    {
+                        "code": "intraday_observation_time_invalid",
+                        "message": "A source observation occurs after its retrieval time.",
+                        "source_operation": observation.source_operation,
+                        "evidence_ids": [item["id"] for item in observation.evidence],
+                    }
+                )
+            elif age > 60:
+                conflicts.append(
+                    {
+                        "code": "intraday_observation_too_old",
+                        "message": "An active-session source observation is older than 60 seconds.",
+                        "source_operation": observation.source_operation,
+                        "age_seconds": _seconds_text(age),
+                        "evidence_ids": [item["id"] for item in observation.evidence],
+                    }
+                )
     gap = abs((baseline.observed_at - cross_check.observed_at).total_seconds())
-    if gap > 60:
+    if (
+        result_session
+        in {
+            "opening_auction",
+            "continuous",
+            "midday_break",
+            "closing_auction",
+        }
+        and gap > 60
+    ):
         conflicts.append(
             {
                 "code": "intraday_source_pair_gap_exceeded",

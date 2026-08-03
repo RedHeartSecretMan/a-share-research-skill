@@ -337,6 +337,7 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
         self.assertEqual(result["status"], "limited")
         self.assertEqual(result["session_state"], "opening_auction")
         self.assertEqual(result["price_type"], "indicative_auction")
+        self.assertEqual(result["trading_status"], "auction")
 
     def test_closing_auction_uses_indicative_prices_from_both_sources(self) -> None:
         result = self.run_task(
@@ -357,6 +358,7 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
         self.assertEqual(result["status"], "limited")
         self.assertEqual(result["session_state"], "midday_break")
         self.assertEqual(result["price_type"], "latest_traded")
+        self.assertEqual(result["trading_status"], "traded")
         self.assertEqual(
             result["observation_times"]["tongdaxin_baseline"],
             "2026-08-03T11:29:50+08:00",
@@ -364,6 +366,10 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
         self.assertEqual(
             result["observation_times"]["tencent_cross_check"],
             "2026-08-03T11:29:55+08:00",
+        )
+        self.assertEqual(
+            result["observation_times"]["observation_boundary"],
+            "morning_last_compatible_pair",
         )
         self.assertEqual(
             result["snapshot"]["cumulative_volume"],
@@ -382,6 +388,36 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             {item["code"] for item in result["conflicts"]},
         )
         self.assertGreaterEqual(len(result["evidence"]), 1)
+
+    def test_missing_source_cache_state_blocks_closed(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "missing_cache"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["source_errors"][0]["code"], "unknown_cache_state")
+
+    def test_midday_pair_gap_still_requires_a_compatible_morning_pair(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "midday_pair_gap"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn(
+            "intraday_source_pair_gap_exceeded",
+            {item["code"] for item in result["conflicts"]},
+        )
+
+    def test_unknown_tencent_price_type_blocks_closed(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "unknown_price_type"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["source_errors"][0]["code"], "unknown_price_type")
 
     def test_pre_open_returns_a_structured_blocked_result(self) -> None:
         result = self.run_task(
@@ -425,6 +461,19 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["limitations"][0]["code"], "intraday_non_trading_date")
+
+    def test_weekday_holiday_without_current_day_source_evidence_blocks(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519", as_of="2026-08-04"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "weekday_holiday"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(len(result["source_errors"]), 2)
+        self.assertEqual(
+            {item["code"] for item in result["source_errors"]},
+            {"trading_date_mismatch", "incomplete_observation"},
+        )
 
     def test_source_session_mismatch_is_structured_blocked(self) -> None:
         result = self.run_task(

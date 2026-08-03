@@ -691,7 +691,16 @@ class TencentDailyLineOperation:
             live_price_type = "intraday_last"
             if is_live_row and len(quote_fields) > 31:
                 declared_price_type = quote_fields[31]
-                if declared_price_type in {"latest_traded", "indicative_auction"}:
+                if declared_price_type and declared_price_type not in {
+                    "latest_traded",
+                    "indicative_auction",
+                }:
+                    raise _operation_error(
+                        self.operation_id,
+                        "unknown_price_type",
+                        "The Tencent quote metadata has an unknown intraday price type.",
+                    )
+                if declared_price_type:
                     live_price_type = declared_price_type
             suspended = (
                 is_live_row

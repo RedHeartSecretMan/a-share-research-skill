@@ -193,9 +193,20 @@ class TongdaxinIntradayOperation:
         volume = Decimal(_text_decimal(quote.get("vol"), self.operation_id, "vol"))
         volume_shares = format(volume * Decimal(100), "f")
         amount_cny = _text_decimal(quote.get("amount"), self.operation_id, "amount")
-        cache_state = quote.get("cache_state", "source_timestamp")
-        if cache_state is not None:
-            cache_state = str(cache_state)
+        if "cache_state" not in quote:
+            raise _source_error(
+                self.operation_id,
+                "unknown_cache_state",
+                "The TongdaXin quote does not establish its cache state.",
+            )
+        cache_state_value = quote.get("cache_state")
+        cache_state = None if cache_state_value is None else str(cache_state_value)
+        trading_status = "auction" if price_type == "indicative_auction" else "traded"
+        observation_boundary = (
+            "morning_last_compatible"
+            if session_at(query.retrieved_at) == "midday_break"
+            else "current_session"
+        )
         quote_id = f"intraday-tdx-quote-{query.security}-{observed_at.isoformat()}"
         bar_id = f"intraday-tdx-date-{query.security}-{trading_date.isoformat()}"
         locator = f"mootdx://std/quote/{query.code}"
@@ -209,9 +220,10 @@ class TongdaxinIntradayOperation:
                 "kind": "intraday_quote",
                 "trading_date": trading_date.isoformat(),
                 "session_state": session_state,
-                "trading_status": "traded",
+                "trading_status": trading_status,
                 "price_type": price_type,
                 "cache_state": cache_state,
+                "observation_boundary": observation_boundary,
                 "date_basis_evidence_id": bar_id,
             },
             "observed_value": {
@@ -261,7 +273,7 @@ class TongdaxinIntradayOperation:
             observed_at=observed_at,
             retrieved_at=query.retrieved_at,
             session_state=session_state,
-            trading_status="traded",
+            trading_status=trading_status,
             price_type=price_type,
             latest_price=price_values["latest_price"],
             open_price=price_values["open_price"],
@@ -282,6 +294,7 @@ class TongdaxinIntradayOperation:
                 "cumulative_amount": ("amount",),
             },
             cache_state=cache_state,
+            observation_boundary=observation_boundary,
         )
 
 
@@ -315,6 +328,12 @@ class TencentIntradayOperation:
             session_state,
             self.operation_id,
         )
+        trading_status = "auction" if price_type == "indicative_auction" else "traded"
+        observation_boundary = (
+            "morning_last_compatible"
+            if session_at(query.retrieved_at) == "midday_break"
+            else "current_session"
+        )
         evidence_id = (
             f"intraday-tencent-{query.security}-{current.evidence_time.isoformat()}"
         )
@@ -328,8 +347,9 @@ class TencentIntradayOperation:
                 "kind": "intraday_core_price_cross_check",
                 "trading_date": query.as_of.isoformat(),
                 "session_state": session_state,
-                "trading_status": "traded",
+                "trading_status": trading_status,
                 "price_type": price_type,
+                "observation_boundary": observation_boundary,
             },
             "observed_value": {
                 "latest_price": current.close_value,
@@ -351,7 +371,7 @@ class TencentIntradayOperation:
             observed_at=current.evidence_time,
             retrieved_at=current.retrieved_at,
             session_state=session_state,
-            trading_status="traded",
+            trading_status=trading_status,
             price_type=price_type,
             latest_price=current.close_value,
             open_price=current.open_value,
@@ -367,4 +387,5 @@ class TencentIntradayOperation:
                 "low": ("day.low",),
             },
             cache_state=current.availability_status,
+            observation_boundary=observation_boundary,
         )
