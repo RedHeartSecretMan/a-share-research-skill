@@ -166,7 +166,12 @@ def build_intraday_snapshot_result(
             },
             "trading_status": {
                 "evidence_ids": core_evidence,
-                "source_fields": ["vol", "day.volume"],
+                "source_fields": [
+                    "trading_status",
+                    "no_trade_confirmed",
+                    "vol",
+                    "day.volume",
+                ],
             },
             "price_type": {
                 "evidence_ids": core_evidence,

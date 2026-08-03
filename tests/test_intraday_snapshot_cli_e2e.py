@@ -230,6 +230,17 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
         )
         self.assertNotIn("change_amount", result["snapshot"])
         self.assertNotIn("change_percent", result["snapshot"])
+        self.assertEqual(
+            result["field_lineage"]["trading_status"]["source_fields"],
+            ["trading_status", "no_trade_confirmed", "vol", "day.volume"],
+        )
+        self.assertEqual(
+            result["field_lineage"]["trading_status"]["evidence_ids"],
+            [
+                "intraday-tdx-quote-SSE:600519-2026-08-03T10:30:00+08:00",
+                "intraday-tencent-SSE:600519-2026-08-03T10:29:58+08:00",
+            ],
+        )
 
     def test_corporate_action_previous_close_is_unavailable_without_change_metrics(
         self,
