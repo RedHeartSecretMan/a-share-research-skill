@@ -182,6 +182,46 @@ class CloseSourceOperationTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "unknown_schema")
 
+    def test_live_declared_suspension_does_not_relabel_historical_rows(self) -> None:
+        quote = [""] * 35
+        quote[2] = "600519"
+        quote[3] = "1668.00"
+        quote[4] = "1668.00"
+        quote[6] = "0"
+        quote[30] = "20260803103000"
+        quote[33] = "suspended"
+        payload = {
+            "code": 0,
+            "data": {
+                "sh600519": {
+                    "day": [
+                        [
+                            "2026-07-31",
+                            "1660.00",
+                            "1668.00",
+                            "1672.00",
+                            "1655.00",
+                            "10000",
+                        ],
+                        ["2026-08-03", "1668.00", "1668.00", "1668.00", "1668.00", "0"],
+                    ],
+                    "qt": {"sh600519": quote},
+                }
+            },
+        }
+        transport = StaticTransport(
+            json.dumps(payload).encode(), content_type="text/html; charset=UTF-8"
+        )
+
+        observations = TencentDailyLineOperation().observe(
+            "SSE:600519", date(2026, 8, 3), transport
+        )
+
+        self.assertEqual(
+            [observation.trading_status for observation in observations],
+            ["traded", "suspended"],
+        )
+
 
 class CloseObservationCliTests(unittest.TestCase):
     def run_close(

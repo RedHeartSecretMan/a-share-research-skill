@@ -152,6 +152,9 @@ class FixtureTongdaxinClient:
             values["previous_close_basis"] = "actual_close"
             if scenario == "corporate_action_unavailable":
                 values["corporate_action"] = {"type": "cash_dividend"}
+        elif scenario == "metadata_secret":
+            values["previous_close_basis"] = "Bearer provider-secret-token"
+            values["corporate_action"] = {"details": "Bearer provider-secret-token"}
         elif scenario == "price_equal_previous_close":
             values.update(
                 {
@@ -166,6 +169,8 @@ class FixtureTongdaxinClient:
             values["price_type"] = "indicative_auction"
         if scenario == "unknown_cache":
             values["cache_state"] = "unknown"
+        if scenario == "cache_state_secret":
+            values["cache_state"] = "Bearer provider-secret-token"
         if scenario == "missing_cache":
             values.pop("cache_state")
         if scenario in {"midday_break", "midday_pair_gap"}:

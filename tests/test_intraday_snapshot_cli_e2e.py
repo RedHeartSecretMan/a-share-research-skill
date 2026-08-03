@@ -381,6 +381,10 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["subject"]["security"]["exchange"], "SSE")
+        self.assertEqual(result["as_of"], "2026-08-03")
+        self.assertIsNone(result["trading_date"])
+        self.assertEqual(result["brief"]["status"], "blocked")
         self.assertEqual(
             result["limitations"][0]["code"], "source_policy_not_satisfied"
         )
@@ -398,6 +402,10 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["subject"]["security"]["code"], "600519")
+        self.assertEqual(result["as_of"], "2026-08-03")
+        self.assertIsNone(result["trading_date"])
+        self.assertEqual(result["brief"]["status"], "blocked")
         limitation = result["limitations"][0]
         self.assertEqual(limitation["code"], "missing_optional_dependency")
         self.assertEqual(limitation["dependency"], "mootdx")
@@ -560,6 +568,18 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             environment={"A_SHARE_INTRADAY_SCENARIO": "source_stale"},
         )
         self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["as_of"], "2026-08-03")
+        self.assertEqual(result["trading_date"], "2026-08-03")
+        self.assertEqual(result["brief"]["status"], "blocked")
+        self.assertEqual(
+            set(result["observation_times"]),
+            {
+                "tongdaxin_baseline",
+                "tencent_cross_check",
+                "retrieved_at",
+                "pair_gap_seconds",
+            },
+        )
         self.assertIn(
             "intraday_observation_too_old",
             {item["code"] for item in result["conflicts"]},
@@ -571,6 +591,10 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             environment={"A_SHARE_INTRADAY_SCENARIO": "pair_gap"},
         )
         self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["as_of"], "2026-08-03")
+        self.assertEqual(result["trading_date"], "2026-08-03")
+        self.assertEqual(result["brief"]["status"], "blocked")
+        self.assertEqual(result["observation_times"]["pair_gap_seconds"], "120")
         self.assertIn(
             "intraday_source_pair_gap_exceeded",
             {item["code"] for item in result["conflicts"]},
@@ -633,6 +657,50 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(result["evidence"]), 1)
 
+    def test_untrusted_cache_state_is_not_echoed_in_public_result(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "cache_state_secret"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        serialized = json.dumps(result)
+        self.assertNotIn("Bearer provider-secret-token", serialized)
+        self.assertEqual(
+            {
+                evidence["observation"].get("cache_state")
+                for evidence in result["evidence"]
+                if evidence["source_operation"] == "tongdaxin_intraday_snapshot@1"
+            },
+            {"unknown", None},
+        )
+        self.assertEqual(
+            {
+                conflict.get("cache_state")
+                for conflict in result["conflicts"]
+                if conflict["code"] == "intraday_cache_state_unknown"
+            },
+            {"unknown"},
+        )
+
+    def test_untrusted_previous_close_metadata_is_not_echoed(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "metadata_secret"},
+        )
+
+        self.assertEqual(result["status"], "limited")
+        serialized = json.dumps(result)
+        self.assertNotIn("Bearer provider-secret-token", serialized)
+        self.assertEqual(
+            result["snapshot"]["previous_close"]["basis"],
+            "unknown",
+        )
+        self.assertEqual(
+            result["evidence"][0]["observation"]["corporate_action"],
+            {"present": "true"},
+        )
+
     def test_missing_source_cache_state_blocks_closed(self) -> None:
         result = self.run_task(
             intraday_request("SSE:600519"),
@@ -676,6 +744,12 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             environment={"A_SHARE_INTRADAY_SCENARIO": "pre_open"},
         )
         self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["as_of"], "2026-08-03")
+        self.assertIsNone(result["trading_date"])
+        self.assertEqual(result["brief"]["status"], "blocked")
+        self.assertEqual(result["field_lineage"], {})
+        self.assertEqual(result["observation_times"], {"retrieved_at": None})
+        self.assertEqual(result["source_operations"], [])
         self.assertEqual(
             result["limitations"][0]["code"], "intraday_session_not_applicable"
         )
@@ -728,6 +802,17 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             environment={"A_SHARE_INTRADAY_SCENARIO": "session_mismatch"},
         )
         self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            set(result["observation_times"]),
+            {
+                "tongdaxin_baseline",
+                "tencent_cross_check",
+                "retrieved_at",
+                "pair_gap_seconds",
+            },
+        )
+        self.assertEqual(result["observation_times"]["pair_gap_seconds"], "4198")
+        self.assertIn("observation_times.pair_gap_seconds", result["field_lineage"])
         self.assertIn(
             "intraday_session_mismatch",
             {item["code"] for item in result["conflicts"]},
@@ -739,6 +824,17 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             environment={"A_SHARE_INTRADAY_SCENARIO": "missing_time"},
         )
         self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            set(result["observation_times"]),
+            {
+                "tongdaxin_baseline",
+                "tencent_cross_check",
+                "retrieved_at",
+                "pair_gap_seconds",
+            },
+        )
+        self.assertIsNone(result["observation_times"]["tongdaxin_baseline"])
+        self.assertIsNone(result["observation_times"]["pair_gap_seconds"])
         self.assertEqual(result["source_errors"][0]["code"], "unknown_schema")
         self.assertGreaterEqual(len(result["evidence"]), 1)
 

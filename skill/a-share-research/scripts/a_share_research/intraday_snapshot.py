@@ -21,6 +21,10 @@ SSE_A_SHARE_PREFIXES = ("600", "601", "603", "605", "688", "689")
 SZSE_A_SHARE_PREFIXES = ("000", "001", "002", "003", "300", "301")
 TONGDAXIN_OPERATION = "tongdaxin_intraday_snapshot@1"
 TENCENT_OPERATION = "tencent_intraday_snapshot@1"
+_SAFE_CACHE_STATES = frozenset({"source_timestamp", "uncached", "fresh"})
+_SAFE_PREVIOUS_CLOSE_BASES = frozenset(
+    {"actual_close", "ex_right_reference", "source_reported_unadjudicated"}
+)
 
 
 class _IntradayDomainBlock(Exception):
@@ -29,6 +33,32 @@ class _IntradayDomainBlock(Exception):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _safe_cache_state(value: object) -> str:
+    """Keep provider cache metadata to a fixed non-sensitive vocabulary."""
+
+    return (
+        value if isinstance(value, str) and value in _SAFE_CACHE_STATES else "unknown"
+    )
+
+
+def _safe_previous_close_basis(value: object) -> str:
+    """Keep provider previous-close semantics to the registered vocabulary."""
+
+    return (
+        value
+        if isinstance(value, str) and value in _SAFE_PREVIOUS_CLOSE_BASES
+        else "unknown"
+    )
+
+
+def _safe_corporate_action(value: object) -> dict[str, str] | None:
+    """Expose only whether a corporate-action annotation was present."""
+
+    if value:
+        return {"present": "true"}
+    return None
 
 
 def build_intraday_snapshot_result(
@@ -90,7 +120,7 @@ def build_intraday_snapshot_result(
         )
     freshness_conflicts = _freshness_conflicts(baseline, cross_check, result_session)
     if freshness_conflicts:
-        return _conflict_result(request, observations, freshness_conflicts)
+        return _conflict_result(request, query, observations, freshness_conflicts)
     suspension_conflicts = _suspension_conflicts(baseline, cross_check)
     if suspension_conflicts:
         return _incompatible_result(request, query, observations, suspension_conflicts)
@@ -605,7 +635,7 @@ def _freshness_conflicts(
                     "code": "intraday_cache_state_unknown",
                     "message": "The source cache state is missing or unknown.",
                     "source_operation": observation.source_operation,
-                    "cache_state": observation.cache_state,
+                    "cache_state": _safe_cache_state(observation.cache_state),
                     "evidence_ids": [item["id"] for item in observation.evidence],
                 }
             )
@@ -938,25 +968,23 @@ def _adjudicate_previous_close(
 
 def _conflict_result(
     request: dict[str, Any],
+    query: IntradayQuery,
     observations: list[IntradayObservation],
     conflicts: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    diagnostics = {
-        "evidence": [
-            item for observation in observations for item in observation.evidence
-        ],
-        "source_operations": [item.source_operation for item in observations],
-        "observation_times": {
-            item.source_operation: item.observed_at.isoformat() for item in observations
-        },
-        "field_lineage": {
-            f"{item.source_operation}.{field}": {
-                "evidence_ids": [entry["id"] for entry in item.evidence],
-                "source_fields": list(source_fields),
-            }
-            for item in observations
-            for field, source_fields in item.field_sources.items()
-        },
+    diagnostics = _diagnostic_fields(query, observations)
+    baseline, cross_check = observations
+    diagnostics["observation_times"] = {
+        "tongdaxin_baseline": baseline.observed_at.isoformat(),
+        "tencent_cross_check": cross_check.observed_at.isoformat(),
+        "retrieved_at": max(
+            query.retrieved_at,
+            baseline.retrieved_at,
+            cross_check.retrieved_at,
+        ).isoformat(),
+        "pair_gap_seconds": _seconds_text(
+            abs((baseline.observed_at - cross_check.observed_at).total_seconds())
+        ),
     }
     return {
         "schema_version": request["schema_version"],
@@ -1169,12 +1197,17 @@ def _validate_observation(
         high_price=price_values["high_price"],
         low_price=price_values["low_price"],
         previous_close=previous_close,
+        previous_close_basis=_safe_previous_close_basis(
+            observation.previous_close_basis
+        ),
         cumulative_volume_shares=(
             format(Decimal(volume).quantize(Decimal(1)), "f")
             if volume is not None
             else None
         ),
         cumulative_amount_cny=amount,
+        cache_state=_safe_cache_state(observation.cache_state),
+        corporate_action=_safe_corporate_action(observation.corporate_action),
         evidence=tuple(evidence),
     )
 
@@ -1397,7 +1430,24 @@ def _validate_evidence_item(
             _canonical_nonnegative(
                 observed_value["cumulative_amount"], operation, "cumulative_amount"
             )
-    return _normalize_evidence_prices(item, operation)
+    normalized = _normalize_evidence_prices(item, operation)
+    normalized_observation = normalized.get("observation")
+    if isinstance(normalized_observation, dict):
+        normalized_observation = dict(normalized_observation)
+        if "cache_state" in normalized_observation:
+            normalized_observation["cache_state"] = _safe_cache_state(
+                normalized_observation.get("cache_state")
+            )
+        if "previous_close_basis" in normalized_observation:
+            normalized_observation["previous_close_basis"] = _safe_previous_close_basis(
+                normalized_observation.get("previous_close_basis")
+            )
+        if "corporate_action" in normalized_observation:
+            normalized_observation["corporate_action"] = _safe_corporate_action(
+                normalized_observation.get("corporate_action")
+            )
+        normalized["observation"] = normalized_observation
+    return normalized
 
 
 def _source_error_result(error: IntradaySourceError) -> dict[str, Any]:
@@ -1482,19 +1532,27 @@ def _diagnostic_fields(
         "evidence": evidence,
         "source_operations": [item.source_operation for item in observations],
         "observation_times": {
+            "tongdaxin_baseline": None,
+            "tencent_cross_check": None,
             "retrieved_at": max(
                 [query.retrieved_at, *(item.retrieved_at for item in observations)]
             ).isoformat(),
+            "pair_gap_seconds": None,
         },
         "field_lineage": {},
         "brief": {
             "status": "blocked",
+            "summary": "The source observations could not form an applicable intraday snapshot.",
             "evidence_ids": _evidence_ids(observations),
         },
     }
     for observation in observations:
         prefix = observation.source_operation
-        fields["observation_times"][prefix] = observation.observed_at.isoformat()
+        time_key = {
+            TONGDAXIN_OPERATION: "tongdaxin_baseline",
+            TENCENT_OPERATION: "tencent_cross_check",
+        }.get(prefix, prefix)
+        fields["observation_times"][time_key] = observation.observed_at.isoformat()
         for field, source_fields in observation.field_sources.items():
             fields["field_lineage"].setdefault(
                 f"{prefix}.{field}",
@@ -1503,6 +1561,39 @@ def _diagnostic_fields(
                     "source_fields": list(source_fields),
                 },
             )
+        fields["field_lineage"][f"observation_times.{time_key}"] = {
+            "evidence_ids": [item["id"] for item in observation.evidence],
+            "source_fields": ["observed_at"],
+        }
+    if observations:
+        fields["field_lineage"]["subject"] = {
+            "evidence_ids": _evidence_ids(observations),
+            "source_fields": ["security"],
+        }
+        fields["field_lineage"]["trading_date"] = {
+            "evidence_ids": _evidence_ids(observations),
+            "source_fields": ["trading_date"],
+        }
+        fields["field_lineage"]["observation_times.retrieved_at"] = {
+            "evidence_ids": [item["id"] for item in evidence],
+            "source_fields": ["retrieved_at"],
+        }
+    if len(observations) == 2:
+        baseline, cross_check = observations
+        fields["observation_times"]["pair_gap_seconds"] = _seconds_text(
+            abs((baseline.observed_at - cross_check.observed_at).total_seconds())
+        )
+        fields["field_lineage"]["observation_times.pair_gap_seconds"] = {
+            "evidence_ids": _evidence_ids(observations),
+            "source_fields": ["observed_at"],
+            "calculation": "absolute_time_difference_seconds@1",
+        }
+    elif observations:
+        fields["field_lineage"]["observation_times.pair_gap_seconds"] = {
+            "evidence_ids": _evidence_ids(observations),
+            "source_fields": [],
+            "reason": "unavailable_source_observation",
+        }
     if observations:
         fields["trading_date"] = observations[0].trading_date.isoformat()
     fields["as_of"] = query.as_of.isoformat()
@@ -1512,12 +1603,68 @@ def _diagnostic_fields(
 def _domain_blocked_result(
     request: dict[str, Any], code: str, message: str
 ) -> dict[str, Any]:
+    subject = _canonical_subject_from_request(request)
     return {
         "schema_version": request["schema_version"],
         "status": "blocked",
         "subjects": request["subjects"],
+        "subject": subject,
+        "as_of": request.get("as_of"),
+        "trading_date": None,
+        "observation_times": {"retrieved_at": None},
+        "source_operations": [],
+        "field_lineage": {},
+        "brief": {
+            "status": "blocked",
+            "summary": message,
+            "evidence_ids": [],
+        },
         "evidence": [],
         "conflicts": [],
         "source_errors": [],
         "limitations": [{"code": code, "message": message}],
+    }
+
+
+def build_intraday_blocked_result(
+    request: dict[str, Any],
+    *,
+    code: str,
+    message: str,
+    limitation_details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a stable blocked envelope before intraday source collection."""
+
+    result = _domain_blocked_result(request, code, message)
+    if limitation_details:
+        result["limitations"][0].update(limitation_details)
+    return result
+
+
+def _canonical_subject_from_request(request: dict[str, Any]) -> dict[str, Any] | None:
+    subjects = request.get("subjects")
+    if not isinstance(subjects, list) or len(subjects) != 1:
+        return None
+    subject = subjects[0]
+    security = subject.get("security") if isinstance(subject, dict) else None
+    if not isinstance(security, str):
+        return None
+    exchange, separator, code = security.partition(":")
+    if (
+        separator != ":"
+        or exchange not in {"SSE", "SZSE"}
+        or len(code) != 6
+        or not code.isascii()
+        or not code.isdigit()
+    ):
+        return None
+    prefixes = SSE_A_SHARE_PREFIXES if exchange == "SSE" else SZSE_A_SHARE_PREFIXES
+    if not code.startswith(prefixes):
+        return None
+    return {
+        "security": {
+            "exchange": exchange,
+            "code": code,
+            "type": "A_SHARE",
+        }
     }

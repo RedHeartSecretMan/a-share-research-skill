@@ -299,7 +299,9 @@ def _observation_times_are_safe(value: Mapping[str, object]) -> bool:
     return True
 
 
-def _observation_time_item_is_safe(key: object, item: object) -> bool:
+def _observation_time_item_is_safe(
+    key: object, item: object, *, max_pair_gap_seconds: Decimal = Decimal(60)
+) -> bool:
     if not isinstance(key, str) or key not in _OBSERVATION_TIME_FIELDS:
         return False
     if not isinstance(item, str):
@@ -308,7 +310,7 @@ def _observation_time_item_is_safe(key: object, item: object) -> bool:
         return (
             bool(_DECIMAL_VALUE.fullmatch(item))
             and Decimal(item) >= 0
-            and Decimal(item) <= 60
+            and Decimal(item) <= max_pair_gap_seconds
         )
     if key == "observation_boundary":
         return item == "morning_last_compatible_pair"
@@ -692,7 +694,9 @@ def _timing(result: Mapping[str, object]) -> dict[str, str]:
             isinstance(key, str)
             and key in _OBSERVATION_TIME_FIELDS
             and isinstance(value, str)
-            and _observation_time_item_is_safe(key, value)
+            and _observation_time_item_is_safe(
+                key, value, max_pair_gap_seconds=Decimal(86400)
+            )
         )
     }
 

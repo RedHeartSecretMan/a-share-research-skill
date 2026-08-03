@@ -27,7 +27,10 @@ from .etf_options import build_etf_options_result
 from .identity_resolution import resolve_security_identity
 from .identity_sources import CHINA_STANDARD_TIME, HttpTransport, UrlLibTransport
 from .intraday_contract import IntradaySourceOperation
-from .intraday_snapshot import build_intraday_snapshot_result
+from .intraday_snapshot import (
+    build_intraday_blocked_result,
+    build_intraday_snapshot_result,
+)
 from .market_series import build_market_trend_result
 from .market_signal_contract import (
     MarketSignalHttpTransport,
@@ -278,7 +281,7 @@ class ResearchRuntime:
                 )
         elif task_type == "intraday_market_signal":
             if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
+                result = build_intraday_blocked_result(
                     request,
                     code="source_policy_not_satisfied",
                     message=(
@@ -287,7 +290,7 @@ class ResearchRuntime:
                     ),
                 )
             elif not self._dependency_available("mootdx", "0.11.7"):
-                result = _blocked_result(
+                result = build_intraday_blocked_result(
                     request,
                     code="missing_optional_dependency",
                     message=(

@@ -123,6 +123,24 @@ class IntradayLiveProbeTests(unittest.TestCase):
             live_probe._result_from_process(0, json.dumps(valid_blocked), ""),
             valid_blocked,
         )
+        blocked_with_exceeded_gap = {
+            **valid_blocked,
+            "observation_times": {
+                "tongdaxin_baseline": "2026-08-03T10:30:00+08:00",
+                "tencent_cross_check": "2026-08-03T10:28:00+08:00",
+                "retrieved_at": "2026-08-03T10:30:05+08:00",
+                "pair_gap_seconds": "120",
+            },
+        }
+        blocked_result = live_probe._result_from_process(
+            0, json.dumps(blocked_with_exceeded_gap), ""
+        )
+        self.assertEqual(
+            live_probe.summarize_observation(
+                "SSE:600519", "2026-08-03", blocked_result
+            )["timing"]["pair_gap_seconds"],
+            "120",
+        )
 
         valid_limited = {
             "schema_version": "1.0",

@@ -730,11 +730,13 @@ class TencentDailyLineOperation:
                     live_price_type = declared_price_type
             if is_live_row and len(quote_fields) > 32 and quote_fields[32]:
                 observation_boundary = str(quote_fields[32])
-            suspended = declared_status in {"suspended", "not_traded", "no_trade"} or (
-                is_live_row
-                and quote_time.time() >= time(15, 0)
-                and quote_volume == 0
-                and quote_value == previous_close
+            suspended = is_live_row and (
+                declared_status in {"suspended", "not_traded", "no_trade"}
+                or (
+                    quote_time.time() >= time(15, 0)
+                    and quote_volume == 0
+                    and quote_value == previous_close
+                )
             )
             session_close = datetime.combine(
                 trading_date, time(15, 0), tzinfo=CHINA_STANDARD_TIME
