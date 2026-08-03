@@ -29,12 +29,15 @@
 
 ## 能力
 
+盘中行情快照只记录当前北京时间交易日的单一观测；完整交易日分时序列是已结束交易日内连续分钟的未复权实际成交记录；分时复盘摘要是从该序列复算的结果；分时复盘分析是 Agent 对已完成路径的解释；证据约束的情景预测只在用户明确请求未来判断且证据门槛满足时形成。它们不是同一个能力，也不共享未经核验的字段。
+
 | 能力 | 输入 | 输出与边界 |
 | --- | --- | --- |
 | 证券身份解析 | 名称、简称或代码线索 + 明确日期 | 交叉核验 SSE/SZSE 与巨潮观测；歧义、冲突和 BSE 输入失败关闭 |
 | 最近完成收盘价 | 规范的 `SSE:code` / `SZSE:code` + 明确日期 | 交叉核验交易所日线与腾讯观测，保留交易日、价格口径和冲突 |
 | 最近 N 日走势 | A 股线索 + 2–250 个交易日 + 未复权/前复权口径 | 双源 OHLCV、累计涨跌、最大回撤、年化波动、涨跌天数、量能变化与公司行动说明 |
 | 盘中行情快照 | 当前北京时间交易日 + 一只规范 `SSE:code` / `SZSE:code` A 股 | 通达信与腾讯实验操作交叉核验的单次盘中快照；保留会话、价格类型、来源时点、单位、冲突与 `limited` / `blocked` 限制 |
+| 完整交易日分时复盘 | 一只规范 SSE/SZSE A 股 + 一个明确已完成交易日 | 返回分钟记录、交易阶段、coverage、日级边界、分时复盘摘要、证据谱系和字段不可用原因；实验来源最高 `limited` |
 | ETF 行情 | 上交所 ETF 六位代码 + 明确日期 | 上交所 ETF 身份和快照、腾讯价格交叉、成交量手/股舍入差说明 |
 | ETF 期权 | 510050 / 510300 / 510500 / 588000 + 单一观测日 + ATM/期权链、到期日与行情时点模式 | 分开保留标准 `M` 与调整 `A` 系列、认购/认沽报价、并列 ATM、供应商报告 Greeks/IV、四态 coverage、来源时点与限制 |
 | 自动单票估值 | A 股线索 + 已确认证券类别数 + 当前北京时间日期 + 情景目标 PE | 保留三表完整数值行和季度序列，取得当前总股本快照与一致预期，计算总市值、PE TTM、PB MRQ、前向 PE、预测增长、PEG 与 PE 消化时间 |
@@ -86,15 +89,15 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 
 核心运行时仅需要 Python 3.12 或更高版本的标准库，不需要安装项目包。下文以 `<python>` 表示已经确认版本不低于 3.12 的解释器：Windows 通常使用 `py -3.12`，macOS 和 Linux 优先使用 `python3.12`；只有在 `python3 --version` 已确认满足要求时才使用 `python3`。完整调用约定见 [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md)。
 
-F10 上市公司资料检索和 `intraday_market_signal` 盘中快照是 v0.1.1/v0.2.0 能力域中按需启用、但需要额外依赖的能力。它们声明的是 capability-scoped optional dependency（按能力范围锁定的可选依赖），需要时在运行对应 Skill 的同一个 Python 环境中安装发布审计验证过的版本：
+F10 上市公司资料检索、`intraday_market_signal` 盘中快照和 `intraday_replay` 分时复盘是按需启用、但需要额外依赖的能力。它们声明的是 capability-scoped optional dependency（按能力范围锁定的可选依赖），需要时在运行对应 Skill 的同一个 Python 环境中安装发布审计验证过的版本：
 
 ```text
 <python> -m pip install "mootdx==0.11.7"
 ```
 
-标准库核心安装不包含 `mootdx`。缺少它时，只有请求 F10 或 `intraday_market_signal`（以及明确依赖它们的步骤）会显式返回 `missing_optional_dependency` / `blocked`，其他研究能力不受影响；运行时不得静默切换来源、伪造空数据或扩大阻断范围。维护者 live probe 使用临时 home，不写入项目全局配置。
+标准库核心安装不包含 `mootdx`。缺少它时，只有请求 F10、`intraday_market_signal` 或 `intraday_replay`（以及明确依赖它们的步骤）会显式返回 `missing_optional_dependency` / `blocked`，其他研究能力不受影响；运行时不得静默切换来源、伪造空数据或扩大阻断范围。维护者 live probe 使用临时 home，不写入项目全局配置。
 
-`mootdx` 的 F10 与 `intraday_market_signal` 接入各自受能力范围和版本 pin 约束；它提供的其他行情接口不会因“同属一个库”就自动成为默认来源或 fallback。每个来源操作都必须分别完成身份、时点、单位、失败语义和许可资格审查，确认能改善证据链后才会接入；盘中任务只接受当前北京时间交易日的一只规范 SSE/SZSE A 股，来源不足时失败关闭，不进行 silent source switch。
+`mootdx` 的 F10、`intraday_market_signal` 与 `intraday_replay` 接入各自受能力范围和版本 pin 约束；它提供的其他行情接口不会因“同属一个库”就自动成为默认来源或 fallback。每个来源操作都必须分别完成身份、时点、单位、失败语义和许可资格审查，确认能改善证据链后才会接入；盘中任务只接受当前北京时间交易日的一只规范 SSE/SZSE A 股，来源不足时失败关闭，不进行 silent source switch。
 
 ## CLI
 
@@ -107,6 +110,8 @@ F10 上市公司资料检索和 `intraday_market_signal` 盘中快照是 v0.1.1/
 `research-task.json` 是结构化任务，不是自然语言文本，包含版本、任务类型、标的、研究日期、窗口、参数和来源策略。未知任务、策略不允许的来源或缺失的可选 Adapter 依赖会返回明确的 `blocked` 结果。
 
 `run --request` 是唯一受支持的公共调用形式；调用者不需要了解来源端点、内部模块或历史子命令。`scripts/entrypoint.py` 是 Skill 唯一的公共运行入口，其他 Python 模块均为内部实现。CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON，`stderr` 只输出诊断；有效的 `limited` 或 `blocked` 研究结果仍以零退出码返回。
+
+只有调用者明确传入 `--output <file>` 时才保存规范化 ResearchResult；不传时不会创建结果文件、隐式缓存、数据库或全局 provider 配置。
 
 盘中快照使用 `task_type: "intraday_market_signal"`，`subjects` 必须恰好包含一个已经规范化的 `SSE:<code>` 或 `SZSE:<code>` A 股，`as_of` 必须是当前北京时间交易日，`window` 为 `null`，并显式设置 `source_policy.allow_experimental: true`。`limited` 表示快照仍可回答但实验来源资格或其他限制必须披露；`blocked` 表示身份、会话、时点或核心来源证据不足。Agent 只能在非阻断结果上依据返回字段形成标注清楚的分析，不能把结果当作交易级行情或投资行动建议。
 
@@ -279,11 +284,15 @@ mypy skill/a-share-research/scripts
 
 该 probe 明确覆盖一只 SSE 和一只 SZSE A 股，只输出带日期的来源身份、观测时间、会话、价格一致性、单位、状态和脱敏失败；它不属于普通 CI，不写夹具、不持久化 provider response、不读取或输出凭据，也不创建项目全局配置。
 
+完整交易日分时的显式 probe 是 `tests/live_probe_intraday_replay.py`，调用时还要传入 `--replay-date YYYY-MM-DD`。它同样覆盖一只 SSE 和一只 SZSE A 股，使用临时 home，只输出 allow-listed 脱敏状态和失败代码；不更新 fixtures，不保存来源响应，也不把一次成功观测描述为生产准入。
+
 各纵向切片可通过版本化请求做显式的真实联网 smoke：
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-market-snapshot.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-sse.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-szse.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json

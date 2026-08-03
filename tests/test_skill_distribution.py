@@ -312,6 +312,104 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("replay analysis", case)
         self.assertIn("prediction", case)
 
+    def test_intraday_replay_delivery_cases_cover_sse_and_szse(self) -> None:
+        examples_readme = Path(REPOSITORY_ROOT, "examples", "README.md").read_text(
+            encoding="utf-8"
+        )
+
+        for security, case_name, request_name in (
+            (
+                "SSE:600519",
+                "intraday-replay-sse.md",
+                "intraday-replay-sse.json",
+            ),
+            (
+                "SZSE:000001",
+                "intraday-replay-szse.md",
+                "intraday-replay-szse.json",
+            ),
+        ):
+            with self.subTest(security=security):
+                self.assertIn(f"({case_name})", examples_readme)
+                self.assertIn(request_name, examples_readme)
+
+                case = Path(REPOSITORY_ROOT, "examples", case_name).read_text(
+                    encoding="utf-8"
+                )
+                for required_text in (
+                    security,
+                    '"task_type": "intraday_replay"',
+                    "coverage",
+                    "records",
+                    "normalized",
+                    "summary",
+                    "evidence lineage",
+                    "limitations",
+                    "unavailable_fields",
+                    "fixture-only",
+                    "missing_optional_dependency",
+                    "security_identity",
+                    "next trading day",
+                    "next 5 trading days",
+                    "primary",
+                    "upside",
+                    "downside",
+                    "blocked",
+                ):
+                    self.assertIn(required_text, case)
+
+                request = json.loads(
+                    Path(
+                        REPOSITORY_ROOT, "examples", "requests", request_name
+                    ).read_text(encoding="utf-8")
+                )
+                self.assertEqual(request["schema_version"], "1.0")
+                self.assertEqual(request["task_type"], "intraday_replay")
+                self.assertEqual(request["subjects"], [{"security": security}])
+                self.assertEqual(request["window"]["observed_from"], "2026-08-03")
+                self.assertEqual(request["window"]["observed_to"], "2026-08-03")
+                self.assertTrue(request["source_policy"]["allow_experimental"])
+                self.assertFalse(request["source_policy"]["allow_credentials"])
+                self.assertFalse(request["source_policy"]["allow_fallback"])
+
+    def test_readmes_and_installed_skill_explain_replay_delivery_boundaries(
+        self,
+    ) -> None:
+        chinese = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
+        english = Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8")
+        entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+        contract = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
+            encoding="utf-8"
+        )
+
+        for document in (chinese, english, entry, contract):
+            with self.subTest(document=document[:32]):
+                self.assertIn("intraday_replay", document)
+                self.assertIn("mootdx==0.11.7", document)
+                self.assertIn("limited", document)
+                self.assertIn("blocked", document)
+                self.assertIn("--output", document)
+
+        for probe_text in (
+            "tests/live_probe_intraday_replay.py",
+            "--replay-date YYYY-MM-DD",
+            "one SSE and one SZSE",
+            "never update fixtures",
+            "production",
+        ):
+            with self.subTest(probe_text=probe_text):
+                self.assertIn(probe_text, english)
+                self.assertIn(probe_text, contract)
+
+        for term in (
+            "A complete intraday trading-day series",
+            "intraday replay summary",
+            "intraday replay analysis",
+            "evidence-constrained scenario prediction",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, entry)
+
     def test_installation_docs_scope_mootdx_to_intraday_capability(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
