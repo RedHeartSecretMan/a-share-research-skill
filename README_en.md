@@ -41,11 +41,8 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 | Research-content retrieval | Theme/industry or one A-share + publication window + material types | Stock/industry reports, consensus, F10 issuer-profile material, news, CNINFO/SSE/SZSE announcements, market flashes, and investor Q&A with role, time, document identity, and locators preserved |
 | Capital, positioning, and company events | One A-share or a market/board scope + observation window + data types | Northbound disclosure gaps, stock/board fund flow, stock and market dragon-tiger records, 90-day lockups, margin data, block trades, shareholder counts, and distributions with period, unit, direction, and market scope preserved |
 | Market themes and trading signals | One A-share clue or market-wide scope + explicit observation date + signal types | Strong-stock themes, security board membership, industry rotation, limit pools, focus monitoring, severe abnormal movements, canonical-identity intersections, and market heat with rules, attribution provenance, four-state coverage, conflicts, and limitations preserved |
-| Four research workflows | One security, several securities, theme keywords, or one new security + explicit research windows | Orchestrates existing research tasks only and preserves every step's status, evidence, conflicts, source errors, and limitations; identity failure gates dependent steps without disguising other unavailable steps as complete |
-| Evidence-bundle validation | Caller-provided `manifest.json` and optional materials | Validates identity, time, units, basis, hashes, locators, and evidence relationships |
-| Provided-evidence valuation | Validated bundle + explicit date | Calculates market capitalization, PE TTM, and PB MRQ with formulas, operands, and report lineage |
 
-Experimental operations can provide observations and expose conflicts, but they have not completed operation-level qualification and cannot establish a `supported` factual claim alone. Contract-complete caller evidence is not described as source-verified merely because its fields and hashes validate.
+Experimental operations can provide observations and expose conflicts, but they have not completed operation-level qualification and cannot establish a `supported` factual claim alone.
 
 Here, **F10 material** means the issuer information conventionally opened through an “F10” entry in Chinese securities-market software. v0.1.1 can retrieve latest notices, company overview, financial analysis, shareholder research, capital structure, capital operations, industry commentary, industry analysis, and company events. These are provider-compiled text materials, not an exchange-standardized dataset, statutory company disclosure, or independently verified company fact.
 
@@ -56,7 +53,6 @@ flowchart LR
     A["Natural-language research question"] --> B["SKILL.md<br/>Resolve intent and CST date"]
     B --> C["Deterministic Python CLI"]
     D["Experimental observations"] --> C
-    E["Caller evidence bundle"] --> C
     C --> F["Versioned JSON<br/>evidence, calculations, conflicts, limits"]
     F --> G["Agent presents research material"]
 ```
@@ -101,7 +97,7 @@ The standard-library core installation does not include `mootdx`. When it is abs
 
 ## CLI
 
-New capabilities use the stable research-task Interface:
+All capabilities use the stable research-task Interface:
 
 ```text
 <python> <skill-root>/scripts/entrypoint.py run --request <research-task.json>
@@ -109,23 +105,20 @@ New capabilities use the stable research-task Interface:
 
 `research-task.json` is a structured task, not natural-language text. It carries the version, task type, subjects, research date, window, parameters, and source policy. Unknown tasks, policy-disallowed sources, and missing optional Adapter dependencies return explicit `blocked` results.
 
-The following four commands remain compatibility entry points during migration.
+`run --request` is the only supported public invocation. Callers do not need to know source endpoints, internal modules, or historical subcommands. `scripts/entrypoint.py` is the Skill's only public runtime entry point; every other Python module is an implementation detail. The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
 
-Experimental-source identity and close research:
+### Preset research plans
 
-```text
-<python> <skill-root>/scripts/entrypoint.py resolve --query <security-clue> --as-of <YYYY-MM-DD>
-<python> <skill-root>/scripts/entrypoint.py close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>
-```
+`research_workflow` provides four fixed, versioned request plans. They are convenient orchestrations for common research questions, not separate data capabilities, and callers cannot supply custom steps or dependency graphs:
 
-Provided-evidence valuation research:
+| Plan ID | Research question | Composition |
+| --- | --- | --- |
+| `single_security_valuation` | Value one security | Runs the existing `security_valuation` task |
+| `valuation_comparison` | Compare several securities on one basis | Runs the existing `valuation_compare` task and preserves every row |
+| `theme_report_research` | Find reports about a theme | Runs the existing `research_content` task |
+| `new_security_research` | Perform a first systematic review of a security | Identity → institutional coverage → valuation → board membership → fund flow → dragon-tiger → lockup → margin trading |
 
-```text
-<python> <skill-root>/scripts/entrypoint.py validate-bundle --bundle <bundle-directory>
-<python> <skill-root>/scripts/entrypoint.py valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD>
-```
-
-`scripts/entrypoint.py` is the Skill's only public runtime entry point; every other Python module is an implementation detail. The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
+Every plan inherits the request's research date and source policy and preserves each leaf task's status, evidence, conflicts, source errors, and limitations. The new-security plan gates dependent work on canonical identity; other blocked steps do not stop independent work, but the overall result is never described as complete or supported when required evidence is missing.
 
 ## Common uses
 
@@ -159,27 +152,19 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 “Provider-reported” means Delta, Gamma, Theta, Vega, and implied volatility come directly from the source; they are neither local BSM calculations by this project nor exchange-calculated values. Provider-native units for Gamma, Theta, and Vega are not independently verified; IV is a decimal fraction. The current source exposes no authoritative contract total, complete contract-unit definition, or adjustment terms and has no qualified independent fallback, so coverage and limitations must remain visible.
 
-**Check research materials**
-
-> Use `$a-share-research` to check whether the research evidence in `/path/to/evidence-bundle` is complete and internally consistent, then prioritize what I still need to provide.
-
-**Calculate common valuation metrics**
-
-> Use `$a-share-research` with `/path/to/evidence-bundle` to calculate market capitalization, PE TTM, and PB MRQ. Include the calculation date, formulas, key inputs, and evidence limitations; if evidence is missing, tell me exactly what is needed.
-
-**Run the single-security valuation workflow**
+**Use the single-security valuation preset**
 
 > Use `$a-share-research` to research Industrial Fulian's valuation as of today. First establish whether the issuer has only one priced ordinary-share class. Use the latest completed unadjusted close and calculate market cap, PE TTM, PB MRQ, first-forecast-year PE, forecast EPS growth, PEG, and the theoretical time to reach 30x PE. Separate mirrored statement observations, consensus opinions, and scenario assumptions, then use an explicit benchmark to explain valuation pressure, key assumptions, and reassessment conditions.
 
-**Run the same-basis valuation-comparison workflow**
+**Use the same-basis valuation-comparison preset**
 
 > Use `$a-share-research` to compare Industrial Fulian, Kweichow Moutai, CATL, Midea Group, and Wuliangye using the same date, unadjusted-close basis, and 30x target PE. Establish each issuer's class scope first and preserve every missing item and limitation instead of dropping a security.
 
-**Run the theme-report workflow**
+**Use the theme-report preset**
 
 > Use `$a-share-research` to find reports published in the last 90 days about humanoid robots, lead screws, and reducers. List publication time, title, author, source, and PDF locator; merge duplicate documents and keep institutional opinions separate from disclosed facts.
 
-**Run the new-security research workflow**
+**Use the new-security research preset**
 
 > Use `$a-share-research` to run a complete new-security review for Industrial Fulian: establish identity, then review institutional reports and consensus, current valuation, provider board membership, latest five-session fund flow, dragon-tiger records, scheduled lockups over the next 90 days, and margin trading. Preserve evidence, source time, status, and limitations for every step. If one step is unavailable, continue steps that do not depend on it without describing the workflow as complete or supported.
 
@@ -219,11 +204,11 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 > Use `$a-share-research` in separate tasks to review the latest completed session's limit-up, break, limit-down, and consecutive-limit ecology, the current provider focus-monitoring pool, severe abnormal movements with rule codes, and current market heat. Form a monitoring intersection only from matching canonical security identity and an overlapping monitoring window; never translate source failure or incomplete coverage into “none.”
 
-The four workflows are single-security valuation, same-basis valuation comparison, theme-report research, and new-security research. They add no data shortcut: each runs a versioned plan of existing ResearchTasks, and the overall `limited` / `blocked` state must be presented together with step-level gaps. Industrial Fulian's fixed new-security path is “identity → institutional coverage → valuation → board membership → fund flow → dragon-tiger → lockup → margin trading”; the future lockup step uses its own explicit window capped at 90 days.
+These presets add no data shortcut: each runs a versioned plan of existing ResearchTasks, and the overall `limited` / `blocked` state must be presented together with step-level gaps. The future lockup step in the new-security plan uses its own explicit window capped at 90 days.
 
 ## Case demos
 
-The cases start from real user research questions. BlueFocus cross-explains a 10-session trend with dragon-tiger, lockup, board, announcement, and news evidence; Industrial Fulian runs the eight-step new-security workflow across identity, institutional material, valuation, boards, fund flow, dragon-tiger, lockups, and margin trading:
+The cases start from real user research questions. BlueFocus cross-explains a 10-session trend with dragon-tiger, lockup, board, announcement, and news evidence; Industrial Fulian uses the new-security preset across identity, institutional material, valuation, boards, fund flow, dragon-tiger, lockups, and margin trading:
 
 - [BlueFocus (SZSE:300058)](examples/bluefocus.md)
 - [Industrial Fulian (SSE:601138)](examples/industrial-fulian.md)

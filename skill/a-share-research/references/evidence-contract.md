@@ -47,7 +47,7 @@ Metric status:
 - `no_valuation_meaning`: inputs are complete, but the applicable denominator is less than or equal to zero;
 - `not_calculable`: a required input is missing, rejected, or incompatible.
 
-Metric status alone does not determine the brief status. A provided-evidence brief remains `limited` without independent source verification even when all three metrics are calculable. When source verification is complete, all three valid metric results, including `no_valuation_meaning`, can support an overall `supported` brief. If at least one metric is valid and another is `not_calculable`, the brief is `limited`. If identity or the common valuation price is unresolved, or all metrics are `not_calculable`, the brief is `blocked`.
+Metric status alone does not determine the brief status. Calculability does not establish source verification. When source verification is complete, all valid metric results, including `no_valuation_meaning`, can support an overall `supported` brief. If the core question remains answerable but a requested metric is `not_calculable`, the brief is `limited`. If identity or the common valuation price is unresolved, or no requested metric is calculable, the brief is `blocked`.
 
 ## Numeric integrity
 

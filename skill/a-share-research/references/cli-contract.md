@@ -14,15 +14,15 @@ In the commands below, `<python>` stands for that selected command, including bo
 
 Resolve `<skill-root>` from the loaded `SKILL.md` location. The Skill's only public runtime entry point is `<skill-root>/scripts/entrypoint.py`; modules under `<skill-root>/scripts/a_share_research/` are implementation details and must not be invoked directly. Do not assume a particular Agent, home directory, installation directory, working directory, or shell. Quote the resolved path when it contains spaces.
 
-Conceptually invoke:
+Invoke the only supported public command:
 
 ```text
-<python> <skill-root>/scripts/entrypoint.py <subcommand> <arguments>
+<python> <skill-root>/scripts/entrypoint.py run --request <research-task.json> [--output <file>]
 ```
 
 Use `pathlib.Path` or the host platform's normal path API when an Agent must construct the path programmatically. Do not manually replace `/` with `\` in user-supplied paths.
 
-## Research Interface
+## Public Research Interface
 
 - `run --request <research-task.json> [--output <file>]`: execute the stable `research(request) -> research result` Interface. The request object contains `schema_version`, `task_type`, `subjects`, explicit `as_of`, `window`, `parameters`, and `source_policy`. Unknown tasks and unavailable optional Adapter dependencies return explicit `blocked` JSON results.
 
@@ -47,15 +47,6 @@ A workflow result exposes `workflow` metadata with requested and executed versio
 
 Never pass natural-language text as the request document. The Agent translates the user's question into a versioned research task and never places credentials in that document.
 
-## Compatibility subcommands
-
-- `resolve --query <security-clue> --as-of <YYYY-MM-DD> [--output <file>]`: cross-check an identity clue with experimental SSE/SZSE and CNINFO operations. The exchange-specific official observation establishes the exchange; an exchange-neutral CNINFO record may corroborate code and name but never supplies a guessed venue. A name or bare code remains a clue until the JSON identifies one canonical security.
-- `close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD> [--output <file>]`: cross-check the latest completed daily unadjusted close from experimental exchange and Tencent operations.
-- `validate-bundle --bundle <bundle-directory>`: validate `manifest.json`, referenced material hashes, evidence applicability, and relationships without calculating a valuation.
-- `valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD> [--output <file>]`: rerun full bundle validation and calculate total market capitalization, PE TTM, and PB MRQ from admissible provided evidence.
-
-These four commands remain compatibility entry points while capabilities migrate behind `run`. Never add an undocumented option or infer an exchange for `close`.
-
 ## Process and JSON semantics
 
 `stdout` contains exactly one compact JSON document with `schema_version`. Parse fields according to that version; do not infer a schema from prose examples.
@@ -74,6 +65,6 @@ A nonzero exit means invocation, protocol, I/O, or internal processing prevented
 
 ## Credentials and network behavior
 
-Most registered source operations are credential-free. Semantic iWencai content search is enabled only when `source_policy.allow_credentials` is true and reads `IWENCAI_API_KEY`; `IWENCAI_BASE_URL` may select an explicitly configured compatible endpoint. The values never belong in a request document, command argument, log, result, example, or fixture. F10 retrieval uses the optional `mootdx` dependency; absence or request failure is reported explicitly rather than replaced by another source. Other `mootdx` interfaces are not implicit sources or fallbacks: every operation must independently qualify identity, timing, units, failure semantics, and licensing before it can enter the evidence chain. ETF-option retrieval is credential-free but experimental, rate-limited, and has no qualified independent fallback. `resolve`, `close`, and other network research tasks use capability-scoped source operations. `validate-bundle` and `valuation` operate on local provided evidence.
+Most registered source operations are credential-free. Semantic iWencai content search is enabled only when `source_policy.allow_credentials` is true and reads `IWENCAI_API_KEY`; `IWENCAI_BASE_URL` may select an explicitly configured compatible endpoint. The values never belong in a request document, command argument, log, result, example, or fixture. F10 retrieval uses the optional `mootdx` dependency; absence or request failure is reported explicitly rather than replaced by another source. Other `mootdx` interfaces are not implicit sources or fallbacks: every operation must independently qualify identity, timing, units, failure semantics, and licensing before it can enter the evidence chain. ETF-option retrieval is credential-free but experimental, rate-limited, and has no qualified independent fallback. Every network research task uses capability-scoped source operations selected behind the `ResearchTask` Interface.
 
 Default tests are offline and replace only the external network boundary with fixed responses. `tests/live_probe_close.py` belongs to the development repository, not the installed Skill; a maintainer must invoke it explicitly for source diagnostics. A live probe must never update fixtures or become an ordinary CI dependency.

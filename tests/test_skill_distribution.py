@@ -84,7 +84,7 @@ class SkillDistributionTests(unittest.TestCase):
                 self.assertIn("**条件触发位**", demo)
                 self.assertIn("不是买入点、卖出点", demo)
 
-    def test_entry_routes_every_public_cli_workflow_with_the_exact_signature(
+    def test_entry_documents_only_the_public_research_task_invocation(
         self,
     ) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
@@ -96,29 +96,38 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertNotIn("scripts/a_share_research.py", entry)
         self.assertIn("references/cli-contract.md", entry)
 
-        expected_commands = (
-            "run --request <research-task.json>",
-            "resolve --query <security-clue> --as-of <YYYY-MM-DD>",
-            "close --security <SSE:code|SZSE:code> --as-of <YYYY-MM-DD>",
-            "validate-bundle --bundle <bundle-directory>",
-            "valuation --bundle <bundle-directory> --as-of <YYYY-MM-DD>",
+        self.assertIn("run --request <research-task.json>", cli_contract)
+        for historical_command in (
+            "resolve --query",
+            "close --security",
+            "validate-bundle --bundle",
+            "valuation --bundle",
+        ):
+            with self.subTest(command=historical_command):
+                self.assertNotIn(historical_command, entry)
+                self.assertNotIn(historical_command, cli_contract)
+
+    def test_readmes_present_presets_outside_the_capability_table(self) -> None:
+        chinese = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
+        english = Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8")
+
+        self.assertIn("### 预置研究方案", chinese)
+        self.assertIn("### Preset research plans", english)
+        self.assertNotIn("| 四套研究流程 |", chinese)
+        self.assertNotIn("| Four research workflows |", english)
+        self.assertIn("`run --request` 是唯一受支持的公共调用形式", chinese)
+        self.assertIn(
+            "`run --request` is the only supported public invocation", english
         )
-        for command in expected_commands:
-            with self.subTest(command=command):
-                self.assertIn(command, cli_contract)
 
     def test_entry_prevents_the_agent_from_inventing_absent_result_fields(
         self,
     ) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
 
+        self.assertIn("Confirm the returned `task_type` and scope", entry)
         self.assertIn(
-            "After `valuation`, confirm its `research.question` matches", entry
-        )
-        self.assertIn(
-            "Do not expect `research.question` from `resolve`, `close`, or "
-            "`validate-bundle`",
-            entry,
+            "no absent result field or wider capability has been inferred", entry
         )
         self.assertIn(
             "Never invent a metric status or field that is absent from the CLI JSON",
@@ -174,23 +183,21 @@ class SkillDistributionTests(unittest.TestCase):
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
             shutil.copytree(SKILL_ROOT, installed)
-            bundle = temporary_root / "caller-bundle"
-            bundle.mkdir()
-            Path(bundle, "manifest.json").write_text(
+            request = temporary_root / "research-task.json"
+            request.write_text(
                 json.dumps(
                     {
                         "schema_version": "1.0",
-                        "subject": {
-                            "security": {
-                                "exchange": "SSE",
-                                "code": "600519",
-                                "type": "A_SHARE",
-                            },
-                            "issuer": {"name": "贵州茅台酒股份有限公司"},
-                        },
+                        "task_type": "security_identity",
+                        "subjects": [{"clue": "600519"}],
                         "as_of": "2026-08-01",
-                        "question": "current_valuation",
-                        "evidence": [],
+                        "window": None,
+                        "parameters": {},
+                        "source_policy": {
+                            "allow_experimental": False,
+                            "allow_credentials": False,
+                            "allow_fallback": False,
+                        },
                     },
                     ensure_ascii=False,
                 ),
@@ -202,9 +209,9 @@ class SkillDistributionTests(unittest.TestCase):
                     sys.executable,
                     "-I",
                     str(installed / "scripts" / "entrypoint.py"),
-                    "validate-bundle",
-                    "--bundle",
-                    str(bundle),
+                    "run",
+                    "--request",
+                    str(request),
                 ],
                 cwd=temporary_root,
                 check=False,
@@ -216,8 +223,11 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
         result = json.loads(completed.stdout)
         self.assertEqual(result["schema_version"], "1.0")
-        self.assertEqual(result["validation"]["structure"], "valid")
-        self.assertEqual(result["validation"]["source_verification"], "unverified")
+        self.assertEqual(result["task_type"], "security_identity")
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["limitations"][0]["code"], "source_policy_not_satisfied"
+        )
 
 
 if __name__ == "__main__":
