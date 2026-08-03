@@ -24,6 +24,13 @@ CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 RETRIEVED_AT = datetime(2026, 8, 4, 16, 0, tzinfo=CHINA_STANDARD_TIME)
 
 
+def _research_now() -> datetime:
+    value = os.environ.get("A_SHARE_INTRADAY_REPLAY_NOW")
+    if not value:
+        return RETRIEVED_AT
+    return datetime.fromisoformat(value)
+
+
 def _completed_dates(replay_date: date) -> tuple[date, ...]:
     dates: list[date] = []
     candidate = replay_date
@@ -32,6 +39,78 @@ def _completed_dates(replay_date: date) -> tuple[date, ...]:
             dates.append(candidate)
         candidate -= timedelta(days=1)
     return tuple(dates)
+
+
+def _complete_rows(trading_date: date) -> tuple[IntradayReplaySourceRow, ...]:
+    rows: list[IntradayReplaySourceRow] = [
+        IntradayReplaySourceRow(
+            source_timestamp=f"{trading_date.isoformat()}T09:25:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="opening_auction",
+            trade_state="traded",
+            open_price="10.00",
+            high_price="10.00",
+            low_price="10.00",
+            close_price="10.00",
+            volume="100",
+            amount="1000.00",
+            evidence_locator="fixture:auction:opening",
+        )
+    ]
+    for phase, start_time, end_time in (
+        ("continuous_morning", (9, 30), (11, 30)),
+        ("continuous_afternoon", (13, 0), (14, 57)),
+    ):
+        cursor = datetime(
+            trading_date.year,
+            trading_date.month,
+            trading_date.day,
+            start_time[0],
+            start_time[1],
+            tzinfo=CHINA_STANDARD_TIME,
+        )
+        end = datetime(
+            trading_date.year,
+            trading_date.month,
+            trading_date.day,
+            end_time[0],
+            end_time[1],
+            tzinfo=CHINA_STANDARD_TIME,
+        )
+        while cursor < end:
+            label = cursor.strftime("%H%M")
+            rows.append(
+                IntradayReplaySourceRow(
+                    source_timestamp=cursor.isoformat(),
+                    timestamp_semantics="interval_start",
+                    trading_phase=phase,
+                    trade_state="traded",
+                    open_price="10.00",
+                    high_price="10.01",
+                    low_price="9.99",
+                    close_price="10.00",
+                    volume="100",
+                    amount="1000.00",
+                    evidence_locator=f"fixture:row:{label}",
+                )
+            )
+            cursor += timedelta(minutes=1)
+    rows.append(
+        IntradayReplaySourceRow(
+            source_timestamp=f"{trading_date.isoformat()}T15:00:00+08:00",
+            timestamp_semantics="interval_end",
+            trading_phase="closing_auction",
+            trade_state="traded",
+            open_price="10.00",
+            high_price="10.00",
+            low_price="10.00",
+            close_price="10.00",
+            volume="100",
+            amount="1000.00",
+            evidence_locator="fixture:auction:closing",
+        )
+    )
+    return tuple(rows)
 
 
 class FixtureIntradayReplayOperation:
@@ -118,6 +197,52 @@ class FixtureIntradayReplayOperation:
                 ),
                 rows[1],
             )
+        elif scenario == "complete":
+            rows = _complete_rows(replay_date)
+        elif scenario == "subinterval_partial":
+            complete_rows = _complete_rows(replay_date)
+            rows = (
+                *complete_rows[:-1],
+                replace(
+                    complete_rows[-1],
+                    source_timestamp=f"{replay_date.isoformat()}T14:58:00+08:00",
+                    timestamp_semantics="interval_end",
+                    auction_interval_start=(
+                        f"{replay_date.isoformat()}T14:57:00+08:00"
+                    ),
+                    auction_interval_end=(f"{replay_date.isoformat()}T14:58:00+08:00"),
+                    evidence_locator="fixture:auction:closing:subinterval",
+                ),
+            )
+        elif scenario == "partial_no_trade":
+            rows = (
+                replace(
+                    rows[1],
+                    trading_phase="continuous_morning",
+                    evidence_locator="fixture:partial:0930",
+                ),
+                replace(
+                    rows[1],
+                    source_timestamp="2026-08-03T09:31:00+08:00",
+                    trading_phase="continuous_morning",
+                    trade_state="no_trade",
+                    open_price=None,
+                    high_price=None,
+                    low_price=None,
+                    close_price=None,
+                    volume="0",
+                    amount="0.00",
+                    evidence_locator="fixture:partial:no-trade-0931",
+                ),
+                replace(
+                    rows[0],
+                    source_timestamp="2026-08-03T13:00:00+08:00",
+                    trading_phase="continuous_afternoon",
+                    evidence_locator="fixture:partial:1300",
+                ),
+            )
+        elif scenario == "zero_volume":
+            rows = (replace(rows[0], volume="0", amount="0.00"), rows[1])
         completed_trading_dates = _completed_dates(replay_date)
         if scenario == "missing_calendar":
             completed_trading_dates = ()
@@ -136,6 +261,21 @@ class FixtureIntradayReplayOperation:
             volume_lot_size=volume_lot_size,
             completed_trading_dates=completed_trading_dates,
             rows=rows,
+            session_contract=(
+                None if scenario == "unknown_session" else "cn_a_share_regular_v1"
+            ),
+            coverage_bound=(
+                "indeterminate" if scenario == "indeterminate" else "bounded"
+            ),
+            closing_auction_semantics=(
+                None
+                if scenario == "unknown_auction"
+                else (
+                    "subinterval_transactions"
+                    if scenario == "subinterval_partial"
+                    else "final_match_14:57_15:00"
+                )
+            ),
         )
 
 
@@ -143,7 +283,7 @@ if __name__ == "__main__":
     raise SystemExit(
         main(
             sys.argv[1:],
-            research_now=RETRIEVED_AT,
+            research_now=_research_now(),
             intraday_replay_operations=(FixtureIntradayReplayOperation(),),
         )
     )

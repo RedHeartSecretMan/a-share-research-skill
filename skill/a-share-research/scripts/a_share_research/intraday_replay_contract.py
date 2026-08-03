@@ -37,6 +37,8 @@ class IntradayReplaySourceRow:
     evidence_locator: str | None = None
     trading_date: date | None = None
     price_adjustment: str | None = None
+    auction_interval_start: str | datetime | None = None
+    auction_interval_end: str | datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,9 @@ class IntradayReplaySourceBatch:
     timestamp_timezone: str = "Asia/Shanghai"
     volume_lot_size: str | None = None
     amount_precision: str = "0.01"
+    session_contract: str | None = None
+    coverage_bound: str | None = None
+    closing_auction_semantics: str | None = None
 
 
 class IntradayReplaySourceError(Exception):

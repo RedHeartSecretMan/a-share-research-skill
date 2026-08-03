@@ -61,6 +61,212 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
         return json.loads(completed.stdout)
 
+    def test_complete_coverage_separates_sessions_break_and_auctions(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "complete"},
+        )
+
+        self.assertEqual(result["coverage"]["status"], "complete")
+        self.assertEqual(
+            result["coverage"]["expected_intervals"],
+            [
+                {
+                    "interval_start": "2026-08-03T09:30:00+08:00",
+                    "interval_end": "2026-08-03T11:30:00+08:00",
+                    "trading_phase": "continuous_morning",
+                },
+                {
+                    "interval_start": "2026-08-03T13:00:00+08:00",
+                    "interval_end": "2026-08-03T14:57:00+08:00",
+                    "trading_phase": "continuous_afternoon",
+                },
+            ],
+        )
+        self.assertEqual(
+            result["coverage"]["lunch_break"],
+            {
+                "interval_start": "2026-08-03T11:30:00+08:00",
+                "interval_end": "2026-08-03T13:00:00+08:00",
+                "excluded_from_coverage": True,
+            },
+        )
+        self.assertEqual(result["records"][0]["trading_phase"], "continuous_morning")
+        self.assertEqual(result["records"][-1]["trading_phase"], "continuous_afternoon")
+        self.assertEqual(len(result["records"]), 237)
+        self.assertEqual(len(result["auction_results"]), 2)
+        self.assertEqual(
+            [item["trading_phase"] for item in result["auction_results"]],
+            ["opening_auction", "closing_auction"],
+        )
+        self.assertEqual(
+            result["auction_results"][1]["interval_start"],
+            "2026-08-03T14:57:00+08:00",
+        )
+        self.assertEqual(
+            result["auction_results"][1]["interval_end"],
+            "2026-08-03T15:00:00+08:00",
+        )
+        self.assertEqual(
+            result["coverage"]["coverage_ratio"],
+            {
+                "covered_minutes": 237,
+                "expected_minutes": 237,
+                "value": "1.0000",
+                "formula": "covered_minutes / expected_minutes",
+            },
+        )
+
+    def test_complete_coverage_accepts_szse_at_the_same_public_seam(self) -> None:
+        result = self.run_task(
+            replay_request("SZSE:000001"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "complete"},
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["subjects"][0]["security"]["exchange"], "SZSE")
+        self.assertEqual(result["coverage"]["status"], "complete")
+        self.assertEqual(result["coverage"]["coverage_ratio"]["value"], "1.0000")
+
+    def test_partial_closing_subinterval_is_not_claimed_complete(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "subinterval_partial"},
+        )
+
+        self.assertEqual(result["coverage"]["status"], "partial")
+        self.assertEqual(result["coverage"]["closing_auction"]["status"], "partial")
+        self.assertEqual(
+            result["coverage"]["missing_auction_intervals"],
+            [
+                {
+                    "interval_start": "2026-08-03T14:58:00+08:00",
+                    "interval_end": "2026-08-03T15:00:00+08:00",
+                    "trading_phase": "closing_auction",
+                }
+            ],
+        )
+        self.assertEqual(len(result["auction_results"]), 2)
+
+    def test_unknown_session_contract_fails_closed(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "unknown_session"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["coverage"]["status"], "indeterminate")
+        self.assertEqual(
+            result["source_errors"][0]["code"], "session_semantics_unverified"
+        )
+
+    def test_partial_coverage_retains_qualified_no_trade_and_true_missing(self) -> None:
+        result = self.run_task(
+            replay_request("SZSE:000001"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "partial_no_trade"},
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["coverage"]["status"], "partial")
+        no_trade = [
+            row for row in result["records"] if row["trade_state"] == "no_trade"
+        ]
+        self.assertEqual(len(no_trade), 1)
+        self.assertEqual(
+            no_trade[0]["ohlc"],
+            {"status": "unavailable", "reason": "source_proven_no_trade"},
+        )
+        self.assertEqual(no_trade[0]["volume"], {"value": "0", "unit": "shares"})
+        self.assertEqual(no_trade[0]["amount"], {"value": "0.00", "unit": "CNY"})
+        self.assertEqual(
+            result["coverage"]["proven_no_trade_intervals"],
+            [
+                {
+                    "interval_start": "2026-08-03T09:31:00+08:00",
+                    "interval_end": "2026-08-03T09:32:00+08:00",
+                    "trading_phase": "continuous_morning",
+                }
+            ],
+        )
+        self.assertEqual(
+            result["coverage"]["missing_intervals"][0],
+            {
+                "interval_start": "2026-08-03T09:32:00+08:00",
+                "interval_end": "2026-08-03T11:30:00+08:00",
+                "trading_phase": "continuous_morning",
+            },
+        )
+        self.assertEqual(result["coverage"]["coverage_ratio"]["covered_minutes"], 3)
+        self.assertEqual(result["coverage"]["coverage_ratio"]["expected_minutes"], 237)
+        self.assertEqual(result["coverage"]["coverage_ratio"]["value"], "0.0127")
+        self.assertFalse(
+            any(
+                row["interval_start"] == "2026-08-03T09:32:00+08:00"
+                for row in result["records"]
+            )
+        )
+
+    def test_indeterminate_coverage_is_structured_blocked(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "indeterminate"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["coverage"]["status"], "indeterminate")
+        self.assertEqual(
+            result["coverage"]["coverage_ratio"],
+            {
+                "status": "unavailable",
+                "reason": "coverage_bound_indeterminate",
+                "formula": "covered_minutes / expected_minutes",
+            },
+        )
+        self.assertIn(
+            "intraday_replay_coverage_indeterminate",
+            [item["code"] for item in result["limitations"]],
+        )
+
+    def test_unknown_auction_semantics_fail_closed(self) -> None:
+        result = self.run_task(
+            replay_request("SZSE:000001"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "unknown_auction"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["coverage"]["status"], "indeterminate")
+        self.assertEqual(
+            result["source_errors"][0]["code"], "auction_semantics_unverified"
+        )
+
+    def test_zero_volume_alone_is_not_no_trade_proof(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "zero_volume"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["source_errors"][0]["code"], "traded_zero_volume_ambiguous"
+        )
+
+    def test_current_day_before_session_end_is_blocked_at_public_seam(self) -> None:
+        request = replay_request("SSE:600519")
+        request["as_of"] = "2026-08-03"
+        request["window"] = {
+            "observed_from": "2026-08-03",
+            "observed_to": "2026-08-03",
+        }
+        result = self.run_task(
+            request,
+            environment={"A_SHARE_INTRADAY_REPLAY_NOW": "2026-08-03T14:59:00+08:00"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["limitations"][0]["code"], "replay_session_not_completed"
+        )
+
     def test_experimental_replay_is_versioned_sorted_and_chart_ready(self) -> None:
         result = self.run_task(replay_request("SSE:600519"))
 
@@ -112,7 +318,7 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         self.assertEqual(
             result["records"][0]["source_timestamp"], "2026-08-03T09:30:00+08:00"
         )
-        self.assertEqual(result["coverage"]["status"], "not_adjudicated")
+        self.assertEqual(result["coverage"]["status"], "partial")
         self.assertEqual(
             result["source_operations"],
             [
@@ -143,7 +349,7 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
             result["limitations"][0]["code"],
-            "intraday_replay_coverage_not_adjudicated",
+            "intraday_replay_partial_coverage",
         )
 
     def test_szse_float_noise_is_fixed_and_duplicate_timestamp_is_deterministic(

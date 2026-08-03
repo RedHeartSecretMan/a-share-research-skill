@@ -23,6 +23,11 @@ SSE_A_SHARE_PREFIXES = ("600", "601", "603", "605", "688", "689")
 SZSE_A_SHARE_PREFIXES = ("000", "001", "002", "003", "300", "301")
 _TIMESTAMP_SEMANTICS = frozenset({"interval_start", "interval_end"})
 _TRADE_STATES = frozenset({"traded", "no_trade"})
+_SESSION_CONTRACT = "cn_a_share_regular_v1"
+_COVERAGE_BOUNDS = frozenset({"bounded", "indeterminate"})
+_CLOSING_AUCTION_SEMANTICS = frozenset(
+    {"final_match_14:57_15:00", "subinterval_transactions"}
+)
 _TRADING_PHASES = frozenset(
     {
         "continuous",
@@ -61,6 +66,14 @@ class _PreparedRow:
     evidence_id: str
     evidence_locator: str
     fingerprint: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _CoverageDecision:
+    """Adjudicated continuous-session coverage and auction state."""
+
+    status: str
+    payload: dict[str, Any]
 
 
 def build_intraday_replay_result(
@@ -129,6 +142,7 @@ def build_intraday_replay_result(
                 "The replay date is not among the 20 most recent completed trading days.",
             )
         rows, conflicts = _normalize_rows(normalized_batch, query)
+        coverage = _adjudicate_coverage(normalized_batch, rows, query)
     except IntradayReplaySourceError as error:
         source_errors.append(source_error_result(error))
         return _blocked_result(
@@ -137,6 +151,7 @@ def build_intraday_replay_result(
             "The injected replay source did not satisfy its versioned contract.",
             query=query,
             source_errors=source_errors,
+            coverage_status="indeterminate",
         )
     except Exception:
         source_errors.append(
@@ -152,6 +167,7 @@ def build_intraday_replay_result(
             "The replay source operation could not form a valid result.",
             query=query,
             source_errors=source_errors,
+            coverage_status="indeterminate",
         )
 
     if not rows:
@@ -169,6 +185,7 @@ def build_intraday_replay_result(
         normalized_batch,
         rows,
         conflicts,
+        coverage,
     )
 
 
@@ -327,6 +344,24 @@ def _validate_batch(
             "unsupported_source_contract",
             "The replay source contract version is not supported.",
         )
+    if batch.session_contract != _SESSION_CONTRACT:
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "session_semantics_unverified",
+            "The replay source did not qualify the regular A-share session contract.",
+        )
+    if batch.coverage_bound not in _COVERAGE_BOUNDS:
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "coverage_bound_unverified",
+            "The replay source did not declare whether its coverage boundary is bounded.",
+        )
+    if batch.closing_auction_semantics not in _CLOSING_AUCTION_SEMANTICS:
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "auction_semantics_unverified",
+            "The replay source did not qualify the closing auction semantics.",
+        )
     if batch.security != query.security:
         raise IntradayReplaySourceError(
             batch.operation_id,
@@ -445,6 +480,246 @@ def _normalize_rows(
     return deduplicated, conflicts
 
 
+def _adjudicate_coverage(
+    batch: IntradayReplaySourceBatch,
+    rows: list[_PreparedRow],
+    query: IntradayReplayQuery,
+) -> _CoverageDecision:
+    expected = _expected_intervals(query.replay_date)
+    expected_by_start = {
+        start: phase
+        for phase, start, end in _expected_minute_intervals(query.replay_date)
+    }
+    continuous_rows = [
+        row for row in rows if row.trading_phase.startswith("continuous_")
+    ]
+    for row in continuous_rows:
+        if (
+            row.interval_start not in expected_by_start
+            or row.interval_end != row.interval_start + timedelta(minutes=1)
+            or expected_by_start[row.interval_start] != row.trading_phase
+        ):
+            raise IntradayReplaySourceError(
+                batch.operation_id,
+                "continuous_interval_outside_session",
+                "A continuous record is not aligned to the qualified session path.",
+            )
+
+    traded_rows = [row for row in continuous_rows if row.trade_state == "traded"]
+    no_trade_rows = [row for row in continuous_rows if row.trade_state == "no_trade"]
+    covered_starts = {row.interval_start for row in continuous_rows}
+    missing_starts = set(expected_by_start).difference(covered_starts)
+    missing_by_phase = {
+        start: expected_by_start[start] for start in sorted(missing_starts)
+    }
+
+    opening_rows = [row for row in rows if row.trading_phase == "opening_auction"]
+    closing_rows = [row for row in rows if row.trading_phase == "closing_auction"]
+    closing_expected = _interval_descriptor(
+        datetime.combine(query.replay_date, time(14, 57), tzinfo=CHINA_STANDARD_TIME),
+        datetime.combine(query.replay_date, time(15, 0), tzinfo=CHINA_STANDARD_TIME),
+        "closing_auction",
+    )
+    closing_start = datetime.combine(
+        query.replay_date, time(14, 57), tzinfo=CHINA_STANDARD_TIME
+    )
+    closing_end = datetime.combine(
+        query.replay_date, time(15, 0), tzinfo=CHINA_STANDARD_TIME
+    )
+    missing_closing_intervals = _missing_interval_ranges(
+        closing_rows, closing_start, closing_end, "closing_auction"
+    )
+    closing_status = (
+        "missing"
+        if not closing_rows
+        else ("partial" if missing_closing_intervals else "observed")
+    )
+    opening_status = "observed" if opening_rows else "not_observed_optional"
+
+    common = {
+        "expected_intervals": expected,
+        "observed_traded_intervals": _merge_row_intervals(traded_rows),
+        "proven_no_trade_intervals": _merge_row_intervals(no_trade_rows),
+        "missing_intervals": _compress_interval_starts(missing_by_phase),
+        "missing_intervals_bounded": batch.coverage_bound == "bounded",
+        "lunch_break": _interval_descriptor(
+            datetime.combine(
+                query.replay_date, time(11, 30), tzinfo=CHINA_STANDARD_TIME
+            ),
+            datetime.combine(
+                query.replay_date, time(13, 0), tzinfo=CHINA_STANDARD_TIME
+            ),
+            None,
+        )
+        | {"excluded_from_coverage": True},
+        "opening_auction": {
+            "status": opening_status,
+            "observed_intervals": _merge_row_intervals(opening_rows),
+            "included_in_continuous_minute_denominator": False,
+        },
+        "closing_auction": {
+            "status": closing_status,
+            "semantics": batch.closing_auction_semantics,
+            "expected_interval": closing_expected,
+            "observed_intervals": _merge_row_intervals(closing_rows),
+            "observed_traded_intervals": _merge_row_intervals(
+                [row for row in closing_rows if row.trade_state == "traded"]
+            ),
+            "proven_no_trade_intervals": _merge_row_intervals(
+                [row for row in closing_rows if row.trade_state == "no_trade"]
+            ),
+            "missing_intervals": missing_closing_intervals,
+            "included_in_continuous_minute_denominator": False,
+        },
+    }
+    if batch.coverage_bound == "indeterminate":
+        return _CoverageDecision(
+            status="indeterminate",
+            payload={
+                **common,
+                "coverage_ratio": {
+                    "status": "unavailable",
+                    "reason": "coverage_bound_indeterminate",
+                    "formula": "covered_minutes / expected_minutes",
+                },
+            },
+        )
+
+    expected_minutes = len(expected_by_start)
+    covered_minutes = len(covered_starts)
+    coverage_ratio = Decimal(covered_minutes) / Decimal(expected_minutes)
+    coverage_payload = {
+        **common,
+        "coverage_ratio": {
+            "covered_minutes": covered_minutes,
+            "expected_minutes": expected_minutes,
+            "value": format(
+                coverage_ratio.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP),
+                "f",
+            ),
+            "formula": "covered_minutes / expected_minutes",
+        },
+    }
+    status = (
+        "complete"
+        if not missing_starts and closing_rows and not missing_closing_intervals
+        else "partial"
+    )
+    coverage_payload["missing_auction_intervals"] = missing_closing_intervals
+    return _CoverageDecision(status=status, payload=coverage_payload)
+
+
+def _expected_intervals(trading_date: date) -> list[dict[str, Any]]:
+    return [
+        _interval_descriptor(
+            datetime.combine(trading_date, time(9, 30), tzinfo=CHINA_STANDARD_TIME),
+            datetime.combine(trading_date, time(11, 30), tzinfo=CHINA_STANDARD_TIME),
+            "continuous_morning",
+        ),
+        _interval_descriptor(
+            datetime.combine(trading_date, time(13, 0), tzinfo=CHINA_STANDARD_TIME),
+            datetime.combine(trading_date, time(14, 57), tzinfo=CHINA_STANDARD_TIME),
+            "continuous_afternoon",
+        ),
+    ]
+
+
+def _expected_minute_intervals(
+    trading_date: date,
+) -> list[tuple[str, datetime, datetime]]:
+    intervals: list[tuple[str, datetime, datetime]] = []
+    for phase, start_time, end_time in (
+        ("continuous_morning", time(9, 30), time(11, 30)),
+        ("continuous_afternoon", time(13, 0), time(14, 57)),
+    ):
+        start = datetime.combine(trading_date, start_time, tzinfo=CHINA_STANDARD_TIME)
+        end = datetime.combine(trading_date, end_time, tzinfo=CHINA_STANDARD_TIME)
+        cursor = start
+        while cursor < end:
+            intervals.append((phase, cursor, cursor + timedelta(minutes=1)))
+            cursor += timedelta(minutes=1)
+    return intervals
+
+
+def _interval_descriptor(
+    interval_start: datetime,
+    interval_end: datetime,
+    trading_phase: str | None,
+) -> dict[str, Any]:
+    descriptor: dict[str, Any] = {
+        "interval_start": interval_start.isoformat(),
+        "interval_end": interval_end.isoformat(),
+    }
+    if trading_phase is not None:
+        descriptor["trading_phase"] = trading_phase
+    return descriptor
+
+
+def _merge_row_intervals(rows: list[_PreparedRow]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    ordered = sorted(rows, key=lambda row: (row.interval_start, row.interval_end))
+    merged: list[dict[str, Any]] = []
+    start = ordered[0].interval_start
+    end = ordered[0].interval_end
+    phase = ordered[0].trading_phase
+    for row in ordered[1:]:
+        if row.trading_phase == phase and row.interval_start == end:
+            end = row.interval_end
+            continue
+        merged.append(_interval_descriptor(start, end, phase))
+        start = row.interval_start
+        end = row.interval_end
+        phase = row.trading_phase
+    merged.append(_interval_descriptor(start, end, phase))
+    return merged
+
+
+def _missing_interval_ranges(
+    rows: list[_PreparedRow],
+    interval_start: datetime,
+    interval_end: datetime,
+    trading_phase: str,
+) -> list[dict[str, Any]]:
+    """Return uncovered gaps in a bounded stage without manufacturing rows."""
+
+    cursor = interval_start
+    missing: list[dict[str, Any]] = []
+    for row in sorted(rows, key=lambda item: (item.interval_start, item.interval_end)):
+        if row.interval_start > cursor:
+            missing.append(
+                _interval_descriptor(cursor, row.interval_start, trading_phase)
+            )
+        if row.interval_end > cursor:
+            cursor = row.interval_end
+        if cursor >= interval_end:
+            break
+    if cursor < interval_end:
+        missing.append(_interval_descriptor(cursor, interval_end, trading_phase))
+    return missing
+
+
+def _compress_interval_starts(
+    starts_by_phase: dict[datetime, str],
+) -> list[dict[str, Any]]:
+    if not starts_by_phase:
+        return []
+    ordered = sorted(starts_by_phase.items())
+    merged: list[dict[str, Any]] = []
+    start, phase = ordered[0]
+    end = start + timedelta(minutes=1)
+    for current, current_phase in ordered[1:]:
+        if current_phase == phase and current == end:
+            end = current + timedelta(minutes=1)
+            continue
+        merged.append(_interval_descriptor(start, end, phase))
+        start = current
+        end = current + timedelta(minutes=1)
+        phase = current_phase
+    merged.append(_interval_descriptor(start, end, phase))
+    return merged
+
+
 def _normalize_row(
     row: IntradayReplaySourceRow,
     index: int,
@@ -492,12 +767,17 @@ def _normalize_row(
             "unsupported_price_adjustment",
             "A replay row declared a non-unadjusted price basis.",
         )
-    if row.timestamp_semantics == "interval_start":
-        interval_start = observed_at
-        interval_end = observed_at + timedelta(minutes=1)
-    else:
-        interval_start = observed_at - timedelta(minutes=1)
-        interval_end = observed_at
+    interval_start, interval_end, trading_phase = _normalize_interval(
+        row, observed_at, batch
+    )
+    if row.trading_phase in {"continuous_morning", "continuous_afternoon"} and (
+        row.trading_phase != trading_phase
+    ):
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "trading_phase_time_conflict",
+            "The source trading phase does not match its verified Beijing interval.",
+        )
     ohlc: dict[str, dict[str, str]] | dict[str, str]
     if row.trade_state == "traded":
         ohlc = {
@@ -533,13 +813,25 @@ def _normalize_row(
             "no_trade_volume_amount_conflict",
             "A proven no-trade row must have zero shares and zero CNY amount.",
         )
+    if row.trade_state == "traded" and volume == "0":
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "traded_zero_volume_ambiguous",
+            "A zero-volume row cannot prove a traded interval or a no-trade interval.",
+        )
+    if row.trade_state == "traded" and Decimal(amount) == 0:
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "traded_zero_amount_ambiguous",
+            "A zero-amount row cannot prove a traded interval or a no-trade interval.",
+        )
     evidence_locator = _safe_locator(row.evidence_locator, interval_start)
     fingerprint = (
         interval_start.isoformat(),
         interval_end.isoformat(),
         source_timestamp,
         row.timestamp_semantics,
-        row.trading_phase,
+        trading_phase,
         row.trade_state,
         repr(ohlc),
         volume,
@@ -558,7 +850,7 @@ def _normalize_row(
         interval_end=interval_end,
         source_timestamp=source_timestamp,
         timestamp_semantics=row.timestamp_semantics,
-        trading_phase=row.trading_phase,
+        trading_phase=trading_phase,
         trade_state=row.trade_state,
         ohlc=ohlc,
         volume={"value": volume, "unit": "shares"},
@@ -566,6 +858,133 @@ def _normalize_row(
         evidence_id=evidence_id,
         evidence_locator=evidence_locator,
         fingerprint=fingerprint,
+    )
+
+
+def _normalize_interval(
+    row: IntradayReplaySourceRow,
+    observed_at: datetime,
+    batch: IntradayReplaySourceBatch,
+) -> tuple[datetime, datetime, str]:
+    """Normalize a source timestamp without turning auctions into minute bars."""
+
+    if row.trading_phase == "midday_break":
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "midday_break_record_not_allowed",
+            "The lunch recess is excluded and must not produce a minute record.",
+        )
+    if row.trading_phase == "opening_auction":
+        opening = datetime.combine(
+            observed_at.date(), time(9, 25), tzinfo=CHINA_STANDARD_TIME
+        )
+        if observed_at != opening:
+            raise IntradayReplaySourceError(
+                batch.operation_id,
+                "opening_auction_time_unverified",
+                "An opening auction result must be observed at 09:25 Beijing time.",
+            )
+        return opening, opening, row.trading_phase
+    if row.trading_phase == "closing_auction":
+        return _normalize_closing_auction_interval(row, observed_at, batch)
+
+    if row.timestamp_semantics == "interval_start":
+        interval_start = observed_at
+        interval_end = observed_at + timedelta(minutes=1)
+    else:
+        interval_start = observed_at - timedelta(minutes=1)
+        interval_end = observed_at
+    return (
+        interval_start,
+        interval_end,
+        _continuous_phase(interval_start, interval_end, batch.operation_id),
+    )
+
+
+def _normalize_closing_auction_interval(
+    row: IntradayReplaySourceRow,
+    observed_at: datetime,
+    batch: IntradayReplaySourceBatch,
+) -> tuple[datetime, datetime, str]:
+    if batch.closing_auction_semantics == "final_match_14:57_15:00":
+        closing_start = datetime.combine(
+            observed_at.date(), time(14, 57), tzinfo=CHINA_STANDARD_TIME
+        )
+        closing_end = datetime.combine(
+            observed_at.date(), time(15, 0), tzinfo=CHINA_STANDARD_TIME
+        )
+        if observed_at.time() not in {time(14, 57), time(15, 0)}:
+            raise IntradayReplaySourceError(
+                batch.operation_id,
+                "closing_auction_time_unverified",
+                "A final closing auction result must identify the 14:57-15:00 stage.",
+            )
+        return closing_start, closing_end, row.trading_phase
+
+    start = _optional_interval_boundary(
+        row.auction_interval_start, observed_at.date(), batch.operation_id
+    )
+    end = _optional_interval_boundary(
+        row.auction_interval_end, observed_at.date(), batch.operation_id
+    )
+    if start is None or end is None:
+        if row.timestamp_semantics == "interval_start":
+            start = observed_at
+            end = observed_at + timedelta(minutes=1)
+        else:
+            start = observed_at - timedelta(minutes=1)
+            end = observed_at
+    closing_start = datetime.combine(
+        observed_at.date(), time(14, 57), tzinfo=CHINA_STANDARD_TIME
+    )
+    closing_end = datetime.combine(
+        observed_at.date(), time(15, 0), tzinfo=CHINA_STANDARD_TIME
+    )
+    if not (closing_start <= start < end <= closing_end):
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "closing_auction_interval_unverified",
+            "A closing auction subinterval must be within 14:57-15:00.",
+        )
+    return start, end, row.trading_phase
+
+
+def _optional_interval_boundary(
+    value: str | datetime | None,
+    trading_date: date,
+    source_operation: str,
+) -> datetime | None:
+    if value is None:
+        return None
+    _, parsed = _parse_source_timestamp(value, trading_date, source_operation)
+    return parsed
+
+
+def _continuous_phase(
+    interval_start: datetime,
+    interval_end: datetime,
+    source_operation: str,
+) -> str:
+    morning_start = datetime.combine(
+        interval_start.date(), time(9, 30), tzinfo=CHINA_STANDARD_TIME
+    )
+    morning_end = datetime.combine(
+        interval_start.date(), time(11, 30), tzinfo=CHINA_STANDARD_TIME
+    )
+    afternoon_start = datetime.combine(
+        interval_start.date(), time(13, 0), tzinfo=CHINA_STANDARD_TIME
+    )
+    afternoon_end = datetime.combine(
+        interval_start.date(), time(14, 57), tzinfo=CHINA_STANDARD_TIME
+    )
+    if morning_start <= interval_start and interval_end <= morning_end:
+        return "continuous_morning"
+    if afternoon_start <= interval_start and interval_end <= afternoon_end:
+        return "continuous_afternoon"
+    raise IntradayReplaySourceError(
+        source_operation,
+        "continuous_interval_outside_session",
+        "A continuous record is outside the qualified A-share sessions.",
     )
 
 
@@ -775,9 +1194,19 @@ def _project_result(
     batch: IntradayReplaySourceBatch,
     rows: list[_PreparedRow],
     conflicts: list[dict[str, Any]],
+    coverage: _CoverageDecision,
 ) -> dict[str, Any]:
     evidence = [_row_evidence(row, query, batch) for row in rows]
-    result_rows = [_row_result(row) for row in rows]
+    continuous_rows = [
+        row for row in rows if row.trading_phase.startswith("continuous_")
+    ]
+    auction_rows = [
+        row
+        for row in rows
+        if row.trading_phase in {"opening_auction", "closing_auction"}
+    ]
+    result_rows = [_row_result(row) for row in continuous_rows]
+    auction_results = [_row_result(row) for row in auction_rows]
     all_evidence_ids = [row.evidence_id for row in rows]
     field_lineage: dict[str, Any] = {}
     field_lineage.update(
@@ -812,9 +1241,25 @@ def _project_result(
                     "retrieved_at",
                 ],
             },
+            "coverage": {
+                "evidence_ids": all_evidence_ids,
+                "source_fields": [
+                    "session_contract",
+                    "coverage_bound",
+                    "source_timestamp",
+                    "trading_phase",
+                    "trade_state",
+                ],
+                "calculation": "intraday_coverage_by_expected_minute@1",
+            },
+            "coverage.coverage_ratio": {
+                "evidence_ids": all_evidence_ids,
+                "source_fields": ["source_timestamp", "trade_state"],
+                "calculation": "covered_minutes / expected_minutes",
+            },
         }
     )
-    for index, row in enumerate(rows):
+    for index, row in enumerate(continuous_rows):
         evidence_ids = [row.evidence_id]
         field_lineage.update(
             {
@@ -854,6 +1299,42 @@ def _project_result(
                 "evidence_ids": evidence_ids,
                 "source_fields": [f"{price_field}_price"],
             }
+    for index, row in enumerate(auction_rows):
+        evidence_ids = [row.evidence_id]
+        field_lineage.update(
+            {
+                f"auction_results[{index}].interval_start": {
+                    "evidence_ids": evidence_ids,
+                    "source_fields": ["source_timestamp", "trading_phase"],
+                },
+                f"auction_results[{index}].interval_end": {
+                    "evidence_ids": evidence_ids,
+                    "source_fields": ["source_timestamp", "timestamp_semantics"],
+                },
+                f"auction_results[{index}].trading_phase": {
+                    "evidence_ids": evidence_ids,
+                    "source_fields": ["trading_phase"],
+                },
+                f"auction_results[{index}].trade_state": {
+                    "evidence_ids": evidence_ids,
+                    "source_fields": ["trade_state"],
+                },
+                f"auction_results[{index}].volume": {
+                    "evidence_ids": evidence_ids,
+                    "source_fields": ["volume", "volume_unit"],
+                    "calculation": "normalize_volume_to_shares@1",
+                },
+                f"auction_results[{index}].amount": {
+                    "evidence_ids": evidence_ids,
+                    "source_fields": ["amount", "amount_unit"],
+                },
+            }
+        )
+        for price_field in ("open", "high", "low", "close"):
+            field_lineage[f"auction_results[{index}].ohlc.{price_field}"] = {
+                "evidence_ids": evidence_ids,
+                "source_fields": [f"{price_field}_price"],
+            }
     limitation = {
         "code": "experimental_intraday_replay_source",
         "message": (
@@ -862,18 +1343,38 @@ def _project_result(
         ),
     }
     limitations = [limitation] if batch.experimental else []
+    if coverage.status == "partial":
+        limitations.append(
+            {
+                "code": "intraday_replay_partial_coverage",
+                "message": (
+                    "The replay retains admissible rows but has bounded missing "
+                    "continuous intervals or an unobserved closing auction."
+                ),
+            }
+        )
+    elif coverage.status == "indeterminate":
+        limitations.append(
+            {
+                "code": "intraday_replay_coverage_indeterminate",
+                "message": (
+                    "The replay coverage boundary is not bounded, so substantive "
+                    "intraday replay is blocked."
+                ),
+            }
+        )
     limitations.append(
         {
-            "code": "intraday_replay_coverage_not_adjudicated",
+            "code": "intraday_replay_daily_boundary_not_cross_checked",
             "message": (
-                "Trading-phase coverage and independent daily validation are not "
-                "yet adjudicated by this tracer."
+                "Independent daily-boundary validation is outside this tracer's "
+                "scope; the result cannot be promoted on that basis."
             ),
         }
     )
     return {
         "schema_version": request["schema_version"],
-        "status": "limited",
+        "status": "blocked" if coverage.status == "indeterminate" else "limited",
         "subjects": [
             {
                 "security": {
@@ -899,12 +1400,11 @@ def _project_result(
             "trading_date": query.replay_date.isoformat(),
             "adjustment": batch.price_adjustment,
             "record_count": len(result_rows),
+            "auction_result_count": len(auction_results),
         },
         "records": result_rows,
-        "coverage": {
-            "status": "not_adjudicated",
-            "reason": "coverage_adjudication_is_scoped_to_issue_30",
-        },
+        "auction_results": auction_results,
+        "coverage": {"status": coverage.status, **coverage.payload},
         "source_operations": [
             {
                 "operation_id": batch.operation_id,
@@ -919,12 +1419,7 @@ def _project_result(
         "source_errors": [],
         "degradations": [],
         "limitations": limitations,
-        "unavailable_fields": [
-            {
-                "field": "coverage",
-                "reason": "coverage_adjudication_is_scoped_to_issue_30",
-            }
-        ],
+        "unavailable_fields": [],
     }
 
 
@@ -949,7 +1444,11 @@ def _row_evidence(
     batch: IntradayReplaySourceBatch,
 ) -> dict[str, Any]:
     observation: dict[str, Any] = {
-        "kind": "intraday_minute_record",
+        "kind": (
+            "intraday_auction_result"
+            if row.trading_phase in {"opening_auction", "closing_auction"}
+            else "intraday_minute_record"
+        ),
         "interval_start": row.interval_start.isoformat(),
         "interval_end": row.interval_end.isoformat(),
         "timestamp_semantics": row.timestamp_semantics,
@@ -999,6 +1498,7 @@ def _blocked_result(
     query: IntradayReplayQuery | None = None,
     source_errors: list[dict[str, Any]] | None = None,
     source_operations: list[IntradayReplaySourceBatch] | None = None,
+    coverage_status: str = "not_adjudicated",
 ) -> dict[str, Any]:
     research: dict[str, str] = {
         "as_of": str(request.get("as_of", "")),
@@ -1050,9 +1550,14 @@ def _blocked_result(
         "window": window,
         "replay": replay,
         "records": [],
+        "auction_results": [],
         "coverage": {
-            "status": "not_adjudicated",
-            "reason": "coverage_adjudication_is_scoped_to_issue_30",
+            "status": coverage_status,
+            "reason": (
+                "coverage_boundary_indeterminate"
+                if coverage_status == "indeterminate"
+                else "coverage_not_adjudicated"
+            ),
         },
         "source_operations": operations,
         "field_lineage": {},
