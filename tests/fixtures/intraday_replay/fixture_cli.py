@@ -115,6 +115,118 @@ def _complete_rows(trading_date: date) -> tuple[IntradayReplaySourceRow, ...]:
     return tuple(rows)
 
 
+def _summary_rows(trading_date: date) -> tuple[IntradayReplaySourceRow, ...]:
+    """Small deterministic path with ties, a no-trade gap, and both auctions."""
+
+    prefix = trading_date.isoformat()
+    return (
+        IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T09:25:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="opening_auction",
+            trade_state="traded",
+            open_price="10.00",
+            high_price="10.00",
+            low_price="10.00",
+            close_price="10.00",
+            volume="100",
+            amount="1000.00",
+            evidence_locator="fixture:summary:opening",
+        ),
+        IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T09:30:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="continuous_morning",
+            trade_state="traded",
+            open_price="10.00",
+            high_price="10.20",
+            low_price="9.90",
+            close_price="10.10",
+            volume="100",
+            amount="1000.00",
+            evidence_locator="fixture:summary:0930",
+        ),
+        IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T09:31:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="continuous_morning",
+            trade_state="traded",
+            open_price="10.10",
+            high_price="10.30",
+            low_price="10.00",
+            close_price="10.20",
+            volume="200",
+            amount="2040.00",
+            evidence_locator="fixture:summary:0931",
+        ),
+        IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T09:32:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="continuous_morning",
+            trade_state="no_trade",
+            open_price=None,
+            high_price=None,
+            low_price=None,
+            close_price=None,
+            volume="0",
+            amount="0.00",
+            evidence_locator="fixture:summary:no-trade-0932",
+        ),
+        IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T09:33:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="continuous_morning",
+            trade_state="traded",
+            open_price="9.90",
+            high_price="10.30",
+            low_price="9.80",
+            close_price="9.90",
+            volume="300",
+            amount="2970.00",
+            evidence_locator="fixture:summary:0933",
+        ),
+        IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T09:34:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="continuous_morning",
+            trade_state="traded",
+            open_price="9.90",
+            high_price="10.00",
+            low_price="9.50",
+            close_price="9.60",
+            volume="100",
+            amount="960.00",
+            evidence_locator="fixture:summary:0934",
+        ),
+        IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T13:00:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="continuous_afternoon",
+            trade_state="traded",
+            open_price="9.60",
+            high_price="10.30",
+            low_price="9.60",
+            close_price="10.00",
+            volume="100",
+            amount="1000.00",
+            evidence_locator="fixture:summary:1300",
+        ),
+        IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T15:00:00+08:00",
+            timestamp_semantics="interval_end",
+            trading_phase="closing_auction",
+            trade_state="traded",
+            open_price="10.00",
+            high_price="10.00",
+            low_price="10.00",
+            close_price="10.00",
+            volume="50",
+            amount="500.00",
+            evidence_locator="fixture:summary:closing",
+        ),
+    )
+
+
 class FixtureIntradayReplayOperation:
     operation_id = "fixture_intraday_replay@1"
 
@@ -211,6 +323,8 @@ class FixtureIntradayReplayOperation:
             )
         elif scenario == "complete":
             rows = _complete_rows(replay_date)
+        elif scenario == "summary_metrics":
+            rows = _summary_rows(replay_date)
         elif scenario == "subinterval_partial":
             complete_rows = _complete_rows(replay_date)
             rows = (

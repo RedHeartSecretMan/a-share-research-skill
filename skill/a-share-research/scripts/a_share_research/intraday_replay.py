@@ -26,6 +26,10 @@ from .intraday_replay_contract import (
     IntradayReplaySourceRow,
     source_error_result,
 )
+from .intraday_replay_summary import (
+    ReplaySummaryRow,
+    build_intraday_replay_summary,
+)
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 SSE_A_SHARE_PREFIXES = ("600", "601", "603", "605", "688", "689")
@@ -1479,6 +1483,39 @@ def _project_result(
     ]
     result_rows = [_row_result(row) for row in continuous_rows]
     auction_results = [_row_result(row) for row in auction_rows]
+    summary: dict[str, Any] | None = None
+    summary_unavailable_fields: list[dict[str, str]] = []
+    if not confirmed_suspension and rows:
+        summary, summary_unavailable_fields = build_intraday_replay_summary(
+            [
+                ReplaySummaryRow(
+                    interval_start=row.interval_start,
+                    interval_end=row.interval_end,
+                    trading_phase=row.trading_phase,
+                    trade_state=row.trade_state,
+                    ohlc=row.ohlc,
+                    volume=row.volume["value"],
+                    amount=row.amount["value"],
+                    evidence_id=row.evidence_id,
+                )
+                for row in continuous_rows
+            ],
+            [
+                ReplaySummaryRow(
+                    interval_start=row.interval_start,
+                    interval_end=row.interval_end,
+                    trading_phase=row.trading_phase,
+                    trade_state=row.trade_state,
+                    ohlc=row.ohlc,
+                    volume=row.volume["value"],
+                    amount=row.amount["value"],
+                    evidence_id=row.evidence_id,
+                )
+                for row in auction_rows
+            ],
+            {"status": coverage.status, **coverage.payload},
+            daily_boundary,
+        )
     all_minute_rows = [*rows, *(duplicate_rows or [])]
     minute_evidence_ids = [row.evidence_id for row in all_minute_rows]
     all_evidence_ids = [*minute_evidence_ids]
@@ -1660,6 +1697,14 @@ def _project_result(
                 "evidence_ids": evidence_ids,
                 "source_fields": [f"{price_field}_price"],
             }
+    if summary is not None:
+        field_lineage["summary"] = {
+            "evidence_ids": summary["evidence_ids"],
+            "source_fields": ["records", "auction_results", "coverage"],
+            "calculation": summary["calculation"],
+        }
+        for name, lineage in summary["lineage"].items():
+            field_lineage[f"summary.{name}"] = lineage
     limitation = {
         "code": "experimental_intraday_replay_source",
         "message": (
@@ -1734,6 +1779,10 @@ def _project_result(
         "auction_result_count": len(auction_results),
         "trading_status": "confirmed_suspended" if confirmed_suspension else "traded",
     }
+    projected_unavailable_fields = [
+        *(unavailable_fields or []),
+        *summary_unavailable_fields,
+    ]
     return {
         "schema_version": request["schema_version"],
         "status": (
@@ -1773,7 +1822,8 @@ def _project_result(
         "source_errors": source_errors or [],
         "degradations": [],
         "limitations": limitations,
-        "unavailable_fields": list(unavailable_fields or []),
+        "unavailable_fields": projected_unavailable_fields,
+        **({"summary": summary} if summary is not None else {}),
     }
 
 

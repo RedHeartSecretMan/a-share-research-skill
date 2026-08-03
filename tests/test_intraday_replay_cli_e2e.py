@@ -345,6 +345,61 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
             [result["records"][0]["evidence_ids"][0]],
         )
 
+    def test_summary_keeps_bounded_counts_and_unavailable_endpoint_metrics_explicit(
+        self,
+    ) -> None:
+        result = self.run_task(replay_request("SSE:600519"))
+
+        summary = result["summary"]
+        self.assertEqual(summary["version"], "1.0")
+        self.assertEqual(
+            summary["counts"],
+            {
+                "continuous_records": 2,
+                "traded_intervals": 2,
+                "proven_no_trade_intervals": 0,
+                "covered_intervals": 2,
+                "expected_intervals": 237,
+                "missing_intervals": result["coverage"]["missing_intervals"],
+            },
+        )
+        self.assertEqual(
+            summary["metrics"]["open_to_close"],
+            {
+                "status": "unavailable",
+                "reason": "actual_close_not_established",
+            },
+        )
+        self.assertEqual(
+            summary["metrics"]["vwap"]["status"],
+            "available",
+        )
+        self.assertEqual(summary["metrics"]["vwap"]["value"], "10.1967")
+
+    def test_summary_recomputes_ties_and_never_crosses_no_trade_or_lunch(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "summary_metrics"},
+        )
+
+        summary = result["summary"]
+        self.assertEqual(summary["counts"]["proven_no_trade_intervals"], 1)
+        self.assertEqual(summary["metrics"]["vwap"]["value"], "9.9684")
+        self.assertEqual(summary["metrics"]["high"]["value"], "10.30")
+        self.assertEqual(len(summary["metrics"]["high"]["times"]), 3)
+        self.assertEqual(summary["metrics"]["max_drawdown"]["value"], "0.30")
+        self.assertEqual(summary["metrics"]["max_adjacent_rise"]["value"], "0.10")
+        self.assertEqual(summary["metrics"]["max_adjacent_fall"]["value"], "0.30")
+        self.assertEqual(
+            summary["metrics"]["morning_volume_share"]["value"], "0.8750"
+        )
+        adjacent_falls = summary["metrics"]["max_adjacent_fall"]["intervals"]
+        self.assertEqual(
+            adjacent_falls[0]["previous"]["interval_start"],
+            "2026-08-03T09:33:00+08:00",
+        )
+        self.assertEqual(result["coverage"]["status"], "partial")
+
     def test_tracer_never_promotes_coverage_without_later_adjudication(self) -> None:
         result = self.run_task(
             replay_request("SSE:600519"),
