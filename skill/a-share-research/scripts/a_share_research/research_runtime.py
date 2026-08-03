@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib.metadata
 from datetime import date, datetime
 from typing import Any, Collection
 
@@ -25,7 +25,9 @@ from .etf_market import build_etf_market_result
 from .etf_option_contract import OptionSourceOperation
 from .etf_options import build_etf_options_result
 from .identity_resolution import resolve_security_identity
-from .identity_sources import HttpTransport, UrlLibTransport
+from .identity_sources import CHINA_STANDARD_TIME, HttpTransport, UrlLibTransport
+from .intraday_contract import IntradaySourceOperation
+from .intraday_snapshot import build_intraday_snapshot_result
 from .market_series import build_market_trend_result
 from .market_signal_contract import (
     MarketSignalHttpTransport,
@@ -53,6 +55,8 @@ class ResearchRuntime:
         market_signal_transport: MarketSignalHttpTransport | None = None,
         etf_option_operations: Collection[OptionSourceOperation] | None = None,
         etf_option_transport: HttpTransport | None = None,
+        intraday_operations: Collection[IntradaySourceOperation] | None = None,
+        intraday_transport: HttpTransport | None = None,
     ) -> None:
         self._identity_transport = identity_transport or UrlLibTransport()
         self._research_now = research_now
@@ -75,6 +79,10 @@ class ResearchRuntime:
             None if etf_option_operations is None else tuple(etf_option_operations)
         )
         self._etf_option_transport = etf_option_transport or UrlLibTransport()
+        self._intraday_operations = (
+            None if intraday_operations is None else tuple(intraday_operations)
+        )
+        self._intraday_transport = intraday_transport or UrlLibTransport()
 
     def research(self, request: dict[str, Any]) -> dict[str, Any]:
         """Execute one versioned research task."""
@@ -269,7 +277,16 @@ class ResearchRuntime:
                     self._identity_transport,
                 )
         elif task_type == "intraday_market_signal":
-            if not self._dependency_available("mootdx"):
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "intraday_market_signal requires both experimental source "
+                        "operations"
+                    ),
+                )
+            elif not self._dependency_available("mootdx", "0.11.7"):
                 result = _blocked_result(
                     request,
                     code="missing_optional_dependency",
@@ -280,15 +297,21 @@ class ResearchRuntime:
                     limitation_details={
                         "capability": "intraday_market_data",
                         "dependency": "mootdx",
+                        "required_version": "0.11.7",
                     },
                 )
             else:
-                result = _blocked_result(
+                intraday_operations = self._intraday_operations
+                if intraday_operations is None:
+                    from .intraday_registry import build_default_intraday_operations
+
+                    intraday_operations = build_default_intraday_operations(
+                        self._intraday_transport
+                    )
+                result = build_intraday_snapshot_result(
                     request,
-                    code="capability_not_implemented",
-                    message=(
-                        "intraday_market_signal is registered but not implemented yet"
-                    ),
+                    intraday_operations,
+                    self._research_now or datetime.now(CHINA_STANDARD_TIME),
                 )
         else:
             result = _blocked_result(
@@ -314,10 +337,13 @@ class ResearchRuntime:
             self._identity_transport,
         )
 
-    def _dependency_available(self, dependency: str) -> bool:
+    def _dependency_available(self, dependency: str, version: str) -> bool:
         if self._available_optional_dependencies is not None:
-            return dependency in self._available_optional_dependencies
-        return importlib.util.find_spec(dependency) is not None
+            return f"{dependency}=={version}" in self._available_optional_dependencies
+        try:
+            return importlib.metadata.version(dependency) == version
+        except importlib.metadata.PackageNotFoundError:
+            return False
 
 
 def research(
@@ -334,6 +360,8 @@ def research(
     market_signal_transport: MarketSignalHttpTransport | None = None,
     etf_option_operations: Collection[OptionSourceOperation] | None = None,
     etf_option_transport: HttpTransport | None = None,
+    intraday_operations: Collection[IntradaySourceOperation] | None = None,
+    intraday_transport: HttpTransport | None = None,
 ) -> dict[str, Any]:
     """Run a task through the public research module interface."""
 
@@ -349,6 +377,8 @@ def research(
         market_signal_transport=market_signal_transport,
         etf_option_operations=etf_option_operations,
         etf_option_transport=etf_option_transport,
+        intraday_operations=intraday_operations,
+        intraday_transport=intraday_transport,
     ).research(request)
 
 
