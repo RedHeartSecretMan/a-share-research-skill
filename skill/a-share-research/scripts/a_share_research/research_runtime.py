@@ -27,6 +27,8 @@ from .etf_options import build_etf_options_result
 from .identity_resolution import resolve_security_identity
 from .identity_sources import CHINA_STANDARD_TIME, HttpTransport, UrlLibTransport
 from .intraday_contract import IntradaySourceOperation
+from .intraday_replay import build_intraday_replay_result
+from .intraday_replay_contract import IntradayReplaySourceOperation
 from .intraday_snapshot import (
     build_intraday_blocked_result,
     build_intraday_snapshot_result,
@@ -60,6 +62,8 @@ class ResearchRuntime:
         etf_option_transport: HttpTransport | None = None,
         intraday_operations: Collection[IntradaySourceOperation] | None = None,
         intraday_transport: HttpTransport | None = None,
+        intraday_replay_operations: Collection[IntradayReplaySourceOperation]
+        | None = None,
     ) -> None:
         self._identity_transport = identity_transport or UrlLibTransport()
         self._research_now = research_now
@@ -86,6 +90,11 @@ class ResearchRuntime:
             None if intraday_operations is None else tuple(intraday_operations)
         )
         self._intraday_transport = intraday_transport or UrlLibTransport()
+        self._intraday_replay_operations = (
+            None
+            if intraday_replay_operations is None
+            else tuple(intraday_replay_operations)
+        )
 
     def research(self, request: dict[str, Any]) -> dict[str, Any]:
         """Execute one versioned research task."""
@@ -316,6 +325,22 @@ class ResearchRuntime:
                     intraday_operations,
                     self._research_now or datetime.now(CHINA_STANDARD_TIME),
                 )
+        elif task_type == "intraday_replay":
+            if not request["source_policy"]["allow_experimental"]:
+                result = _blocked_result(
+                    request,
+                    code="source_policy_not_satisfied",
+                    message=(
+                        "intraday_replay requires an explicit experimental source "
+                        "policy until a source operation is qualified"
+                    ),
+                )
+            else:
+                result = build_intraday_replay_result(
+                    request,
+                    self._intraday_replay_operations or (),
+                    self._research_now or datetime.now(CHINA_STANDARD_TIME),
+                )
         else:
             result = _blocked_result(
                 request,
@@ -365,6 +390,7 @@ def research(
     etf_option_transport: HttpTransport | None = None,
     intraday_operations: Collection[IntradaySourceOperation] | None = None,
     intraday_transport: HttpTransport | None = None,
+    intraday_replay_operations: Collection[IntradayReplaySourceOperation] | None = None,
 ) -> dict[str, Any]:
     """Run a task through the public research module interface."""
 
@@ -382,6 +408,7 @@ def research(
         etf_option_transport=etf_option_transport,
         intraday_operations=intraday_operations,
         intraday_transport=intraday_transport,
+        intraday_replay_operations=intraday_replay_operations,
     ).research(request)
 
 

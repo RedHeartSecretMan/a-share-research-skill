@@ -1,0 +1,89 @@
+"""Typed seam for deterministic complete intraday replay source operations."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Any, Protocol
+
+
+@dataclass(frozen=True)
+class IntradayReplayQuery:
+    """One canonical security and one bounded replay date."""
+
+    security: str
+    exchange: str
+    code: str
+    as_of: date
+    replay_date: date
+    research_boundary: datetime
+    retrieved_at: datetime
+
+
+@dataclass(frozen=True)
+class IntradayReplaySourceRow:
+    """One source row before the tracer normalizes its values and interval."""
+
+    source_timestamp: str | datetime
+    timestamp_semantics: str
+    trading_phase: str
+    trade_state: str
+    open_price: object | None
+    high_price: object | None
+    low_price: object | None
+    close_price: object | None
+    volume: object
+    amount: object
+    evidence_locator: str | None = None
+    trading_date: date | None = None
+    price_adjustment: str | None = None
+
+
+@dataclass(frozen=True)
+class IntradayReplaySourceBatch:
+    """One coherent operation's rows and its versioned source contract."""
+
+    operation_id: str
+    contract_version: str
+    security: str
+    trading_date: date
+    retrieved_at: datetime
+    experimental: bool
+    price_adjustment: str
+    price_unit: str
+    price_precision: str
+    volume_unit: str
+    amount_unit: str
+    rows: tuple[IntradayReplaySourceRow, ...]
+    completed_trading_dates: tuple[date, ...] = ()
+    source_role: str = "market_observation"
+    timestamp_timezone: str = "Asia/Shanghai"
+    volume_lot_size: str | None = None
+    amount_precision: str = "0.01"
+
+
+class IntradayReplaySourceError(Exception):
+    """Safe, non-sensitive diagnosis from one replay source operation."""
+
+    def __init__(self, source_operation: str, code: str, message: str) -> None:
+        super().__init__(message)
+        self.source_operation = source_operation
+        self.code = code
+
+
+class IntradayReplaySourceOperation(Protocol):
+    """Internal source operation hidden behind the public ResearchTask seam."""
+
+    operation_id: str
+
+    def collect(self, query: IntradayReplayQuery) -> IntradayReplaySourceBatch: ...
+
+
+def source_error_result(error: IntradayReplaySourceError) -> dict[str, Any]:
+    """Project a source failure without exposing provider diagnostics."""
+
+    return {
+        "source_operation": error.source_operation,
+        "code": error.code,
+        "message": str(error),
+    }
