@@ -73,6 +73,7 @@ class FixtureIntradayReplayOperation:
         volume_unit = "shares"
         volume_lot_size = None
         price_adjustment = "unadjusted"
+        experimental = scenario != "qualified"
         if scenario == "float_noise":
             rows = (
                 replace(rows[0], open_price=10.2000000001, amount=2044.0000000001),
@@ -103,20 +104,37 @@ class FixtureIntradayReplayOperation:
             rows = (replace(rows[0], volume=2), replace(rows[1], volume=1))
         elif scenario == "forward_adjusted":
             price_adjustment = "forward_adjusted"
+        elif scenario == "no_trade_nonzero":
+            rows = (
+                replace(
+                    rows[0],
+                    trade_state="no_trade",
+                    open_price=None,
+                    high_price=None,
+                    low_price=None,
+                    close_price=None,
+                    volume="1",
+                    amount="1.00",
+                ),
+                rows[1],
+            )
+        completed_trading_dates = _completed_dates(replay_date)
+        if scenario == "missing_calendar":
+            completed_trading_dates = ()
         return IntradayReplaySourceBatch(
             operation_id=self.operation_id,
             contract_version="1.0",
             security=security,
             trading_date=replay_date,
             retrieved_at=RETRIEVED_AT,
-            experimental=True,
+            experimental=experimental,
             price_adjustment=price_adjustment,
             price_unit="CNY/share",
             price_precision="0.01",
             volume_unit=volume_unit,
             amount_unit="CNY",
             volume_lot_size=volume_lot_size,
-            completed_trading_dates=_completed_dates(replay_date),
+            completed_trading_dates=completed_trading_dates,
             rows=rows,
         )
 

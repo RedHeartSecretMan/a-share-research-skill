@@ -23,8 +23,18 @@ SSE_A_SHARE_PREFIXES = ("600", "601", "603", "605", "688", "689")
 SZSE_A_SHARE_PREFIXES = ("000", "001", "002", "003", "300", "301")
 _TIMESTAMP_SEMANTICS = frozenset({"interval_start", "interval_end"})
 _TRADE_STATES = frozenset({"traded", "no_trade"})
+_TRADING_PHASES = frozenset(
+    {
+        "continuous",
+        "continuous_morning",
+        "continuous_afternoon",
+        "opening_auction",
+        "closing_auction",
+        "midday_break",
+    }
+)
 _SAFE_OPERATION_ID = re.compile(r"^[A-Za-z0-9_.:@-]+$")
-_SAFE_LOCATOR = re.compile(r"^[A-Za-z0-9_.:@/#?=&%+\- ]+$")
+_SAFE_LOCATOR = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*(?::[A-Za-z0-9_.-]+)*$")
 
 
 class _ReplayDomainBlock(Exception):
@@ -104,11 +114,14 @@ def build_intraday_replay_result(
         batch = operation.collect(query)
         normalized_batch = _validate_batch(batch, operation_id, query)
         if not normalized_batch.completed_trading_dates:
-            eligible_dates = _weekday_completed_dates(query.as_of)
-        else:
-            eligible_dates = _eligible_dates(
-                normalized_batch.completed_trading_dates, query.as_of
+            raise IntradayReplaySourceError(
+                operation_id,
+                "completed_trading_calendar_unverified",
+                "The replay source did not provide a completed trading-date calendar.",
             )
+        eligible_dates = _eligible_dates(
+            normalized_batch.completed_trading_dates, query.as_of
+        )
         if query.replay_date not in eligible_dates:
             raise IntradayReplaySourceError(
                 operation_id,
@@ -376,9 +389,15 @@ def _validate_batch(
             "retrieved_at_timezone_unverified",
             "The source acquisition time must carry an explicit +08:00 offset.",
         )
+    retrieved_at = _as_china_time(batch.retrieved_at)
+    if retrieved_at > query.research_boundary:
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "source_retrieved_after_research_boundary",
+            "The replay source was acquired after the research boundary.",
+        )
     _positive_decimal(batch.price_precision, batch.operation_id, "price_precision")
     _positive_decimal(batch.amount_precision, batch.operation_id, "amount_precision")
-    _as_china_time(batch.retrieved_at)
     if not isinstance(batch.experimental, bool):
         raise IntradayReplaySourceError(
             batch.operation_id,
@@ -444,7 +463,7 @@ def _normalize_row(
             "unknown_trade_state",
             "The source row trade state is not in the supported vocabulary.",
         )
-    if not isinstance(row.trading_phase, str) or not row.trading_phase:
+    if row.trading_phase not in _TRADING_PHASES:
         raise IntradayReplaySourceError(
             batch.operation_id,
             "unknown_trading_phase",
@@ -508,6 +527,12 @@ def _normalize_row(
         ohlc = {"status": "unavailable", "reason": "source_proven_no_trade"}
     volume = _volume_text(row.volume, batch)
     amount = _amount_text(row.amount, batch)
+    if row.trade_state == "no_trade" and (volume != "0" or Decimal(amount) != 0):
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "no_trade_volume_amount_conflict",
+            "A proven no-trade row must have zero shares and zero CNY amount.",
+        )
     evidence_locator = _safe_locator(row.evidence_locator, interval_start)
     fingerprint = (
         interval_start.isoformat(),
@@ -719,16 +744,6 @@ def _eligible_dates(dates: tuple[date, ...], as_of: date) -> tuple[date, ...]:
     return tuple(eligible[-20:])
 
 
-def _weekday_completed_dates(as_of: date) -> tuple[date, ...]:
-    dates: list[date] = []
-    candidate = as_of
-    while len(dates) < 20:
-        if candidate.weekday() < 5:
-            dates.append(candidate)
-        candidate -= timedelta(days=1)
-    return tuple(dates)
-
-
 def _evidence_id(
     operation_id: str,
     security: str,
@@ -847,9 +862,18 @@ def _project_result(
         ),
     }
     limitations = [limitation] if batch.experimental else []
+    limitations.append(
+        {
+            "code": "intraday_replay_coverage_not_adjudicated",
+            "message": (
+                "Trading-phase coverage and independent daily validation are not "
+                "yet adjudicated by this tracer."
+            ),
+        }
+    )
     return {
         "schema_version": request["schema_version"],
-        "status": "limited" if batch.experimental else "supported",
+        "status": "limited",
         "subjects": [
             {
                 "security": {
@@ -958,7 +982,7 @@ def _row_evidence(
         },
         "observation": observation,
         "evidence_time": row.source_timestamp,
-        "available_at": None,
+        "available_at": _as_china_time(batch.retrieved_at).isoformat(),
         "retrieved_at": _as_china_time(batch.retrieved_at).isoformat(),
         "locator": {"uri": row.evidence_locator, "observation": "source row"},
         "limitations": (

@@ -85,5 +85,5 @@ def source_error_result(error: IntradayReplaySourceError) -> dict[str, Any]:
     return {
         "source_operation": error.source_operation,
         "code": error.code,
-        "message": str(error),
+        "message": "The replay source rejected the request under its safe contract.",
     }

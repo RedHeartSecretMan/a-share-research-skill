@@ -135,6 +135,17 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
             [result["records"][0]["evidence_ids"][0]],
         )
 
+    def test_tracer_never_promotes_coverage_without_later_adjudication(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "qualified"},
+        )
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(
+            result["limitations"][0]["code"],
+            "intraday_replay_coverage_not_adjudicated",
+        )
+
     def test_szse_float_noise_is_fixed_and_duplicate_timestamp_is_deterministic(
         self,
     ) -> None:
@@ -189,6 +200,15 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
             policy_result["limitations"][0]["code"], "source_policy_not_satisfied"
         )
 
+        historical = replay_request("SSE:600519")
+        historical["as_of"] = "2026-08-03"
+        historical_result = self.run_task(historical)
+        self.assertEqual(historical_result["status"], "blocked")
+        self.assertEqual(
+            historical_result["source_errors"][0]["code"],
+            "source_retrieved_after_research_boundary",
+        )
+
     def test_real_entrypoint_returns_blocked_json_without_a_default_source(
         self,
     ) -> None:
@@ -228,6 +248,21 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         for scenario, source_code in (
             ("unknown_timestamp", "timestamp_semantics_unverified"),
             ("forward_adjusted", "unsupported_price_adjustment"),
+        ):
+            with self.subTest(scenario=scenario):
+                result = self.run_task(
+                    replay_request("SSE:600519"),
+                    environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": scenario},
+                )
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["source_errors"][0]["code"], source_code)
+
+    def test_source_contract_fails_closed_without_calendar_or_zero_no_trade(
+        self,
+    ) -> None:
+        for scenario, source_code in (
+            ("missing_calendar", "completed_trading_calendar_unverified"),
+            ("no_trade_nonzero", "no_trade_volume_amount_conflict"),
         ):
             with self.subTest(scenario=scenario):
                 result = self.run_task(
