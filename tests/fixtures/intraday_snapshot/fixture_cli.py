@@ -32,6 +32,7 @@ def _retrieved_at_for_scenario() -> datetime:
         "opening_auction": (9, 20, 5),
         "midday_break": (12, 0, 5),
         "midday_pair_gap": (12, 0, 5),
+        "midday_not_last": (12, 0, 5),
         "closing_auction": (14, 58, 5),
         "post_close": (15, 30, 5),
     }
@@ -95,10 +96,15 @@ class FixtureTongdaxinClient:
             values["cache_state"] = "unknown"
         if scenario == "missing_cache":
             values.pop("cache_state")
+        if scenario in {"midday_break", "midday_pair_gap"}:
+            values["observation_boundary"] = "morning_last_compatible"
+        if scenario == "midday_not_last":
+            values["observation_boundary"] = "morning_observation"
         observed_times = {
             "opening_auction": "09:20:00",
             "midday_break": "11:29:50",
             "midday_pair_gap": "11:28:00",
+            "midday_not_last": "10:00:00",
             "closing_auction": "14:58:00",
             "source_stale": "10:28:00",
             "session_mismatch": "10:30:00",
@@ -189,6 +195,7 @@ class FixtureTransport:
             "opening_auction": "20260803092002",
             "midday_break": "20260803112955",
             "midday_pair_gap": "20260803112600",
+            "midday_not_last": "20260803100000",
             "closing_auction": "20260803145802",
             "source_stale": "20260803102800",
             "pair_gap": "20260803102800",
@@ -199,6 +206,10 @@ class FixtureTransport:
             quote[31] = "indicative_auction"
         elif scenario == "unknown_price_type":
             quote[31] = "unknown_price_type"
+        if scenario in {"midday_break", "midday_pair_gap"}:
+            quote[32] = "morning_last_compatible"
+        elif scenario == "midday_not_last":
+            quote[32] = "morning_observation"
         if scenario == "core_price_mismatch":
             current[2] = "1680.26"
             quote[3] = "1680.26"

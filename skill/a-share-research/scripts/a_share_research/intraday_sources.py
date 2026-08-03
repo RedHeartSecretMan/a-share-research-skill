@@ -202,11 +202,22 @@ class TongdaxinIntradayOperation:
         cache_state_value = quote.get("cache_state")
         cache_state = None if cache_state_value is None else str(cache_state_value)
         trading_status = "auction" if price_type == "indicative_auction" else "traded"
-        observation_boundary = (
-            "morning_last_compatible"
-            if session_at(query.retrieved_at) == "midday_break"
-            else "current_session"
-        )
+        if session_at(query.retrieved_at) == "midday_break":
+            if "observation_boundary" not in quote:
+                raise _source_error(
+                    self.operation_id,
+                    "unknown_observation_boundary",
+                    "The TongdaXin quote does not establish the last compatible morning observation.",
+                )
+            if quote.get("observation_boundary") != "morning_last_compatible":
+                raise _source_error(
+                    self.operation_id,
+                    "incompatible_observation_boundary",
+                    "The TongdaXin quote is not identified as the last compatible morning observation.",
+                )
+            observation_boundary = "morning_last_compatible"
+        else:
+            observation_boundary = "current_session"
         quote_id = f"intraday-tdx-quote-{query.security}-{observed_at.isoformat()}"
         bar_id = f"intraday-tdx-date-{query.security}-{trading_date.isoformat()}"
         locator = f"mootdx://std/quote/{query.code}"
@@ -329,11 +340,16 @@ class TencentIntradayOperation:
             self.operation_id,
         )
         trading_status = "auction" if price_type == "indicative_auction" else "traded"
-        observation_boundary = (
-            "morning_last_compatible"
-            if session_at(query.retrieved_at) == "midday_break"
-            else "current_session"
-        )
+        if session_at(query.retrieved_at) == "midday_break":
+            if current.observation_boundary != "morning_last_compatible":
+                raise _source_error(
+                    self.operation_id,
+                    "unknown_observation_boundary",
+                    "The Tencent quote does not establish the last compatible morning observation.",
+                )
+            observation_boundary = "morning_last_compatible"
+        else:
+            observation_boundary = "current_session"
         evidence_id = (
             f"intraday-tencent-{query.security}-{current.evidence_time.isoformat()}"
         )

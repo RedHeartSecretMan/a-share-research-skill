@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Collection
 
@@ -197,6 +197,16 @@ def build_intraday_snapshot_result(
                 "source_fields": ["servertime", "qt.timestamp"],
                 "calculation": "absolute_time_difference_seconds@1",
             },
+            **(
+                {
+                    "observation_times.observation_boundary": {
+                        "evidence_ids": core_evidence,
+                        "source_fields": ["observation_boundary"],
+                    }
+                }
+                if result_session == "midday_break"
+                else {}
+            ),
         },
         "brief": {
             "status": "limited",
@@ -336,6 +346,14 @@ def _pair_incompatibility(
             return (
                 "intraday_morning_observation_not_last",
                 "The midday result requires each source to identify its morning-last observation boundary.",
+            )
+        if any(
+            not _is_morning_continuous(item.observed_at)
+            for item in (baseline, cross_check)
+        ):
+            return (
+                "intraday_morning_observation_out_of_window",
+                "The midday result requires observations from the morning continuous session.",
             )
     elif any(
         item.session_state != expected_session for item in (baseline, cross_check)
@@ -493,6 +511,11 @@ def _result_session(
     ):
         return None
     return "midday_break"
+
+
+def _is_morning_continuous(value: datetime) -> bool:
+    observed_time = value.timetz().replace(tzinfo=None)
+    return time(9, 30) <= observed_time <= time(11, 30)
 
 
 def _seconds_text(value: float) -> str:

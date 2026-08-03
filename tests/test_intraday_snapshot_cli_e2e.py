@@ -410,6 +410,17 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             {item["code"] for item in result["conflicts"]},
         )
 
+    def test_midday_non_last_morning_marker_cannot_be_promoted(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "midday_not_last"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["source_errors"][0]["code"], "incompatible_observation_boundary"
+        )
+
     def test_unknown_tencent_price_type_blocks_closed(self) -> None:
         result = self.run_task(
             intraday_request("SSE:600519"),
