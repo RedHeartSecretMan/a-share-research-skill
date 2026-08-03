@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
@@ -12,6 +12,7 @@ from .intraday_contract import (
     IntradayObservation,
     IntradayQuery,
     IntradaySourceError,
+    session_at,
 )
 
 
@@ -66,17 +67,43 @@ def _price(value: object, operation: str, field: str) -> str:
     return format(parsed.quantize(Decimal("0.01")), "f")
 
 
-def _continuous_session(observed_at: datetime, operation: str) -> str:
-    observed_time = observed_at.timetz().replace(tzinfo=None)
-    if time(9, 30) <= observed_time <= time(11, 30) or time(
-        13, 0
-    ) <= observed_time < time(14, 57):
-        return "continuous"
+def _session_state(observed_at: datetime, operation: str) -> str:
+    state = session_at(observed_at)
+    if state is not None:
+        return state
     raise _source_error(
         operation,
         "inapplicable_session",
-        "The source observation is not from continuous auction trading.",
+        "The source observation is outside an applicable trading session.",
     )
+
+
+def _price_type(
+    source_value: object,
+    session_state: str,
+    operation: str,
+) -> str:
+    expected = (
+        "indicative_auction"
+        if session_state in {"opening_auction", "closing_auction"}
+        else "latest_traded"
+    )
+    if source_value is None:
+        if expected == "latest_traded":
+            return expected
+        raise _source_error(
+            operation,
+            "unknown_price_type",
+            "The auction source observation does not identify an indicative price.",
+        )
+    value = str(source_value)
+    if value != expected:
+        raise _source_error(
+            operation,
+            "incompatible_price_type",
+            "The source price type is incompatible with its trading session.",
+        )
+    return value
 
 
 class TongdaxinIntradayOperation:
@@ -149,7 +176,10 @@ class TongdaxinIntradayOperation:
             server_time,
             tzinfo=query.retrieved_at.tzinfo,
         )
-        session_state = _continuous_session(observed_at, self.operation_id)
+        session_state = _session_state(observed_at, self.operation_id)
+        price_type = _price_type(
+            quote.get("price_type"), session_state, self.operation_id
+        )
         price_values = {
             field: _price(quote.get(source), self.operation_id, source)
             for field, source in {
@@ -163,6 +193,9 @@ class TongdaxinIntradayOperation:
         volume = Decimal(_text_decimal(quote.get("vol"), self.operation_id, "vol"))
         volume_shares = format(volume * Decimal(100), "f")
         amount_cny = _text_decimal(quote.get("amount"), self.operation_id, "amount")
+        cache_state = quote.get("cache_state", "source_timestamp")
+        if cache_state is not None:
+            cache_state = str(cache_state)
         quote_id = f"intraday-tdx-quote-{query.security}-{observed_at.isoformat()}"
         bar_id = f"intraday-tdx-date-{query.security}-{trading_date.isoformat()}"
         locator = f"mootdx://std/quote/{query.code}"
@@ -177,7 +210,8 @@ class TongdaxinIntradayOperation:
                 "trading_date": trading_date.isoformat(),
                 "session_state": session_state,
                 "trading_status": "traded",
-                "price_type": "latest_traded",
+                "price_type": price_type,
+                "cache_state": cache_state,
                 "date_basis_evidence_id": bar_id,
             },
             "observed_value": {
@@ -228,7 +262,7 @@ class TongdaxinIntradayOperation:
             retrieved_at=query.retrieved_at,
             session_state=session_state,
             trading_status="traded",
-            price_type="latest_traded",
+            price_type=price_type,
             latest_price=price_values["latest_price"],
             open_price=price_values["open_price"],
             high_price=price_values["high_price"],
@@ -247,6 +281,7 @@ class TongdaxinIntradayOperation:
                 "cumulative_volume": ("vol",),
                 "cumulative_amount": ("amount",),
             },
+            cache_state=cache_state,
         )
 
 
@@ -274,7 +309,12 @@ class TencentIntradayOperation:
                 "incomplete_observation",
                 "Tencent did not establish the current intraday core-price observation.",
             )
-        session_state = _continuous_session(current.evidence_time, self.operation_id)
+        session_state = _session_state(current.evidence_time, self.operation_id)
+        price_type = _price_type(
+            current.price_type if current.price_type == "indicative_auction" else None,
+            session_state,
+            self.operation_id,
+        )
         evidence_id = (
             f"intraday-tencent-{query.security}-{current.evidence_time.isoformat()}"
         )
@@ -289,7 +329,7 @@ class TencentIntradayOperation:
                 "trading_date": query.as_of.isoformat(),
                 "session_state": session_state,
                 "trading_status": "traded",
-                "price_type": "latest_traded",
+                "price_type": price_type,
             },
             "observed_value": {
                 "latest_price": current.close_value,
@@ -312,7 +352,7 @@ class TencentIntradayOperation:
             retrieved_at=current.retrieved_at,
             session_state=session_state,
             trading_status="traded",
-            price_type="latest_traded",
+            price_type=price_type,
             latest_price=current.close_value,
             open_price=current.open_value,
             high_price=current.high_value,
@@ -326,4 +366,5 @@ class TencentIntradayOperation:
                 "high": ("day.high",),
                 "low": ("day.low",),
             },
+            cache_state=current.availability_status,
         )

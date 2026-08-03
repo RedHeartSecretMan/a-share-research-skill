@@ -17,12 +17,12 @@ ENTRYPOINT = (
 )
 
 
-def intraday_request(security: str) -> dict[str, object]:
+def intraday_request(security: str, *, as_of: str = "2026-08-03") -> dict[str, object]:
     return {
         "schema_version": "1.0",
         "task_type": "intraday_market_signal",
         "subjects": [{"security": security}],
-        "as_of": "2026-08-03",
+        "as_of": as_of,
         "window": None,
         "parameters": {},
         "source_policy": {
@@ -303,6 +303,150 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             result["limitations"][0]["code"],
             "intraday_source_pair_incompatible",
         )
+
+    def test_active_source_observation_older_than_sixty_seconds_blocks(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "source_stale"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn(
+            "intraday_observation_too_old",
+            {item["code"] for item in result["conflicts"]},
+        )
+
+    def test_active_source_pair_more_than_sixty_seconds_apart_blocks(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "pair_gap"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn(
+            "intraday_source_pair_gap_exceeded",
+            {item["code"] for item in result["conflicts"]},
+        )
+
+    def test_opening_auction_uses_indicative_prices_from_both_sources(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "opening_auction"},
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["session_state"], "opening_auction")
+        self.assertEqual(result["price_type"], "indicative_auction")
+
+    def test_closing_auction_uses_indicative_prices_from_both_sources(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "closing_auction"},
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["session_state"], "closing_auction")
+        self.assertEqual(result["price_type"], "indicative_auction")
+
+    def test_midday_break_retains_the_last_compatible_morning_pair(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "midday_break"},
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["session_state"], "midday_break")
+        self.assertEqual(result["price_type"], "latest_traded")
+        self.assertEqual(
+            result["observation_times"]["tongdaxin_baseline"],
+            "2026-08-03T11:29:50+08:00",
+        )
+        self.assertEqual(
+            result["observation_times"]["tencent_cross_check"],
+            "2026-08-03T11:29:55+08:00",
+        )
+        self.assertEqual(
+            result["snapshot"]["cumulative_volume"],
+            {"value": "1234500", "unit": "shares"},
+        )
+
+    def test_unknown_source_cache_state_blocks_with_evidence(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "unknown_cache"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn(
+            "intraday_cache_state_unknown",
+            {item["code"] for item in result["conflicts"]},
+        )
+        self.assertGreaterEqual(len(result["evidence"]), 1)
+
+    def test_pre_open_returns_a_structured_blocked_result(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "pre_open"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["limitations"][0]["code"], "intraday_session_not_applicable"
+        )
+
+    def test_post_close_returns_a_structured_blocked_result(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "post_close"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["limitations"][0]["code"], "intraday_session_not_applicable"
+        )
+
+    def test_historical_and_future_dates_are_domain_blocked_with_exit_zero(
+        self,
+    ) -> None:
+        for as_of, expected_code in (
+            ("2026-08-02", "intraday_as_of_not_current"),
+            ("2026-08-04", "intraday_as_of_not_current"),
+        ):
+            with self.subTest(as_of=as_of):
+                result = self.run_task(intraday_request("SSE:600519", as_of=as_of))
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["limitations"][0]["code"], expected_code)
+
+    def test_non_trading_date_is_domain_blocked(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519", as_of="2026-08-08"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "non_trading"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["limitations"][0]["code"], "intraday_non_trading_date")
+
+    def test_source_session_mismatch_is_structured_blocked(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "session_mismatch"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn(
+            "intraday_session_mismatch",
+            {item["code"] for item in result["conflicts"]},
+        )
+
+    def test_missing_source_time_preserves_the_other_source_diagnostic(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "missing_time"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["source_errors"][0]["code"], "unknown_schema")
+        self.assertGreaterEqual(len(result["evidence"]), 1)
 
 
 if __name__ == "__main__":

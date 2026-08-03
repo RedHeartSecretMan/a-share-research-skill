@@ -688,6 +688,11 @@ class TencentDailyLineOperation:
                 )
             is_live_row = trading_date == quote_time.date()
             before_close = is_live_row and quote_time.time() < time(15, 0)
+            live_price_type = "intraday_last"
+            if is_live_row and len(quote_fields) > 31:
+                declared_price_type = quote_fields[31]
+                if declared_price_type in {"latest_traded", "indicative_auction"}:
+                    live_price_type = declared_price_type
             suspended = (
                 is_live_row
                 and quote_time.time() >= time(15, 0)
@@ -713,7 +718,7 @@ class TencentDailyLineOperation:
                     volume_shares=_volume_shares(
                         row[5], self.operation_id, lot_size=100
                     ),
-                    price_type="intraday_last" if before_close else "close",
+                    price_type=live_price_type if before_close else "close",
                     trading_status=(
                         "suspended"
                         if suspended
