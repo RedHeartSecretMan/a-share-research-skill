@@ -16,7 +16,9 @@ sys.path.insert(0, str(SCRIPTS))
 
 from a_share_research.cli import main  # noqa: E402
 from a_share_research.intraday_replay_contract import (  # noqa: E402
+    IntradayReplayDailySourceBatch,
     IntradayReplaySourceBatch,
+    IntradayReplaySourceError,
     IntradayReplaySourceRow,
 )
 
@@ -70,6 +72,15 @@ class FixtureIntradayReplayOperation:
             ),
         )
         scenario = os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO")
+        trading_status = (
+            "suspended"
+            if scenario
+            in {
+                "single_source_suspension",
+                "suspension_confirmed",
+            }
+            else "traded"
+        )
         volume_unit = "shares"
         volume_lot_size = None
         price_adjustment = "unadjusted"
@@ -118,6 +129,13 @@ class FixtureIntradayReplayOperation:
                 ),
                 rows[1],
             )
+        elif scenario == "zero_volume":
+            rows = (
+                replace(rows[0], volume="0", amount="0.00"),
+                replace(rows[1], volume="0", amount="0.00"),
+            )
+        if trading_status == "suspended":
+            rows = ()
         completed_trading_dates = _completed_dates(replay_date)
         if scenario == "missing_calendar":
             completed_trading_dates = ()
@@ -136,14 +154,135 @@ class FixtureIntradayReplayOperation:
             volume_lot_size=volume_lot_size,
             completed_trading_dates=completed_trading_dates,
             rows=rows,
+            trading_status=trading_status,
+        )
+
+
+class FixtureIntradayReplayDailyOperation:
+    def __init__(self, operation_id: str = "fixture_daily_boundary@1") -> None:
+        self.operation_id = operation_id
+
+    def collect(self, query: object) -> IntradayReplayDailySourceBatch:
+        replay_query = query
+        scenario = os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO")
+        if scenario == "daily_source_error":
+            raise IntradayReplaySourceError(
+                self.operation_id,
+                "daily_source_unavailable",
+                "Synthetic daily source unavailable.",
+            )
+        daily_status = "suspended" if scenario == "suspension_confirmed" else "traded"
+        close_price = "10.23" if scenario == "daily_conflict" else "10.22"
+        previous_close = "9.90" if scenario == "ex_right_only" else "10.00"
+        previous_close_basis = (
+            "ex_right_reference" if scenario == "ex_right_only" else "actual_unadjusted"
+        )
+        daily_volume_unit = (
+            "hands" if scenario == "daily_unit_normalization" else "shares"
+        )
+        daily_volume = (
+            "3"
+            if scenario == "daily_unit_normalization"
+            else "0"
+            if scenario == "zero_volume"
+            else "300"
+        )
+        daily_amount_unit = (
+            "CNY_thousand" if scenario == "daily_unit_normalization" else "CNY"
+        )
+        daily_amount = (
+            "3.059"
+            if scenario == "daily_unit_normalization"
+            else "0.00"
+            if scenario == "zero_volume"
+            else "3059.00"
+        )
+        daily_open = "10.11" if scenario == "daily_auction_explained" else "10.10"
+        comparison_explanations = (
+            (("open", "auction_bucketing"),)
+            if scenario == "daily_auction_explained"
+            else ()
+        )
+        daily_security = (
+            "SZSE:000001"
+            if scenario == "daily_security_mismatch"
+            else replay_query.security  # type: ignore[attr-defined]
+        )
+        daily_date = (
+            replay_query.replay_date - timedelta(days=1)  # type: ignore[attr-defined]
+            if scenario == "daily_date_mismatch"
+            else replay_query.replay_date  # type: ignore[attr-defined]
+        )
+        return IntradayReplayDailySourceBatch(
+            operation_id=self.operation_id,
+            contract_version="1.0",
+            security=daily_security,
+            trading_date=daily_date,
+            retrieved_at=RETRIEVED_AT,
+            experimental=scenario != "daily_qualified",
+            price_adjustment="unadjusted",
+            price_unit="CNY/share",
+            price_precision="0.01",
+            price_minimum_tick="0.01",
+            volume_unit=daily_volume_unit,
+            amount_unit=daily_amount_unit,
+            open_price=None if daily_status == "suspended" else daily_open,
+            high_price=None if daily_status == "suspended" else "10.25",
+            low_price=None if daily_status == "suspended" else "10.09",
+            close_price=None if daily_status == "suspended" else close_price,
+            actual_close_price=None if daily_status == "suspended" else close_price,
+            volume="0" if daily_status == "suspended" else daily_volume,
+            amount="0.00" if daily_status == "suspended" else daily_amount,
+            volume_lot_size="100" if daily_volume_unit == "hands" else None,
+            amount_scale="1000" if daily_amount_unit == "CNY_thousand" else "1",
+            trading_status=daily_status,
+            previous_trading_date=date(2026, 7, 31),
+            previous_close=previous_close,
+            previous_close_basis=previous_close_basis,
+            ex_right_reference=None if scenario == "ex_right_only" else "9.90",
+            ex_right_reference_date=None
+            if scenario == "ex_right_only"
+            else date(2026, 7, 31),
+            evidence_locator="fixture:daily:20260803",
+            comparison_explanations=comparison_explanations,
         )
 
 
 if __name__ == "__main__":
+    scenario = os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO")
+    daily_operations = (
+        (
+            FixtureIntradayReplayDailyOperation(
+                operation_id=(
+                    "fixture_intraday_replay@1"
+                    if scenario == "daily_same_operation"
+                    else "fixture_daily_boundary@1"
+                )
+            ),
+        )
+        if scenario
+        in {
+            "daily_agreement",
+            "daily_conflict",
+            "daily_date_mismatch",
+            "daily_qualified",
+            "daily_security_mismatch",
+            "daily_unit_normalization",
+            "daily_auction_explained",
+            "daily_source_error",
+            "daily_same_operation",
+            "zero_volume",
+            "ex_right_only",
+            "single_source_suspension",
+            "suspension_confirmed",
+        }
+        else ()
+    )
     raise SystemExit(
         main(
             sys.argv[1:],
             research_now=RETRIEVED_AT,
             intraday_replay_operations=(FixtureIntradayReplayOperation(),),
+            intraday_replay_daily_operations=daily_operations,
         )
     )

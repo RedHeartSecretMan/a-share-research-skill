@@ -146,6 +146,160 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
             "intraday_replay_coverage_not_adjudicated",
         )
 
+    def test_daily_boundary_agreement_is_visible_at_the_public_seam(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "daily_agreement"},
+        )
+
+        self.assertEqual(result["daily_boundary"]["status"], "cross_checked")
+        self.assertEqual(
+            result["daily_boundary"]["close"],
+            {"value": "10.22", "unit": "CNY/share"},
+        )
+        self.assertEqual(
+            result["daily_boundary"]["volume"], {"value": "300", "unit": "shares"}
+        )
+        self.assertEqual(
+            result["daily_boundary"]["amount"], {"value": "3059.00", "unit": "CNY"}
+        )
+
+    def test_unexplained_daily_core_conflict_blocks_and_retains_both_sources(
+        self,
+    ) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "daily_conflict"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["daily_boundary"]["status"], "blocked")
+        self.assertEqual(
+            result["conflicts"][0]["code"], "daily_boundary_core_value_conflict"
+        )
+        self.assertEqual(len(result["records"]), 2)
+        self.assertEqual(len(result["source_operations"]), 2)
+        self.assertEqual(len(result["evidence"]), 3)
+
+    def test_daily_identity_and_date_mismatch_fail_closed(self) -> None:
+        for scenario, source_code in (
+            ("daily_security_mismatch", "daily_source_security_mismatch"),
+            ("daily_date_mismatch", "daily_source_trading_date_mismatch"),
+        ):
+            with self.subTest(scenario=scenario):
+                result = self.run_task(
+                    replay_request("SSE:600519"),
+                    environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": scenario},
+                )
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["source_errors"][0]["code"], source_code)
+
+    def test_confirmed_suspension_is_a_state_result_without_replay_outputs(
+        self,
+    ) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "suspension_confirmed"},
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["replay"]["trading_status"], "confirmed_suspended")
+        self.assertEqual(result["daily_boundary"]["status"], "suspended_observation")
+        self.assertEqual(result["records"], [])
+        self.assertNotIn("summary", result)
+        self.assertEqual(len(result["source_operations"]), 2)
+        self.assertEqual(len(result["evidence"]), 1)
+
+    def test_ex_right_reference_does_not_replace_actual_previous_close(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "ex_right_only"},
+        )
+
+        baselines = result["daily_boundary"]["baselines"]
+        self.assertEqual(baselines["actual_unadjusted_close"]["status"], "unavailable")
+        self.assertEqual(baselines["ex_right_reference"]["status"], "available")
+        self.assertEqual(baselines["comparability"]["status"], "not_comparable")
+        unavailable = {item["field"] for item in result["unavailable_fields"]}
+        self.assertTrue({"replay.opening_gap", "replay.relative_return"} <= unavailable)
+        self.assertEqual(len(result["records"]), 2)
+
+    def test_daily_unit_and_tick_normalization_remains_in_lineage(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={
+                "A_SHARE_INTRADAY_REPLAY_SCENARIO": "daily_unit_normalization"
+            },
+        )
+
+        self.assertEqual(result["daily_boundary"]["status"], "cross_checked")
+        lineage = result["daily_boundary"]["lineage"]
+        self.assertEqual(lineage["daily"]["volume_unit"], "hands")
+        self.assertEqual(lineage["daily"]["amount_unit"], "CNY_thousand")
+        self.assertEqual(lineage["daily"]["price_minimum_tick"], "0.01")
+
+    def test_qualified_auction_difference_is_explained_not_hidden(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "daily_auction_explained"},
+        )
+
+        self.assertEqual(result["daily_boundary"]["status"], "cross_checked")
+        open_comparison = result["daily_boundary"]["comparison"]["fields"]["open"]
+        self.assertEqual(open_comparison["status"], "explained_difference")
+        self.assertEqual(open_comparison["explanation"], "auction_bucketing")
+        self.assertEqual(result["conflicts"], [])
+
+    def test_unavailable_daily_operation_degrades_without_dropping_minutes(
+        self,
+    ) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "daily_source_error"},
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["daily_boundary"]["status"], "unavailable")
+        self.assertEqual(result["source_errors"][0]["code"], "daily_source_unavailable")
+        self.assertEqual(len(result["records"]), 2)
+
+    def test_single_source_suspension_is_not_confirmed(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={
+                "A_SHARE_INTRADAY_REPLAY_SCENARIO": "single_source_suspension"
+            },
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["conflicts"][0]["code"], "suspension_not_independently_confirmed"
+        )
+        self.assertEqual(result["records"], [])
+        self.assertNotEqual(result["replay"]["trading_status"], "confirmed_suspended")
+
+    def test_zero_volume_or_flat_price_does_not_imply_suspension(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "zero_volume"},
+        )
+
+        self.assertEqual(result["daily_boundary"]["status"], "cross_checked")
+        self.assertEqual(result["replay"]["trading_status"], "traded")
+        self.assertNotEqual(result["daily_boundary"]["trading_status"], "suspended")
+        self.assertEqual(len(result["records"]), 2)
+
+    def test_daily_operation_cannot_claim_the_minute_operation_identity(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "daily_same_operation"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["source_errors"][0]["code"], "daily_operation_not_independent"
+        )
+
     def test_szse_float_noise_is_fixed_and_duplicate_timestamp_is_deterministic(
         self,
     ) -> None:

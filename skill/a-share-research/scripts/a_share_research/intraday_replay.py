@@ -9,7 +9,16 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Collection
 
+from .intraday_daily_boundary import (
+    DailyBoundaryMinute,
+    assess_daily_boundary,
+    build_unavailable_boundary,
+    normalize_price_to_tick,
+    validate_daily_batch,
+)
 from .intraday_replay_contract import (
+    IntradayReplayDailySourceBatch,
+    IntradayReplayDailySourceOperation,
     IntradayReplayQuery,
     IntradayReplaySourceBatch,
     IntradayReplaySourceError,
@@ -67,6 +76,7 @@ def build_intraday_replay_result(
     request: dict[str, Any],
     operations: Collection[IntradayReplaySourceOperation],
     research_now: datetime,
+    daily_operations: Collection[IntradayReplayDailySourceOperation] = (),
 ) -> dict[str, Any]:
     """Collect one source operation and project its normalized replay rows."""
 
@@ -154,22 +164,211 @@ def build_intraday_replay_result(
             source_errors=source_errors,
         )
 
-    if not rows:
-        return _blocked_result(
+    daily_boundary = build_unavailable_boundary(
+        "daily_boundary_source_unavailable",
+        "No independent daily boundary operation is configured.",
+    )
+    daily_batch: IntradayReplayDailySourceBatch | None = None
+    daily_evidence: list[dict[str, Any]] = []
+    daily_errors: list[dict[str, Any]] = []
+    daily_unavailable_fields: list[dict[str, str]] = []
+    daily_conflicts: list[dict[str, Any]] = []
+    daily_operation_list = list(daily_operations)
+    if len(daily_operation_list) > 1:
+        daily_errors.append(
+            {
+                "source_operation": "intraday_replay_daily_boundary",
+                "code": "daily_boundary_requires_one_source_operation",
+                "message": (
+                    "The replay daily boundary must use exactly one independent "
+                    "source operation."
+                ),
+            }
+        )
+        return _project_result(
             request,
-            "empty_intraday_replay",
-            "The replay source returned no admissible minute records.",
-            query=query,
-            source_operations=[normalized_batch],
+            query,
+            normalized_batch,
+            rows,
+            conflicts,
+            status="blocked",
+            daily_boundary=daily_boundary,
+            source_errors=daily_errors,
+        )
+    if daily_operation_list:
+        daily_operation = daily_operation_list[0]
+        daily_operation_id = getattr(daily_operation, "operation_id", None)
+        if not isinstance(daily_operation_id, str) or not _SAFE_OPERATION_ID.fullmatch(
+            daily_operation_id
+        ):
+            daily_errors.append(
+                {
+                    "source_operation": "intraday_replay_daily_boundary",
+                    "code": "unsafe_daily_source_operation_id",
+                    "message": (
+                        "The daily source operation identifier is not in the safe "
+                        "vocabulary."
+                    ),
+                }
+            )
+            return _project_result(
+                request,
+                query,
+                normalized_batch,
+                rows,
+                conflicts,
+                status="blocked",
+                daily_boundary=daily_boundary,
+                source_errors=daily_errors,
+            )
+        try:
+            daily_batch = validate_daily_batch(
+                daily_operation.collect(query),
+                daily_operation_id,
+                normalized_batch.operation_id,
+                query,
+            )
+            assessment = assess_daily_boundary(
+                daily_batch,
+                query,
+                normalized_batch.operation_id,
+                [
+                    DailyBoundaryMinute(
+                        interval_start=row.interval_start,
+                        trading_phase=row.trading_phase,
+                        trade_state=row.trade_state,
+                        ohlc=row.ohlc,
+                        volume=row.volume["value"],
+                        amount=row.amount["value"],
+                        evidence_id=row.evidence_id,
+                    )
+                    for row in rows
+                ],
+                normalized_batch.price_minimum_tick or normalized_batch.price_precision,
+            )
+            daily_boundary = assessment.boundary
+            daily_evidence = assessment.evidence
+            daily_conflicts = assessment.conflicts
+            daily_unavailable_fields = assessment.unavailable_fields
+        except IntradayReplaySourceError as error:
+            daily_errors.append(source_error_result(error))
+            daily_boundary = build_unavailable_boundary(
+                error.code,
+                "The independent daily boundary source was unavailable under its safe contract.",
+            )
+            if _daily_error_blocks(error.code):
+                return _project_result(
+                    request,
+                    query,
+                    normalized_batch,
+                    rows,
+                    conflicts,
+                    status="blocked",
+                    daily_boundary=daily_boundary,
+                    source_errors=daily_errors,
+                )
+        except Exception:
+            daily_errors.append(
+                {
+                    "source_operation": daily_operation_id,
+                    "code": "daily_operation_failure",
+                    "message": "The daily boundary operation failed safely.",
+                }
+            )
+            daily_boundary = build_unavailable_boundary(
+                "daily_operation_failure",
+                "The independent daily boundary was not available.",
+            )
+
+    source_errors.extend(daily_errors)
+    if daily_conflicts:
+        conflicts = [*conflicts, *daily_conflicts]
+    if (
+        normalized_batch.trading_status == "suspended"
+        or daily_boundary.get("trading_status") == "suspended"
+    ):
+        if (
+            normalized_batch.trading_status == "suspended"
+            and daily_boundary.get("trading_status") == "suspended"
+            and not rows
+        ):
+            return _project_result(
+                request,
+                query,
+                normalized_batch,
+                [],
+                conflicts,
+                status="limited",
+                daily_boundary=daily_boundary,
+                daily_batch=daily_batch,
+                daily_evidence=daily_evidence,
+                source_errors=source_errors,
+                unavailable_fields=daily_unavailable_fields,
+                confirmed_suspension=True,
+            )
+        conflicts.append(
+            {
+                "code": "suspension_not_independently_confirmed",
+                "message": (
+                    "A suspension observation was not confirmed by both the minute "
+                    "and independent daily operations."
+                ),
+                "evidence_ids": [
+                    *[row.evidence_id for row in rows],
+                    *daily_boundary.get("evidence_ids", []),
+                ],
+            }
         )
 
+    if not rows:
+        if normalized_batch.trading_status == "traded" and not daily_operation_list:
+            return _blocked_result(
+                request,
+                "empty_intraday_replay",
+                "The replay source returned no admissible minute records.",
+                query=query,
+                source_operations=[normalized_batch],
+                source_errors=source_errors,
+            )
+        return _project_result(
+            request,
+            query,
+            normalized_batch,
+            [],
+            conflicts,
+            status="blocked",
+            daily_boundary=daily_boundary,
+            daily_batch=daily_batch,
+            daily_evidence=daily_evidence,
+            source_errors=source_errors,
+            unavailable_fields=daily_unavailable_fields,
+        )
+
+    result_status = "blocked" if conflicts else "limited"
     return _project_result(
         request,
         query,
         normalized_batch,
         rows,
         conflicts,
+        status=result_status,
+        daily_boundary=daily_boundary,
+        daily_batch=daily_batch,
+        daily_evidence=daily_evidence,
+        source_errors=source_errors,
+        unavailable_fields=daily_unavailable_fields,
     )
+
+
+def _daily_error_blocks(code: str) -> bool:
+    return code in {
+        "daily_source_security_mismatch",
+        "daily_source_trading_date_mismatch",
+        "daily_operation_not_independent",
+        "daily_source_operation_mismatch",
+        "daily_boundary_requires_one_source_operation",
+        "daily_internal_close_conflict",
+    }
 
 
 def _normalize_query(
@@ -381,6 +580,18 @@ def _validate_batch(
             "unknown_amount_unit",
             "The replay source amount unit is not CNY.",
         )
+    if batch.trading_status not in {"traded", "suspended"}:
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "unknown_trading_status",
+            "The replay source trading status is not supported.",
+        )
+    if batch.trading_status == "suspended" and batch.rows:
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "suspended_source_has_minute_rows",
+            "A suspended minute source cannot also provide a minute sequence.",
+        )
     if batch.retrieved_at.tzinfo is None or batch.retrieved_at.utcoffset() != timedelta(
         hours=8
     ):
@@ -397,6 +608,10 @@ def _validate_batch(
             "The replay source was acquired after the research boundary.",
         )
     _positive_decimal(batch.price_precision, batch.operation_id, "price_precision")
+    if batch.price_minimum_tick is not None:
+        _positive_decimal(
+            batch.price_minimum_tick, batch.operation_id, "price_minimum_tick"
+        )
     _positive_decimal(batch.amount_precision, batch.operation_id, "amount_precision")
     if not isinstance(batch.experimental, bool):
         raise IntradayReplaySourceError(
@@ -615,9 +830,11 @@ def _price_text(value: object | None, batch: IntradayReplaySourceBatch) -> str:
             "missing_transaction_price",
             "A traded replay row must provide all unadjusted OHLC values.",
         )
-    precision = _decimal(batch.price_precision, batch.operation_id, "price_precision")
-    return _fixed_decimal_text(
-        value, precision, batch.operation_id, "price", positive=True
+    return normalize_price_to_tick(
+        value,
+        batch.price_minimum_tick or batch.price_precision,
+        batch.operation_id,
+        "price",
     )
 
 
@@ -775,10 +992,27 @@ def _project_result(
     batch: IntradayReplaySourceBatch,
     rows: list[_PreparedRow],
     conflicts: list[dict[str, Any]],
+    *,
+    status: str = "limited",
+    daily_boundary: dict[str, Any] | None = None,
+    daily_batch: IntradayReplayDailySourceBatch | None = None,
+    daily_evidence: list[dict[str, Any]] | None = None,
+    source_errors: list[dict[str, Any]] | None = None,
+    unavailable_fields: list[dict[str, str]] | None = None,
+    confirmed_suspension: bool = False,
 ) -> dict[str, Any]:
     evidence = [_row_evidence(row, query, batch) for row in rows]
+    evidence.extend(daily_evidence or [])
     result_rows = [_row_result(row) for row in rows]
-    all_evidence_ids = [row.evidence_id for row in rows]
+    minute_evidence_ids = [row.evidence_id for row in rows]
+    all_evidence_ids = [*minute_evidence_ids]
+    daily_evidence_ids = [item["id"] for item in daily_evidence or []]
+    all_evidence_ids.extend(daily_evidence_ids)
+    daily_boundary = daily_boundary or {
+        "status": "unavailable",
+        "reason": "daily_boundary_not_run",
+        "evidence_ids": [],
+    }
     field_lineage: dict[str, Any] = {}
     field_lineage.update(
         {
@@ -804,7 +1038,7 @@ def _project_result(
                 "source_fields": ["price_adjustment"],
             },
             "source_operations[0]": {
-                "evidence_ids": all_evidence_ids,
+                "evidence_ids": minute_evidence_ids,
                 "source_fields": [
                     "operation_id",
                     "contract_version",
@@ -814,6 +1048,50 @@ def _project_result(
             },
         }
     )
+    if daily_batch is not None:
+        field_lineage["source_operations[1]"] = {
+            "evidence_ids": daily_evidence_ids,
+            "source_fields": [
+                "operation_id",
+                "contract_version",
+                "experimental",
+                "retrieved_at",
+                "source_role",
+            ],
+        }
+        for field in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "actual_close",
+            "volume",
+            "amount",
+        ):
+            field_lineage[f"daily_boundary.{field}"] = {
+                "evidence_ids": daily_evidence_ids,
+                "source_fields": [field],
+                "calculation": "daily_boundary_cross_check@1",
+            }
+        field_lineage["daily_boundary.lineage"] = {
+            "evidence_ids": daily_evidence_ids,
+            "source_fields": [
+                "price_minimum_tick",
+                "volume_unit",
+                "amount_unit",
+                "comparison_explanations",
+            ],
+            "calculation": "qualified_daily_normalization@1",
+        }
+        field_lineage["daily_boundary.baselines"] = {
+            "evidence_ids": daily_evidence_ids,
+            "source_fields": [
+                "previous_close",
+                "previous_close_basis",
+                "ex_right_reference",
+            ],
+            "calculation": "previous_close_semantics@1",
+        }
     for index, row in enumerate(rows):
         evidence_ids = [row.evidence_id]
         field_lineage.update(
@@ -862,18 +1140,63 @@ def _project_result(
         ),
     }
     limitations = [limitation] if batch.experimental else []
+    if daily_batch is not None and daily_batch.experimental:
+        limitations.append(
+            {
+                "code": "experimental_daily_boundary_source",
+                "message": (
+                    "The independent daily boundary operation is experimental; "
+                    "the result remains limited."
+                ),
+            }
+        )
     limitations.append(
         {
             "code": "intraday_replay_coverage_not_adjudicated",
             "message": (
-                "Trading-phase coverage and independent daily validation are not "
-                "yet adjudicated by this tracer."
+                "Trading-phase coverage remains unadjudicated by this tracer and "
+                "is scoped to the coverage work item."
             ),
         }
     )
+    if daily_boundary.get("status") == "unavailable":
+        limitations.append(
+            {
+                "code": "daily_boundary_unavailable",
+                "message": (
+                    "The independent daily boundary is unavailable; the minute "
+                    "sequence is retained as limited evidence."
+                ),
+            }
+        )
+    source_operations: list[dict[str, Any]] = [
+        {
+            "operation_id": batch.operation_id,
+            "contract_version": batch.contract_version,
+            "experimental": batch.experimental,
+            "retrieved_at": _as_china_time(batch.retrieved_at).isoformat(),
+        }
+    ]
+    if daily_batch is not None:
+        source_operations.append(
+            {
+                "operation_id": daily_batch.operation_id,
+                "contract_version": daily_batch.contract_version,
+                "experimental": daily_batch.experimental,
+                "retrieved_at": _as_china_time(daily_batch.retrieved_at).isoformat(),
+                "source_role": daily_batch.source_role,
+            }
+        )
+    replay: dict[str, Any] = {
+        "security": query.security,
+        "trading_date": query.replay_date.isoformat(),
+        "adjustment": batch.price_adjustment,
+        "record_count": len(result_rows),
+        "trading_status": "confirmed_suspended" if confirmed_suspension else "traded",
+    }
     return {
         "schema_version": request["schema_version"],
-        "status": "limited",
+        "status": status,
         "subjects": [
             {
                 "security": {
@@ -894,36 +1217,26 @@ def _project_result(
             "observed_to": query.replay_date.isoformat(),
             "timezone": "Asia/Shanghai",
         },
-        "replay": {
-            "security": query.security,
-            "trading_date": query.replay_date.isoformat(),
-            "adjustment": batch.price_adjustment,
-            "record_count": len(result_rows),
-        },
+        "replay": replay,
         "records": result_rows,
         "coverage": {
             "status": "not_adjudicated",
             "reason": "coverage_adjudication_is_scoped_to_issue_30",
         },
-        "source_operations": [
-            {
-                "operation_id": batch.operation_id,
-                "contract_version": batch.contract_version,
-                "experimental": batch.experimental,
-                "retrieved_at": _as_china_time(batch.retrieved_at).isoformat(),
-            }
-        ],
+        "source_operations": source_operations,
+        "daily_boundary": daily_boundary,
         "field_lineage": field_lineage,
         "evidence": evidence,
         "conflicts": conflicts,
-        "source_errors": [],
+        "source_errors": source_errors or [],
         "degradations": [],
         "limitations": limitations,
         "unavailable_fields": [
             {
                 "field": "coverage",
                 "reason": "coverage_adjudication_is_scoped_to_issue_30",
-            }
+            },
+            *(unavailable_fields or []),
         ],
     }
 
@@ -978,6 +1291,7 @@ def _row_evidence(
         "basis": {
             "price_adjustment": batch.price_adjustment,
             "price_precision": batch.price_precision,
+            "price_minimum_tick": batch.price_minimum_tick or batch.price_precision,
             "timestamp_timezone": batch.timestamp_timezone,
         },
         "observation": observation,
