@@ -77,13 +77,79 @@ class IntradayLiveProbeTests(unittest.TestCase):
         self.assertEqual(observation["failures"], [])
 
     def test_probe_rejects_json_without_research_result_contract(self) -> None:
-        for payload in ({}, {"schema_version": "1.0", "status": "limited"}):
+        incomplete_payloads = [
+            {},
+            {"schema_version": "1.0", "status": "limited"},
+            {
+                "schema_version": "1.0",
+                "task_type": "intraday_market_signal",
+                "status": "limited",
+            },
+            {
+                "schema_version": "1.0",
+                "task_type": "intraday_market_signal",
+                "status": "supported",
+            },
+            {
+                "schema_version": "1.0",
+                "task_type": "intraday_market_signal",
+                "status": "blocked",
+            },
+        ]
+        for payload in incomplete_payloads:
             with self.subTest(payload=payload):
                 result = live_probe._result_from_process(0, json.dumps(payload), "")
                 self.assertEqual(result["status"], "blocked")
                 self.assertEqual(
                     result["_failures"][0]["code"], "probe_protocol_failure"
                 )
+
+        valid_blocked = {
+            "schema_version": "1.0",
+            "task_type": "intraday_market_signal",
+            "status": "blocked",
+            "subjects": [{"security": "SSE:600519"}],
+            "evidence": [],
+            "limitations": [{"code": "missing_optional_dependency"}],
+        }
+        self.assertEqual(
+            live_probe._result_from_process(0, json.dumps(valid_blocked), ""),
+            valid_blocked,
+        )
+
+        valid_limited = {
+            "schema_version": "1.0",
+            "task_type": "intraday_market_signal",
+            "status": "limited",
+            "subject": {"security": {"exchange": "SSE", "code": "600519"}},
+            "as_of": "2026-08-03",
+            "trading_date": "2026-08-03",
+            "session_state": "continuous",
+            "trading_status": "traded",
+            "price_type": "latest_traded",
+            "source_operations": [
+                "tongdaxin_intraday_snapshot@1",
+                "tencent_intraday_snapshot@1",
+            ],
+            "observation_times": {
+                "tongdaxin_baseline": "2026-08-03T10:30:00+08:00",
+                "tencent_cross_check": "2026-08-03T10:29:58+08:00",
+            },
+            "snapshot": {
+                "latest_price": {},
+                "open": {},
+                "high": {},
+                "low": {},
+            },
+            "evidence": [],
+            "conflicts": [],
+            "source_errors": [],
+            "limitations": [],
+        }
+        self.assertEqual(
+            live_probe._result_from_process(0, json.dumps(valid_limited), ""),
+            valid_limited,
+        )
 
     def test_probe_rejects_same_exchange_override(self) -> None:
         with patch.object(live_probe, "run_probe") as run_probe:

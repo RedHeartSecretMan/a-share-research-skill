@@ -161,6 +161,95 @@ def _probe_environment(home: str) -> dict[str, str]:
     return environment
 
 
+def _nonempty_string_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, str) and bool(item) for item in value)
+    )
+
+
+def _diagnostic_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, Mapping) for item in value)
+    )
+
+
+def _has_observation_contract(value: Mapping[str, object]) -> bool:
+    subject = value.get("subject")
+    if not isinstance(subject, Mapping) or not isinstance(
+        subject.get("security"), Mapping
+    ):
+        return False
+    if not all(
+        isinstance(value.get(field), str)
+        for field in (
+            "as_of",
+            "trading_date",
+            "session_state",
+            "trading_status",
+            "price_type",
+        )
+    ):
+        return False
+    source_operations = value.get("source_operations")
+    if not _nonempty_string_list(source_operations):
+        return False
+    if (
+        len(source_operations) != 2
+        or set(source_operations) != _EXPECTED_SOURCE_OPERATIONS
+    ):
+        return False
+    observation_times = value.get("observation_times")
+    if not isinstance(observation_times, Mapping) or not observation_times:
+        return False
+    if not {"tongdaxin_baseline", "tencent_cross_check"}.issubset(observation_times):
+        return False
+    if not all(
+        isinstance(key, str) and isinstance(item, str)
+        for key, item in observation_times.items()
+    ):
+        return False
+    snapshot = value.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        return False
+    if not {
+        "latest_price",
+        "open",
+        "high",
+        "low",
+    }.issubset(snapshot):
+        return False
+    return all(
+        isinstance(value.get(field), list)
+        for field in (
+            "evidence",
+            "conflicts",
+            "source_errors",
+            "limitations",
+        )
+    )
+
+
+def _has_blocked_contract(value: Mapping[str, object]) -> bool:
+    subjects = value.get("subjects")
+    has_subject = (
+        isinstance(subjects, list)
+        and bool(subjects)
+        and all(isinstance(item, Mapping) for item in subjects)
+    )
+    return (
+        has_subject
+        and isinstance(value.get("evidence"), list)
+        and any(
+            _diagnostic_list(value.get(field))
+            for field in ("limitations", "source_errors", "conflicts")
+        )
+    )
+
+
 def _run_public_request(request: Mapping[str, object]) -> tuple[int, str, str]:
     """Invoke ``entrypoint.py run --request`` with ephemeral input only."""
 
@@ -219,6 +308,11 @@ def _result_from_process(returncode: int, stdout: str, stderr: str) -> dict[str,
         or value.get("schema_version") != "1.0"
         or value.get("task_type") != "intraday_market_signal"
         or value.get("status") not in {"supported", "limited", "blocked"}
+        or (
+            value.get("status") in {"supported", "limited"}
+            and not _has_observation_contract(value)
+        )
+        or (value.get("status") == "blocked" and not _has_blocked_contract(value))
     ):
         return {
             "status": "blocked",
