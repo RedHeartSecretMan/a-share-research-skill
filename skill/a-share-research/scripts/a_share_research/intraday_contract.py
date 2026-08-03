@@ -76,6 +76,9 @@ class IntradayObservation:
     # state must never be silently treated as fresh by the adjudicator.
     cache_state: str | None = None
     observation_boundary: str | None = None
+    previous_close_comparability: str | None = None
+    corporate_action: dict[str, str] | None = None
+    no_trade_confirmed: bool = False
 
 
 class IntradaySourceError(Exception):

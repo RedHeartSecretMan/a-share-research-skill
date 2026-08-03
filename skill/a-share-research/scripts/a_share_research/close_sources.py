@@ -154,6 +154,8 @@ class DailyBarObservation:
     corporate_action: dict[str, str] | None = None
     adjustment: str = "unadjusted"
     observation_boundary: str | None = None
+    previous_close: str | None = None
+    previous_close_basis: str | None = None
 
     @property
     def value(self) -> str:
@@ -691,6 +693,28 @@ class TencentDailyLineOperation:
             before_close = is_live_row and quote_time.time() < time(15, 0)
             live_price_type = "intraday_last"
             observation_boundary = None
+            declared_status = (
+                str(quote_fields[33]).casefold()
+                if len(quote_fields) > 33 and quote_fields[33]
+                else None
+            )
+            if declared_status not in {
+                None,
+                "traded",
+                "suspended",
+                "not_traded",
+                "no_trade",
+            }:
+                raise _operation_error(
+                    self.operation_id,
+                    "unknown_trading_status",
+                    "The Tencent quote metadata has an unknown trading status.",
+                )
+            previous_close_basis = (
+                str(quote_fields[34])
+                if len(quote_fields) > 34 and quote_fields[34]
+                else None
+            )
             if is_live_row and len(quote_fields) > 31:
                 declared_price_type = quote_fields[31]
                 if declared_price_type and declared_price_type not in {
@@ -706,7 +730,7 @@ class TencentDailyLineOperation:
                     live_price_type = declared_price_type
             if is_live_row and len(quote_fields) > 32 and quote_fields[32]:
                 observation_boundary = str(quote_fields[32])
-            suspended = (
+            suspended = declared_status in {"suspended", "not_traded", "no_trade"} or (
                 is_live_row
                 and quote_time.time() >= time(15, 0)
                 and quote_volume == 0
@@ -749,6 +773,8 @@ class TencentDailyLineOperation:
                     ),
                     corporate_action=annotation,
                     observation_boundary=observation_boundary,
+                    previous_close=format(previous_close, "f"),
+                    previous_close_basis=previous_close_basis,
                 )
             )
             observed_dates.add(trading_date)
@@ -778,6 +804,8 @@ class TencentDailyLineOperation:
                     available_at=quote_time,
                     retrieved_at=response.retrieved_at,
                     availability_status="source_timestamp",
+                    previous_close=format(previous_close, "f"),
+                    previous_close_basis=previous_close_basis,
                 )
             )
         return observations

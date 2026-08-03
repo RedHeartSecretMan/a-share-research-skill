@@ -374,6 +374,47 @@ class TongdaxinIntradayOperation:
             )
         cache_state = None if cache_state_value is None else str(cache_state_value)
         trading_status = "auction" if price_type == "indicative_auction" else "traded"
+        declared_status = quote.get("trading_status", quote.get("status"))
+        if declared_status is not None:
+            trading_status = str(declared_status).casefold()
+        if trading_status not in {
+            "traded",
+            "suspended",
+            "not_traded",
+            "no_trade",
+            "auction",
+        }:
+            raise _source_error(
+                self.operation_id,
+                "unknown_trading_status",
+                "The TongdaXin quote has an unknown trading status.",
+            )
+        previous_close_basis = str(
+            quote.get("previous_close_basis", "source_reported_unadjudicated")
+        )
+        corporate_action_value = quote.get("corporate_action")
+        if corporate_action_value is not None and (
+            not isinstance(corporate_action_value, dict)
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in corporate_action_value.items()
+            )
+        ):
+            raise _source_error(
+                self.operation_id,
+                "unknown_schema",
+                "The TongdaXin corporate-action annotation is not structured.",
+            )
+        corporate_action = (
+            dict(corporate_action_value)
+            if isinstance(corporate_action_value, dict)
+            else None
+        )
+        no_trade_confirmed = (
+            trading_status in {"suspended", "not_traded", "no_trade"}
+            and volume_shares == "0"
+            and amount_cny == "0"
+        )
         if session_at(query.retrieved_at) == "midday_break":
             if "observation_boundary" not in quote:
                 raise _source_error(
@@ -407,6 +448,9 @@ class TongdaxinIntradayOperation:
                 "price_type": price_type,
                 "cache_state": cache_state,
                 "observation_boundary": observation_boundary,
+                "previous_close_basis": previous_close_basis,
+                "corporate_action": corporate_action,
+                "no_trade_confirmed": no_trade_confirmed,
                 "date_basis_evidence_id": bar_id,
             },
             "observed_value": {
@@ -465,7 +509,7 @@ class TongdaxinIntradayOperation:
             high_price=price_values["high_price"],
             low_price=price_values["low_price"],
             previous_close=price_values["previous_close"],
-            previous_close_basis="source_reported_unadjudicated",
+            previous_close_basis=previous_close_basis,
             cumulative_volume_shares=volume_shares,
             cumulative_amount_cny=amount_cny,
             evidence=(quote_evidence, bar_evidence),
@@ -480,6 +524,13 @@ class TongdaxinIntradayOperation:
             },
             cache_state=cache_state,
             observation_boundary=observation_boundary,
+            previous_close_comparability=(
+                "comparable"
+                if previous_close_basis in {"actual_close", "ex_right_reference"}
+                else "unknown"
+            ),
+            corporate_action=corporate_action,
+            no_trade_confirmed=no_trade_confirmed,
         )
 
 
@@ -514,6 +565,12 @@ class TencentIntradayOperation:
             self.operation_id,
         )
         trading_status = "auction" if price_type == "indicative_auction" else "traded"
+        if current.trading_status in {
+            "suspended",
+            "not_traded",
+            "no_trade",
+        }:
+            trading_status = current.trading_status
         if session_at(query.retrieved_at) == "midday_break":
             if current.observation_boundary != "morning_last_compatible":
                 raise _source_error(
@@ -547,12 +604,19 @@ class TencentIntradayOperation:
                 "trading_status": trading_status,
                 "price_type": price_type,
                 "observation_boundary": observation_boundary,
+                "previous_close_basis": current.previous_close_basis,
+                "corporate_action": current.corporate_action,
+                "no_trade_confirmed": (
+                    trading_status in {"suspended", "not_traded", "no_trade"}
+                    and current.volume_shares == "0"
+                ),
             },
             "observed_value": {
                 "latest_price": price_values["latest_price"],
                 "open": price_values["open_price"],
                 "high": price_values["high_price"],
                 "low": price_values["low_price"],
+                "previous_close": current.previous_close,
             },
             "unit": {"price": "CNY/share"},
             "evidence_time": current.evidence_time.isoformat(),
@@ -574,15 +638,30 @@ class TencentIntradayOperation:
             open_price=price_values["open_price"],
             high_price=price_values["high_price"],
             low_price=price_values["low_price"],
-            previous_close=None,
-            previous_close_basis=None,
+            previous_close=current.previous_close,
+            previous_close_basis=(
+                current.previous_close_basis or "source_reported_unadjudicated"
+            ),
+            cumulative_volume_shares=current.volume_shares,
             evidence=(evidence,),
             field_sources={
                 "latest_price": ("day.close", "qt.timestamp"),
                 "open": ("day.open",),
                 "high": ("day.high",),
                 "low": ("day.low",),
+                "previous_close": ("qt.prev_close",),
             },
             cache_state=current.availability_status,
             observation_boundary=observation_boundary,
+            previous_close_comparability=(
+                "comparable"
+                if current.previous_close_basis
+                in {"actual_close", "ex_right_reference"}
+                else "unknown"
+            ),
+            corporate_action=current.corporate_action,
+            no_trade_confirmed=(
+                trading_status in {"suspended", "not_traded", "no_trade"}
+                and current.volume_shares == "0"
+            ),
         )

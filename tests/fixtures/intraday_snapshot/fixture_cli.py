@@ -125,6 +125,40 @@ class FixtureTongdaxinClient:
             values.pop("amount_scope")
         elif scenario == "tdx_quote_date_mismatch":
             values["trading_date"] = "2026-08-02"
+        elif scenario in {
+            "suspension_confirmed",
+            "suspension_one_source",
+            "suspension_core_conflict",
+            "suspension_status_ambiguous",
+        }:
+            values.update(
+                {
+                    "price": "1668.00",
+                    "open": "1668.00",
+                    "high": "1668.00",
+                    "low": "1668.00",
+                    "last_close": "1668.00",
+                    "vol": "0",
+                    "amount": "0",
+                    "trading_status": "suspended",
+                }
+            )
+            if scenario == "suspension_status_ambiguous":
+                values["amount"] = "1.00"
+        elif scenario in {"corporate_action_unavailable", "comparable_prev_close"}:
+            values["previous_close_basis"] = "actual_close"
+            if scenario == "corporate_action_unavailable":
+                values["corporate_action"] = {"type": "cash_dividend"}
+        elif scenario == "price_equal_previous_close":
+            values.update(
+                {
+                    "price": "1668.00",
+                    "open": "1668.00",
+                    "high": "1668.00",
+                    "low": "1668.00",
+                    "last_close": "1668.00",
+                }
+            )
         if scenario in {"opening_auction", "closing_auction"}:
             values["price_type"] = "indicative_auction"
         if scenario == "unknown_cache":
@@ -249,6 +283,24 @@ class FixtureTransport:
             "session_mismatch": "20260803092002",
         }
         quote[30] = quote_times.get(scenario, "20260803102958")
+        if scenario in {
+            "suspension_confirmed",
+            "suspension_one_source",
+            "suspension_status_ambiguous",
+        }:
+            current[1] = current[2] = current[3] = current[4] = "1668.00"
+            current[5] = "0"
+            previous[2] = "1668.00"
+            quote[3] = quote[4] = "1668.00"
+            quote[6] = "0"
+            if scenario in {"suspension_confirmed", "suspension_status_ambiguous"}:
+                quote[33] = "suspended"
+        elif scenario in {"corporate_action_unavailable", "comparable_prev_close"}:
+            quote[34] = (
+                "ex_right_reference"
+                if scenario == "corporate_action_unavailable"
+                else "actual_close"
+            )
         if scenario in {"opening_auction", "closing_auction", "session_mismatch"}:
             quote[31] = "indicative_auction"
         elif scenario == "unknown_price_type":
@@ -277,6 +329,10 @@ class FixtureTransport:
         if scenario == "core_price_mismatch":
             current[2] = "1680.26"
             quote[3] = "1680.26"
+        if scenario == "price_equal_previous_close":
+            current[1] = current[2] = current[3] = current[4] = "1668.00"
+            previous[2] = "1668.00"
+            quote[3] = quote[4] = "1668.00"
         body = {
             "code": 0,
             "data": {
@@ -286,6 +342,27 @@ class FixtureTransport:
                 }
             },
         }
+        if scenario == "corporate_action_unavailable":
+            body["data"][query_security]["day"][-1].append(
+                {
+                    "nd": "2026",
+                    "fh_sh": "1.00",
+                    "djr": "2026-08-03",
+                    "cqr": "2026-08-04",
+                    "FHcontent": "10派1.00元",
+                }
+            )
+        if scenario == "suspension_core_conflict":
+            current[1] = current[2] = current[3] = current[4] = "1668.00"
+            current[5] = "0"
+            previous[2] = "1668.00"
+            quote[3] = quote[4] = "1668.00"
+            quote[6] = "0"
+            quote[33] = "suspended"
+            current[2] = "1668.01"
+            current[3] = "1668.02"
+            current[4] = "1667.99"
+            quote[3] = "1668.01"
         if scenario == "tencent_wrong_security":
             body["data"] = {"sh000001": body["data"][query_security]}
         return HttpResponse(

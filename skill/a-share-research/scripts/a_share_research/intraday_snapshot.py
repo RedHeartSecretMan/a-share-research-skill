@@ -91,6 +91,9 @@ def build_intraday_snapshot_result(
     freshness_conflicts = _freshness_conflicts(baseline, cross_check, result_session)
     if freshness_conflicts:
         return _conflict_result(request, observations, freshness_conflicts)
+    suspension_conflicts = _suspension_conflicts(baseline, cross_check)
+    if suspension_conflicts:
+        return _incompatible_result(request, query, observations, suspension_conflicts)
     assert baseline.previous_close is not None
     assert baseline.previous_close_basis is not None
     baseline_id = baseline.evidence[0]["id"]
@@ -110,7 +113,7 @@ def build_intraday_snapshot_result(
     }
     if result_session == "midday_break":
         observation_times["observation_boundary"] = "morning_last_compatible_pair"
-    return {
+    result = {
         "schema_version": request["schema_version"],
         "status": "limited",
         "subject": {
@@ -260,6 +263,26 @@ def build_intraday_snapshot_result(
             ),
         ],
     }
+    previous_close = _adjudicate_previous_close(baseline, cross_check)
+    result["snapshot"]["previous_close"] = previous_close["snapshot"]
+    if previous_close["comparable"]:
+        change_amount = Decimal(baseline.latest_price) - Decimal(
+            baseline.previous_close
+        )
+        change_percent = (
+            (change_amount / Decimal(baseline.previous_close)) * Decimal(100)
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        result["snapshot"]["change_amount"] = {
+            "value": _decimal_text(change_amount),
+            "unit": "CNY/share",
+        }
+        result["snapshot"]["change_percent"] = {
+            "value": _decimal_text(change_percent),
+            "unit": "percent",
+        }
+    if _is_confirmed_suspension(baseline, cross_check):
+        return _suspended_result(result, baseline, cross_check)
+    return result
 
 
 def _normalize_query(request: dict[str, Any], research_now: datetime) -> IntradayQuery:
@@ -444,10 +467,20 @@ def _pair_incompatibility(
         if expected_session in {"opening_auction", "closing_auction"}
         else "traded"
     )
-    if expected_trading_status == "auction":
+    suspended_statuses = {"suspended", "not_traded", "no_trade"}
+    all_suspended = all(
+        item.trading_status in suspended_statuses for item in observations
+    )
+    any_suspended = any(
+        item.trading_status in suspended_statuses for item in observations
+    )
+    if all_suspended:
+        status_compatible = True
+    elif any_suspended:
+        status_compatible = False
+    elif expected_trading_status == "auction":
         status_compatible = all(
-            item.trading_status in {"auction", "unknown", "not_traded"}
-            for item in observations
+            item.trading_status in {"auction", "unknown"} for item in observations
         )
     else:
         status_compatible = all(
@@ -456,8 +489,16 @@ def _pair_incompatibility(
     if not status_compatible:
         conflicts.append(
             _pair_conflict(
-                "intraday_trading_status_mismatch",
-                "Intraday source observations do not establish the current session status.",
+                (
+                    "intraday_suspension_confirmation_mismatch"
+                    if any_suspended
+                    else "intraday_trading_status_mismatch"
+                ),
+                (
+                    "Intraday source operations do not jointly confirm suspension."
+                    if any_suspended
+                    else "Intraday source observations do not establish the current session status."
+                ),
                 field="trading_status",
                 baseline=baseline.trading_status,
                 cross_check=cross_check.trading_status,
@@ -560,12 +601,16 @@ def _freshness_conflicts(
                     }
                 )
     gap = abs((baseline.observed_at - cross_check.observed_at).total_seconds())
-    if result_session in {
-        "opening_auction",
-        "continuous",
-        "midday_break",
-        "closing_auction",
-    } and gap > 60:
+    if (
+        result_session
+        in {
+            "opening_auction",
+            "continuous",
+            "midday_break",
+            "closing_auction",
+        }
+        and gap > 60
+    ):
         conflicts.append(
             {
                 "code": "intraday_source_pair_gap_exceeded",
@@ -592,14 +637,15 @@ def _result_session(
     if current_session is None:
         return None
     if current_session != "midday_break":
-        if any(item.session_state != current_session for item in (baseline, cross_check)):
+        if any(
+            item.session_state != current_session for item in (baseline, cross_check)
+        ):
             return None
         return current_session
     if any(item.session_state != "continuous" for item in (baseline, cross_check)):
         return None
     if any(
-        session_at(item.observed_at) != "continuous"
-        for item in (baseline, cross_check)
+        session_at(item.observed_at) != "continuous" for item in (baseline, cross_check)
     ):
         return None
     return "midday_break"
@@ -615,13 +661,191 @@ def _seconds_text(value: float) -> str:
     return format(decimal_value.normalize(), "f")
 
 
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _suspension_conflicts(
+    baseline: IntradayObservation,
+    cross_check: IntradayObservation,
+) -> list[dict[str, Any]]:
+    """Require both independent operations to prove a no-trade suspension."""
+
+    observations = (baseline, cross_check)
+    suspended_statuses = {"suspended", "not_traded", "no_trade"}
+    statuses = [item.trading_status for item in observations]
+    if not any(status in suspended_statuses for status in statuses):
+        if (
+            baseline.previous_close is not None
+            and cross_check.previous_close is not None
+            and baseline.latest_price == baseline.previous_close
+            and cross_check.latest_price == cross_check.previous_close
+        ):
+            return [
+                _pair_conflict(
+                    "intraday_suspension_ambiguous",
+                    "Equal price and previous-close evidence cannot establish suspension.",
+                    field="trading_status",
+                    baseline=baseline.trading_status,
+                    cross_check=cross_check.trading_status,
+                    observations=observations,
+                )
+            ]
+        return []
+    if not all(status in suspended_statuses for status in statuses):
+        return [
+            _pair_conflict(
+                "intraday_suspension_confirmation_mismatch",
+                "Only one source explicitly confirms suspension.",
+                field="trading_status",
+                baseline=baseline.trading_status,
+                cross_check=cross_check.trading_status,
+                observations=observations,
+            )
+        ]
+    if not all(item.no_trade_confirmed for item in observations):
+        return [
+            _pair_conflict(
+                "intraday_suspension_no_trade_unconfirmed",
+                "Suspension is explicit but both sources do not establish no trading.",
+                field="no_trade_confirmed",
+                baseline=baseline.no_trade_confirmed,
+                cross_check=cross_check.no_trade_confirmed,
+                observations=observations,
+            )
+        ]
+    return []
+
+
+def _is_confirmed_suspension(
+    baseline: IntradayObservation,
+    cross_check: IntradayObservation,
+) -> bool:
+    statuses = {"suspended", "not_traded", "no_trade"}
+    return all(
+        item.trading_status in statuses and item.no_trade_confirmed
+        for item in (baseline, cross_check)
+    )
+
+
+def _suspended_result(
+    result: dict[str, Any],
+    baseline: IntradayObservation,
+    cross_check: IntradayObservation,
+) -> dict[str, Any]:
+    result = dict(result)
+    snapshot = dict(result["snapshot"])
+    not_applicable = {
+        "status": "not_applicable",
+        "value": None,
+        "unit": "CNY/share",
+        "reason": "suspended",
+    }
+    for field in ("latest_price", "open", "high", "low"):
+        snapshot[field] = dict(not_applicable)
+    snapshot["cumulative_volume"] = {"value": "0", "unit": "shares"}
+    snapshot["cumulative_amount"] = {"value": "0", "unit": "CNY"}
+    result["snapshot"] = snapshot
+    result["trading_status"] = "suspended"
+    result["price_type"] = "not_applicable"
+    result["brief"] = {
+        "status": "limited",
+        "summary": (
+            "Two experimental operations jointly confirm a current-session suspension; "
+            "prices are not applicable and no trading is confirmed."
+        ),
+        "evidence_ids": result["brief"]["evidence_ids"],
+    }
+    result["limitations"] = [
+        {
+            "code": "intraday_suspension_confirmed",
+            "message": (
+                "Both independent source operations explicitly confirm suspension "
+                "and no trading for the applicable session."
+            ),
+        },
+        *result["limitations"],
+    ]
+    return result
+
+
+def _adjudicate_previous_close(
+    baseline: IntradayObservation,
+    cross_check: IntradayObservation,
+) -> dict[str, Any]:
+    basis = (baseline.previous_close_basis, cross_check.previous_close_basis)
+    values = (baseline.previous_close, cross_check.previous_close)
+    if any(value is None for value in values):
+        return {
+            "comparable": False,
+            "snapshot": {
+                "status": "unavailable",
+                "reported_value": baseline.previous_close,
+                "unit": "CNY/share",
+                "basis": baseline.previous_close_basis,
+                "reason": "previous_close_unavailable",
+            },
+        }
+    if (
+        baseline.corporate_action is not None
+        or cross_check.corporate_action is not None
+    ):
+        return {
+            "comparable": False,
+            "snapshot": {
+                "status": "unavailable",
+                "reported_value": baseline.previous_close,
+                "unit": "CNY/share",
+                "basis": baseline.previous_close_basis,
+                "reason": "corporate_action_previous_close_not_comparable",
+            },
+        }
+    comparable_bases = {"actual_close", "ex_right_reference"}
+    if (
+        basis[0] not in comparable_bases
+        or basis[1] not in comparable_bases
+        or basis[0] != basis[1]
+        or values[0] != values[1]
+    ):
+        return {
+            "comparable": False,
+            "snapshot": {
+                "status": "unavailable",
+                "reported_value": baseline.previous_close,
+                "unit": "CNY/share",
+                "basis": baseline.previous_close_basis,
+                "reason": (
+                    "independent_semantics_not_adjudicated"
+                    if basis
+                    == (
+                        "source_reported_unadjudicated",
+                        "source_reported_unadjudicated",
+                    )
+                    else "independent_semantics_not_comparable"
+                ),
+            },
+        }
+    return {
+        "comparable": True,
+        "snapshot": {
+            "status": "available",
+            "value": baseline.previous_close,
+            "reported_value": baseline.previous_close,
+            "unit": "CNY/share",
+            "basis": baseline.previous_close_basis,
+        },
+    }
+
+
 def _conflict_result(
     request: dict[str, Any],
     observations: list[IntradayObservation],
     conflicts: list[dict[str, Any]],
 ) -> dict[str, Any]:
     diagnostics = {
-        "evidence": [item for observation in observations for item in observation.evidence],
+        "evidence": [
+            item for observation in observations for item in observation.evidence
+        ],
         "source_operations": [item.source_operation for item in observations],
         "observation_times": {
             item.source_operation: item.observed_at.isoformat() for item in observations
@@ -744,6 +968,37 @@ def _validate_observation(
                 "unknown_schema",
                 f"The source observation does not contain a timezone-aware {name}.",
             )
+    if observation.trading_status not in {
+        "traded",
+        "suspended",
+        "not_traded",
+        "no_trade",
+        "auction",
+        "unknown",
+    }:
+        raise IntradaySourceError(
+            expected_operation,
+            "unknown_schema",
+            "The source observation has an unknown trading status.",
+        )
+    if not isinstance(observation.no_trade_confirmed, bool):
+        raise IntradaySourceError(
+            expected_operation,
+            "unknown_schema",
+            "The source observation has an invalid no-trade confirmation.",
+        )
+    if observation.corporate_action is not None and (
+        not isinstance(observation.corporate_action, dict)
+        or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in observation.corporate_action.items()
+        )
+    ):
+        raise IntradaySourceError(
+            expected_operation,
+            "unknown_schema",
+            "The source observation corporate-action annotation is invalid.",
+        )
     price_values = {
         field: _canonical_price(getattr(observation, field), expected_operation, field)
         for field in ("latest_price", "open_price", "high_price", "low_price")
@@ -781,11 +1036,15 @@ def _validate_observation(
         evidence.append(
             _validate_evidence_item(item, expected_operation, observation.security)
         )
-    required_sources = {"latest_price", "open", "high", "low"}
+    required_sources = {
+        "latest_price",
+        "open",
+        "high",
+        "low",
+        "previous_close",
+    }
     if expected_operation == TONGDAXIN_OPERATION:
-        required_sources.update(
-            {"previous_close", "cumulative_volume", "cumulative_amount"}
-        )
+        required_sources.update({"cumulative_volume", "cumulative_amount"})
     if (
         not isinstance(observation.field_sources, dict)
         or not required_sources.issubset(observation.field_sources)
@@ -1012,7 +1271,7 @@ def _validate_evidence_item(
         )
     if kind in {"intraday_quote", "intraday_core_price_cross_check"}:
         observed_value = item.get("observed_value")
-        required_values = {"latest_price", "open", "high", "low"}
+        required_values = {"latest_price", "open", "high", "low", "previous_close"}
         if operation == TONGDAXIN_OPERATION:
             required_values.update(
                 {"previous_close", "cumulative_volume", "cumulative_amount"}
