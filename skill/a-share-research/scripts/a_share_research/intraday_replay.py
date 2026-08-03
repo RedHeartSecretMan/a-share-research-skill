@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -507,9 +508,7 @@ def _normalize_row(
         ohlc = {"status": "unavailable", "reason": "source_proven_no_trade"}
     volume = _volume_text(row.volume, batch)
     amount = _amount_text(row.amount, batch)
-    evidence_id = _evidence_id(
-        batch.operation_id, query.security, query.replay_date, interval_start, index
-    )
+    evidence_locator = _safe_locator(row.evidence_locator, interval_start)
     fingerprint = (
         interval_start.isoformat(),
         interval_end.isoformat(),
@@ -520,6 +519,14 @@ def _normalize_row(
         repr(ohlc),
         volume,
         amount,
+        evidence_locator,
+    )
+    evidence_id = _evidence_id(
+        batch.operation_id,
+        query.security,
+        query.replay_date,
+        interval_start,
+        fingerprint,
     )
     return _PreparedRow(
         interval_start=interval_start,
@@ -532,7 +539,7 @@ def _normalize_row(
         volume={"value": volume, "unit": "shares"},
         amount={"value": amount, "unit": "CNY"},
         evidence_id=evidence_id,
-        evidence_locator=_safe_locator(row.evidence_locator, interval_start),
+        evidence_locator=evidence_locator,
         fingerprint=fingerprint,
     )
 
@@ -602,6 +609,12 @@ def _volume_text(value: object, batch: IntradayReplaySourceBatch) -> str:
         lot_size = _decimal(
             batch.volume_lot_size, batch.operation_id, "volume_lot_size"
         )
+        if lot_size <= 0:
+            raise IntradayReplaySourceError(
+                batch.operation_id,
+                "invalid_volume_lot_size",
+                "Replay volume lot size must be positive.",
+            )
         parsed *= lot_size
     if parsed != parsed.to_integral_value():
         raise IntradayReplaySourceError(
@@ -721,11 +734,12 @@ def _evidence_id(
     security: str,
     replay_date: date,
     interval_start: datetime,
-    index: int,
+    fingerprint: tuple[str, ...],
 ) -> str:
+    digest = hashlib.sha256("\x1f".join(fingerprint).encode("utf-8")).hexdigest()[:16]
     return (
         f"intraday-replay-{operation_id}-{security}-{replay_date.isoformat()}-"
-        f"{interval_start.strftime('%H%M%S')}-{index}"
+        f"{interval_start.strftime('%H%M%S')}-{digest}"
     )
 
 

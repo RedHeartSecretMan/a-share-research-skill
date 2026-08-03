@@ -80,6 +80,12 @@ class FixtureIntradayReplayOperation:
             )
         elif scenario == "duplicate":
             rows = (*rows, replace(rows[1], evidence_locator="fixture:duplicate:0930"))
+        elif scenario == "duplicate_reversed":
+            rows = (
+                replace(rows[1], evidence_locator="fixture:duplicate:0930"),
+                rows[0],
+                rows[1],
+            )
         elif scenario == "unknown_timestamp":
             rows = (replace(rows[0], timestamp_semantics="provider_default"), *rows[1:])
         elif scenario == "interval_end":

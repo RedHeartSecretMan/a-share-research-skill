@@ -155,6 +155,15 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         self.assertEqual(
             duplicate["conflicts"][0]["code"], "duplicate_intraday_interval"
         )
+        reversed_duplicate = self.run_task(
+            replay_request("SZSE:000001"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "duplicate_reversed"},
+        )
+        self.assertEqual(duplicate["records"], reversed_duplicate["records"])
+        self.assertEqual(duplicate["evidence"], reversed_duplicate["evidence"])
+        self.assertEqual(
+            duplicate["field_lineage"], reversed_duplicate["field_lineage"]
+        )
 
     def test_date_and_policy_gates_are_structured_domain_results(self) -> None:
         future = replay_request("SSE:600519")
