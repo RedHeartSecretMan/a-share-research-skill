@@ -164,6 +164,7 @@ class FixtureIntradayReplayOperation:
         volume_lot_size = None
         price_adjustment = "unadjusted"
         experimental = scenario != "qualified"
+        retrieved_at = RETRIEVED_AT
         if scenario == "float_noise":
             rows = (
                 replace(rows[0], open_price=10.2000000001, amount=2044.0000000001),
@@ -257,17 +258,22 @@ class FixtureIntradayReplayOperation:
                 replace(rows[0], volume="0", amount="0.00"),
                 replace(rows[1], volume="0", amount="0.00"),
             )
+        elif scenario == "after_retrieval":
+            rows = _complete_rows(replay_date)
+            retrieved_at = datetime(2026, 8, 3, 14, 59, tzinfo=CHINA_STANDARD_TIME)
         if trading_status == "suspended":
             rows = ()
         completed_trading_dates = _completed_dates(replay_date)
         if scenario == "missing_calendar":
             completed_trading_dates = ()
+        elif scenario == "short_calendar":
+            completed_trading_dates = completed_trading_dates[:19]
         return IntradayReplaySourceBatch(
             operation_id=self.operation_id,
             contract_version="1.0",
             security=security,
             trading_date=replay_date,
-            retrieved_at=RETRIEVED_AT,
+            retrieved_at=retrieved_at,
             experimental=experimental,
             price_adjustment=price_adjustment,
             price_unit="CNY/share",

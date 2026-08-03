@@ -173,6 +173,22 @@ def validate_daily_batch(
             "daily_source_retrieved_after_research_boundary",
             "The daily boundary was acquired after the research boundary.",
         )
+    if batch.available_at is not None:
+        if batch.available_at.tzinfo is None or batch.available_at.utcoffset() != (
+            CHINA_STANDARD_OFFSET
+        ):
+            raise IntradayReplaySourceError(
+                batch.operation_id,
+                "daily_available_at_timezone_unverified",
+                "The daily public-availability time must carry an explicit +08:00 offset.",
+            )
+        available_at = batch.available_at.astimezone(query.research_boundary.tzinfo)
+        if available_at > retrieved_at or available_at > query.research_boundary:
+            raise IntradayReplaySourceError(
+                batch.operation_id,
+                "daily_available_at_after_retrieval",
+                "The daily public-availability time cannot be later than retrieval.",
+            )
     for field, reason in batch.comparison_explanations:
         if field not in _EXPLAINABLE_FIELDS or reason not in _EXPLANATION_CODES:
             raise IntradayReplaySourceError(
@@ -691,10 +707,17 @@ def _daily_evidence(
             "trading_status": batch.trading_status,
         },
         "evidence_time": f"{query.replay_date.isoformat()}T15:00:00+08:00",
-        "available_at": retrieved_at,
+        "available_at": (
+            batch.available_at.astimezone(query.research_boundary.tzinfo).isoformat()
+            if batch.available_at is not None
+            else None
+        ),
         "retrieved_at": retrieved_at,
         "locator": {"uri": locator, "observation": "daily boundary"},
-        "limitations": ["experimental_source_operation"] if batch.experimental else [],
+        "limitations": [
+            *(["experimental_source_operation"] if batch.experimental else []),
+            *(["public_availability_unverified"] if batch.available_at is None else []),
+        ],
     }
 
 

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
+
+_SAFE_SOURCE_OPERATION = re.compile(r"^[A-Za-z0-9_.:@-]+$")
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,7 @@ class IntradayReplaySourceBatch:
     closing_auction_semantics: str | None = None
     trading_status: str = "traded"
     price_minimum_tick: str | None = None
+    available_at: datetime | None = None
 
 
 class IntradayReplaySourceError(Exception):
@@ -122,6 +126,7 @@ class IntradayReplayDailySourceBatch:
     ex_right_reference: object | None = None
     ex_right_reference_date: date | None = None
     comparison_explanations: tuple[tuple[str, str], ...] = ()
+    available_at: datetime | None = None
 
 
 class IntradayReplayDailySourceOperation(Protocol):
@@ -135,8 +140,14 @@ class IntradayReplayDailySourceOperation(Protocol):
 def source_error_result(error: IntradayReplaySourceError) -> dict[str, Any]:
     """Project a source failure without exposing provider diagnostics."""
 
+    source_operation = error.source_operation
+    if (
+        not isinstance(source_operation, str)
+        or _SAFE_SOURCE_OPERATION.fullmatch(source_operation) is None
+    ):
+        source_operation = "intraday_replay"
     return {
-        "source_operation": error.source_operation,
+        "source_operation": source_operation,
         "code": error.code,
         "message": "The replay source rejected the request under its safe contract.",
     }

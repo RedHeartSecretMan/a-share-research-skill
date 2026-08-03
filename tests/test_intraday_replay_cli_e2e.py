@@ -336,6 +336,10 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
             result["limitations"][0]["code"], "experimental_intraday_replay_source"
         )
         self.assertEqual(len(result["evidence"]), 2)
+        self.assertIsNone(result["evidence"][0]["available_at"])
+        self.assertIn(
+            "public_availability_unverified", result["evidence"][0]["limitations"]
+        )
         self.assertEqual(
             result["field_lineage"]["records[0].ohlc.close"]["evidence_ids"],
             [result["records"][0]["evidence_ids"][0]],
@@ -535,6 +539,12 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         self.assertEqual(
             duplicate["field_lineage"], reversed_duplicate["field_lineage"]
         )
+        conflict_evidence_ids = set(duplicate["conflicts"][0]["evidence_ids"])
+        result_evidence_ids = {item["id"] for item in duplicate["evidence"]}
+        self.assertTrue(conflict_evidence_ids <= result_evidence_ids)
+        self.assertTrue(
+            any(item.get("accepted") is False for item in duplicate["evidence"])
+        )
 
     def test_date_and_policy_gates_are_structured_domain_results(self) -> None:
         future = replay_request("SSE:600519")
@@ -622,6 +632,7 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
     ) -> None:
         for scenario, source_code in (
             ("missing_calendar", "completed_trading_calendar_unverified"),
+            ("short_calendar", "completed_trading_calendar_incomplete"),
             ("no_trade_nonzero", "no_trade_volume_amount_conflict"),
         ):
             with self.subTest(scenario=scenario):
@@ -631,6 +642,17 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "blocked")
                 self.assertEqual(result["source_errors"][0]["code"], source_code)
+
+    def test_interval_cannot_end_after_source_retrieval(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "after_retrieval"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(
+            result["source_errors"][0]["code"], "source_interval_after_retrieval"
+        )
 
     def test_qualified_hands_are_normalized_to_whole_shares(self) -> None:
         result = self.run_task(

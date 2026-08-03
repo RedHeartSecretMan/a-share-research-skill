@@ -151,7 +151,7 @@ def build_intraday_replay_result(
                 "replay_date_outside_recent_20",
                 "The replay date is not among the 20 most recent completed trading days.",
             )
-        rows, conflicts = _normalize_rows(normalized_batch, query)
+        rows, conflicts, duplicate_rows = _normalize_rows(normalized_batch, query)
         coverage = _adjudicate_coverage(normalized_batch, rows, query)
     except IntradayReplaySourceError as error:
         source_errors.append(source_error_result(error))
@@ -208,6 +208,7 @@ def build_intraday_replay_result(
             rows,
             conflicts,
             coverage,
+            duplicate_rows=duplicate_rows,
             status="blocked",
             daily_boundary=daily_boundary,
             source_errors=daily_errors,
@@ -235,6 +236,7 @@ def build_intraday_replay_result(
                 rows,
                 conflicts,
                 coverage,
+                duplicate_rows=duplicate_rows,
                 status="blocked",
                 daily_boundary=daily_boundary,
                 source_errors=daily_errors,
@@ -282,6 +284,7 @@ def build_intraday_replay_result(
                     rows,
                     conflicts,
                     coverage,
+                    duplicate_rows=duplicate_rows,
                     status="blocked",
                     daily_boundary=daily_boundary,
                     source_errors=daily_errors,
@@ -318,6 +321,7 @@ def build_intraday_replay_result(
                 [],
                 conflicts,
                 coverage,
+                duplicate_rows=duplicate_rows,
                 status="limited",
                 daily_boundary=daily_boundary,
                 daily_batch=daily_batch,
@@ -357,6 +361,7 @@ def build_intraday_replay_result(
             [],
             conflicts,
             coverage,
+            duplicate_rows=duplicate_rows,
             status="blocked",
             daily_boundary=daily_boundary,
             daily_batch=daily_batch,
@@ -373,6 +378,7 @@ def build_intraday_replay_result(
         rows,
         conflicts,
         coverage,
+        duplicate_rows=duplicate_rows,
         status=result_status,
         daily_boundary=daily_boundary,
         daily_batch=daily_batch,
@@ -647,6 +653,23 @@ def _validate_batch(
             "source_retrieved_after_research_boundary",
             "The replay source was acquired after the research boundary.",
         )
+    if batch.available_at is not None:
+        if (
+            batch.available_at.tzinfo is None
+            or batch.available_at.utcoffset() != timedelta(hours=8)
+        ):
+            raise IntradayReplaySourceError(
+                batch.operation_id,
+                "available_at_timezone_unverified",
+                "The source public-availability time must carry an explicit +08:00 offset.",
+            )
+        available_at = _as_china_time(batch.available_at)
+        if available_at > retrieved_at or available_at > query.research_boundary:
+            raise IntradayReplaySourceError(
+                batch.operation_id,
+                "available_at_after_retrieval",
+                "The source public-availability time cannot be later than retrieval.",
+            )
     _positive_decimal(batch.price_precision, batch.operation_id, "price_precision")
     if batch.price_minimum_tick is not None:
         _positive_decimal(
@@ -665,13 +688,14 @@ def _validate_batch(
 def _normalize_rows(
     batch: IntradayReplaySourceBatch,
     query: IntradayReplayQuery,
-) -> tuple[list[_PreparedRow], list[dict[str, Any]]]:
+) -> tuple[list[_PreparedRow], list[dict[str, Any]], list[_PreparedRow]]:
     prepared = [
         _normalize_row(row, index, batch, query) for index, row in enumerate(batch.rows)
     ]
     prepared.sort(key=lambda row: (row.interval_start, row.fingerprint))
     deduplicated: list[_PreparedRow] = []
     conflicts: list[dict[str, Any]] = []
+    duplicate_rows: list[_PreparedRow] = []
     index = 0
     while index < len(prepared):
         same_interval = [prepared[index]]
@@ -685,6 +709,7 @@ def _normalize_rows(
         winner = min(same_interval, key=lambda row: row.fingerprint)
         deduplicated.append(winner)
         if len(same_interval) > 1:
+            duplicate_rows.extend(row for row in same_interval if row is not winner)
             conflicts.append(
                 {
                     "code": "duplicate_intraday_interval",
@@ -697,7 +722,7 @@ def _normalize_rows(
                     "resolution": "lexicographically_smallest_normalized_row",
                 }
             )
-    return deduplicated, conflicts
+    return deduplicated, conflicts, duplicate_rows
 
 
 def _adjudicate_coverage(
@@ -990,6 +1015,12 @@ def _normalize_row(
     interval_start, interval_end, trading_phase = _normalize_interval(
         row, observed_at, batch
     )
+    if interval_end > _as_china_time(batch.retrieved_at):
+        raise IntradayReplaySourceError(
+            batch.operation_id,
+            "source_interval_after_retrieval",
+            "A replay interval cannot end after the source acquisition time.",
+        )
     if row.trading_phase in {"continuous_morning", "continuous_afternoon"} and (
         row.trading_phase != trading_phase
     ):
@@ -1375,13 +1406,19 @@ def _positive_decimal(value: object, source_operation: str, field_name: str) -> 
 
 
 def _eligible_dates(dates: tuple[date, ...], as_of: date) -> tuple[date, ...]:
-    if any(not isinstance(item, date) for item in dates):
+    if any(not isinstance(item, date) or isinstance(item, datetime) for item in dates):
         raise IntradayReplaySourceError(
             "intraday_replay",
             "unknown_calendar_schema",
             "The source completed-trading-date calendar is not valid.",
         )
     eligible = sorted({item for item in dates if item <= as_of})
+    if len(eligible) < 20:
+        raise IntradayReplaySourceError(
+            "intraday_replay",
+            "completed_trading_calendar_incomplete",
+            "The source completed-trading-date calendar has fewer than 20 eligible dates.",
+        )
     return tuple(eligible[-20:])
 
 
@@ -1418,6 +1455,7 @@ def _project_result(
     conflicts: list[dict[str, Any]],
     coverage: _CoverageDecision,
     *,
+    duplicate_rows: list[_PreparedRow] | None = None,
     status: str = "limited",
     daily_boundary: dict[str, Any] | None = None,
     daily_batch: IntradayReplayDailySourceBatch | None = None,
@@ -1427,6 +1465,9 @@ def _project_result(
     confirmed_suspension: bool = False,
 ) -> dict[str, Any]:
     evidence = [_row_evidence(row, query, batch) for row in rows]
+    evidence.extend(
+        _row_evidence(row, query, batch, accepted=False) for row in duplicate_rows or []
+    )
     evidence.extend(daily_evidence or [])
     continuous_rows = [
         row for row in rows if row.trading_phase.startswith("continuous_")
@@ -1438,7 +1479,8 @@ def _project_result(
     ]
     result_rows = [_row_result(row) for row in continuous_rows]
     auction_results = [_row_result(row) for row in auction_rows]
-    minute_evidence_ids = [row.evidence_id for row in rows]
+    all_minute_rows = [*rows, *(duplicate_rows or [])]
+    minute_evidence_ids = [row.evidence_id for row in all_minute_rows]
     all_evidence_ids = [*minute_evidence_ids]
     daily_evidence_ids = [item["id"] for item in daily_evidence or []]
     all_evidence_ids.extend(daily_evidence_ids)
@@ -1754,6 +1796,8 @@ def _row_evidence(
     row: _PreparedRow,
     query: IntradayReplayQuery,
     batch: IntradayReplaySourceBatch,
+    *,
+    accepted: bool = True,
 ) -> dict[str, Any]:
     observation: dict[str, Any] = {
         "kind": (
@@ -1771,7 +1815,7 @@ def _row_evidence(
         "volume_unit": "shares",
         "amount_unit": batch.amount_unit,
     }
-    return {
+    evidence = {
         "id": row.evidence_id,
         "source_role": batch.source_role,
         "source_operation": batch.operation_id,
@@ -1794,13 +1838,29 @@ def _row_evidence(
         },
         "observation": observation,
         "evidence_time": row.source_timestamp,
-        "available_at": _as_china_time(batch.retrieved_at).isoformat(),
+        "available_at": (
+            _as_china_time(batch.available_at).isoformat()
+            if batch.available_at is not None
+            else None
+        ),
         "retrieved_at": _as_china_time(batch.retrieved_at).isoformat(),
         "locator": {"uri": row.evidence_locator, "observation": "source row"},
-        "limitations": (
-            ["experimental_source_operation"] if batch.experimental else []
-        ),
+        "limitations": [
+            *(["experimental_source_operation"] if batch.experimental else []),
+            *(["public_availability_unverified"] if batch.available_at is None else []),
+        ],
     }
+    if not accepted:
+        evidence.update(
+            {
+                "accepted": False,
+                "rejection": {
+                    "code": "duplicate_intraday_interval",
+                    "reason": "Deterministic interval de-duplication retained another row.",
+                },
+            }
+        )
+    return evidence
 
 
 def _blocked_result(
