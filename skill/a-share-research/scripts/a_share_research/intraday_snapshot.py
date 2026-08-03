@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Collection
 
 from .intraday_contract import (
+    SESSION_STATES,
     IntradayObservation,
     IntradayQuery,
     IntradaySourceError,
     IntradaySourceOperation,
+    session_at,
 )
 
 SSE_A_SHARE_PREFIXES = ("600", "601", "603", "605", "688", "689")
@@ -21,14 +23,25 @@ TONGDAXIN_OPERATION = "tongdaxin_intraday_snapshot@1"
 TENCENT_OPERATION = "tencent_intraday_snapshot@1"
 
 
+class _IntradayDomainBlock(Exception):
+    """A valid intraday request that cannot form an applicable domain result."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def build_intraday_snapshot_result(
     request: dict[str, Any],
     operations: Collection[IntradaySourceOperation],
     research_now: datetime,
 ) -> dict[str, Any]:
-    """Collect and cross-check one current-date continuous-auction snapshot."""
+    """Collect and cross-check one current-date intraday snapshot."""
 
-    query = _normalize_query(request, research_now)
+    try:
+        query = _normalize_query(request, research_now)
+    except _IntradayDomainBlock as blocked:
+        return _domain_blocked_result(request, blocked.code, str(blocked))
     operation_list = list(operations)
     if len(operation_list) != 2:
         raise ValueError(
@@ -61,6 +74,23 @@ def build_intraday_snapshot_result(
     incompatibilities = _pair_incompatibility(query, baseline, cross_check)
     if incompatibilities:
         return _incompatible_result(request, query, observations, incompatibilities)
+    result_session = _result_session(query, baseline, cross_check)
+    if result_session is None:
+        return _incompatible_result(
+            request,
+            query,
+            observations,
+            [
+                _pair_conflict(
+                    "intraday_session_unknown",
+                    "The current time and source timestamps do not establish an applicable session.",
+                    observations=(baseline, cross_check),
+                )
+            ],
+        )
+    freshness_conflicts = _freshness_conflicts(baseline, cross_check, result_session)
+    if freshness_conflicts:
+        return _conflict_result(request, observations, freshness_conflicts)
     assert baseline.previous_close is not None
     assert baseline.previous_close_basis is not None
     baseline_id = baseline.evidence[0]["id"]
@@ -69,9 +99,17 @@ def build_intraday_snapshot_result(
     all_evidence = [
         item["id"] for observation in observations for item in observation.evidence
     ]
-    gap_seconds = abs(
-        int((baseline.observed_at - cross_check.observed_at).total_seconds())
-    )
+    gap_seconds = abs((baseline.observed_at - cross_check.observed_at).total_seconds())
+    observation_times: dict[str, str] = {
+        "tongdaxin_baseline": baseline.observed_at.isoformat(),
+        "tencent_cross_check": cross_check.observed_at.isoformat(),
+        "retrieved_at": max(
+            baseline.retrieved_at, cross_check.retrieved_at
+        ).isoformat(),
+        "pair_gap_seconds": _seconds_text(gap_seconds),
+    }
+    if result_session == "midday_break":
+        observation_times["observation_boundary"] = "morning_last_compatible_pair"
     return {
         "schema_version": request["schema_version"],
         "status": "limited",
@@ -84,7 +122,7 @@ def build_intraday_snapshot_result(
         },
         "as_of": query.as_of.isoformat(),
         "trading_date": baseline.trading_date.isoformat(),
-        "session_state": baseline.session_state,
+        "session_state": result_session,
         "trading_status": baseline.trading_status,
         "price_type": baseline.price_type,
         "snapshot": {
@@ -108,14 +146,7 @@ def build_intraday_snapshot_result(
                 "unit": "CNY",
             },
         },
-        "observation_times": {
-            "tongdaxin_baseline": baseline.observed_at.isoformat(),
-            "tencent_cross_check": cross_check.observed_at.isoformat(),
-            "retrieved_at": max(
-                baseline.retrieved_at, cross_check.retrieved_at
-            ).isoformat(),
-            "pair_gap_seconds": str(gap_seconds),
-        },
+        "observation_times": observation_times,
         "source_operations": [item.source_operation for item in observations],
         "field_lineage": {
             "subject": {
@@ -182,12 +213,22 @@ def build_intraday_snapshot_result(
                 "source_fields": ["servertime", "qt.timestamp"],
                 "calculation": "absolute_time_difference_seconds@1",
             },
+            **(
+                {
+                    "observation_times.observation_boundary": {
+                        "evidence_ids": core_evidence,
+                        "source_fields": ["observation_boundary"],
+                    }
+                }
+                if result_session == "midday_break"
+                else {}
+            ),
         },
         "brief": {
             "status": "limited",
             "summary": (
-                "Two experimental operations agree on one continuous-auction "
-                "intraday market snapshot."
+                "Two experimental operations agree on one "
+                f"{result_session} intraday market snapshot."
             ),
             "evidence_ids": core_evidence,
         },
@@ -203,7 +244,20 @@ def build_intraday_snapshot_result(
                     "The source operations agree but have not completed production "
                     "qualification; the snapshot is limited."
                 ),
-            }
+            },
+            *(
+                [
+                    {
+                        "code": "midday_break_morning_observation",
+                        "message": (
+                            "Prices and cumulative trading remain at the last compatible "
+                            "morning observation during the midday break."
+                        ),
+                    }
+                ]
+                if result_session == "midday_break"
+                else []
+            ),
         ],
     }
 
@@ -236,7 +290,20 @@ def _normalize_query(request: dict[str, Any], research_now: datetime) -> Intrada
         raise ValueError("intraday_market_signal window must be null")
     as_of = date.fromisoformat(request["as_of"])
     if as_of != research_now.date():
-        raise ValueError("intraday_market_signal requires current China-date as_of")
+        raise _IntradayDomainBlock(
+            "intraday_as_of_not_current",
+            "Intraday snapshots are only applicable to the current China trading date.",
+        )
+    if as_of.weekday() >= 5:
+        raise _IntradayDomainBlock(
+            "intraday_non_trading_date",
+            "The requested China date is not a scheduled trading date.",
+        )
+    if session_at(research_now) is None:
+        raise _IntradayDomainBlock(
+            "intraday_session_not_applicable",
+            "The current China time is before open, after close, or otherwise outside an applicable session.",
+        )
     return IntradayQuery(
         security=security,
         exchange=exchange,
@@ -290,33 +357,123 @@ def _pair_incompatibility(
                 observations=observations,
             )
         )
-    if any(item.session_state != "continuous" for item in observations):
+    expected_session = session_at(query.retrieved_at)
+    if expected_session is None:
         conflicts.append(
             _pair_conflict(
-                "intraday_session_mismatch",
-                "Intraday source observations are not continuous-auction data.",
+                "intraday_session_unknown",
+                "The current retrieval time is outside an applicable trading session.",
                 field="session_state",
                 baseline=baseline.session_state,
                 cross_check=cross_check.session_state,
                 observations=observations,
             )
         )
-    if any(item.trading_status != "traded" for item in observations):
+    elif any(item.session_state not in SESSION_STATES for item in observations):
+        conflicts.append(
+            _pair_conflict(
+                "intraday_session_unknown",
+                "Intraday source observations do not establish a known trading session.",
+                field="session_state",
+                baseline=baseline.session_state,
+                cross_check=cross_check.session_state,
+                observations=observations,
+            )
+        )
+    elif any(
+        session_at(item.observed_at) != item.session_state for item in observations
+    ):
+        conflicts.append(
+            _pair_conflict(
+                "intraday_session_mismatch",
+                "A source session state is incompatible with its observation timestamp.",
+                field="session_state",
+                baseline=baseline.session_state,
+                cross_check=cross_check.session_state,
+                observations=observations,
+            )
+        )
+    elif expected_session == "midday_break":
+        if any(item.session_state != "continuous" for item in observations):
+            conflicts.append(
+                _pair_conflict(
+                    "intraday_session_mismatch",
+                    "The midday result must retain compatible morning continuous observations.",
+                    field="session_state",
+                    baseline=baseline.session_state,
+                    cross_check=cross_check.session_state,
+                    observations=observations,
+                )
+            )
+        if any(
+            item.observation_boundary != "morning_last_compatible"
+            for item in observations
+        ):
+            conflicts.append(
+                _pair_conflict(
+                    "intraday_morning_observation_not_last",
+                    "The midday result requires each source to identify its morning-last observation boundary.",
+                    field="observation_boundary",
+                    baseline=baseline.observation_boundary,
+                    cross_check=cross_check.observation_boundary,
+                    observations=observations,
+                )
+            )
+        if any(not _is_morning_continuous(item.observed_at) for item in observations):
+            conflicts.append(
+                _pair_conflict(
+                    "intraday_morning_observation_out_of_window",
+                    "The midday result requires observations from the morning continuous session.",
+                    field="observed_at",
+                    observations=observations,
+                )
+            )
+    elif any(item.session_state != expected_session for item in observations):
+        conflicts.append(
+            _pair_conflict(
+                "intraday_session_mismatch",
+                "Intraday source observations are not in the current trading session.",
+                field="session_state",
+                baseline=baseline.session_state,
+                cross_check=cross_check.session_state,
+                observations=observations,
+            )
+        )
+    expected_trading_status = (
+        "auction"
+        if expected_session in {"opening_auction", "closing_auction"}
+        else "traded"
+    )
+    if expected_trading_status == "auction":
+        status_compatible = all(
+            item.trading_status in {"auction", "unknown", "not_traded"}
+            for item in observations
+        )
+    else:
+        status_compatible = all(
+            item.trading_status == expected_trading_status for item in observations
+        )
+    if not status_compatible:
         conflicts.append(
             _pair_conflict(
                 "intraday_trading_status_mismatch",
-                "Intraday source observations do not establish traded status.",
+                "Intraday source observations do not establish the current session status.",
                 field="trading_status",
                 baseline=baseline.trading_status,
                 cross_check=cross_check.trading_status,
                 observations=observations,
             )
         )
-    if any(item.price_type != "latest_traded" for item in observations):
+    expected_price_type = (
+        "indicative_auction"
+        if expected_session in {"opening_auction", "closing_auction"}
+        else "latest_traded"
+    )
+    if any(item.price_type != expected_price_type for item in observations):
         conflicts.append(
             _pair_conflict(
                 "intraday_price_type_mismatch",
-                "Intraday source observations do not establish latest traded prices.",
+                "Intraday source observations do not establish the current session price type.",
                 field="price_type",
                 baseline=baseline.price_type,
                 cross_check=cross_check.price_type,
@@ -358,6 +515,140 @@ def _pair_incompatibility(
             )
         )
     return conflicts
+
+
+def _freshness_conflicts(
+    baseline: IntradayObservation,
+    cross_check: IntradayObservation,
+    result_session: str,
+) -> list[dict[str, Any]]:
+    """Apply the 60-second active-session observation and pair bounds."""
+
+    conflicts: list[dict[str, Any]] = []
+    observations = (baseline, cross_check)
+    for observation in observations:
+        if observation.cache_state not in {"source_timestamp", "uncached", "fresh"}:
+            conflicts.append(
+                {
+                    "code": "intraday_cache_state_unknown",
+                    "message": "The source cache state is missing or unknown.",
+                    "source_operation": observation.source_operation,
+                    "cache_state": observation.cache_state,
+                    "evidence_ids": [item["id"] for item in observation.evidence],
+                }
+            )
+    if result_session in {"opening_auction", "continuous", "closing_auction"}:
+        for observation in observations:
+            age = (observation.retrieved_at - observation.observed_at).total_seconds()
+            if age < 0:
+                conflicts.append(
+                    {
+                        "code": "intraday_observation_time_invalid",
+                        "message": "A source observation occurs after its retrieval time.",
+                        "source_operation": observation.source_operation,
+                        "evidence_ids": [item["id"] for item in observation.evidence],
+                    }
+                )
+            elif age > 60:
+                conflicts.append(
+                    {
+                        "code": "intraday_observation_too_old",
+                        "message": "An active-session source observation is older than 60 seconds.",
+                        "source_operation": observation.source_operation,
+                        "age_seconds": _seconds_text(age),
+                        "evidence_ids": [item["id"] for item in observation.evidence],
+                    }
+                )
+    gap = abs((baseline.observed_at - cross_check.observed_at).total_seconds())
+    if result_session in {
+        "opening_auction",
+        "continuous",
+        "midday_break",
+        "closing_auction",
+    } and gap > 60:
+        conflicts.append(
+            {
+                "code": "intraday_source_pair_gap_exceeded",
+                "message": "The active-session source observations are more than 60 seconds apart.",
+                "gap_seconds": _seconds_text(gap),
+                "evidence_ids": [
+                    item["id"]
+                    for observation in observations
+                    for item in observation.evidence
+                ],
+            }
+        )
+    return conflicts
+
+
+def _result_session(
+    query: IntradayQuery,
+    baseline: IntradayObservation,
+    cross_check: IntradayObservation,
+) -> str | None:
+    """Resolve the result session from retrieval and source observations."""
+
+    current_session = session_at(query.retrieved_at)
+    if current_session is None:
+        return None
+    if current_session != "midday_break":
+        if any(item.session_state != current_session for item in (baseline, cross_check)):
+            return None
+        return current_session
+    if any(item.session_state != "continuous" for item in (baseline, cross_check)):
+        return None
+    if any(
+        session_at(item.observed_at) != "continuous"
+        for item in (baseline, cross_check)
+    ):
+        return None
+    return "midday_break"
+
+
+def _is_morning_continuous(value: datetime) -> bool:
+    observed_time = value.timetz().replace(tzinfo=None)
+    return time(9, 30) <= observed_time <= time(11, 30)
+
+
+def _seconds_text(value: float) -> str:
+    decimal_value = Decimal(str(value))
+    return format(decimal_value.normalize(), "f")
+
+
+def _conflict_result(
+    request: dict[str, Any],
+    observations: list[IntradayObservation],
+    conflicts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    diagnostics = {
+        "evidence": [item for observation in observations for item in observation.evidence],
+        "source_operations": [item.source_operation for item in observations],
+        "observation_times": {
+            item.source_operation: item.observed_at.isoformat() for item in observations
+        },
+        "field_lineage": {
+            f"{item.source_operation}.{field}": {
+                "evidence_ids": [entry["id"] for entry in item.evidence],
+                "source_fields": list(source_fields),
+            }
+            for item in observations
+            for field, source_fields in item.field_sources.items()
+        },
+    }
+    return {
+        "schema_version": request["schema_version"],
+        "status": "blocked",
+        "subjects": request["subjects"],
+        **diagnostics,
+        "conflicts": conflicts,
+        "source_errors": [],
+        "limitations": [
+            {
+                "code": "intraday_freshness_not_satisfied",
+                "message": "Active-session observations must be fresh and mutually compatible.",
+            }
+        ],
+    }
 
 
 def _incompatible_result(
@@ -858,3 +1149,17 @@ def _diagnostic_fields(
         fields["trading_date"] = observations[0].trading_date.isoformat()
     fields["as_of"] = query.as_of.isoformat()
     return fields
+
+
+def _domain_blocked_result(
+    request: dict[str, Any], code: str, message: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": request["schema_version"],
+        "status": "blocked",
+        "subjects": request["subjects"],
+        "evidence": [],
+        "conflicts": [],
+        "source_errors": [],
+        "limitations": [{"code": code, "message": message}],
+    }

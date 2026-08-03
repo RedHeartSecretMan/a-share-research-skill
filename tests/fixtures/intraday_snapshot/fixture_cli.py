@@ -28,7 +28,25 @@ from a_share_research.intraday_sources import (  # noqa: E402
 )
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
-RETRIEVED_AT = datetime(2026, 8, 3, 10, 30, 5, tzinfo=CHINA_STANDARD_TIME)
+
+
+def _retrieved_at_for_scenario() -> datetime:
+    scenario = os.environ.get("A_SHARE_INTRADAY_SCENARIO")
+    times = {
+        "pre_open": (8, 30, 5),
+        "opening_auction": (9, 20, 5),
+        "midday_break": (12, 0, 5),
+        "midday_pair_gap": (12, 0, 5),
+        "midday_not_last": (12, 0, 5),
+        "closing_auction": (14, 58, 5),
+        "post_close": (15, 30, 5),
+    }
+    hour, minute, second = times.get(scenario, (10, 30, 5))
+    day = 8 if scenario == "non_trading" else 4 if scenario == "weekday_holiday" else 3
+    return datetime(2026, 8, day, hour, minute, second, tzinfo=CHINA_STANDARD_TIME)
+
+
+RETRIEVED_AT = _retrieved_at_for_scenario()
 
 
 class _Row:
@@ -66,6 +84,7 @@ class FixtureTongdaxinClient:
                 "vol_scope": "trading_day",
                 "amount_unit": "CNY",
                 "amount_scope": "trading_day",
+                "cache_state": "source_timestamp",
             }
             if code == "600519"
             else {
@@ -80,6 +99,7 @@ class FixtureTongdaxinClient:
                 "vol_scope": "trading_day",
                 "amount_unit": "CNY",
                 "amount_scope": "trading_day",
+                "cache_state": "source_timestamp",
             }
         )
         scenario = os.environ.get("A_SHARE_INTRADAY_SCENARIO", "success")
@@ -105,12 +125,33 @@ class FixtureTongdaxinClient:
             values.pop("amount_scope")
         elif scenario == "tdx_quote_date_mismatch":
             values["trading_date"] = "2026-08-02"
+        if scenario in {"opening_auction", "closing_auction"}:
+            values["price_type"] = "indicative_auction"
+        if scenario == "unknown_cache":
+            values["cache_state"] = "unknown"
+        if scenario == "missing_cache":
+            values.pop("cache_state")
+        if scenario in {"midday_break", "midday_pair_gap"}:
+            values["observation_boundary"] = "morning_last_compatible"
+        if scenario == "midday_not_last":
+            values["observation_boundary"] = "morning_observation"
+        observed_times = {
+            "opening_auction": "09:20:00",
+            "midday_break": "11:29:50",
+            "midday_pair_gap": "11:28:00",
+            "midday_not_last": "10:00:00",
+            "closing_auction": "14:58:00",
+            "source_stale": "10:28:00",
+            "session_mismatch": "10:30:00",
+            "missing_time": None,
+        }
+        observed_time = observed_times.get(scenario, "10:30:00")
         return _Rows(
             [
                 {
                     "code": code,
                     "market": 1 if code == "600519" else 0,
-                    "servertime": "10:30:00",
+                    "servertime": observed_time,
                     **values,
                 }
             ]
@@ -197,7 +238,25 @@ class FixtureTransport:
         quote[3] = current[2]
         quote[4] = previous[2]
         quote[6] = current[5]
-        quote[30] = "20260803102958"
+        quote_times = {
+            "opening_auction": "20260803092002",
+            "midday_break": "20260803112955",
+            "midday_pair_gap": "20260803112600",
+            "midday_not_last": "20260803100000",
+            "closing_auction": "20260803145802",
+            "source_stale": "20260803102800",
+            "pair_gap": "20260803102800",
+            "session_mismatch": "20260803092002",
+        }
+        quote[30] = quote_times.get(scenario, "20260803102958")
+        if scenario in {"opening_auction", "closing_auction", "session_mismatch"}:
+            quote[31] = "indicative_auction"
+        elif scenario == "unknown_price_type":
+            quote[31] = "unknown_price_type"
+        if scenario in {"midday_break", "midday_pair_gap"}:
+            quote[32] = "morning_last_compatible"
+        elif scenario == "midday_not_last":
+            quote[32] = "morning_observation"
         if scenario == "tencent_float_noise":
             current[2] = "1680.2500000001" if code == "600519" else "12.3400000001"
             quote[3] = current[2]

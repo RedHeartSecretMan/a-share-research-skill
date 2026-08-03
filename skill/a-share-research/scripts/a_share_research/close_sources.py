@@ -153,6 +153,7 @@ class DailyBarObservation:
     availability_status: str = "inferred_from_final_daily_line"
     corporate_action: dict[str, str] | None = None
     adjustment: str = "unadjusted"
+    observation_boundary: str | None = None
 
     @property
     def value(self) -> str:
@@ -688,6 +689,23 @@ class TencentDailyLineOperation:
                 )
             is_live_row = trading_date == quote_time.date()
             before_close = is_live_row and quote_time.time() < time(15, 0)
+            live_price_type = "intraday_last"
+            observation_boundary = None
+            if is_live_row and len(quote_fields) > 31:
+                declared_price_type = quote_fields[31]
+                if declared_price_type and declared_price_type not in {
+                    "latest_traded",
+                    "indicative_auction",
+                }:
+                    raise _operation_error(
+                        self.operation_id,
+                        "unknown_price_type",
+                        "The Tencent quote metadata has an unknown intraday price type.",
+                    )
+                if declared_price_type:
+                    live_price_type = declared_price_type
+            if is_live_row and len(quote_fields) > 32 and quote_fields[32]:
+                observation_boundary = str(quote_fields[32])
             suspended = (
                 is_live_row
                 and quote_time.time() >= time(15, 0)
@@ -713,7 +731,7 @@ class TencentDailyLineOperation:
                     volume_shares=_volume_shares(
                         row[5], self.operation_id, lot_size=100
                     ),
-                    price_type="intraday_last" if before_close else "close",
+                    price_type=live_price_type if before_close else "close",
                     trading_status=(
                         "suspended"
                         if suspended
@@ -730,6 +748,7 @@ class TencentDailyLineOperation:
                         else "inferred_from_final_daily_line"
                     ),
                     corporate_action=annotation,
+                    observation_boundary=observation_boundary,
                 )
             )
             observed_dates.add(trading_date)

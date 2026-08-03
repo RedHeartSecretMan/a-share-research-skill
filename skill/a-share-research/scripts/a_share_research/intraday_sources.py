@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, time
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Callable
 
@@ -13,6 +13,7 @@ from .intraday_contract import (
     IntradayObservation,
     IntradayQuery,
     IntradaySourceError,
+    session_at,
 )
 
 
@@ -203,17 +204,43 @@ def _zero_value_is_explicit(row: dict[str, object]) -> bool:
     }
 
 
-def _continuous_session(observed_at: datetime, operation: str) -> str:
-    observed_time = observed_at.timetz().replace(tzinfo=None)
-    if time(9, 30) <= observed_time <= time(11, 30) or time(
-        13, 0
-    ) <= observed_time < time(14, 57):
-        return "continuous"
+def _session_state(observed_at: datetime, operation: str) -> str:
+    state = session_at(observed_at)
+    if state is not None:
+        return state
     raise _source_error(
         operation,
         "inapplicable_session",
-        "The source observation is not from continuous auction trading.",
+        "The source observation is outside an applicable trading session.",
     )
+
+
+def _price_type(
+    source_value: object,
+    session_state: str,
+    operation: str,
+) -> str:
+    expected = (
+        "indicative_auction"
+        if session_state in {"opening_auction", "closing_auction"}
+        else "latest_traded"
+    )
+    if source_value is None:
+        if expected == "latest_traded":
+            return expected
+        raise _source_error(
+            operation,
+            "unknown_price_type",
+            "The auction source observation does not identify an indicative price.",
+        )
+    value = str(source_value)
+    if value != expected:
+        raise _source_error(
+            operation,
+            "incompatible_price_type",
+            "The source price type is incompatible with its trading session.",
+        )
+    return value
 
 
 class TongdaxinIntradayOperation:
@@ -313,7 +340,10 @@ class TongdaxinIntradayOperation:
             server_time,
             tzinfo=query.retrieved_at.tzinfo,
         )
-        session_state = _continuous_session(observed_at, self.operation_id)
+        session_state = _session_state(observed_at, self.operation_id)
+        price_type = _price_type(
+            quote.get("price_type"), session_state, self.operation_id
+        )
         price_values = {
             field: _price(quote.get(source), self.operation_id, source)
             for field, source in {
@@ -335,7 +365,31 @@ class TongdaxinIntradayOperation:
             self.operation_id,
             row=quote,
         )
-        trading_status = str(quote.get("trading_status", "traded"))
+        cache_state_value = quote.get("cache_state")
+        if "cache_state" not in quote:
+            raise _source_error(
+                self.operation_id,
+                "unknown_cache_state",
+                "The TongdaXin quote does not establish its cache state.",
+            )
+        cache_state = None if cache_state_value is None else str(cache_state_value)
+        trading_status = "auction" if price_type == "indicative_auction" else "traded"
+        if session_at(query.retrieved_at) == "midday_break":
+            if "observation_boundary" not in quote:
+                raise _source_error(
+                    self.operation_id,
+                    "unknown_observation_boundary",
+                    "The TongdaXin quote does not establish the last compatible morning observation.",
+                )
+            if quote.get("observation_boundary") != "morning_last_compatible":
+                raise _source_error(
+                    self.operation_id,
+                    "incompatible_observation_boundary",
+                    "The TongdaXin quote is not identified as the last compatible morning observation.",
+                )
+            observation_boundary = "morning_last_compatible"
+        else:
+            observation_boundary = "current_session"
         quote_id = f"intraday-tdx-quote-{query.security}-{observed_at.isoformat()}"
         bar_id = f"intraday-tdx-date-{query.security}-{trading_date.isoformat()}"
         locator = f"mootdx://std/quote/{query.code}"
@@ -350,7 +404,9 @@ class TongdaxinIntradayOperation:
                 "trading_date": trading_date.isoformat(),
                 "session_state": session_state,
                 "trading_status": trading_status,
-                "price_type": "latest_traded",
+                "price_type": price_type,
+                "cache_state": cache_state,
+                "observation_boundary": observation_boundary,
                 "date_basis_evidence_id": bar_id,
             },
             "observed_value": {
@@ -403,7 +459,7 @@ class TongdaxinIntradayOperation:
             retrieved_at=query.retrieved_at,
             session_state=session_state,
             trading_status=trading_status,
-            price_type="latest_traded",
+            price_type=price_type,
             latest_price=price_values["latest_price"],
             open_price=price_values["open_price"],
             high_price=price_values["high_price"],
@@ -422,6 +478,8 @@ class TongdaxinIntradayOperation:
                 "cumulative_volume": ("vol",),
                 "cumulative_amount": ("amount",),
             },
+            cache_state=cache_state,
+            observation_boundary=observation_boundary,
         )
 
 
@@ -449,7 +507,23 @@ class TencentIntradayOperation:
                 "incomplete_observation",
                 "Tencent did not establish the current intraday core-price observation.",
             )
-        session_state = _continuous_session(current.evidence_time, self.operation_id)
+        session_state = _session_state(current.evidence_time, self.operation_id)
+        price_type = _price_type(
+            current.price_type if current.price_type == "indicative_auction" else None,
+            session_state,
+            self.operation_id,
+        )
+        trading_status = "auction" if price_type == "indicative_auction" else "traded"
+        if session_at(query.retrieved_at) == "midday_break":
+            if current.observation_boundary != "morning_last_compatible":
+                raise _source_error(
+                    self.operation_id,
+                    "unknown_observation_boundary",
+                    "The Tencent quote does not establish the last compatible morning observation.",
+                )
+            observation_boundary = "morning_last_compatible"
+        else:
+            observation_boundary = "current_session"
         price_values = {
             "latest_price": _price(current.close_value, self.operation_id, "close"),
             "open_price": _price(current.open_value, self.operation_id, "open"),
@@ -457,12 +531,6 @@ class TencentIntradayOperation:
             "low_price": _price(current.low_value, self.operation_id, "low"),
         }
         _validate_ohlc(price_values, self.operation_id)
-        if current.price_type == "intraday_last":
-            price_type = "latest_traded"
-        elif current.price_type == "indicative_auction":
-            price_type = "indicative_auction"
-        else:
-            price_type = current.price_type
         evidence_id = (
             f"intraday-tencent-{query.security}-{current.evidence_time.isoformat()}"
         )
@@ -476,10 +544,9 @@ class TencentIntradayOperation:
                 "kind": "intraday_core_price_cross_check",
                 "trading_date": query.as_of.isoformat(),
                 "session_state": session_state,
-                "trading_status": (
-                    "auction" if price_type == "indicative_auction" else "traded"
-                ),
+                "trading_status": trading_status,
                 "price_type": price_type,
+                "observation_boundary": observation_boundary,
             },
             "observed_value": {
                 "latest_price": price_values["latest_price"],
@@ -501,9 +568,7 @@ class TencentIntradayOperation:
             observed_at=current.evidence_time,
             retrieved_at=current.retrieved_at,
             session_state=session_state,
-            trading_status=(
-                "auction" if price_type == "indicative_auction" else "traded"
-            ),
+            trading_status=trading_status,
             price_type=price_type,
             latest_price=price_values["latest_price"],
             open_price=price_values["open_price"],
@@ -518,4 +583,6 @@ class TencentIntradayOperation:
                 "high": ("day.high",),
                 "low": ("day.low",),
             },
+            cache_state=current.availability_status,
+            observation_boundary=observation_boundary,
         )
