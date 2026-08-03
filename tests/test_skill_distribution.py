@@ -58,8 +58,8 @@ class SkillDistributionTests(unittest.TestCase):
         english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("当前只把 `mootdx` 用于 F10", chinese_readme)
-        self.assertIn("`mootdx` is currently used only for F10", english_readme)
+        self.assertIn("mootdx", chinese_readme)
+        self.assertIn("mootdx", english_readme)
 
     def test_release_demos_present_agent_judgment_and_conditional_triggers(
         self,
@@ -153,6 +153,40 @@ class SkillDistributionTests(unittest.TestCase):
         )
         self.assertNotIn("Do not generate a project or Agent rating", entry)
         self.assertNotIn("Do not label a security cheap or expensive", boundary)
+
+    def test_installed_skill_documents_intraday_contract_and_agent_boundary(
+        self,
+    ) -> None:
+        entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+        cli_contract = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
+            encoding="utf-8"
+        )
+        boundary = Path(SKILL_ROOT, "references", "analysis-boundary.md").read_text(
+            encoding="utf-8"
+        )
+
+        for document in (entry, cli_contract, boundary):
+            with self.subTest(document=document[:24]):
+                self.assertIn("intraday_market_signal", document)
+                self.assertIn("limited", document)
+                self.assertIn("blocked", document)
+
+        self.assertIn("current China Standard Time trading date", cli_contract)
+        self.assertIn("canonical SSE/SZSE A-share", cli_contract)
+        self.assertIn("Agent analysis", boundary)
+        self.assertIn("research judgment", boundary)
+
+    def test_installation_docs_scope_mootdx_to_intraday_capability(self) -> None:
+        for readme_name in ("README.md", "README_en.md"):
+            readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
+            with self.subTest(readme=readme_name):
+                self.assertIn("mootdx==0.11.7", readme)
+                self.assertIn("capability-scoped", readme)
+                self.assertIn("intraday", readme)
+                if readme_name == "README.md":
+                    self.assertIn("silent source switch", readme)
+                else:
+                    self.assertIn("never silently switches source", readme)
 
     def test_skill_entry_remains_a_concise_router(self) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")

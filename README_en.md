@@ -27,13 +27,14 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 - **Reproducible calculations**: market capitalization, PE TTM, and PB MRQ use Decimal arithmetic and preserve full calculation lineage.
 - **Honest failure**: ambiguity, conflict, staleness, wrong-security payloads, or missing critical evidence return `limited` / `blocked` instead of invented values.
 
-## v0.1.1 capabilities
+## v0.1.1 and v0.2.0 capabilities
 
 | Capability | Input | Output and boundary |
 | --- | --- | --- |
 | Security identity resolution | Name, abbreviation, or code clue + explicit date | Cross-checks SSE/SZSE and CNINFO observations; ambiguity, conflicts, and BSE inputs fail closed |
 | Latest completed close | Canonical `SSE:code` / `SZSE:code` + explicit date | Cross-checks exchange daily lines and Tencent observations while preserving trading date, basis, and conflicts |
 | Recent N-session trend | A-share clue + 2–250 sessions + unadjusted/forward-adjusted basis | Cross-checked OHLCV, cumulative return, drawdown, volatility, up/down sessions, volume change, and corporate actions |
+| Intraday market snapshot (v0.2.0) | Current China Standard Time trading date + one canonical `SSE:code` / `SZSE:code` A-share | One TongdaXin/Tencent experimental cross-check with session, price type, source times, units, conflicts, and explicit `limited` / `blocked` boundaries |
 | ETF market | Six-digit SSE ETF code + explicit date | SSE ETF identity and snapshot, Tencent price cross-check, and explicit board-lot rounding differences |
 | ETF options | 510050 / 510300 / 510500 / 588000 + one observation date + ATM/chain, expiry, and quote-time modes | Separate standard `M` and adjusted `A` series, call/put quotes, tied ATM strikes, provider-reported Greeks/IV, four-state coverage, source time, and limitations |
 | Automatic security valuation | A-share clue + established security-class count + current China Standard Time date + scenario target PE | Preserves complete numeric rows from all three statements and quarterly series, then acquires current shares and consensus to calculate reported and forward metrics |
@@ -85,15 +86,15 @@ git clone --depth 1 --branch v0.1.1 --single-branch https://github.com/RedHeartS
 
 The core runtime requires only the Python 3.12 or later standard library and does not require installing this repository as a package. Below, `<python>` means an interpreter already confirmed to be version 3.12 or later: Windows normally uses `py -3.12`; macOS and Linux should prefer `python3.12`, and should use `python3` only after `python3 --version` confirms the requirement. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for the complete invocation contract.
 
-F10 issuer-profile retrieval is integrated into v0.1.1 but requires an extra dependency. Install the release-audited version into the same Python environment that runs the Skill when this capability is needed:
+F10 issuer-profile retrieval and the `intraday_market_signal` snapshot are capability-scoped optional capabilities and require an extra dependency. Install the release-audited version into the same Python environment that runs the corresponding Skill capability when needed:
 
 ```text
 <python> -m pip install "mootdx==0.11.7"
 ```
 
-The standard-library core installation does not include `mootdx`. When it is absent, only steps requesting F10 material report the missing dependency or return `blocked`; other research capabilities remain available. On first use, this upstream dependency may create `.mootdx/config.json` in the user's home directory.
+The standard-library core installation does not include `mootdx`. When it is absent, only F10, `intraday_market_signal`, and steps explicitly dependent on them report `missing_optional_dependency` or return `blocked`; other research capabilities remain available. The runtime must not silently switch sources, fabricate empty data, or widen the blocked scope. The maintainer-only live probe uses an ephemeral home and does not create project-owned global configuration.
 
-`mootdx` is currently used only for F10 because it fills a Tongdaxin-material access gap not covered by the existing HTTP operations. Its quote and other interfaces do not become default sources or fallbacks merely because they ship in the same library. Each source operation must separately qualify its identity, timing, units, failure semantics, and licensing, and must improve the evidence chain before integration.
+The F10 and `intraday_market_signal` integrations each pin `mootdx==0.11.7` within their capability scope. Its other quote interfaces do not become default sources or fallbacks merely because they ship in the same library. Each source operation must separately qualify identity, timing, units, failure semantics, and licensing, and must improve the evidence chain before integration; intraday never silently switches source when evidence is unavailable.
 
 ## CLI
 
@@ -106,6 +107,8 @@ All capabilities use the stable research-task Interface:
 `research-task.json` is a structured task, not natural-language text. It carries the version, task type, subjects, research date, window, parameters, and source policy. Unknown tasks, policy-disallowed sources, and missing optional Adapter dependencies return explicit `blocked` results.
 
 `run --request` is the only supported public invocation. Callers do not need to know source endpoints, internal modules, or historical subcommands. `scripts/entrypoint.py` is the Skill's only public runtime entry point; every other Python module is an implementation detail. The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
+
+The intraday snapshot uses `task_type: "intraday_market_signal"`, exactly one canonical `SSE:<code>` or `SZSE:<code>` A-share, the current China Standard Time trading date, `window: null`, and `source_policy.allow_experimental: true`. `limited` means the snapshot remains answerable but experimental-source qualification or another disclosed limitation remains; `blocked` means identity, session, timing, or core-source evidence is insufficient. Agent analysis may interpret only a non-blocked result within the returned fields and limitations; it is not a trading feed, prediction, or action instruction.
 
 ### Preset research plans
 
@@ -233,7 +236,7 @@ The current version is deliberately conservative:
 - ETF snapshots are supported; minute, tick, trading, news-sentiment scoring, full-company profiles, and batch screening are not yet supported.
 - Research analysis and advice follow the installed [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md); this README does not define a second operational policy.
 
-See [`CONTEXT.md`](CONTEXT.md) for the complete product domain and terminology. [`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) is the superseded early v0.0.1 valuation-kernel proposal; [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) defines the delivered v0.0.1 trustworthy-evidence kernel; [`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) defines the complete v0.1.0 capability and release gates; [`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) defines the v0.1.1 presentation-boundary and documentation release revision; and [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) defines the not-yet-implemented v0.2.0 research-grade intraday snapshot.
+See [`CONTEXT.md`](CONTEXT.md) for the complete product domain and terminology. [`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) is the superseded early v0.0.1 valuation-kernel proposal; [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) defines the delivered v0.0.1 trustworthy-evidence kernel; [`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) defines the complete v0.1.0 capability and release gates; [`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) defines the v0.1.1 presentation-boundary and documentation release revision; and [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) defines the implemented v0.2.0 research-grade intraday snapshot available through `intraday_market_signal`.
 
 ## Repository layout
 
@@ -259,7 +262,13 @@ mypy skill/a-share-research/scripts
 <python> /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```
 
-The live-source diagnostic entry point is `tests/live_probe_close.py`. It never updates fixtures or lowers evidence requirements.
+The live-source diagnostic entry point is `tests/live_probe_close.py`. The maintainer-only intraday dual-exchange probe is `tests/live_probe_intraday.py` and must be explicitly confirmed with a date:
+
+```text
+<python> tests/live_probe_intraday.py --confirm-live --as-of YYYY-MM-DD
+```
+
+It covers one SSE and one SZSE A-share and emits only a dated observation report with source identity, timing, session, price agreement, units, status, and sanitized failures. It is excluded from ordinary CI, writes no fixtures, persists no provider response, accepts no credentials, and creates no project-owned global configuration.
 
 Run each vertical slice explicitly against live sources with versioned requests:
 

@@ -10,6 +10,10 @@ Use the CLI result's overall status and the user's question to choose the respon
 - For identity-only lookup, contract validation, and other questions asking only for direct evidence, answer the requested evidence without adding an unsolicited judgment.
 - Otherwise, after presenting the evidence, provide a useful research judgment when interpretation would answer the user's question.
 
+## Intraday Agent analysis
+
+For `intraday_market_signal`, the deterministic CLI only forms a dated, canonical-security snapshot and its evidence boundary. A `limited` result may support a clearly labelled **Agent analysis** or **Agent inference** when the judgment stays within the returned session, price type, units, timing, conflicts, and limitations. Do not turn it into a trend, catalyst, trading signal, price target, or action instruction. A `blocked` result reports the missing or conflicting evidence and stops before any research judgment.
+
 ## Research judgment
 
 Label a research judgment as **Agent inference**. State the evidence, explicit comparison benchmark, assumptions, research horizon, uncertainty, material risks, evidence supporting and opposing the interpretation, and the conditions that would invalidate it. Keep source facts, project calculations, attributed opinions, market signals, and Agent inference visibly separate.
