@@ -14,6 +14,16 @@ Use the CLI result's overall status and the user's question to choose the respon
 
 For `intraday_market_signal`, the deterministic CLI only forms a dated, canonical-security snapshot and its evidence boundary. A `limited` result may support a clearly labelled **Agent analysis** or **Agent inference** when the judgment stays within the returned session, price type, units, timing, conflicts, and limitations. Do not turn it into a trend, catalyst, trading signal, price target, or action instruction. A `blocked` result reports the missing or conflicting evidence and stops before any research judgment.
 
+## Evidence-constrained intraday replay prediction
+
+`intraday_replay` remains deterministic. A historical query or replay request is not a prediction request, and its JSON does not contain prediction fields or Agent views. Route to this section only when the user explicitly asks for a future judgment. Present the source facts and deterministic calculations first, and keep replay analysis and prediction as separate Agent-generated layers.
+
+The minimum evidence floor is canonical identity, a non-blocked replay with a usable close or closing stage, 20 complete daily trading sessions through the replay date, aligned security/date/unadjusted price semantics/close, and no unresolved core source conflict. Refuse the prediction and state the evidence needed when coverage is indeterminate, the close is missing, the whole morning or whole afternoon is missing, daily evidence is incomplete, or there is a confirmed suspension. A bounded partial replay can support only a `limited` prediction when its close remains usable; list every gap and the affected judgment.
+
+Use two independent horizons: the next trading day and the next 5 trading days. Each horizon must contain one primary scenario selected from continuation, range, or reversal, plus an upside alternative and a downside alternative. Each scenario must state its horizon, evidence basis, supporting evidence, opposing evidence, assumptions, observable triggers, invalidation conditions, and uncertainty. The optional context (announcements, news, fund flow, capital events, valuation, industry, and broader market) may enhance the analysis; if it is missing, disclose that limitation and restrict the claim to price behavior rather than inventing a cause or “main force” intent.
+
+No exact probabilities or pseudo-statistical confidence are allowed without a named reproducible model with genuine out-of-sample validation. Scenario prediction is research inference, not investment advice: do not generate a project or Agent rating, target price, direct buy/sell/hold instruction, position sizing, stop-loss order, execution timing, alerts, orders, or automatic trading.
+
 ## Research judgment
 
 Label a research judgment as **Agent inference**. State the evidence, explicit comparison benchmark, assumptions, research horizon, uncertainty, material risks, evidence supporting and opposing the interpretation, and the conditions that would invalidate it. Keep source facts, project calculations, attributed opinions, market signals, and Agent inference visibly separate.

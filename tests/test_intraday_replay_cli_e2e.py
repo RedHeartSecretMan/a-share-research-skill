@@ -128,6 +128,23 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["status"], "complete")
         self.assertEqual(result["coverage"]["coverage_ratio"]["value"], "1.0000")
 
+    def test_deterministic_replay_result_has_no_agent_prediction_layer(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "complete"},
+        )
+
+        for forbidden_field in (
+            "prediction",
+            "predictions",
+            "direction",
+            "scenarios",
+            "agent_view",
+            "agent_analysis",
+        ):
+            with self.subTest(forbidden_field=forbidden_field):
+                self.assertNotIn(forbidden_field, result)
+
     def test_partial_closing_subinterval_is_not_claimed_complete(self) -> None:
         result = self.run_task(
             replay_request("SSE:600519"),
