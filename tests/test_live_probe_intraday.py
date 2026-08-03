@@ -140,19 +140,48 @@ class IntradayLiveProbeTests(unittest.TestCase):
                 "pair_gap_seconds": "2",
             },
             "snapshot": {
-                "latest_price": {},
-                "open": {},
-                "high": {},
-                "low": {},
+                "latest_price": {"value": "1680.25", "unit": "CNY/share"},
+                "open": {"value": "1675.00", "unit": "CNY/share"},
+                "high": {"value": "1688.00", "unit": "CNY/share"},
+                "low": {"value": "1670.50", "unit": "CNY/share"},
+                "cumulative_volume": {"value": "1234500", "unit": "shares"},
+                "cumulative_amount": {
+                    "value": "2071234567.89",
+                    "unit": "CNY",
+                },
             },
             "evidence": [],
             "conflicts": [],
             "source_errors": [],
-            "limitations": [],
+            "limitations": [{"code": "experimental_intraday_sources"}],
         }
         self.assertEqual(
             live_probe._result_from_process(0, json.dumps(valid_limited), ""),
             valid_limited,
+        )
+        incomplete_snapshot = {
+            **valid_limited,
+            "snapshot": {
+                **valid_limited["snapshot"],  # type: ignore[arg-type]
+                "open": {"value": "1"},
+            },
+        }
+        incomplete_snapshot_result = live_probe._result_from_process(
+            0, json.dumps(incomplete_snapshot), ""
+        )
+        self.assertEqual(incomplete_snapshot_result["status"], "blocked")
+        self.assertEqual(
+            incomplete_snapshot_result["_failures"][0]["code"],
+            "probe_protocol_failure",
+        )
+        undisclosed_limitations = {**valid_limited, "limitations": []}
+        undisclosed_result = live_probe._result_from_process(
+            0, json.dumps(undisclosed_limitations), ""
+        )
+        self.assertEqual(undisclosed_result["status"], "blocked")
+        self.assertEqual(
+            undisclosed_result["_failures"][0]["code"],
+            "probe_protocol_failure",
         )
         incomplete_timing = {
             **valid_limited,

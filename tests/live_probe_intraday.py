@@ -220,25 +220,30 @@ def _has_observation_contract(value: Mapping[str, object]) -> bool:
     snapshot = value.get("snapshot")
     if not isinstance(snapshot, Mapping):
         return False
-    core_fields = {
+    snapshot_fields = {
         "latest_price",
         "open",
         "high",
         "low",
+        "cumulative_volume",
+        "cumulative_amount",
     }
-    if not core_fields.issubset(snapshot) or not all(
-        isinstance(snapshot.get(field), Mapping) for field in core_fields
+    if not snapshot_fields.issubset(snapshot):
+        return False
+    if not all(
+        isinstance(snapshot.get(field), Mapping)
+        and "value" in snapshot[field]
+        and isinstance(snapshot[field].get("unit"), str)
+        and bool(snapshot[field]["unit"])
+        for field in snapshot_fields
     ):
         return False
-    return all(
+    if not all(
         isinstance(value.get(field), list)
-        for field in (
-            "evidence",
-            "conflicts",
-            "source_errors",
-            "limitations",
-        )
-    )
+        for field in ("evidence", "conflicts", "source_errors", "limitations")
+    ):
+        return False
+    return _diagnostic_list(value.get("limitations"))
 
 
 def _has_blocked_contract(value: Mapping[str, object]) -> bool:
