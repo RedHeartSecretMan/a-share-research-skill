@@ -130,6 +130,7 @@ class FixtureTongdaxinClient:
             "suspension_one_source",
             "suspension_core_conflict",
             "suspension_status_ambiguous",
+            "suspension_alias",
         }:
             values.update(
                 {
@@ -140,7 +141,9 @@ class FixtureTongdaxinClient:
                     "last_close": "1668.00",
                     "vol": "0",
                     "amount": "0",
-                    "trading_status": "suspended",
+                    "trading_status": (
+                        "not_traded" if scenario == "suspension_alias" else "suspended"
+                    ),
                 }
             )
             if scenario == "suspension_status_ambiguous":
@@ -287,14 +290,21 @@ class FixtureTransport:
             "suspension_confirmed",
             "suspension_one_source",
             "suspension_status_ambiguous",
+            "suspension_alias",
         }:
             current[1] = current[2] = current[3] = current[4] = "1668.00"
             current[5] = "0"
             previous[2] = "1668.00"
             quote[3] = quote[4] = "1668.00"
             quote[6] = "0"
-            if scenario in {"suspension_confirmed", "suspension_status_ambiguous"}:
-                quote[33] = "suspended"
+            if scenario in {
+                "suspension_confirmed",
+                "suspension_status_ambiguous",
+                "suspension_alias",
+            }:
+                quote[33] = (
+                    "not_traded" if scenario == "suspension_alias" else "suspended"
+                )
         elif scenario in {"corporate_action_unavailable", "comparable_prev_close"}:
             quote[34] = (
                 "ex_right_reference"
@@ -376,7 +386,10 @@ class FixtureTransport:
 class FixtureTencentIntradayOperation(TencentIntradayOperation):
     def collect(self, query: IntradayQuery) -> IntradayObservation:
         observation = super().collect(query)
-        if os.environ.get("A_SHARE_INTRADAY_SCENARIO") != "tencent_unknown_kind":
+        scenario = os.environ.get("A_SHARE_INTRADAY_SCENARIO")
+        if scenario == "unknown_prev_close_comparability":
+            return replace(observation, previous_close_comparability="unknown")
+        if scenario != "tencent_unknown_kind":
             return observation
         evidence = dict(observation.evidence[0])
         source_observation = dict(evidence["observation"])

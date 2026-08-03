@@ -188,8 +188,12 @@ def build_intraday_snapshot_result(
                 )
             },
             "snapshot.previous_close": {
-                "evidence_ids": [baseline_id],
-                "source_fields": list(baseline.field_sources["previous_close"]),
+                "evidence_ids": core_evidence,
+                "source_fields": [
+                    *baseline.field_sources["previous_close"],
+                    *cross_check.field_sources["previous_close"],
+                ],
+                "calculation": "previous_close_cross_source_adjudication@1",
             },
             "snapshot.cumulative_volume": {
                 "evidence_ids": [baseline_id],
@@ -265,6 +269,8 @@ def build_intraday_snapshot_result(
     }
     previous_close = _adjudicate_previous_close(baseline, cross_check)
     result["snapshot"]["previous_close"] = previous_close["snapshot"]
+    if _is_confirmed_suspension(baseline, cross_check):
+        return _suspended_result(result, baseline, cross_check)
     if previous_close["comparable"]:
         change_amount = Decimal(baseline.latest_price) - Decimal(
             baseline.previous_close
@@ -280,8 +286,26 @@ def build_intraday_snapshot_result(
             "value": _decimal_text(change_percent),
             "unit": "percent",
         }
-    if _is_confirmed_suspension(baseline, cross_check):
-        return _suspended_result(result, baseline, cross_check)
+        result["field_lineage"]["snapshot.change_amount"] = {
+            "evidence_ids": core_evidence,
+            "source_fields": [
+                *baseline.field_sources["latest_price"],
+                *cross_check.field_sources["latest_price"],
+                *baseline.field_sources["previous_close"],
+                *cross_check.field_sources["previous_close"],
+            ],
+            "calculation": "intraday_change_amount@1",
+        }
+        result["field_lineage"]["snapshot.change_percent"] = {
+            "evidence_ids": core_evidence,
+            "source_fields": [
+                *baseline.field_sources["latest_price"],
+                *cross_check.field_sources["latest_price"],
+                *baseline.field_sources["previous_close"],
+                *cross_check.field_sources["previous_close"],
+            ],
+            "calculation": "intraday_change_percent@1",
+        }
     return result
 
 
@@ -467,12 +491,14 @@ def _pair_incompatibility(
         if expected_session in {"opening_auction", "closing_auction"}
         else "traded"
     )
-    suspended_statuses = {"suspended", "not_traded", "no_trade"}
+    suspended_statuses = {"suspended"}
+    no_trade_aliases = {"not_traded", "no_trade"}
     all_suspended = all(
         item.trading_status in suspended_statuses for item in observations
     )
     any_suspended = any(
-        item.trading_status in suspended_statuses for item in observations
+        item.trading_status in suspended_statuses | no_trade_aliases
+        for item in observations
     )
     if all_suspended:
         status_compatible = True
@@ -672,14 +698,17 @@ def _suspension_conflicts(
     """Require both independent operations to prove a no-trade suspension."""
 
     observations = (baseline, cross_check)
-    suspended_statuses = {"suspended", "not_traded", "no_trade"}
+    suspended_statuses = {"suspended"}
+    no_trade_aliases = {"not_traded", "no_trade"}
     statuses = [item.trading_status for item in observations]
-    if not any(status in suspended_statuses for status in statuses):
+    if not any(status in suspended_statuses | no_trade_aliases for status in statuses):
         if (
             baseline.previous_close is not None
             and cross_check.previous_close is not None
             and baseline.latest_price == baseline.previous_close
             and cross_check.latest_price == cross_check.previous_close
+            and all(item.trading_status == "traded" for item in observations)
+            and not all(_has_positive_trade_evidence(item) for item in observations)
         ):
             return [
                 _pair_conflict(
@@ -696,7 +725,7 @@ def _suspension_conflicts(
         return [
             _pair_conflict(
                 "intraday_suspension_confirmation_mismatch",
-                "Only one source explicitly confirms suspension.",
+                "Both source operations must explicitly report suspended status.",
                 field="trading_status",
                 baseline=baseline.trading_status,
                 cross_check=cross_check.trading_status,
@@ -721,11 +750,27 @@ def _is_confirmed_suspension(
     baseline: IntradayObservation,
     cross_check: IntradayObservation,
 ) -> bool:
-    statuses = {"suspended", "not_traded", "no_trade"}
+    statuses = {"suspended"}
     return all(
         item.trading_status in statuses and item.no_trade_confirmed
         for item in (baseline, cross_check)
     )
+
+
+def _has_positive_trade_evidence(observation: IntradayObservation) -> bool:
+    """Return whether a traded observation proves at least one trade occurred."""
+
+    if observation.trading_status != "traded":
+        return False
+    if observation.cumulative_volume_shares is None:
+        return False
+    if Decimal(observation.cumulative_volume_shares) <= 0:
+        return False
+    if observation.source_operation == TONGDAXIN_OPERATION:
+        if observation.cumulative_amount_cny is None:
+            return False
+        return Decimal(observation.cumulative_amount_cny) > 0
+    return True
 
 
 def _suspended_result(
@@ -744,8 +789,38 @@ def _suspended_result(
     for field in ("latest_price", "open", "high", "low"):
         snapshot[field] = dict(not_applicable)
     snapshot["cumulative_volume"] = {"value": "0", "unit": "shares"}
-    snapshot["cumulative_amount"] = {"value": "0", "unit": "CNY"}
+    snapshot["cumulative_amount"] = {
+        "status": "not_applicable",
+        "value": None,
+        "unit": "CNY",
+        "reason": "suspended_amount_not_observed",
+    }
     result["snapshot"] = snapshot
+    lineage = dict(result["field_lineage"])
+    lineage["snapshot.cumulative_volume"] = {
+        "evidence_ids": [
+            baseline.evidence[0]["id"],
+            cross_check.evidence[0]["id"],
+        ],
+        "source_fields": [
+            *baseline.field_sources["cumulative_volume"],
+            *cross_check.field_sources.get("cumulative_volume", ()),
+        ],
+        "calculation": "joint_no_trade_confirmation@1",
+    }
+    lineage["snapshot.cumulative_amount"] = {
+        "evidence_ids": [
+            baseline.evidence[0]["id"],
+            cross_check.evidence[0]["id"],
+        ],
+        "source_fields": [
+            *baseline.field_sources["cumulative_amount"],
+            "trading_status",
+            "cumulative_volume",
+        ],
+        "calculation": "joint_no_trade_confirmation_amount_not_observed@1",
+    }
+    result["field_lineage"] = lineage
     result["trading_status"] = "suspended"
     result["price_type"] = "not_applicable"
     result["brief"] = {
@@ -784,6 +859,25 @@ def _adjudicate_previous_close(
                 "unit": "CNY/share",
                 "basis": baseline.previous_close_basis,
                 "reason": "previous_close_unavailable",
+            },
+        }
+    comparability = (
+        baseline.previous_close_comparability,
+        cross_check.previous_close_comparability,
+    )
+    if any(value != "comparable" for value in comparability):
+        return {
+            "comparable": False,
+            "snapshot": {
+                "status": "unavailable",
+                "reported_value": baseline.previous_close,
+                "unit": "CNY/share",
+                "basis": baseline.previous_close_basis,
+                "reason": (
+                    "independent_semantics_not_adjudicated"
+                    if any(value in {None, "unknown"} for value in comparability)
+                    else "independent_semantics_not_comparable"
+                ),
             },
         }
     if (

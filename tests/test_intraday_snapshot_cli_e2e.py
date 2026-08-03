@@ -130,8 +130,15 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            result["field_lineage"]["snapshot.previous_close"]["evidence_ids"],
-            ["intraday-tdx-quote-SSE:600519-2026-08-03T10:30:00+08:00"],
+            result["field_lineage"]["snapshot.previous_close"],
+            {
+                "evidence_ids": [
+                    "intraday-tdx-quote-SSE:600519-2026-08-03T10:30:00+08:00",
+                    "intraday-tencent-SSE:600519-2026-08-03T10:29:58+08:00",
+                ],
+                "source_fields": ["last_close", "qt.prev_close"],
+                "calculation": "previous_close_cross_source_adjudication@1",
+            },
         )
         self.assertEqual(
             result["field_lineage"]["snapshot.cumulative_volume"]["evidence_ids"],
@@ -214,8 +221,15 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
         )
         self.assertEqual(
             result["snapshot"]["cumulative_amount"],
-            {"value": "0", "unit": "CNY"},
+            {
+                "status": "not_applicable",
+                "value": None,
+                "unit": "CNY",
+                "reason": "suspended_amount_not_observed",
+            },
         )
+        self.assertNotIn("change_amount", result["snapshot"])
+        self.assertNotIn("change_percent", result["snapshot"])
 
     def test_corporate_action_previous_close_is_unavailable_without_change_metrics(
         self,
@@ -299,16 +313,51 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             {item["code"] for item in result["conflicts"]},
         )
 
-    def test_equal_previous_close_does_not_establish_suspension(self) -> None:
+    def test_not_traded_alias_does_not_establish_suspension(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_SCENARIO": "suspension_alias"},
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn(
+            "intraday_suspension_confirmation_mismatch",
+            {item["code"] for item in result["conflicts"]},
+        )
+
+    def test_equal_previous_close_with_trading_evidence_remains_limited(self) -> None:
         result = self.run_task(
             intraday_request("SSE:600519"),
             environment={"A_SHARE_INTRADAY_SCENARIO": "price_equal_previous_close"},
         )
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertIn(
-            "intraday_suspension_ambiguous",
-            {item["code"] for item in result["conflicts"]},
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["trading_status"], "traded")
+        self.assertEqual(result["snapshot"]["latest_price"]["value"], "1668.00")
+        self.assertEqual(result["conflicts"], [])
+
+    def test_unknown_previous_close_comparability_stays_unavailable(self) -> None:
+        result = self.run_task(
+            intraday_request("SSE:600519"),
+            environment={
+                "A_SHARE_INTRADAY_SCENARIO": "unknown_prev_close_comparability"
+            },
+        )
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["snapshot"]["previous_close"]["status"], "unavailable")
+        self.assertEqual(
+            result["snapshot"]["previous_close"]["reason"],
+            "independent_semantics_not_adjudicated",
+        )
+        self.assertNotIn("change_amount", result["snapshot"])
+        self.assertNotIn("change_percent", result["snapshot"])
+        self.assertEqual(
+            result["field_lineage"]["snapshot.previous_close"]["evidence_ids"],
+            [
+                "intraday-tdx-quote-SSE:600519-2026-08-03T10:30:00+08:00",
+                "intraday-tencent-SSE:600519-2026-08-03T10:29:58+08:00",
+            ],
         )
 
     def test_source_policy_rejection_blocks_before_source_collection(self) -> None:
