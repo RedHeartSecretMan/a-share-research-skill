@@ -4,11 +4,13 @@ Read this reference when selecting a command, invoking the bundled runtime, or i
 
 ## Portable invocation
 
-The core runtime requires Python 3.12 or later and only the Python standard library; optional source capabilities may declare their own dependency. Select an interpreter available on the host:
+The core runtime requires Python 3.12 or later and only the Python standard library; optional source capabilities may declare their own dependency. Select an interpreter available on the host and verify its version before invoking the Skill:
 
 - Windows: `py -3.12`
-- macOS: `python3`
-- Linux: `python3`
+- macOS: prefer `python3.12`; use `python3` only when it reports Python 3.12 or later
+- Linux: prefer `python3.12`; use `python3` only when it reports Python 3.12 or later
+
+In the commands below, `<python>` stands for that selected command, including both tokens in `py -3.12`. Run `<python> --version` and stop if the resolved interpreter is older than Python 3.12.
 
 Resolve `<skill-root>` from the loaded `SKILL.md` location. The Skill's only public runtime entry point is `<skill-root>/scripts/entrypoint.py`; modules under `<skill-root>/scripts/a_share_research/` are implementation details and must not be invoked directly. Do not assume a particular Agent, home directory, installation directory, working directory, or shell. Quote the resolved path when it contains spaces.
 
@@ -72,6 +74,6 @@ A nonzero exit means invocation, protocol, I/O, or internal processing prevented
 
 ## Credentials and network behavior
 
-Most registered source operations are credential-free. Semantic iWencai content search is enabled only when `source_policy.allow_credentials` is true and reads `IWENCAI_API_KEY`; `IWENCAI_BASE_URL` may select an explicitly configured compatible endpoint. The values never belong in a request document, command argument, log, result, example, or fixture. F10 retrieval uses the optional `mootdx` dependency; absence or request failure is reported explicitly rather than replaced by another source. ETF-option retrieval is credential-free but experimental, rate-limited, and has no qualified independent fallback. `resolve`, `close`, and other network research tasks use capability-scoped source operations. `validate-bundle` and `valuation` operate on local provided evidence.
+Most registered source operations are credential-free. Semantic iWencai content search is enabled only when `source_policy.allow_credentials` is true and reads `IWENCAI_API_KEY`; `IWENCAI_BASE_URL` may select an explicitly configured compatible endpoint. The values never belong in a request document, command argument, log, result, example, or fixture. F10 retrieval uses the optional `mootdx` dependency; absence or request failure is reported explicitly rather than replaced by another source. Other `mootdx` interfaces are not implicit sources or fallbacks: every operation must independently qualify identity, timing, units, failure semantics, and licensing before it can enter the evidence chain. ETF-option retrieval is credential-free but experimental, rate-limited, and has no qualified independent fallback. `resolve`, `close`, and other network research tasks use capability-scoped source operations. `validate-bundle` and `valuation` operate on local provided evidence.
 
 Default tests are offline and replace only the external network boundary with fixed responses. `tests/live_probe_close.py` belongs to the development repository, not the installed Skill; a maintainer must invoke it explicitly for source diagnostics. A live probe must never update fixtures or become an ordinary CI dependency.

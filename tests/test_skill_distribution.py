@@ -33,29 +33,68 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn('display_name: "A股研究技能"', metadata)
         self.assertIn("$a-share-research ", metadata)
         self.assertNotIn("$a-share-research-skill", metadata)
+        self.assertIn("when the question calls for interpretation", metadata)
+        self.assertIn("the result is not blocked", metadata)
 
-    def test_release_installation_is_pinned_to_v0_1_0(self) -> None:
+    def test_release_installation_is_pinned_to_v0_1_1(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
-                    "git clone --depth 1 --branch v0.1.0 --single-branch ",
+                    "git clone --depth 1 --branch v0.1.1 --single-branch ",
                     readme,
                 )
                 self.assertIn(
                     "https://github.com/RedHeartSecretMan/a-share-research-skill.git",
                     readme,
                 )
-                self.assertNotIn("v0.1.0 in development", readme)
-                self.assertNotIn("v0.1.0 开发中", readme)
+                self.assertNotIn(
+                    "git clone --depth 1 --branch v0.1.0 --single-branch ", readme
+                )
+                self.assertNotIn("v0.1.1 in development", readme)
+                self.assertNotIn("v0.1.1 开发中", readme)
+
+        chinese_readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
+        english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("当前只把 `mootdx` 用于 F10", chinese_readme)
+        self.assertIn("`mootdx` is currently used only for F10", english_readme)
+
+    def test_release_demos_present_agent_judgment_and_conditional_triggers(
+        self,
+    ) -> None:
+        readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
+        english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("## 分析边界", readme)
+        self.assertIn("## Analysis boundary", english_readme)
+
+        for demo_name in ("bluefocus.md", "industrial-fulian.md"):
+            with self.subTest(demo=demo_name):
+                demo = Path(REPOSITORY_ROOT, "examples", demo_name).read_text(
+                    encoding="utf-8"
+                )
+                first_nonblank = next(
+                    line for line in demo.splitlines() if line.strip()
+                )
+                self.assertTrue(first_nonblank.startswith("# "))
+                self.assertIn("## Agent 研究判断", demo)
+                self.assertIn("**条件触发位**", demo)
+                self.assertIn("不是买入点、卖出点", demo)
 
     def test_entry_routes_every_public_cli_workflow_with_the_exact_signature(
         self,
     ) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+        cli_contract = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("scripts/entrypoint.py", entry)
         self.assertNotIn("scripts/a_share_research.py", entry)
+        self.assertIn("references/cli-contract.md", entry)
 
         expected_commands = (
             "run --request <research-task.json>",
@@ -66,7 +105,7 @@ class SkillDistributionTests(unittest.TestCase):
         )
         for command in expected_commands:
             with self.subTest(command=command):
-                self.assertIn(command, entry)
+                self.assertIn(command, cli_contract)
 
     def test_entry_prevents_the_agent_from_inventing_absent_result_fields(
         self,
@@ -86,6 +125,33 @@ class SkillDistributionTests(unittest.TestCase):
             entry,
         )
 
+    def test_installed_skill_separates_research_judgment_from_action_advice(
+        self,
+    ) -> None:
+        entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+        boundary = Path(SKILL_ROOT, "references", "analysis-boundary.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("references/analysis-boundary.md", entry)
+        self.assertIn("provide a useful research judgment", boundary)
+        self.assertIn("A conditional trigger level is allowed only when", boundary)
+        self.assertIn("label it as an **Agent calculation**", boundary)
+        self.assertIn(
+            "Do not generate a project or Agent rating, price target, direct "
+            "buy/sell/hold instruction",
+            boundary,
+        )
+        self.assertNotIn("Do not generate a project or Agent rating", entry)
+        self.assertNotIn("Do not label a security cheap or expensive", boundary)
+
+    def test_skill_entry_remains_a_concise_router(self) -> None:
+        entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertLess(len(entry.split()), 1500)
+        self.assertNotIn("`parameters.market_heat_period` is `hour` by default", entry)
+        self.assertNotIn("Gamma/Theta/Vega use unverified provider-native units", entry)
+
     def test_cli_reference_explains_platform_neutral_invocation(self) -> None:
         reference = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
             encoding="utf-8"
@@ -93,8 +159,8 @@ class SkillDistributionTests(unittest.TestCase):
 
         for instruction in (
             "Windows: `py -3.12`",
-            "macOS: `python3`",
-            "Linux: `python3`",
+            "macOS: prefer `python3.12`; use `python3` only when it reports Python 3.12 or later",
+            "Linux: prefer `python3.12`; use `python3` only when it reports Python 3.12 or later",
             "Resolve `<skill-root>` from the loaded `SKILL.md` location",
             "only public runtime entry point is `<skill-root>/scripts/entrypoint.py`",
         ):

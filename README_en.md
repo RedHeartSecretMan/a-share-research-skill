@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.0)
+[![Release: v0.1.1](https://img.shields.io/badge/release-v0.1.1-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
@@ -15,7 +15,7 @@
 
 `a-share-research-skill` is the project repository name; the installable Skill is `$a-share-research`. It takes an evidence-first approach to mainland-China listed-security research: a deterministic Python CLI handles security identity, research time boundaries, evidence validation, and valuation calculations, then an Agent presents the versioned JSON as auditable research material.
 
-The project does not treat “an endpoint returned data” as “the fact is trustworthy.” It does not provide ratings, price targets, position sizing, buy/sell advice, or cheap/expensive judgments.
+The project does not treat “an endpoint returned data” as “the fact is trustworthy.” It provides auditable research analysis only after security identity, research time, provenance, basis, and assumptions are explicit.
 
 ## Why it exists
 
@@ -27,7 +27,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 - **Reproducible calculations**: market capitalization, PE TTM, and PB MRQ use Decimal arithmetic and preserve full calculation lineage.
 - **Honest failure**: ambiguity, conflict, staleness, wrong-security payloads, or missing critical evidence return `limited` / `blocked` instead of invented values.
 
-## v0.1.0 capabilities
+## v0.1.1 capabilities
 
 | Capability | Input | Output and boundary |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 | ETF options | 510050 / 510300 / 510500 / 588000 + one observation date + ATM/chain, expiry, and quote-time modes | Separate standard `M` and adjusted `A` series, call/put quotes, tied ATM strikes, provider-reported Greeks/IV, four-state coverage, source time, and limitations |
 | Automatic security valuation | A-share clue + established security-class count + current China Standard Time date + scenario target PE | Preserves complete numeric rows from all three statements and quarterly series, then acquires current shares and consensus to calculate reported and forward metrics |
 | Same-basis valuation comparison | 2–10 unique A-share clues + shared date/target PE | Preserves every requested row with one price and metric basis; unavailable, meaningless, and blocked metrics remain explicit |
-| Research-content retrieval | Theme/industry or one A-share + publication window + material types | Stock/industry reports, consensus, F10, news, CNINFO/SSE/SZSE announcements, market flashes, and investor Q&A with role, time, document identity, and locators preserved |
+| Research-content retrieval | Theme/industry or one A-share + publication window + material types | Stock/industry reports, consensus, F10 issuer-profile material, news, CNINFO/SSE/SZSE announcements, market flashes, and investor Q&A with role, time, document identity, and locators preserved |
 | Capital, positioning, and company events | One A-share or a market/board scope + observation window + data types | Northbound disclosure gaps, stock/board fund flow, stock and market dragon-tiger records, 90-day lockups, margin data, block trades, shareholder counts, and distributions with period, unit, direction, and market scope preserved |
 | Market themes and trading signals | One A-share clue or market-wide scope + explicit observation date + signal types | Strong-stock themes, security board membership, industry rotation, limit pools, focus monitoring, severe abnormal movements, canonical-identity intersections, and market heat with rules, attribution provenance, four-state coverage, conflicts, and limitations preserved |
 | Four research workflows | One security, several securities, theme keywords, or one new security + explicit research windows | Orchestrates existing research tasks only and preserves every step's status, evidence, conflicts, source errors, and limitations; identity failure gates dependent steps without disguising other unavailable steps as complete |
@@ -46,6 +46,8 @@ Most data tools optimize for how much they can retrieve. This project asks wheth
 | Provided-evidence valuation | Validated bundle + explicit date | Calculates market capitalization, PE TTM, and PB MRQ with formulas, operands, and report lineage |
 
 Experimental operations can provide observations and expose conflicts, but they have not completed operation-level qualification and cannot establish a `supported` factual claim alone. Contract-complete caller evidence is not described as source-verified merely because its fields and hashes validate.
+
+Here, **F10 material** means the issuer information conventionally opened through an “F10” entry in Chinese securities-market software. v0.1.1 can retrieve latest notices, company overview, financial analysis, shareholder research, capital structure, capital operations, industry commentary, industry analysis, and company events. These are provider-compiled text materials, not an exchange-standardized dataset, statutory company disclosure, or independently verified company fact.
 
 ## How it works
 
@@ -65,12 +67,18 @@ Research results use three overall states:
 - `limited`: the core question remains answerable, but a non-critical gap, conflict, or source limitation must be disclosed.
 - `blocked`: identity or critical evidence is insufficient, so substantive conclusions must stop.
 
+## Analysis boundary
+
+The CLI produces evidence, deterministic calculations, status, and limitations. When the result is not blocked and the question needs interpretation, the Agent may add a research judgment, risks, invalidation conditions, conditional trigger levels, and follow-up research suggestions. Direct-evidence questions such as identity checks receive no unrelated judgment; an overall `blocked` result states the gap and the evidence needed to continue.
+
+This section is only a user-facing orientation. The normative rules for research judgments, conditional triggers, attributed external opinions, and investment-action advice are in the installed [`references/analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md). The researcher remains responsible for the final investment decision.
+
 ## Installation
 
 The only installable artifact is [`skill/a-share-research`](skill/a-share-research/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
 
 ```text
-git clone --depth 1 --branch v0.1.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.1.1 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -79,7 +87,17 @@ git clone --depth 1 --branch v0.1.0 --single-branch https://github.com/RedHeartS
 └── scripts/
 ```
 
-The core runtime requires only the Python 3.12 or later standard library and does not require installing this repository as a package. F10 retrieval is optional and requires `mootdx`; absence is reported explicitly instead of silently substituting data. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for platform-neutral interpreter selection and invocation.
+The core runtime requires only the Python 3.12 or later standard library and does not require installing this repository as a package. Below, `<python>` means an interpreter already confirmed to be version 3.12 or later: Windows normally uses `py -3.12`; macOS and Linux should prefer `python3.12`, and should use `python3` only after `python3 --version` confirms the requirement. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for the complete invocation contract.
+
+F10 issuer-profile retrieval is integrated into v0.1.1 but requires an extra dependency. Install the release-audited version into the same Python environment that runs the Skill when this capability is needed:
+
+```text
+<python> -m pip install "mootdx==0.11.7"
+```
+
+The standard-library core installation does not include `mootdx`. When it is absent, only steps requesting F10 material report the missing dependency or return `blocked`; other research capabilities remain available. On first use, this upstream dependency may create `.mootdx/config.json` in the user's home directory.
+
+`mootdx` is currently used only for F10 because it fills a Tongdaxin-material access gap not covered by the existing HTTP operations. Its quote and other interfaces do not become default sources or fallbacks merely because they ship in the same library. Each source operation must separately qualify its identity, timing, units, failure semantics, and licensing, and must improve the evidence chain before integration.
 
 ## CLI
 
@@ -111,7 +129,7 @@ Provided-evidence valuation research:
 
 ## Common uses
 
-Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The uses below match the task contracts shipped in the stable v0.1.0 Release.
+Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The uses below match the task contracts in the v0.1.1 release candidate.
 
 **Identify the right security**
 
@@ -123,7 +141,7 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 **Research a recent trend**
 
-> Use `$a-share-research` to research BlueFocus over the latest 10 completed sessions as of today on an unadjusted basis. Include OHLCV, cumulative return, maximum drawdown, volatility, up/down sessions, and volume change, then summarize the observed trend without giving trading advice.
+> Use `$a-share-research` to research BlueFocus over the latest 10 completed sessions as of today on an unadjusted basis. Include OHLCV, cumulative return, maximum drawdown, volatility, up/down sessions, and volume change, then explain the trend, material risks, and invalidation conditions from that evidence. Label the conclusion as Agent inference; if you state a conditional trigger level, explain its rule and research horizon rather than phrasing it as a trading instruction.
 
 **Look up an ETF market quote**
 
@@ -151,7 +169,7 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 **Run the single-security valuation workflow**
 
-> Use `$a-share-research` to research Industrial Fulian's valuation as of today. First establish whether the issuer has only one priced ordinary-share class. Use the latest completed unadjusted close and calculate market cap, PE TTM, PB MRQ, first-forecast-year PE, forecast EPS growth, PEG, and the theoretical time to reach 30x PE. Separate mirrored statement observations, consensus opinions, and scenario assumptions; do not give trading advice.
+> Use `$a-share-research` to research Industrial Fulian's valuation as of today. First establish whether the issuer has only one priced ordinary-share class. Use the latest completed unadjusted close and calculate market cap, PE TTM, PB MRQ, first-forecast-year PE, forecast EPS growth, PEG, and the theoretical time to reach 30x PE. Separate mirrored statement observations, consensus opinions, and scenario assumptions, then use an explicit benchmark to explain valuation pressure, key assumptions, and reassessment conditions.
 
 **Run the same-basis valuation-comparison workflow**
 
@@ -222,15 +240,15 @@ The current version is deliberately conservative:
 - The share count is a current observation, not an independently verified effective event; statements are provider-mirror observations whose correction/replacement semantics remain unqualified.
 - Security-class count is never silently assumed. Unknown scope or A/H, A/B, or other multi-class issuers block issuer-wide valuation.
 - Consensus is aggregated opinion, not a reported company fact; target PE is a user scenario input, not a fair-value conclusion.
-- Reports, news, announcements, flashes, investor Q&A, and F10 currently use experimental sources, so results are at most `limited`. A PDF locator does not prove download or parsing; only an explicit document-verification run may claim retrieval was checked.
+- Reports, news, announcements, flashes, investor Q&A, and F10 material currently use experimental sources, so results are at most `limited`. F10 is a provider-compiled current snapshot whose publication time, document identity, and version-replacement semantics remain unqualified. A PDF locator does not prove download or parsing; only an explicit document-verification run may claim retrieval was checked.
 - Fund flow, dragon-tiger records, lockups, margin data, block trades, shareholder counts, and distributions also use experimental sources. Provider-derived fund direction is a market signal, not authoritative disclosure. A rolling board metric keeps `period.start: null` when the first session is not exposed; a source with unknown first-availability time is usable only for research on its current retrieval date, never as a historical backtest input. When the post-19-August-2024 regime does not expose the old daily northbound net-buy metric, the task blocks explicitly instead of inserting zero.
 - Themes, board membership, industry rotation, limit pools, monitoring, abnormal movement, and heat also use experimental sources. A provider watchlist is not an official exchange list, and editorial reasons or popularity labels do not prove causality or fundamentals. Only a completely collected zero pool is `observed_empty`, and provider-local codes cannot establish a monitoring intersection.
 - ETF options currently cover experimental snapshots for 50ETF, 300ETF, 500ETF, and STAR 50ETF only. Provider-reported Greeks/IV are neither local-model nor exchange calculations; authoritative contract totals, contract units, adjustment terms, and an independent fallback remain unavailable. Preserve `M` / `A` series, quote state, units, timing, source, and coverage.
 - Theme-report research defaults to exact title-keyword filtering over the Eastmoney market-wide report feed; this is not semantic search and does not prove a complete theme universe. Semantic iWencai search is an optional enhancement when source policy permits it and reads credentials only from `IWENCAI_API_KEY`; values never enter request JSON or output.
 - ETF snapshots are supported; minute, tick, trading, news-sentiment scoring, full-company profiles, and batch screening are not yet supported.
-- It does not provide ratings, price targets, buy/sell advice, position sizing, or automated trading instructions.
+- Research analysis and advice follow the installed [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md); this README does not define a second operational policy.
 
-See [`CONTEXT.md`](CONTEXT.md) for the complete domain boundary, [`docs/specs/0002-trustworthy-a-share-research-foundation.md`](docs/specs/0002-trustworthy-a-share-research-foundation.md) for the current kernel specification, and [`docs/specs/0003-full-a-share-research-v0.1.0.md`](docs/specs/0003-full-a-share-research-v0.1.0.md) for the true v0.1.0 capability and release gates.
+See [`CONTEXT.md`](CONTEXT.md) for the complete product domain and terminology. [`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) is the superseded early v0.0.1 valuation-kernel proposal; [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) defines the delivered v0.0.1 trustworthy-evidence kernel; [`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) defines the complete v0.1.0 capability and release gates; and [`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) defines the v0.1.1 presentation-boundary and documentation release revision.
 
 ## Repository layout
 
@@ -249,11 +267,11 @@ CONTEXT.md                     domain language and boundaries
 Default tests are fully offline. Live-source probes are opt-in diagnostics and are not part of the ordinary CI gate.
 
 ```text
-python3.12 -m unittest discover -s tests -p "test_*.py"
+<python> -m unittest discover -s tests -p "test_*.py"
 ruff check .
 ruff format --check .
 mypy skill/a-share-research/scripts
-python /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
+<python> /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```
 
 The live-source diagnostic entry point is `tests/live_probe_close.py`. It never updates fixtures or lowers evidence requirements.
@@ -261,40 +279,41 @@ The live-source diagnostic entry point is `tests/live_probe_close.py`. It never 
 Run each vertical slice explicitly against live sources with versioned requests:
 
 ```text
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-single-security-valuation.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-announcements-news.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-research-reports.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-announcements.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-flashes.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-investor-qa.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-5-day-fund-flow.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industry-board-5-day-fund-flow.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-dragon-tiger.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-lockup-90-day.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-capital-events.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-strong-stock-themes.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-board-membership.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-industry-rotation.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-limit-ecology.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-focus-monitoring.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-severe-abnormal-movements.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-monitoring-intersection.json
-python3.12 skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-single-security-valuation.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-f10.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-announcements-news.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-research-reports.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-announcements.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-flashes.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-investor-qa.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-5-day-fund-flow.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industry-board-5-day-fund-flow.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-dragon-tiger.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-lockup-90-day.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-capital-events.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-strong-stock-themes.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-board-membership.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-industry-rotation.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-limit-ecology.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-focus-monitoring.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-severe-abnormal-movements.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-monitoring-intersection.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
-Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the optional `mootdx` capability and should return an explicit blocked result when the dependency is absent.
+Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the integrated F10 capability that requires the optional `mootdx` dependency and should return an explicit blocked result when the dependency is absent.
 
 The dated results and environment limitations for all eight market-signal scenarios are recorded in the [2026-08-02 live smoke record](docs/research/market-signals-smoke-2026-08-02.md).
 

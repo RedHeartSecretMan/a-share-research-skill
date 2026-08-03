@@ -1,6 +1,6 @@
 # Current valuation methodology
 
-The current valuation evidence brief reports evidence and reproducible calculations. It does not determine whether a security is cheap or expensive.
+The current valuation evidence brief reports evidence and reproducible calculations. The Agent may interpret those results against an explicit peer set, historical range, or user-supplied scenario, but must label that interpretation as Agent inference rather than fact, fair value, or an investment-action instruction.
 
 ## Common price
 
@@ -65,7 +65,7 @@ Nonpositive forecast EPS or growth has `no_valuation_meaning` where applicable; 
 pe_digestion_years = ln(forward_pe / target_pe) / ln(1 + forecast_eps_growth)
 ```
 
-Return zero when forward PE is already at or below the user-supplied target. `target_pe` is a scenario assumption, not a factual fair-value anchor, rating, target price, or recommendation. Always show it beside the result.
+Return zero when forward PE is already at or below the user-supplied target. Always present `target_pe` as the user-supplied scenario assumption beside the result.
 
 ## Same-basis comparison
 
