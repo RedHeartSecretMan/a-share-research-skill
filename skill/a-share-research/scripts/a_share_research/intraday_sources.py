@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, time
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Callable
 
 from .close_sources import TencentDailyLineOperation
@@ -38,9 +39,17 @@ def _row(frame: Any, index: int, operation: str) -> dict[str, object]:
 
 
 def _text_decimal(value: object, operation: str, field: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, Decimal, int, float)):
+        raise _source_error(
+            operation,
+            "unknown_schema",
+            f"The source {field} is not an exact decimal value.",
+        )
     try:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise InvalidOperation
         parsed = Decimal(str(value))
-    except (InvalidOperation, ValueError) as error:
+    except (InvalidOperation, ValueError, TypeError) as error:
         raise _source_error(
             operation,
             "unknown_schema",
@@ -63,7 +72,135 @@ def _price(value: object, operation: str, field: str) -> str:
             "unknown_schema",
             f"The source {field} is not a positive price.",
         )
-    return format(parsed.quantize(Decimal("0.01")), "f")
+    normalized = parsed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if normalized <= 0:
+        raise _source_error(
+            operation,
+            "unknown_schema",
+            f"The source {field} is below the minimum CNY tick.",
+        )
+    return format(normalized, "f")
+
+
+def _validate_ohlc(values: dict[str, str], operation: str) -> None:
+    """Reject a source bar whose prices cannot describe one OHLC observation."""
+
+    low = Decimal(values["low_price"])
+    high = Decimal(values["high_price"])
+    opening = Decimal(values["open_price"])
+    latest = Decimal(values["latest_price"])
+    if low > high or opening < low or opening > high or latest < low or latest > high:
+        raise _source_error(
+            operation,
+            "inconsistent_price_bar",
+            "The source OHLC values are internally inconsistent.",
+        )
+
+
+def _normalized_volume_shares(
+    value: object,
+    operation: str,
+    *,
+    row: dict[str, object],
+) -> str:
+    """Normalize TongdaXin's explicitly contract-defined hands to shares."""
+
+    declared_unit = row.get("vol_unit", row.get("volume_unit"))
+    if declared_unit is None or str(declared_unit).casefold() not in {
+        "hand",
+        "hands",
+        "lot",
+        "lots",
+    }:
+        raise _source_error(
+            operation,
+            "ambiguous_volume_unit",
+            "The TongdaXin volume unit is missing or not contract-defined as hands.",
+        )
+    declared_scope = row.get("vol_scope", row.get("volume_scope"))
+    if declared_scope is None or str(declared_scope).casefold() not in {
+        "trading_day",
+        "day",
+        "session_cumulative",
+    }:
+        raise _source_error(
+            operation,
+            "ambiguous_volume_scope",
+            "The TongdaXin volume is not identified as cumulative for this trading day.",
+        )
+    try:
+        hands = Decimal(_text_decimal(value, operation, "vol"))
+    except IntradaySourceError:
+        raise
+    if hands != hands.to_integral_value():
+        raise _source_error(
+            operation,
+            "ambiguous_volume_unit",
+            "The TongdaXin volume in hands is not a whole number.",
+        )
+    if hands == 0 and not _zero_value_is_explicit(row):
+        raise _source_error(
+            operation,
+            "ambiguous_zero_value",
+            "The TongdaXin zero volume is not explicitly confirmed as no-trade or suspended.",
+        )
+    shares = hands * Decimal(100)
+    if shares != shares.to_integral_value():
+        raise _source_error(
+            operation,
+            "ambiguous_volume_unit",
+            "The normalized TongdaXin volume is not a whole number of shares.",
+        )
+    return format(shares.quantize(Decimal(1)), "f")
+
+
+def _normalized_amount_cny(
+    value: object,
+    operation: str,
+    *,
+    row: dict[str, object],
+) -> str:
+    """Normalize a contract-defined cumulative amount to CNY."""
+
+    declared_unit = row.get("amount_unit")
+    if declared_unit is None or str(declared_unit).casefold() not in {
+        "cny",
+        "rmb",
+        "yuan",
+    }:
+        raise _source_error(
+            operation,
+            "ambiguous_amount_unit",
+            "The TongdaXin amount unit is missing or not contract-defined as CNY.",
+        )
+    declared_scope = row.get("amount_scope")
+    if declared_scope is None or str(declared_scope).casefold() not in {
+        "trading_day",
+        "day",
+        "session_cumulative",
+    }:
+        raise _source_error(
+            operation,
+            "ambiguous_amount_scope",
+            "The TongdaXin amount is not identified as cumulative for this trading day.",
+        )
+    amount = _text_decimal(value, operation, "amount")
+    if Decimal(amount) == 0 and not _zero_value_is_explicit(row):
+        raise _source_error(
+            operation,
+            "ambiguous_zero_value",
+            "The TongdaXin zero amount is not explicitly confirmed as no-trade or suspended.",
+        )
+    return amount
+
+
+def _zero_value_is_explicit(row: dict[str, object]) -> bool:
+    status = row.get("trading_status", row.get("status"))
+    return isinstance(status, str) and status.casefold() in {
+        "not_traded",
+        "suspended",
+        "no_trade",
+    }
 
 
 def _continuous_session(observed_at: datetime, operation: str) -> str:
@@ -117,11 +254,31 @@ class TongdaxinIntradayOperation:
                 except Exception:
                     pass
         expected_market = 1 if query.exchange == "SSE" else 0
-        if quote.get("code") != query.code or quote.get("market") != expected_market:
+        if (
+            quote.get("code") != query.code
+            or quote.get("market") != expected_market
+            or isinstance(quote.get("market"), bool)
+        ):
             raise _source_error(
                 self.operation_id,
                 "wrong_security_payload",
                 "The TongdaXin quote identifies a different security.",
+            )
+        bar_code = daily_bar.get("code")
+        if bar_code is not None and str(bar_code) != query.code:
+            raise _source_error(
+                self.operation_id,
+                "quote_daily_security_mismatch",
+                "The TongdaXin daily bar identifies a different security.",
+            )
+        bar_market = daily_bar.get("market")
+        if bar_market is not None and (
+            isinstance(bar_market, bool) or bar_market != expected_market
+        ):
+            raise _source_error(
+                self.operation_id,
+                "quote_daily_security_mismatch",
+                "The TongdaXin daily bar identifies a different market.",
             )
         try:
             trading_date = query.as_of.replace(
@@ -144,6 +301,13 @@ class TongdaxinIntradayOperation:
                 "trading_date_mismatch",
                 "The TongdaXin latest daily bar does not establish the requested date.",
             )
+        quote_date = quote.get("trading_date", quote.get("date"))
+        if quote_date is not None and str(quote_date) != trading_date.isoformat():
+            raise _source_error(
+                self.operation_id,
+                "quote_daily_date_mismatch",
+                "The TongdaXin quote and latest daily bar describe different dates.",
+            )
         observed_at = datetime.combine(
             trading_date,
             server_time,
@@ -160,9 +324,18 @@ class TongdaxinIntradayOperation:
                 "previous_close": "last_close",
             }.items()
         }
-        volume = Decimal(_text_decimal(quote.get("vol"), self.operation_id, "vol"))
-        volume_shares = format(volume * Decimal(100), "f")
-        amount_cny = _text_decimal(quote.get("amount"), self.operation_id, "amount")
+        _validate_ohlc(price_values, self.operation_id)
+        volume_shares = _normalized_volume_shares(
+            quote.get("vol"),
+            self.operation_id,
+            row=quote,
+        )
+        amount_cny = _normalized_amount_cny(
+            quote.get("amount"),
+            self.operation_id,
+            row=quote,
+        )
+        trading_status = str(quote.get("trading_status", "traded"))
         quote_id = f"intraday-tdx-quote-{query.security}-{observed_at.isoformat()}"
         bar_id = f"intraday-tdx-date-{query.security}-{trading_date.isoformat()}"
         locator = f"mootdx://std/quote/{query.code}"
@@ -176,7 +349,7 @@ class TongdaxinIntradayOperation:
                 "kind": "intraday_quote",
                 "trading_date": trading_date.isoformat(),
                 "session_state": session_state,
-                "trading_status": "traded",
+                "trading_status": trading_status,
                 "price_type": "latest_traded",
                 "date_basis_evidence_id": bar_id,
             },
@@ -191,9 +364,11 @@ class TongdaxinIntradayOperation:
             },
             "unit": {
                 "price": "CNY/share",
+                "source_volume": "hands",
                 "cumulative_volume": "shares",
                 "cumulative_amount": "CNY",
             },
+            "cumulative_scope": "trading_day",
             "evidence_time": observed_at.isoformat(),
             "available_at": None,
             "retrieved_at": query.retrieved_at.isoformat(),
@@ -227,7 +402,7 @@ class TongdaxinIntradayOperation:
             observed_at=observed_at,
             retrieved_at=query.retrieved_at,
             session_state=session_state,
-            trading_status="traded",
+            trading_status=trading_status,
             price_type="latest_traded",
             latest_price=price_values["latest_price"],
             open_price=price_values["open_price"],
@@ -275,6 +450,19 @@ class TencentIntradayOperation:
                 "Tencent did not establish the current intraday core-price observation.",
             )
         session_state = _continuous_session(current.evidence_time, self.operation_id)
+        price_values = {
+            "latest_price": _price(current.close_value, self.operation_id, "close"),
+            "open_price": _price(current.open_value, self.operation_id, "open"),
+            "high_price": _price(current.high_value, self.operation_id, "high"),
+            "low_price": _price(current.low_value, self.operation_id, "low"),
+        }
+        _validate_ohlc(price_values, self.operation_id)
+        if current.price_type == "intraday_last":
+            price_type = "latest_traded"
+        elif current.price_type == "indicative_auction":
+            price_type = "indicative_auction"
+        else:
+            price_type = current.price_type
         evidence_id = (
             f"intraday-tencent-{query.security}-{current.evidence_time.isoformat()}"
         )
@@ -288,14 +476,16 @@ class TencentIntradayOperation:
                 "kind": "intraday_core_price_cross_check",
                 "trading_date": query.as_of.isoformat(),
                 "session_state": session_state,
-                "trading_status": "traded",
-                "price_type": "latest_traded",
+                "trading_status": (
+                    "auction" if price_type == "indicative_auction" else "traded"
+                ),
+                "price_type": price_type,
             },
             "observed_value": {
-                "latest_price": current.close_value,
-                "open": current.open_value,
-                "high": current.high_value,
-                "low": current.low_value,
+                "latest_price": price_values["latest_price"],
+                "open": price_values["open_price"],
+                "high": price_values["high_price"],
+                "low": price_values["low_price"],
             },
             "unit": {"price": "CNY/share"},
             "evidence_time": current.evidence_time.isoformat(),
@@ -311,12 +501,14 @@ class TencentIntradayOperation:
             observed_at=current.evidence_time,
             retrieved_at=current.retrieved_at,
             session_state=session_state,
-            trading_status="traded",
-            price_type="latest_traded",
-            latest_price=current.close_value,
-            open_price=current.open_value,
-            high_price=current.high_value,
-            low_price=current.low_value,
+            trading_status=(
+                "auction" if price_type == "indicative_auction" else "traded"
+            ),
+            price_type=price_type,
+            latest_price=price_values["latest_price"],
+            open_price=price_values["open_price"],
+            high_price=price_values["high_price"],
+            low_price=price_values["low_price"],
             previous_close=None,
             previous_close_basis=None,
             evidence=(evidence,),

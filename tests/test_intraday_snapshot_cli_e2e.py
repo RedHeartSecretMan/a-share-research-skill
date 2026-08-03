@@ -134,6 +134,10 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             ["intraday-tdx-quote-SSE:600519-2026-08-03T10:30:00+08:00"],
         )
         self.assertEqual(
+            result["field_lineage"]["snapshot.cumulative_volume"]["evidence_ids"],
+            ["intraday-tdx-quote-SSE:600519-2026-08-03T10:30:00+08:00"],
+        )
+        self.assertEqual(
             set(result["field_lineage"]),
             {
                 "subject",
@@ -299,10 +303,75 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["conflicts"][0]["code"], "intraday_core_price_mismatch")
+        self.assertEqual(result["conflicts"][0]["field"], "latest_price")
+        self.assertEqual(result["conflicts"][0]["baseline"], "1680.25")
+        self.assertEqual(result["conflicts"][0]["cross_check"], "1680.26")
         self.assertEqual(
             result["limitations"][0]["code"],
             "intraday_source_pair_incompatible",
         )
+
+    def test_provider_float_noise_is_normalized_to_the_cny_tick(self) -> None:
+        for scenario in ("tdx_float_noise", "tencent_float_noise"):
+            with self.subTest(scenario=scenario):
+                result = self.run_task(
+                    intraday_request("SSE:600519"),
+                    environment={"A_SHARE_INTRADAY_SCENARIO": scenario},
+                )
+                self.assertEqual(result["status"], "limited")
+                self.assertEqual(result["snapshot"]["latest_price"]["value"], "1680.25")
+                self.assertEqual(result["conflicts"], [])
+
+    def test_malformed_or_ambiguous_tongdaxin_values_block_with_sanitized_error(
+        self,
+    ) -> None:
+        expected_codes = {
+            "tdx_malformed_price": "unknown_schema",
+            "tdx_negative_volume": "unknown_schema",
+            "tdx_zero_values": "ambiguous_zero_value",
+            "tdx_fractional_volume": "ambiguous_volume_unit",
+            "tdx_unknown_volume_unit": "ambiguous_volume_unit",
+            "tdx_unknown_amount_unit": "ambiguous_amount_unit",
+            "tdx_missing_units": "ambiguous_volume_unit",
+            "tdx_quote_date_mismatch": "quote_daily_date_mismatch",
+            "tdx_wrong_daily_security": "quote_daily_security_mismatch",
+        }
+        for scenario, expected_code in expected_codes.items():
+            with self.subTest(scenario=scenario):
+                result = self.run_task(
+                    intraday_request("SSE:600519"),
+                    environment={"A_SHARE_INTRADAY_SCENARIO": scenario},
+                )
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["source_errors"][0]["code"], expected_code)
+                self.assertNotIn("not-a-price", result["source_errors"][0]["message"])
+                self.assertGreaterEqual(len(result["evidence"]), 1)
+
+    def test_malformed_or_empty_tencent_payload_blocks_without_losing_tdx_evidence(
+        self,
+    ) -> None:
+        for scenario, expected_code in (
+            ("tencent_malformed_json", "unknown_schema"),
+            ("tencent_empty_body", "empty_response"),
+            ("tencent_wrong_security", "wrong_security_payload"),
+            ("tencent_unknown_kind", "unknown_schema"),
+        ):
+            with self.subTest(scenario=scenario):
+                result = self.run_task(
+                    intraday_request("SSE:600519"),
+                    environment={"A_SHARE_INTRADAY_SCENARIO": scenario},
+                )
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["source_errors"][0]["code"], expected_code)
+                self.assertEqual(
+                    result["source_errors"][0]["message"],
+                    {
+                        "unknown_schema": "The source response did not match the expected schema.",
+                        "empty_response": "The source operation returned an empty response.",
+                        "wrong_security_payload": "The source response identifies another security.",
+                    }[expected_code],
+                )
+                self.assertGreaterEqual(len(result["evidence"]), 2)
 
 
 if __name__ == "__main__":

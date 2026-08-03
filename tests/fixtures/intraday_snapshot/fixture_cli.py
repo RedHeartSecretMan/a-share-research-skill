@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 from a_share_research.cli import main  # noqa: E402
 from a_share_research.identity_sources import HttpResponse  # noqa: E402
+from a_share_research.intraday_contract import (  # noqa: E402
+    IntradayObservation,
+    IntradayQuery,
+)
 from a_share_research.intraday_sources import (  # noqa: E402
     TencentIntradayOperation,
     TongdaxinIntradayOperation,
@@ -57,6 +62,10 @@ class FixtureTongdaxinClient:
                 "last_close": "1668.00",
                 "vol": "12345",
                 "amount": "2071234567.89",
+                "vol_unit": "hands",
+                "vol_scope": "trading_day",
+                "amount_unit": "CNY",
+                "amount_scope": "trading_day",
             }
             if code == "600519"
             else {
@@ -67,8 +76,35 @@ class FixtureTongdaxinClient:
                 "last_close": "12.18",
                 "vol": "9876",
                 "amount": "12187654.32",
+                "vol_unit": "hands",
+                "vol_scope": "trading_day",
+                "amount_unit": "CNY",
+                "amount_scope": "trading_day",
             }
         )
+        scenario = os.environ.get("A_SHARE_INTRADAY_SCENARIO", "success")
+        if scenario == "tdx_malformed_price":
+            values["price"] = "not-a-price"
+        elif scenario == "tdx_float_noise":
+            values["price"] = 1680.2500000001 if code == "600519" else 12.3400000001
+        elif scenario == "tdx_negative_volume":
+            values["vol"] = "-1"
+        elif scenario == "tdx_zero_values":
+            values["vol"] = "0"
+            values["amount"] = "0"
+        elif scenario == "tdx_fractional_volume":
+            values["vol"] = "1.5"
+        elif scenario == "tdx_unknown_volume_unit":
+            values["vol_unit"] = "shares"
+        elif scenario == "tdx_unknown_amount_unit":
+            values["amount_unit"] = "dollars"
+        elif scenario == "tdx_missing_units":
+            values.pop("vol_unit")
+            values.pop("vol_scope")
+            values.pop("amount_unit")
+            values.pop("amount_scope")
+        elif scenario == "tdx_quote_date_mismatch":
+            values["trading_date"] = "2026-08-02"
         return _Rows(
             [
                 {
@@ -90,6 +126,18 @@ class FixtureTongdaxinClient:
         scenario = os.environ.get("A_SHARE_INTRADAY_SCENARIO", "success")
         if scenario == "tdx_missing_daily":
             return _Rows([])
+        if scenario == "tdx_wrong_daily_security":
+            return _Rows(
+                [
+                    {
+                        "code": "000001",
+                        "market": 0,
+                        "year": 2026,
+                        "month": 8,
+                        "day": 3,
+                    }
+                ]
+            )
         return _Rows(
             [
                 {
@@ -150,6 +198,23 @@ class FixtureTransport:
         quote[4] = previous[2]
         quote[6] = current[5]
         quote[30] = "20260803102958"
+        if scenario == "tencent_float_noise":
+            current[2] = "1680.2500000001" if code == "600519" else "12.3400000001"
+            quote[3] = current[2]
+        elif scenario == "tencent_malformed_json":
+            return HttpResponse(
+                status=200,
+                content_type="text/html; charset=UTF-8",
+                body=b"{not-json",
+                retrieved_at=RETRIEVED_AT,
+            )
+        elif scenario == "tencent_empty_body":
+            return HttpResponse(
+                status=200,
+                content_type="text/html; charset=UTF-8",
+                body=b"",
+                retrieved_at=RETRIEVED_AT,
+            )
         if scenario == "core_price_mismatch":
             current[2] = "1680.26"
             quote[3] = "1680.26"
@@ -162,12 +227,26 @@ class FixtureTransport:
                 }
             },
         }
+        if scenario == "tencent_wrong_security":
+            body["data"] = {"sh000001": body["data"][query_security]}
         return HttpResponse(
             status=200,
             content_type="text/html; charset=UTF-8",
             body=json.dumps(body).encode("utf-8"),
             retrieved_at=RETRIEVED_AT,
         )
+
+
+class FixtureTencentIntradayOperation(TencentIntradayOperation):
+    def collect(self, query: IntradayQuery) -> IntradayObservation:
+        observation = super().collect(query)
+        if os.environ.get("A_SHARE_INTRADAY_SCENARIO") != "tencent_unknown_kind":
+            return observation
+        evidence = dict(observation.evidence[0])
+        source_observation = dict(evidence["observation"])
+        source_observation["kind"] = "unknown-provider-shape"
+        evidence["observation"] = source_observation
+        return replace(observation, evidence=(evidence,))
 
 
 def _client_factory(**kwargs: Any) -> FixtureTongdaxinClient:
@@ -183,7 +262,7 @@ def _client_factory(**kwargs: Any) -> FixtureTongdaxinClient:
 if __name__ == "__main__":
     operations = (
         TongdaxinIntradayOperation(_client_factory),
-        TencentIntradayOperation(FixtureTransport()),
+        FixtureTencentIntradayOperation(FixtureTransport()),
     )
     configured_dependencies = os.environ.get(
         "A_SHARE_INTRADAY_DEPENDENCIES", "mootdx==0.11.7"
