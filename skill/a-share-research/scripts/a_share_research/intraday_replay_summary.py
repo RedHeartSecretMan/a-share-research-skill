@@ -8,7 +8,6 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
-
 PRICE_QUANTUM = Decimal("0.01")
 RATIO_QUANTUM = Decimal("0.0001")
 VWAP_QUANTUM = Decimal("0.0001")
@@ -55,6 +54,7 @@ def build_intraday_replay_summary(
             "auctions_separate": True,
         },
         "counts": {
+            "record_count": len(continuous),
             "continuous_records": len(continuous),
             "traded_intervals": len(traded_continuous),
             "proven_no_trade_intervals": sum(
@@ -75,7 +75,7 @@ def build_intraday_replay_summary(
         },
     }
 
-    endpoints = _endpoints(continuous, auctions, coverage_status, daily_boundary)
+    endpoints = _endpoints(continuous, auctions, coverage, daily_boundary)
     metrics: dict[str, Any] = {
         "endpoints": endpoints,
         "open_to_close": _open_to_close(endpoints),
@@ -248,9 +248,10 @@ def _endpoint(row: ReplaySummaryRow, field: str, source: str) -> dict[str, Any]:
 def _endpoints(
     continuous: Sequence[ReplaySummaryRow],
     auctions: Sequence[ReplaySummaryRow],
-    coverage_status: str,
+    coverage: Mapping[str, Any],
     daily_boundary: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    coverage_status = str(coverage.get("status", "unavailable"))
     traded_continuous = [row for row in continuous if row.trade_state == "traded"]
     traded_opening = [
         row
@@ -262,7 +263,11 @@ def _endpoints(
         for row in auctions
         if row.trading_phase == "closing_auction" and row.trade_state == "traded"
     ]
-    first = (traded_opening or traded_continuous)
+    first = traded_opening or (
+        traded_continuous
+        if continuous and _covers_session_start(continuous, coverage)
+        else []
+    )
     opening = (
         _endpoint(first[0], "open", first[0].trading_phase)
         if first
@@ -281,6 +286,7 @@ def _endpoints(
                 and closing_rows
                 and all(row.trade_state == "no_trade" for row in closing_rows)
                 and traded_continuous
+                and _covers_session_end(continuous, coverage)
             ):
                 closing = _endpoint(
                     traded_continuous[-1], "close", "last_continuous_transaction"
@@ -288,6 +294,38 @@ def _endpoints(
             else:
                 closing = _unavailable("actual_close_not_established")
     return {"open": opening, "close": closing}
+
+
+def _coverage_boundary(
+    coverage: Mapping[str, Any], index: int, field: str
+) -> str | None:
+    expected = coverage.get("expected_intervals")
+    if not isinstance(expected, list) or len(expected) <= index:
+        return None
+    interval = expected[index]
+    if not isinstance(interval, Mapping):
+        return None
+    value = interval.get(field)
+    return value if isinstance(value, str) else None
+
+
+def _covers_session_start(
+    rows: Sequence[ReplaySummaryRow], coverage: Mapping[str, Any]
+) -> bool:
+    expected_start = _coverage_boundary(coverage, 0, "interval_start")
+    return (
+        expected_start is not None
+        and rows[0].interval_start.isoformat() == expected_start
+    )
+
+
+def _covers_session_end(
+    rows: Sequence[ReplaySummaryRow], coverage: Mapping[str, Any]
+) -> bool:
+    expected_end = _coverage_boundary(coverage, 1, "interval_end")
+    return (
+        expected_end is not None and rows[-1].interval_end.isoformat() == expected_end
+    )
 
 
 def _daily_close(daily_boundary: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -308,12 +346,14 @@ def _daily_close(daily_boundary: Mapping[str, Any] | None) -> dict[str, Any]:
 def _open_to_close(endpoints: Mapping[str, Any]) -> dict[str, Any]:
     opening = endpoints.get("open")
     closing = endpoints.get("close")
-    if not _available_endpoint(opening):
+    opening_mapping = _available_endpoint_mapping(opening)
+    closing_mapping = _available_endpoint_mapping(closing)
+    if opening_mapping is None:
         return _unavailable("actual_open_not_established")
-    if not _available_endpoint(closing):
+    if closing_mapping is None:
         return _unavailable("actual_close_not_established")
-    open_value = _decimal(str(opening["value"]))
-    close_value = _decimal(str(closing["value"]))
+    open_value = _decimal(str(opening_mapping["value"]))
+    close_value = _decimal(str(closing_mapping["value"]))
     change = close_value - open_value
     if open_value == 0:
         return _unavailable("actual_open_zero")
@@ -323,26 +363,35 @@ def _open_to_close(endpoints: Mapping[str, Any]) -> dict[str, Any]:
             _text(change, PRICE_QUANTUM),
             "CNY/share",
             "actual_close - actual_open",
-            {"actual_open": opening, "actual_close": closing},
+            {"actual_open": opening_mapping, "actual_close": closing_mapping},
             {"endpoints": ["actual_open", "actual_close"]},
-            _endpoint_ids(opening, closing),
+            _endpoint_ids(opening_mapping, closing_mapping),
             PRICE_QUANTUM,
         ),
         "return": _metric(
             _text(change / open_value, RATIO_QUANTUM),
             "ratio",
             "(actual_close - actual_open) / actual_open",
-            {"actual_open": opening, "actual_close": closing},
+            {"actual_open": opening_mapping, "actual_close": closing_mapping},
             {"endpoints": ["actual_open", "actual_close"]},
-            _endpoint_ids(opening, closing),
+            _endpoint_ids(opening_mapping, closing_mapping),
             RATIO_QUANTUM,
         ),
-        "operands": {"actual_open": opening, "actual_close": closing},
+        "operands": {
+            "actual_open": opening_mapping,
+            "actual_close": closing_mapping,
+        },
     }
 
 
 def _available_endpoint(value: object) -> bool:
     return isinstance(value, Mapping) and value.get("status") == "available"
+
+
+def _available_endpoint_mapping(value: object) -> Mapping[str, Any] | None:
+    if _available_endpoint(value) and isinstance(value, Mapping):
+        return value
+    return None
 
 
 def _endpoint_ids(*values: object) -> list[str]:
@@ -360,17 +409,23 @@ def _baseline(
 ) -> tuple[Decimal | None, list[str], str]:
     if daily_boundary is None:
         return None, [], "actual_previous_close_unavailable"
+    if daily_boundary.get("status") != "cross_checked":
+        reason = daily_boundary.get("reason")
+        return (
+            None,
+            [],
+            reason if isinstance(reason, str) else "daily_boundary_not_cross_checked",
+        )
     baselines = daily_boundary.get("baselines")
     if not isinstance(baselines, Mapping):
         return None, [], "actual_previous_close_unavailable"
     actual = baselines.get("actual_unadjusted_close")
     comparability = baselines.get("comparability")
-    reason = (
-        comparability.get("reason")
-        if isinstance(comparability, Mapping)
-        and isinstance(comparability.get("reason"), str)
-        else "actual_previous_close_unavailable"
-    )
+    reason = "actual_previous_close_unavailable"
+    if isinstance(comparability, Mapping) and isinstance(
+        comparability.get("reason"), str
+    ):
+        reason = comparability["reason"]
     if not isinstance(actual, Mapping) or actual.get("status") != "available":
         return None, [], reason
     value = actual.get("value")
@@ -388,7 +443,10 @@ def _opening_gap(
         return _unavailable("actual_open_not_established")
     if baseline is None:
         return _unavailable(reason)
-    opening_value = _decimal(str(opening["value"]))
+    opening_mapping = _available_endpoint_mapping(opening)
+    if opening_mapping is None:
+        return _unavailable("actual_open_not_established")
+    opening_value = _decimal(str(opening_mapping["value"]))
     if baseline == 0:
         return _unavailable("actual_previous_close_zero")
     change = opening_value - baseline
@@ -398,18 +456,24 @@ def _opening_gap(
             _text(change, PRICE_QUANTUM),
             "CNY/share",
             "actual_open - actual_previous_close",
-            {"actual_open": opening, "actual_previous_close": _text(baseline, PRICE_QUANTUM)},
+            {
+                "actual_open": opening_mapping,
+                "actual_previous_close": _text(baseline, PRICE_QUANTUM),
+            },
             {"endpoints": ["actual_open", "actual_previous_close"]},
-            _endpoint_ids(opening) + ids,
+            _endpoint_ids(opening_mapping) + ids,
             PRICE_QUANTUM,
         ),
         "return": _metric(
             _text(change / baseline, RATIO_QUANTUM),
             "ratio",
             "(actual_open - actual_previous_close) / actual_previous_close",
-            {"actual_open": opening, "actual_previous_close": _text(baseline, PRICE_QUANTUM)},
+            {
+                "actual_open": opening_mapping,
+                "actual_previous_close": _text(baseline, PRICE_QUANTUM),
+            },
             {"endpoints": ["actual_open", "actual_previous_close"]},
-            _endpoint_ids(opening) + ids,
+            _endpoint_ids(opening_mapping) + ids,
             RATIO_QUANTUM,
         ),
     }
@@ -424,7 +488,10 @@ def _relative_return(
         return _unavailable("actual_close_not_established")
     if baseline is None:
         return _unavailable(reason)
-    close_value = _decimal(str(closing["value"]))
+    closing_mapping = _available_endpoint_mapping(closing)
+    if closing_mapping is None:
+        return _unavailable("actual_close_not_established")
+    close_value = _decimal(str(closing_mapping["value"]))
     if baseline == 0:
         return _unavailable("actual_previous_close_zero")
     change = close_value - baseline
@@ -432,9 +499,12 @@ def _relative_return(
         _text(change / baseline, RATIO_QUANTUM),
         "ratio",
         "(actual_close - actual_previous_close) / actual_previous_close",
-        {"actual_close": closing, "actual_previous_close": _text(baseline, PRICE_QUANTUM)},
+        {
+            "actual_close": closing_mapping,
+            "actual_previous_close": _text(baseline, PRICE_QUANTUM),
+        },
         {"endpoints": ["actual_close", "actual_previous_close"]},
-        _endpoint_ids(closing) + ids,
+        _endpoint_ids(closing_mapping) + ids,
         RATIO_QUANTUM,
     )
 
@@ -471,7 +541,14 @@ def _extreme(
         "CNY/share",
         f"{description} over admitted traded {field} values",
         {"value": format(value, "f"), "tie_count": len(tied)},
-        _scope(rows, coverage, includes_auctions=any(row in rows for row, _ in tied)),
+        _scope(
+            [row for row, _ in tied],
+            coverage,
+            includes_auctions=any(
+                row.trading_phase in {"opening_auction", "closing_auction"}
+                for row, _ in tied
+            ),
+        ),
         [row.evidence_id for row, _ in tied],
         PRICE_QUANTUM,
         times=[row.interval_start.isoformat() for row, _ in tied],
@@ -509,7 +586,11 @@ def _ranges(
             _text((high_value - low_value) / baseline, RATIO_QUANTUM),
             "ratio",
             "(high - low) / actual_previous_close",
-            {"high": high, "low": low, "actual_previous_close": _text(baseline, PRICE_QUANTUM)},
+            {
+                "high": high,
+                "low": low,
+                "actual_previous_close": _text(baseline, PRICE_QUANTUM),
+            },
             {"coverage_status": coverage.get("status", "unavailable")},
             _string_list(high.get("evidence_ids"))
             + _string_list(low.get("evidence_ids"))
@@ -533,10 +614,23 @@ def _vwap(
         "CNY/share",
         "total_amount / total_shares",
         {
-            "total_amount": {"value": _text(total_amount, Decimal("0.01")), "unit": "CNY"},
-            "total_shares": {"value": _text(total_volume, Decimal(1)), "unit": "shares"},
+            "total_amount": {
+                "value": _text(total_amount, Decimal("0.01")),
+                "unit": "CNY",
+            },
+            "total_shares": {
+                "value": _text(total_volume, Decimal(1)),
+                "unit": "shares",
+            },
         },
-        _scope(rows, coverage, includes_auctions=True),
+        _scope(
+            rows,
+            coverage,
+            includes_auctions=any(
+                row.trading_phase in {"opening_auction", "closing_auction"}
+                for row in rows
+            ),
+        ),
         _ids(rows),
         VWAP_QUANTUM,
     )
@@ -649,7 +743,10 @@ def _session_volume_share(
         "ratio",
         "session_traded_shares / all_continuous_traded_shares",
         {
-            "session_traded_shares": {"value": _text(numerator, Decimal(1)), "unit": "shares"},
+            "session_traded_shares": {
+                "value": _text(numerator, Decimal(1)),
+                "unit": "shares",
+            },
             "all_continuous_traded_shares": {
                 "value": _text(denominator, Decimal(1)),
                 "unit": "shares",
@@ -693,22 +790,20 @@ def _adjacent_changes(
     pairs = [
         (previous, current)
         for segment in _segments(rows)
-        for previous, current in zip(segment, segment[1:])
+        for previous, current in zip(segment, segment[1:], strict=False)
     ]
-    rises = [
-        (previous, current, _row_price(current, "close") - _row_price(previous, "close"))
-        for previous, current in pairs
-        if _row_price(previous, "close") is not None
-        and _row_price(current, "close") is not None
-        and _row_price(current, "close") > _row_price(previous, "close")
-    ]
-    falls = [
-        (previous, current, _row_price(previous, "close") - _row_price(current, "close"))
-        for previous, current in pairs
-        if _row_price(previous, "close") is not None
-        and _row_price(current, "close") is not None
-        and _row_price(current, "close") < _row_price(previous, "close")
-    ]
+    rises: list[tuple[ReplaySummaryRow, ReplaySummaryRow, Decimal]] = []
+    falls: list[tuple[ReplaySummaryRow, ReplaySummaryRow, Decimal]] = []
+    for previous, current in pairs:
+        previous_close = _row_price(previous, "close")
+        current_close = _row_price(current, "close")
+        if previous_close is None or current_close is None:
+            continue
+        change = current_close - previous_close
+        if change > 0:
+            rises.append((previous, current, change))
+        elif change < 0:
+            falls.append((previous, current, -change))
     return (
         _adjacent_metric(rises, coverage, "rise", "current_close - previous_close"),
         _adjacent_metric(falls, coverage, "fall", "previous_close - current_close"),
@@ -732,14 +827,22 @@ def _adjacent_metric(
         }
         for previous, current, _ in ties
     ]
+    tied_operands = [
+        {
+            "previous_close": _close_operand(previous),
+            "current_close": _close_operand(current),
+        }
+        for previous, current, _ in ties
+    ]
     return _metric(
         _text(value, PRICE_QUANTUM),
         "CNY/share",
         formula,
         {
-            "previous_close": _close_operand(ties[0][0]),
-            "current_close": _close_operand(ties[0][1]),
+            "previous_close": tied_operands[0]["previous_close"],
+            "current_close": tied_operands[0]["current_close"],
             "tie_count": len(ties),
+            "ties": tied_operands,
         },
         _scope([row for item in ties for row in item[:2]], coverage),
         _ids([row for item in ties for row in item[:2]]),
@@ -788,7 +891,9 @@ def _lineage(metrics: Mapping[str, Any]) -> dict[str, Any]:
         result[f"metrics.{name}"] = {
             "evidence_ids": ids,
             "source_fields": ["records", "auction_results"],
-            "calculation": formula if isinstance(formula, str) else "nested_metric_operands",
+            "calculation": formula
+            if isinstance(formula, str)
+            else "nested_metric_operands",
         }
     return result
 

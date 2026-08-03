@@ -1485,7 +1485,7 @@ def _project_result(
     auction_results = [_row_result(row) for row in auction_rows]
     summary: dict[str, Any] | None = None
     summary_unavailable_fields: list[dict[str, str]] = []
-    if not confirmed_suspension and rows:
+    if not confirmed_suspension and rows and coverage.status != "indeterminate":
         summary, summary_unavailable_fields = build_intraday_replay_summary(
             [
                 ReplaySummaryRow(

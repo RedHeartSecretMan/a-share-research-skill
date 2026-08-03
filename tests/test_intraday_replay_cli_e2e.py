@@ -355,6 +355,7 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         self.assertEqual(
             summary["counts"],
             {
+                "record_count": 2,
                 "continuous_records": 2,
                 "traded_intervals": 2,
                 "proven_no_trade_intervals": 0,
@@ -384,14 +385,15 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
 
         summary = result["summary"]
         self.assertEqual(summary["counts"]["proven_no_trade_intervals"], 1)
-        self.assertEqual(summary["metrics"]["vwap"]["value"], "9.9684")
+        self.assertEqual(summary["metrics"]["vwap"]["value"], "9.9429")
         self.assertEqual(summary["metrics"]["high"]["value"], "10.30")
         self.assertEqual(len(summary["metrics"]["high"]["times"]), 3)
         self.assertEqual(summary["metrics"]["max_drawdown"]["value"], "0.30")
         self.assertEqual(summary["metrics"]["max_adjacent_rise"]["value"], "0.10")
         self.assertEqual(summary["metrics"]["max_adjacent_fall"]["value"], "0.30")
+        self.assertEqual(summary["metrics"]["morning_volume_share"]["value"], "0.8889")
         self.assertEqual(
-            summary["metrics"]["morning_volume_share"]["value"], "0.8750"
+            len(summary["metrics"]["max_adjacent_rise"]["operands"]["ties"]), 2
         )
         adjacent_falls = summary["metrics"]["max_adjacent_fall"]["intervals"]
         self.assertEqual(
@@ -399,6 +401,22 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
             "2026-08-03T09:33:00+08:00",
         )
         self.assertEqual(result["coverage"]["status"], "partial")
+
+    def test_summary_does_not_call_a_late_first_row_the_actual_open(self) -> None:
+        result = self.run_task(
+            replay_request("SSE:600519"),
+            environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "summary_missing_open"},
+        )
+
+        summary = result["summary"]
+        self.assertEqual(
+            summary["metrics"]["endpoints"]["open"],
+            {"status": "unavailable", "reason": "actual_open_not_established"},
+        )
+        self.assertEqual(
+            summary["metrics"]["open_to_close"],
+            {"status": "unavailable", "reason": "actual_open_not_established"},
+        )
 
     def test_tracer_never_promotes_coverage_without_later_adjudication(self) -> None:
         result = self.run_task(
@@ -445,6 +463,13 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         self.assertEqual(len(result["records"]), 2)
         self.assertEqual(len(result["source_operations"]), 2)
         self.assertEqual(len(result["evidence"]), 3)
+        self.assertEqual(
+            result["summary"]["metrics"]["opening_gap"],
+            {
+                "status": "unavailable",
+                "reason": "daily_boundary_not_cross_checked",
+            },
+        )
 
     def test_daily_identity_and_date_mismatch_fail_closed(self) -> None:
         for scenario, source_code in (

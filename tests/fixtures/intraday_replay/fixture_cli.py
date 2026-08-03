@@ -199,6 +199,19 @@ def _summary_rows(trading_date: date) -> tuple[IntradayReplaySourceRow, ...]:
             evidence_locator="fixture:summary:0934",
         ),
         IntradayReplaySourceRow(
+            source_timestamp=f"{prefix}T09:35:00+08:00",
+            timestamp_semantics="interval_start",
+            trading_phase="continuous_morning",
+            trade_state="traded",
+            open_price="9.60",
+            high_price="9.80",
+            low_price="9.50",
+            close_price="9.70",
+            volume="100",
+            amount="970.00",
+            evidence_locator="fixture:summary:0935",
+        ),
+        IntradayReplaySourceRow(
             source_timestamp=f"{prefix}T13:00:00+08:00",
             timestamp_semantics="interval_start",
             trading_phase="continuous_afternoon",
@@ -325,6 +338,16 @@ class FixtureIntradayReplayOperation:
             rows = _complete_rows(replay_date)
         elif scenario == "summary_metrics":
             rows = _summary_rows(replay_date)
+        elif scenario == "summary_missing_open":
+            rows = tuple(
+                row
+                for row in _summary_rows(replay_date)
+                if not (
+                    row.trading_phase == "opening_auction"
+                    or row.source_timestamp
+                    == f"{replay_date.isoformat()}T09:30:00+08:00"
+                )
+            )
         elif scenario == "subinterval_partial":
             complete_rows = _complete_rows(replay_date)
             rows = (
