@@ -37,7 +37,7 @@ def session_at(value: datetime) -> str | None:
     """
 
     observed_time = value.timetz().replace(tzinfo=None)
-    if time(9, 15) <= observed_time < time(9, 30):
+    if time(9, 15) <= observed_time <= time(9, 25):
         return "opening_auction"
     if time(9, 30) <= observed_time <= time(11, 30):
         return "continuous"
