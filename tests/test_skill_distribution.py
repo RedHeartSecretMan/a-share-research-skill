@@ -36,23 +36,26 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("when the question calls for interpretation", metadata)
         self.assertIn("the result is not blocked", metadata)
 
-    def test_release_installation_is_pinned_to_v0_1_1(self) -> None:
+    def test_installation_is_pinned_to_current_main_delivery(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
-                    "git clone --depth 1 --branch v0.1.1 --single-branch ",
+                    "git clone --depth 1 --branch main --single-branch ",
                     readme,
                 )
                 self.assertIn(
                     "https://github.com/RedHeartSecretMan/a-share-research-skill.git",
                     readme,
                 )
-                self.assertNotIn(
-                    "git clone --depth 1 --branch v0.1.0 --single-branch ", readme
+                self.assertIn(
+                    (
+                        "v0.2.0 交付基线"
+                        if readme_name == "README.md"
+                        else "v0.2.0 delivery baseline"
+                    ),
+                    readme,
                 )
-                self.assertNotIn("v0.1.1 in development", readme)
-                self.assertNotIn("v0.1.1 开发中", readme)
 
         chinese_readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
         english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(

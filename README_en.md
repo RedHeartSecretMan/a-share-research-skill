@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Release: v0.1.1](https://img.shields.io/badge/release-v0.1.1-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.1)
+[![Delivery: v0.2.0](https://img.shields.io/badge/delivery-v0.2.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/main)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
@@ -75,7 +75,7 @@ This section is only a user-facing orientation. The normative rules for research
 The only installable artifact is [`skill/a-share-research`](skill/a-share-research/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
 
 ```text
-git clone --depth 1 --branch v0.1.1 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -125,7 +125,7 @@ Every plan inherits the request's research date and source policy and preserves 
 
 ## Common uses
 
-Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The uses below match the task contracts in the v0.1.1 release candidate.
+Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The uses below match the task contracts in the v0.2.0 delivery baseline.
 
 **Identify the right security**
 

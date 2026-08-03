@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Release: v0.1.1](https://img.shields.io/badge/release-v0.1.1-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.1.1)
+[![Delivery: v0.2.0](https://img.shields.io/badge/delivery-v0.2.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/main)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 [English](README_en.md) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
@@ -75,7 +75,7 @@ CLI 负责证据、确定性计算、状态和限制；Agent 可以在未被整�
 唯一安装产物是 [`skill/a-share-research`](skill/a-share-research/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
 
 ```text
-git clone --depth 1 --branch v0.1.1 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -125,7 +125,7 @@ F10 上市公司资料检索和 `intraday_market_signal` 盘中快照是 v0.1.1/
 
 ## 常见用法
 
-安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。以下用法与 v0.1.1 发布候选的实际任务契约一致。
+安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。以下用法与 v0.2.0 交付基线的实际任务契约一致。
 
 **找对证券**
 

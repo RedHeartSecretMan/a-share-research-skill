@@ -50,6 +50,9 @@ class IntradayLiveProbeTests(unittest.TestCase):
             },
             "snapshot": {
                 "latest_price": {"value": "1680.25", "unit": "CNY/share"},
+                "open": {"value": "1675.00", "unit": "CNY/share"},
+                "high": {"value": "1688.00", "unit": "CNY/share"},
+                "low": {"value": "1670.50", "unit": "CNY/share"},
                 "cumulative_volume": {"value": "1234500", "unit": "shares"},
             },
             "conflicts": [],
@@ -72,6 +75,88 @@ class IntradayLiveProbeTests(unittest.TestCase):
         self.assertEqual(observation["price_agreement"]["status"], "agreed")  # type: ignore[index]
         self.assertEqual(observation["units"]["latest_price"], "CNY/share")  # type: ignore[index]
         self.assertEqual(observation["failures"], [])
+
+    def test_probe_rejects_same_exchange_override(self) -> None:
+        with patch.object(live_probe, "run_probe") as run_probe:
+            with self.assertRaises(SystemExit) as invalid_sse:
+                live_probe.main(
+                    [
+                        "--confirm-live",
+                        "--as-of",
+                        "2026-08-03",
+                        "--sse",
+                        "SZSE:000001",
+                    ]
+                )
+            self.assertEqual(invalid_sse.exception.code, 2)
+            run_probe.assert_not_called()
+
+        with patch.object(live_probe, "run_probe") as run_probe:
+            with self.assertRaises(SystemExit) as invalid_prefix:
+                live_probe.main(
+                    [
+                        "--confirm-live",
+                        "--as-of",
+                        "2026-08-03",
+                        "--sse",
+                        "SSE:510300",
+                    ]
+                )
+            self.assertEqual(invalid_prefix.exception.code, 2)
+            run_probe.assert_not_called()
+
+    def test_price_agreement_requires_both_operations_and_core_prices(self) -> None:
+        result = {
+            "status": "limited",
+            "source_operations": ["tongdaxin_intraday_snapshot@1"],
+            "observation_times": {"tongdaxin_baseline": "2026-08-03T10:30:00+08:00"},
+            "snapshot": {"latest_price": {"value": "1680.25", "unit": "CNY/share"}},
+            "conflicts": [],
+            "source_errors": [],
+        }
+
+        self.assertEqual(
+            live_probe._price_agreement(result)["status"], "not_established"
+        )
+
+    def test_suspension_does_not_report_price_agreement(self) -> None:
+        result = {
+            "status": "limited",
+            "trading_status": "suspended",
+            "price_type": "not_applicable",
+            "session_state": "continuous",
+            "source_operations": [
+                "tongdaxin_intraday_snapshot@1",
+                "tencent_intraday_snapshot@1",
+            ],
+            "observation_times": {
+                "tongdaxin_baseline": "2026-08-03T10:30:00+08:00",
+                "tencent_cross_check": "2026-08-03T10:29:58+08:00",
+            },
+            "snapshot": {
+                "latest_price": {"status": "not_applicable", "value": None},
+                "open": {"status": "not_applicable", "value": None},
+                "high": {"status": "not_applicable", "value": None},
+                "low": {"status": "not_applicable", "value": None},
+            },
+            "conflicts": [],
+            "source_errors": [],
+        }
+
+        self.assertEqual(
+            live_probe._price_agreement(result)["status"], "not_established"
+        )
+
+    def test_sanitize_failure_allowlists_codes_and_operations(self) -> None:
+        failure = live_probe.sanitize_failure(
+            {
+                "source_operation": "Bearer:secret",
+                "code": "https://provider/path/secret",
+            }
+        )
+
+        self.assertEqual(failure["source_operation"], "unknown")
+        self.assertEqual(failure["code"], "probe_failure")
 
     def test_probe_requires_explicit_opt_in_and_as_of(self) -> None:
         with patch.object(live_probe, "run_probe") as run_probe:

@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -27,8 +26,66 @@ ENTRYPOINT = (
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 DEFAULT_SSE = "SSE:600519"
 DEFAULT_SZSE = "SZSE:000001"
-_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:@/-]{1,160}$")
-
+_EXPECTED_SOURCE_OPERATIONS = {
+    "tongdaxin_intraday_snapshot@1",
+    "tencent_intraday_snapshot@1",
+}
+_KNOWN_FAILURE_CODES = {
+    "ambiguous_amount_scope",
+    "ambiguous_amount_unit",
+    "ambiguous_volume_scope",
+    "ambiguous_volume_unit",
+    "ambiguous_zero_value",
+    "empty_response",
+    "experimental_intraday_sources",
+    "inapplicable_session",
+    "incompatible_observation_boundary",
+    "incompatible_price_type",
+    "incomplete_observation",
+    "intraday_as_of_not_current",
+    "intraday_baseline_incomplete",
+    "intraday_cache_state_unknown",
+    "intraday_core_price_mismatch",
+    "intraday_freshness_not_satisfied",
+    "intraday_morning_observation_not_last",
+    "intraday_morning_observation_out_of_window",
+    "intraday_non_trading_date",
+    "intraday_observation_time_invalid",
+    "intraday_observation_too_old",
+    "intraday_price_type_mismatch",
+    "intraday_security_mismatch",
+    "intraday_session_mismatch",
+    "intraday_session_not_applicable",
+    "intraday_session_unknown",
+    "intraday_source_pair_gap_exceeded",
+    "intraday_source_pair_incompatible",
+    "intraday_source_pair_incomplete",
+    "intraday_source_role_mismatch",
+    "intraday_suspension_ambiguous",
+    "intraday_suspension_confirmation_mismatch",
+    "intraday_suspension_confirmed",
+    "intraday_suspension_no_trade_unconfirmed",
+    "intraday_trading_date_mismatch",
+    "intraday_trading_status_mismatch",
+    "inconsistent_price_bar",
+    "missing_optional_dependency",
+    "operation_failure",
+    "probe_process_failure",
+    "probe_protocol_failure",
+    "probe_timeout",
+    "quote_daily_date_mismatch",
+    "quote_daily_security_mismatch",
+    "source_policy_not_satisfied",
+    "trading_date_mismatch",
+    "unknown_cache_state",
+    "unknown_observation_boundary",
+    "unknown_price_type",
+    "unknown_schema",
+    "unknown_trading_status",
+    "upstream_http_error",
+    "upstream_unavailable",
+    "wrong_security_payload",
+}
 _SAFE_FAILURE_MESSAGES = {
     "missing_optional_dependency": "The capability-scoped source dependency is unavailable.",
     "source_policy_not_satisfied": "The explicit probe source policy was rejected.",
@@ -44,18 +101,23 @@ _SAFE_FAILURE_MESSAGES = {
 }
 
 
-def _safe_token(value: object, fallback: str) -> str:
-    if isinstance(value, str) and _SAFE_TOKEN.fullmatch(value):
-        return value
-    return fallback
-
-
 def sanitize_failure(value: object) -> dict[str, str]:
     """Reduce a runtime/provider diagnostic to a non-sensitive stable shape."""
 
     if isinstance(value, Mapping):
-        code = _safe_token(value.get("code"), "probe_failure")
-        operation = _safe_token(value.get("source_operation"), "unknown")
+        raw_code = value.get("code")
+        code = (
+            raw_code
+            if isinstance(raw_code, str) and raw_code in _KNOWN_FAILURE_CODES
+            else "probe_failure"
+        )
+        raw_operation = value.get("source_operation")
+        operation = (
+            raw_operation
+            if isinstance(raw_operation, str)
+            and raw_operation in _EXPECTED_SOURCE_OPERATIONS
+            else "unknown"
+        )
     else:
         code = "probe_failure"
         operation = "unknown"
@@ -183,7 +245,12 @@ def _source_identity(result: Mapping[str, object]) -> list[str]:
     values = result.get("source_operations")
     if not isinstance(values, list):
         return []
-    return [_safe_token(value, "unknown") for value in values]
+    return [
+        value
+        if isinstance(value, str) and value in _EXPECTED_SOURCE_OPERATIONS
+        else "unknown"
+        for value in values
+    ]
 
 
 def _timing(result: Mapping[str, object]) -> dict[str, str]:
@@ -213,21 +280,40 @@ def _units(result: Mapping[str, object]) -> dict[str, str]:
 def _price_agreement(result: Mapping[str, object]) -> dict[str, object]:
     conflicts = result.get("conflicts")
     conflict_present = isinstance(conflicts, list) and bool(conflicts)
+    source_errors = result.get("source_errors")
+    source_error_present = isinstance(source_errors, list) and bool(source_errors)
     status = result.get("status")
-    agreed = status in {"limited", "supported"} and not conflict_present
-    agreement: dict[str, object] = {
-        "status": "agreed" if agreed else "not_established",
-        "basis": "cross-source normalized CNY 0.01 tick",
-    }
+    source_operations = _source_identity(result)
+    timing = _timing(result)
     snapshot = result.get("snapshot")
-    if agreed and isinstance(snapshot, Mapping):
-        normalized: dict[str, str] = {}
+    normalized: dict[str, str] = {}
+    if isinstance(snapshot, Mapping):
         for field in ("latest_price", "open", "high", "low"):
             item = snapshot.get(field)
             if isinstance(item, Mapping) and isinstance(item.get("value"), str):
                 normalized[field] = item["value"]
-        if normalized:
-            agreement["normalized_prices"] = normalized
+    session = result.get("session_state")
+    trading_status = result.get("trading_status")
+    price_type = result.get("price_type")
+    agreed = (
+        status == "limited"
+        and not conflict_present
+        and not source_error_present
+        and len(source_operations) == 2
+        and set(source_operations) == _EXPECTED_SOURCE_OPERATIONS
+        and {"tongdaxin_baseline", "tencent_cross_check"}.issubset(timing)
+        and session
+        in {"opening_auction", "continuous", "midday_break", "closing_auction"}
+        and trading_status in {"traded", "auction"}
+        and price_type in {"latest_traded", "indicative_auction"}
+        and len(normalized) == 4
+    )
+    agreement: dict[str, object] = {
+        "status": "agreed" if agreed else "not_established",
+        "basis": "cross-source normalized CNY 0.01 tick",
+    }
+    if agreed:
+        agreement["normalized_prices"] = normalized
     return agreement
 
 
@@ -270,6 +356,12 @@ def run_probe(
 ) -> dict[str, object]:
     """Run one explicit observation for each required exchange."""
 
+    if (
+        len(securities) != 2
+        or not securities[0].startswith("SSE:")
+        or not securities[1].startswith("SZSE:")
+    ):
+        raise ValueError("the intraday probe requires one SSE and one SZSE security")
     observations: list[dict[str, object]] = []
     for security in securities:
         process_result = _run_public_request(build_probe_request(security, as_of))
@@ -305,6 +397,33 @@ def _security(value: str) -> str:
     return value
 
 
+def _exchange_security(value: str, expected_exchange: str) -> str:
+    security = _security(value)
+    if not security.startswith(f"{expected_exchange}:"):
+        raise argparse.ArgumentTypeError(
+            f"this probe argument requires a {expected_exchange} security"
+        )
+    code = security.split(":", 1)[1]
+    prefixes = (
+        ("600", "601", "603", "605", "688", "689")
+        if expected_exchange == "SSE"
+        else ("000", "001", "002", "003", "300", "301")
+    )
+    if not code.startswith(prefixes):
+        raise argparse.ArgumentTypeError(
+            f"this probe argument is not a supported {expected_exchange} A-share"
+        )
+    return security
+
+
+def _sse_security(value: str) -> str:
+    return _exchange_security(value, "SSE")
+
+
+def _szse_security(value: str) -> str:
+    return _exchange_security(value, "SZSE")
+
+
 def _as_of(value: str) -> str:
     try:
         parsed = date.fromisoformat(value)
@@ -326,8 +445,8 @@ def main(argv: list[str] | None = None) -> int:
         help="acknowledge live network access and non-production observation",
     )
     parser.add_argument("--as-of", type=_as_of, required=True)
-    parser.add_argument("--sse", type=_security, default=DEFAULT_SSE)
-    parser.add_argument("--szse", type=_security, default=DEFAULT_SZSE)
+    parser.add_argument("--sse", type=_sse_security, default=DEFAULT_SSE)
+    parser.add_argument("--szse", type=_szse_security, default=DEFAULT_SZSE)
     arguments = parser.parse_args(argv)
     report = run_probe(arguments.as_of, (arguments.sse, arguments.szse))
     print(json.dumps(report, ensure_ascii=False, separators=(",", ":")))

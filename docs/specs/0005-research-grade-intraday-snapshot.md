@@ -6,7 +6,7 @@
 
 ## 背景
 
-当前 Skill 可以取得最近完成交易日行情、历史走势和 ETF/ETF 期权快照，但 `intraday_market_signal` 仍是明确阻断的能力占位。Agent 因而不能通过稳定 ResearchTask Interface 取得单只 A 股的当日盘中状态，只能使用已经完成的收盘证据，或明确说明盘中证据不可用。
+当前 Skill 可以取得最近完成交易日行情、历史走势和 ETF/ETF 期权快照，并已通过 `intraday_market_signal` 在稳定 ResearchTask Interface 上提供单只 A 股的当日盘中状态。该能力仍使用实验来源，Agent 必须保留其受限或阻断状态，不能把一次观测升级为生产来源资格。
 
 本规格增加研究级近实时快照，而不是交易级行情服务。它只负责取得、标准化、交叉核验和裁决证据；市场含义、风险与结论继续由 Agent 按分析边界形成。
 
