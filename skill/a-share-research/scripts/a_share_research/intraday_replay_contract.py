@@ -71,6 +71,7 @@ class IntradayReplaySourceBatch:
     trading_status: str = "traded"
     price_minimum_tick: str | None = None
     available_at: datetime | None = None
+    completed_calendar_basis: str | None = None
 
 
 class IntradayReplaySourceError(Exception):

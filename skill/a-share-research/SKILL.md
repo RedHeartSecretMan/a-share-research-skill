@@ -43,3 +43,7 @@ Use `intraday_market_signal` only for one canonical `SSE:<code>` or `SZSE:<code>
 The result's `limited` or `blocked` status is valid JSON research output even when the process exits zero. Missing the capability-scoped `mootdx==0.11.7` dependency blocks only this task and any explicitly dependent task; the runtime never silently switches source or turns missing data into zero. Read the evidence, timing, units, conflicts, and limitations before answering.
 
 Agent analysis remains outside the deterministic task: a `limited` result may support a clearly labelled **Agent inference** only within returned evidence and assumptions; a `blocked` result permits no research judgment. Do not infer a trend, cause, target, or buy/sell action from a snapshot.
+
+## Intraday replay boundary
+
+Use `intraday_replay` for one canonical SSE/SZSE A share and one explicit completed trading date. The optional `mootdx==0.11.7` candidate source is experimental forever in this capability: unknown timestamp, calendar, unit, price-basis, or auction semantics remain blocked, while independently usable evidence remains `limited`. The deterministic result does not forecast or recommend action; read `records`, `auction_results`, `coverage`, `daily_boundary`, `summary`, `source_errors`, and `unavailable_fields` before forming any separately labelled research judgment.

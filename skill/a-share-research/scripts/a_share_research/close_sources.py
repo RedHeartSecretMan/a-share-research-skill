@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from urllib.parse import urlencode
 
 from .identity_sources import (
@@ -103,6 +103,30 @@ def _volume_shares(value: object, source_operation: str, *, lot_size: int) -> st
     return format(shares.quantize(Decimal(1)), "f")
 
 
+def _amount_cny(value: object, source_operation: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise _operation_error(
+            source_operation,
+            "unknown_schema",
+            "The source amount is not an exact CNY decimal.",
+        )
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as error:
+        raise _operation_error(
+            source_operation,
+            "unknown_schema",
+            "The source amount is not an exact CNY decimal.",
+        ) from error
+    if not parsed.is_finite() or parsed < 0:
+        raise _operation_error(
+            source_operation,
+            "unknown_schema",
+            "The source amount must be a non-negative finite decimal.",
+        )
+    return format(parsed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
+
+
 def _ohlc(
     open_value: object,
     high_value: object,
@@ -156,6 +180,7 @@ class DailyBarObservation:
     observation_boundary: str | None = None
     previous_close: str | None = None
     previous_close_basis: str | None = None
+    amount_cny: str | None = None
 
     @property
     def value(self) -> str:
@@ -324,7 +349,7 @@ class SseDailyLineOperation:
         url = f"{self.endpoint}/{code}?{
             urlencode(
                 {
-                    'select': 'date,open,high,low,close,volume',
+                    'select': 'date,open,high,low,close,volume,amount',
                     'begin': '-1000',
                     'end': '-1',
                 }
@@ -384,7 +409,7 @@ class SseDailyLineOperation:
             )
         observations = []
         for row in payload["kline"]:
-            if not isinstance(row, list) or len(row) != 6:
+            if not isinstance(row, list) or len(row) not in {6, 7}:
                 raise _operation_error(
                     self.operation_id,
                     "unknown_schema",
@@ -421,6 +446,11 @@ class SseDailyLineOperation:
                     evidence_time=session_close,
                     available_at=session_close,
                     retrieved_at=response.retrieved_at,
+                    amount_cny=(
+                        _amount_cny(row[6], self.operation_id)
+                        if len(row) == 7
+                        else None
+                    ),
                 )
             )
         return observations
@@ -541,6 +571,7 @@ class SzseDailyLineOperation:
                     evidence_time=session_close,
                     available_at=session_close,
                     retrieved_at=response.retrieved_at,
+                    amount_cny=_amount_cny(row[8], self.operation_id),
                 )
             )
         return observations

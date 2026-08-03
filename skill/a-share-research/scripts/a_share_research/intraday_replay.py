@@ -1564,6 +1564,7 @@ def _project_result(
                 "source_fields": [
                     "session_contract",
                     "coverage_bound",
+                    "completed_calendar_basis",
                     "source_timestamp",
                     "trading_phase",
                     "trade_state",
@@ -1759,6 +1760,11 @@ def _project_result(
             "contract_version": batch.contract_version,
             "experimental": batch.experimental,
             "retrieved_at": _as_china_time(batch.retrieved_at).isoformat(),
+            **(
+                {"completed_calendar_basis": batch.completed_calendar_basis}
+                if batch.completed_calendar_basis is not None
+                else {}
+            ),
         }
     ]
     if daily_batch is not None:

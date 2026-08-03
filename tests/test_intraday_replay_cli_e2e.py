@@ -659,9 +659,7 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
             "source_retrieved_after_research_boundary",
         )
 
-    def test_real_entrypoint_returns_blocked_json_without_a_default_source(
-        self,
-    ) -> None:
+    def test_real_entrypoint_reports_capability_scoped_missing_mootdx(self) -> None:
         request = replay_request("SSE:600519")
         with tempfile.TemporaryDirectory() as temporary_directory:
             request_path = Path(temporary_directory, "request.json")
@@ -691,8 +689,11 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
         result = json.loads(completed.stdout)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
-            result["limitations"][0]["code"], "intraday_replay_source_unavailable"
+            result["limitations"][0]["code"], "missing_optional_dependency"
         )
+        self.assertEqual(result["limitations"][0]["capability"], "intraday_replay")
+        self.assertEqual(result["limitations"][0]["dependency"], "mootdx")
+        self.assertEqual(result["limitations"][0]["required_version"], "0.11.7")
 
     def test_source_contract_rejects_unknown_semantics_and_adjustment(self) -> None:
         for scenario, source_code in (

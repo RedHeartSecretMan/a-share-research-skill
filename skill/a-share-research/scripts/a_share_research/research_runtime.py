@@ -345,12 +345,60 @@ class ResearchRuntime:
                         "policy until a source operation is qualified"
                     ),
                 )
+            elif (
+                self._intraday_replay_operations is None
+                and not self._dependency_available("mootdx", "0.11.7")
+            ):
+                result = _blocked_result(
+                    request,
+                    code="missing_optional_dependency",
+                    message=(
+                        "intraday_replay requires the optional mootdx Adapter "
+                        "dependency"
+                    ),
+                    limitation_details={
+                        "capability": "intraday_replay",
+                        "dependency": "mootdx",
+                        "required_version": "0.11.7",
+                    },
+                )
             else:
+                replay_operations = self._intraday_replay_operations
+                replay_daily_operations = self._intraday_replay_daily_operations
+                if replay_operations is None:
+                    try:
+                        from .intraday_replay_registry import (
+                            build_default_intraday_replay_operations,
+                        )
+
+                        (
+                            replay_operations,
+                            default_daily_operations,
+                        ) = build_default_intraday_replay_operations(
+                            transport=self._intraday_transport,
+                        )
+                        if replay_daily_operations is None:
+                            replay_daily_operations = default_daily_operations
+                    except ModuleNotFoundError:
+                        result = _blocked_result(
+                            request,
+                            code="missing_optional_dependency",
+                            message=(
+                                "intraday_replay requires the optional mootdx Adapter "
+                                "dependency"
+                            ),
+                            limitation_details={
+                                "capability": "intraday_replay",
+                                "dependency": "mootdx",
+                                "required_version": "0.11.7",
+                            },
+                        )
+                        return _complete_result(result, task_type)
                 result = build_intraday_replay_result(
                     request,
-                    self._intraday_replay_operations or (),
+                    replay_operations or (),
                     self._research_now or datetime.now(CHINA_STANDARD_TIME),
-                    daily_operations=self._intraday_replay_daily_operations or (),
+                    daily_operations=replay_daily_operations or (),
                 )
         else:
             result = _blocked_result(
