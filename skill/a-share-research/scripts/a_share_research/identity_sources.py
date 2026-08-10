@@ -11,7 +11,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener
 
-from .research_result import FieldDisposition, OperationOutcome
+from .research_result import (
+    EvidenceUsePolicy,
+    FieldDisposition,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+)
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -239,6 +245,14 @@ class IdentityObservation:
 
 
 @dataclass(frozen=True)
+class IdentityQueryResult:
+    """Normalized observations plus the source's query-completeness fact."""
+
+    observations: tuple[IdentityObservation, ...]
+    query_complete: bool
+
+
+@dataclass(frozen=True)
 class IdentityFieldContract:
     """The declared actual fields and required subset for one identity operation."""
 
@@ -258,7 +272,14 @@ class IdentityFieldContract:
 class SseStockListOperation:
     """Observe current SSE A-share identity from the official stock list."""
 
-    operation_id = "sse_stock_list@1"
+    operation_id: str = "sse_stock_list@1"
+    source_role: str = "authoritative_disclosure"
+    exchange_scope: str | None = "SSE"
+    evidence_uses: tuple[EvidenceUsePolicy, ...] = (
+        EvidenceUsePolicy("security_identity", "supporting"),
+        EvidenceUsePolicy("attribution_lineage", "lineage"),
+        EvidenceUsePolicy("issuer_relationship", "conditional_supporting"),
+    )
     endpoint = "https://query.sse.com.cn/commonQuery.do"
     field_contract = IdentityFieldContract(
         dispositions=(
@@ -300,6 +321,9 @@ class SseStockListOperation:
     def observe(
         self, query: str, transport: HttpTransport
     ) -> list[IdentityObservation]:
+        return list(self.query(query, transport).observations)
+
+    def query(self, query: str, transport: HttpTransport) -> IdentityQueryResult:
         url = f"{self.endpoint}?{
             urlencode(
                 {
@@ -371,7 +395,7 @@ class SseStockListOperation:
                 "wrong_security_payload",
                 "The source returned a different security than requested.",
             )
-        return observations
+        return IdentityQueryResult(tuple(observations), query_complete=True)
 
 
 class _TextExtractor(HTMLParser):
@@ -392,7 +416,14 @@ def _plain_text(value: str) -> str:
 class SzseStockListOperation:
     """Observe current SZSE A-share identity from the official stock list."""
 
-    operation_id = "szse_stock_list@1"
+    operation_id: str = "szse_stock_list@1"
+    source_role: str = "authoritative_disclosure"
+    exchange_scope: str | None = "SZSE"
+    evidence_uses: tuple[EvidenceUsePolicy, ...] = (
+        EvidenceUsePolicy("security_identity", "supporting"),
+        EvidenceUsePolicy("attribution_lineage", "lineage"),
+        EvidenceUsePolicy("issuer_relationship", "conditional_supporting"),
+    )
     endpoint = "https://www.szse.cn/api/report/ShowReport/data"
     field_contract = IdentityFieldContract(
         dispositions=(
@@ -414,6 +445,9 @@ class SzseStockListOperation:
     def observe(
         self, query: str, transport: HttpTransport
     ) -> list[IdentityObservation]:
+        return list(self.query(query, transport).observations)
+
+    def query(self, query: str, transport: HttpTransport) -> IdentityQueryResult:
         url = f"{self.endpoint}?{
             urlencode(
                 {
@@ -451,6 +485,15 @@ class SzseStockListOperation:
         )
         if report is None or not isinstance(report.get("data"), list):
             raise _unknown_schema(self.operation_id)
+        metadata = report["metadata"]
+        assert isinstance(metadata, dict)
+        record_count = metadata.get("recordcount")
+        if (
+            not isinstance(record_count, int)
+            or isinstance(record_count, bool)
+            or record_count < len(report["data"])
+        ):
+            raise _unknown_schema(self.operation_id)
         observations: list[IdentityObservation] = []
         for row in report["data"]:
             if not self.field_contract.accepts(row):
@@ -480,13 +523,23 @@ class SzseStockListOperation:
                 "wrong_security_payload",
                 "The source returned a different security than requested.",
             )
-        return observations
+        return IdentityQueryResult(
+            tuple(observations),
+            query_complete=record_count == len(report["data"]),
+        )
 
 
 class CninfoSecurityDictionaryOperation:
     """Observe security-to-issuer links from the CNINFO dictionary."""
 
-    operation_id = "cninfo_security_dictionary@1"
+    operation_id: str = "cninfo_security_dictionary@1"
+    source_role: str = "market_observation"
+    exchange_scope: str | None = None
+    evidence_uses: tuple[EvidenceUsePolicy, ...] = (
+        EvidenceUsePolicy("security_identity", "corroborating"),
+        EvidenceUsePolicy("attribution_lineage", "lineage"),
+        EvidenceUsePolicy("issuer_relationship", "not_applicable"),
+    )
     endpoint = "https://www.cninfo.com.cn/new/data/szse_stock.json"
     field_contract = IdentityFieldContract(
         dispositions=(
@@ -517,6 +570,9 @@ class CninfoSecurityDictionaryOperation:
     def observe(
         self, query: str, transport: HttpTransport
     ) -> list[IdentityObservation]:
+        return list(self.query(query, transport).observations)
+
+    def query(self, query: str, transport: HttpTransport) -> IdentityQueryResult:
         response = _request_response(
             self.operation_id,
             transport,
@@ -560,7 +616,7 @@ class CninfoSecurityDictionaryOperation:
                     retrieved_at=response.retrieved_at,
                 )
             )
-        return observations
+        return IdentityQueryResult(tuple(observations), query_complete=True)
 
 
 IDENTITY_CAPABILITY_ID = "security_identity_resolution"
@@ -578,13 +634,7 @@ class IdentityOperationAdapter(Protocol):
     """The only lower seam used by identity research."""
 
     @property
-    def capability_id(self) -> str: ...
-
-    @property
-    def operation_id(self) -> str: ...
-
-    @property
-    def source_role(self) -> str: ...
+    def obligation(self) -> OperationObligation: ...
 
     @property
     def field_dispositions(self) -> tuple[FieldDisposition, ...]: ...
@@ -596,11 +646,12 @@ class IdentityOperationAdapter(Protocol):
 
 class _ObservingOperation(Protocol):
     operation_id: str
+    source_role: str
+    exchange_scope: str | None
+    evidence_uses: tuple[EvidenceUsePolicy, ...]
     field_contract: IdentityFieldContract
 
-    def observe(
-        self, query: str, transport: HttpTransport
-    ) -> list[IdentityObservation]: ...
+    def query(self, query: str, transport: HttpTransport) -> IdentityQueryResult: ...
 
 
 @dataclass(frozen=True)
@@ -609,12 +660,26 @@ class ProductionIdentityOperationAdapter:
 
     operation: _ObservingOperation
     transport: HttpTransport
-    source_role: str
     capability_id: str = IDENTITY_CAPABILITY_ID
 
     @property
     def operation_id(self) -> str:
-        return self.operation.operation_id
+        return self.obligation.operation_id
+
+    @property
+    def source_role(self) -> str:
+        return self.obligation.source_role
+
+    @property
+    def obligation(self) -> OperationObligation:
+        return OperationObligation(
+            capability_id=self.capability_id,
+            operation_id=self.operation.operation_id,
+            source_role=self.operation.source_role,
+            experimental=True,
+            exchange=self.operation.exchange_scope,
+            evidence_uses=self.operation.evidence_uses,
+        )
 
     @property
     def field_dispositions(self) -> tuple[FieldDisposition, ...]:
@@ -631,31 +696,34 @@ class ProductionIdentityOperationAdapter:
             self.transport, timeout_seconds=timeout_seconds
         )
         try:
-            observations = self.operation.observe(request.query, bounded_transport)
+            query_result = self.operation.query(request.query, bounded_transport)
         except SourceOperationError as error:
             return OperationOutcome(
-                capability_id=self.capability_id,
-                operation_id=self.operation_id,
-                coverage="failed",
+                capability_id=self.obligation.capability_id,
+                operation_id=self.obligation.operation_id,
+                execution=OperationExecution("failed"),
                 source_errors=(
                     {
-                        "source_operation": self.operation_id,
+                        "source_operation": self.obligation.operation_id,
                         "code": error.code,
                         "message": str(error),
                     },
                 ),
-                field_dispositions=self.field_dispositions,
+                field_dispositions=self.operation.field_contract.dispositions,
                 diagnostics={"attempts": 1, "timeout_seconds": timeout_seconds},
             )
         normalized = tuple(
-            item.to_observation(source_role=self.source_role) for item in observations
+            item.to_observation(source_role=self.obligation.source_role)
+            for item in query_result.observations
         )
         return OperationOutcome(
-            capability_id=self.capability_id,
-            operation_id=self.operation_id,
-            coverage="complete" if normalized else "observed_empty",
+            capability_id=self.obligation.capability_id,
+            operation_id=self.obligation.operation_id,
+            execution=OperationExecution(
+                "succeeded", query_complete=query_result.query_complete
+            ),
             observations=normalized,
-            field_dispositions=self.field_dispositions,
+            field_dispositions=self.operation.field_contract.dispositions,
             diagnostics={"attempts": 1, "timeout_seconds": timeout_seconds},
         )
 
@@ -680,17 +748,14 @@ def build_default_identity_operations(
         ProductionIdentityOperationAdapter(
             operation=SseStockListOperation(),
             transport=transport,
-            source_role="authoritative_disclosure",
         ),
         ProductionIdentityOperationAdapter(
             operation=SzseStockListOperation(),
             transport=transport,
-            source_role="authoritative_disclosure",
         ),
         ProductionIdentityOperationAdapter(
             operation=CninfoSecurityDictionaryOperation(),
             transport=transport,
-            source_role="market_observation",
         ),
     )
     return operations
