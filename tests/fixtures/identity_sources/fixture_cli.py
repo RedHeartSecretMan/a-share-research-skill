@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -13,6 +15,9 @@ SCRIPTS = FIXTURES.parents[2] / "skill" / "a-share-research" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from a_share_research.cli import main  # noqa: E402
+from a_share_research.identity_resolution import (  # noqa: E402
+    resolve_security_identity,
+)
 from a_share_research.identity_sources import HttpResponse  # noqa: E402
 
 
@@ -102,11 +107,26 @@ class FixtureTransport:
         )
 
 
-if __name__ == "__main__":
-    raise SystemExit(
-        main(
-            sys.argv[1:],
-            identity_transport=FixtureTransport(),
-            available_optional_dependencies=set(),
+def fixture_main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "resolve":
+        parser = argparse.ArgumentParser()
+        parser.add_argument("resolve")
+        parser.add_argument("--query", required=True)
+        parser.add_argument("--as-of", required=True)
+        arguments = parser.parse_args()
+        result = resolve_security_identity(
+            arguments.query,
+            arguments.as_of,
+            FixtureTransport(),
         )
+        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        return 0
+    return main(
+        sys.argv[1:],
+        identity_transport=FixtureTransport(),
+        available_optional_dependencies=set(),
     )
+
+
+if __name__ == "__main__":
+    raise SystemExit(fixture_main())

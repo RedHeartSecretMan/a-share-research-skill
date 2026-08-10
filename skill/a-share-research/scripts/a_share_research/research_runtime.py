@@ -24,8 +24,13 @@ from .content_registry import build_default_content_operations
 from .etf_market import build_etf_market_result
 from .etf_option_contract import OptionSourceOperation
 from .etf_options import build_etf_options_result
-from .identity_resolution import resolve_security_identity
-from .identity_sources import CHINA_STANDARD_TIME, HttpTransport, UrlLibTransport
+from .identity_resolution import build_security_identity_research_result
+from .identity_sources import (
+    CHINA_STANDARD_TIME,
+    HttpTransport,
+    UrlLibTransport,
+    build_default_identity_operations,
+)
 from .intraday_contract import IntradaySourceOperation
 from .intraday_replay import build_intraday_replay_result
 from .intraday_replay_contract import (
@@ -43,6 +48,7 @@ from .market_signal_contract import (
 )
 from .market_signals import build_market_signals_result
 from .research_content import build_research_content_result
+from .research_result import UnifiedResearchResult
 from .research_workflows import build_research_workflow_result
 
 
@@ -106,10 +112,17 @@ class ResearchRuntime:
             else tuple(intraday_replay_daily_operations)
         )
 
-    def research(self, request: dict[str, Any]) -> dict[str, Any]:
+    def research(
+        self, request: dict[str, Any]
+    ) -> UnifiedResearchResult | dict[str, Any]:
         """Execute one versioned research task."""
 
         _validate_request_envelope(request)
+        if request["task_type"] == "security_identity":
+            return build_security_identity_research_result(
+                request,
+                build_default_identity_operations(self._identity_transport),
+            )
         return self._dispatch_validated(request, allow_workflow=True)
 
     def _run_leaf_task(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -118,6 +131,11 @@ class ResearchRuntime:
         _validate_request_envelope(request)
         if request["task_type"] == "research_workflow":
             raise ValueError("research_workflow steps must be leaf ResearchTasks")
+        if request["task_type"] == "security_identity":
+            return build_security_identity_research_result(
+                request,
+                build_default_identity_operations(self._identity_transport),
+            ).to_dict()
         return self._dispatch_validated(request, allow_workflow=False)
 
     def _dispatch_validated(
@@ -133,18 +151,6 @@ class ResearchRuntime:
             if not allow_workflow:
                 raise ValueError("nested research_workflow tasks are not allowed")
             result = build_research_workflow_result(request, self._run_leaf_task)
-        elif task_type == "security_identity":
-            if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
-                    request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "security_identity currently requires experimental "
-                        "source operations"
-                    ),
-                )
-            else:
-                result = self._research_identity(request)
         elif task_type == "market_trend":
             if not request["source_policy"]["allow_experimental"]:
                 result = _blocked_result(
@@ -408,22 +414,6 @@ class ResearchRuntime:
             )
         return _complete_result(result, task_type)
 
-    def _research_identity(self, request: dict[str, Any]) -> dict[str, Any]:
-        subjects = request["subjects"]
-        if len(subjects) != 1:
-            raise ValueError("security_identity requires exactly one subject")
-        subject = subjects[0]
-        if not isinstance(subject, dict):
-            raise ValueError("each research subject must be a JSON object")
-        clue = subject.get("clue")
-        if not isinstance(clue, str) or not clue.strip():
-            raise ValueError("security_identity subject requires a non-empty clue")
-        return resolve_security_identity(
-            clue.strip(),
-            request["as_of"],
-            self._identity_transport,
-        )
-
     def _dependency_available(self, dependency: str, version: str) -> bool:
         if self._available_optional_dependencies is not None:
             return f"{dependency}=={version}" in self._available_optional_dependencies
@@ -452,7 +442,7 @@ def research(
     intraday_replay_operations: Collection[IntradayReplaySourceOperation] | None = None,
     intraday_replay_daily_operations: Collection[IntradayReplayDailySourceOperation]
     | None = None,
-) -> dict[str, Any]:
+) -> UnifiedResearchResult | dict[str, Any]:
     """Run a task through the public research module interface."""
 
     return ResearchRuntime(
@@ -487,6 +477,8 @@ def _validate_request_envelope(request: dict[str, Any]) -> None:
     missing = sorted(required.difference(request))
     if missing:
         raise ValueError(f"research task is missing fields: {', '.join(missing)}")
+    if set(request) != required:
+        raise ValueError("research task contains unknown fields")
     if request["schema_version"] != "1.0":
         raise ValueError("unsupported research task schema_version")
     if not isinstance(request["task_type"], str) or not request["task_type"]:
@@ -521,11 +513,27 @@ def _validate_request_envelope(request: dict[str, Any]) -> None:
             "research source_policy is missing fields: "
             + ", ".join(missing_policy_fields)
         )
+    if set(request["source_policy"]) != required_policy_fields:
+        raise ValueError("research source_policy contains unknown fields")
     if any(
         not isinstance(request["source_policy"][field], bool)
         for field in required_policy_fields
     ):
         raise ValueError("research source_policy fields must be booleans")
+    if request["task_type"] == "security_identity":
+        if len(request["subjects"]) != 1:
+            raise ValueError("security_identity requires exactly one subject")
+        subject = request["subjects"][0]
+        if not isinstance(subject, dict):
+            raise ValueError("security_identity subject must be a JSON object")
+        if set(subject) != {"clue"}:
+            raise ValueError("security_identity subject has an invalid shape")
+        if not isinstance(subject["clue"], str) or not subject["clue"].strip():
+            raise ValueError("security_identity subject requires a non-empty clue")
+        if request["parameters"]:
+            raise ValueError("security_identity parameters contain unknown fields")
+        if request["window"] is not None:
+            raise ValueError("security_identity window must be null")
 
 
 def _blocked_result(

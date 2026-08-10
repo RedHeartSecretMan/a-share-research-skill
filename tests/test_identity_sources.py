@@ -108,11 +108,17 @@ class IdentitySourceOperationTests(unittest.TestCase):
         self.assertEqual(len(observations), 1)
         evidence = observations[0].to_evidence()
         self.assertEqual(evidence["source_operation"], "cninfo_security_dictionary@1")
-        self.assertEqual(evidence["subject"]["security"], "SSE:600519")
+        self.assertIsNone(evidence["subject"]["security"])
+        self.assertEqual(evidence["subject"]["security_clue"], {"code": "600519"})
         self.assertEqual(evidence["observation"]["issuer_identifier"], "gssh0600519")
+        self.assertIsNone(evidence["observation"]["exchange"])
+        self.assertIs(
+            evidence["observation"]["issuer_relationship_verified"],
+            False,
+        )
         self.assertEqual(evidence["observation"]["security_type"], "A_SHARE")
 
-    def test_cninfo_issuer_relationship_must_embed_the_same_security_code(
+    def test_cninfo_org_id_format_does_not_establish_an_issuer_relationship(
         self,
     ) -> None:
         inconsistent = (
@@ -122,10 +128,12 @@ class IdentitySourceOperationTests(unittest.TestCase):
         )
         transport = FixtureTransport(inconsistent.encode("utf-8"))
 
-        with self.assertRaises(SourceOperationError) as caught:
-            CninfoSecurityDictionaryOperation().observe("600519", transport)
+        observations = CninfoSecurityDictionaryOperation().observe("600519", transport)
 
-        self.assertEqual(caught.exception.code, "inconsistent_identity_payload")
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0].issuer_identifier, "gssh0600000")
+        self.assertIsNone(observations[0].exchange)
+        self.assertIs(observations[0].issuer_relationship_verified, False)
 
     def test_http_success_with_empty_body_fails_closed(self) -> None:
         transport = FixtureTransport(b"")
@@ -321,12 +329,12 @@ class IdentityResolutionCliTests(unittest.TestCase):
         )
 
         self.assertEqual(result["schema_version"], "1.0")
-        self.assertEqual(result["task_type"], "security_identity")
+        self.assertEqual(result["plan"]["task_type"], "security_identity")
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["candidates"][0]["security"]["exchange"], "SSE")
-        self.assertEqual(result["candidates"][0]["security"]["code"], "600519")
+        self.assertEqual(result["claims"][0]["payload"]["security"]["exchange"], "SSE")
+        self.assertEqual(result["claims"][0]["payload"]["security"]["code"], "600519")
         self.assertEqual(
-            [item["source_operation"] for item in result["evidence"]],
+            [item["payload"]["source_operation"] for item in result["observations"]],
             ["sse_stock_list@1", "cninfo_security_dictionary@1"],
         )
 
@@ -374,7 +382,7 @@ class IdentityResolutionCliTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["observations"], [])
         self.assertEqual(
             result["limitations"][0]["code"],
             "source_policy_not_satisfied",
@@ -422,7 +430,7 @@ class IdentityResolutionCliTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["evidence"], [])
+        self.assertEqual(result["observations"], [])
         self.assertEqual(result["limitations"][0]["code"], "invalid_security_clue")
 
     def test_run_reports_missing_optional_adapter_dependency(self) -> None:
@@ -457,11 +465,8 @@ class IdentityResolutionCliTests(unittest.TestCase):
         self.assertEqual(candidate["security"]["exchange"], "SZSE")
         self.assertEqual(candidate["security"]["code"], "000001")
         self.assertIsNone(candidate["issuer"]["name"])
-        self.assertEqual(
-            candidate["issuer"]["identifier"],
-            {"scheme": "CNINFO_ORG_ID", "value": "gssz0000001"},
-        )
-        self.assertEqual(candidate["issuer"]["security_relationship"], "verified")
+        self.assertIsNone(candidate["issuer"]["identifier"])
+        self.assertEqual(candidate["issuer"]["security_relationship"], "unverified")
         self.assertEqual(
             [item["source_operation"] for item in result["evidence"]],
             ["szse_stock_list@1", "cninfo_security_dictionary@1"],
@@ -556,11 +561,12 @@ class IdentityResolutionCliTests(unittest.TestCase):
                     result["limitations"][0]["code"], "unsupported_exchange"
                 )
 
-    def test_bse_name_discovered_by_cninfo_is_unsupported(self) -> None:
+    def test_bse_like_cninfo_org_id_is_not_used_to_guess_exchange(self) -> None:
         result = self.run_resolve("安徽凤凰", "bse_name")
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["limitations"][0]["code"], "unsupported_exchange")
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["limitations"][0]["code"], "identity_not_resolved")
 
     def test_invalid_clues_block_before_network(self) -> None:
         for clue in ("", "   ", "60051", "HKEX:600519"):
@@ -583,11 +589,18 @@ class IdentityResolutionCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["conflicts"][0]["code"], "source_identity_conflict")
 
-    def test_source_exchange_conflict_is_preserved(self) -> None:
+    def test_cninfo_org_id_prefix_does_not_create_an_exchange_conflict(self) -> None:
         result = self.run_resolve("600519", "exchange_conflict")
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["conflicts"][0]["code"], "source_identity_conflict")
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["candidates"][0]["security"]["exchange"], "SSE")
+        self.assertEqual(result["conflicts"], [])
+        cninfo = next(
+            item
+            for item in result["evidence"]
+            if item["source_operation"] == "cninfo_security_dictionary@1"
+        )
+        self.assertIsNone(cninfo["observation"]["exchange"])
 
     def test_source_operation_failure_is_a_blocked_domain_result(self) -> None:
         result = self.run_resolve("600519", "source_failure")

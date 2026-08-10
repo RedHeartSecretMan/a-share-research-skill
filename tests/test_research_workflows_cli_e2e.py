@@ -254,6 +254,16 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         for step in result["steps"]:
             self.assertIsInstance(step["research_task"], dict)
             self.assertIsInstance(step["result"], dict)
+        identity_step = result["steps"][0]
+        self.assertEqual(
+            identity_step["research_task"]["subjects"], [{"clue": "工业富联"}]
+        )
+        self.assertEqual(
+            identity_step["result"]["plan"]["task_type"], "security_identity"
+        )
+        self.assertIn("observations", identity_step["result"])
+        self.assertNotIn("evidence", identity_step["result"])
+        for step in result["steps"][1:]:
             for field in (
                 "evidence",
                 "conflicts",

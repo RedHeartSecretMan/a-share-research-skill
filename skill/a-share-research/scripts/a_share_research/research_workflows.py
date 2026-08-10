@@ -220,7 +220,7 @@ def _run_new_security_workflow(
     identity_request = _leaf_request(
         request,
         task_type="security_identity",
-        subjects=request["subjects"],
+        subjects=[{"clue": request["subjects"][0]["clue"]}],
         window=None,
         parameters={},
     )
@@ -432,10 +432,13 @@ def _canonical_subject(result: object) -> dict[str, Any] | None:
     }:
         return None
     conflicts = result.get("conflicts")
-    candidates = result.get("candidates")
-    if conflicts or not isinstance(candidates, list) or len(candidates) != 1:
+    claims = result.get("claims")
+    if conflicts or not isinstance(claims, list) or len(claims) != 1:
         return None
-    candidate = candidates[0]
+    claim = claims[0]
+    if not isinstance(claim, dict) or claim.get("kind") != "security_identity":
+        return None
+    candidate = claim.get("payload")
     if not isinstance(candidate, dict):
         return None
     security = candidate.get("security")

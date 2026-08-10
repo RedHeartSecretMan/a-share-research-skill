@@ -506,7 +506,8 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
         result = json.loads(completed.stdout)
         self.assertEqual(result["schema_version"], "1.0")
-        self.assertEqual(result["task_type"], "security_identity")
+        self.assertEqual(result["plan"]["task_type"], "security_identity")
+        self.assertNotIn("task_type", result)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
             result["limitations"][0]["code"], "source_policy_not_satisfied"

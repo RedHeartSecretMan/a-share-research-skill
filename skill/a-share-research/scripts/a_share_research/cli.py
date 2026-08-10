@@ -14,7 +14,6 @@ from .capital_contract import CapitalHttpTransport, CapitalSourceOperation
 from .close_observation import build_close_result
 from .content_contract import ContentHttpTransport, ContentSourceOperation
 from .etf_option_contract import OptionSourceOperation
-from .identity_resolution import resolve_security_identity
 from .identity_sources import HttpTransport, UrlLibTransport
 from .intraday_contract import IntradaySourceOperation
 from .intraday_replay_contract import (
@@ -26,6 +25,7 @@ from .market_signal_contract import (
     MarketSignalSourceOperation,
 )
 from .provided_evidence import build_provided_evidence_result
+from .research_result import UnifiedResearchResult
 from .research_runtime import research
 from .valuation import build_valuation_result
 
@@ -66,16 +66,6 @@ def _parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run")
     run.add_argument("--request", type=Path, required=True)
     run.add_argument("--output", type=Path)
-
-    resolve = subparsers.add_parser("resolve")
-    resolve.add_argument("--query", required=True)
-    resolve.add_argument(
-        "--as-of",
-        type=_explicit_research_date,
-        required=True,
-        help="explicit research date in China Standard Time (YYYY-MM-DD)",
-    )
-    resolve.add_argument("--output", type=Path)
 
     close = subparsers.add_parser("close")
     close.add_argument("--security", type=_canonical_security, required=True)
@@ -171,12 +161,6 @@ def main(
                 intraday_replay_operations=intraday_replay_operations,
                 intraday_replay_daily_operations=intraday_replay_daily_operations,
             )
-        elif arguments.command == "resolve":
-            result = resolve_security_identity(
-                arguments.query,
-                arguments.as_of,
-                identity_transport or UrlLibTransport(),
-            )
         elif arguments.command == "close":
             result = build_close_result(
                 arguments.security,
@@ -199,11 +183,15 @@ def main(
                 )
             else:
                 result = build_provided_evidence_result(manifest, arguments.as_of)
+        public_result = (
+            result.to_dict() if isinstance(result, UnifiedResearchResult) else result
+        )
     except OSError as error:
         input_name = (
             "research request" if arguments.command == "run" else "bundle manifest"
         )
-        print(f"error: cannot read {input_name}: {error}", file=sys.stderr)
+        detail = "" if arguments.command == "run" else f": {error}"
+        print(f"error: cannot read {input_name}{detail}", file=sys.stderr)
         return 1
     except ValueError as error:
         protocol_name = (
@@ -212,7 +200,7 @@ def main(
         print(f"error: invalid {protocol_name}: {error}", file=sys.stderr)
         return 2
     serialized = json.dumps(
-        result,
+        public_result,
         allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),

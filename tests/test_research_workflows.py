@@ -63,31 +63,42 @@ def leaf_result(
 
 
 def identity_result(status: str = "limited") -> dict[str, Any]:
-    candidates: list[dict[str, Any]] = []
+    claims: list[dict[str, Any]] = []
     if status != "blocked":
-        candidates = [
+        claims = [
             {
-                "security": {
-                    "exchange": "SSE",
-                    "code": "601138",
-                    "type": "A_SHARE",
+                "id": "claim-identity-601138",
+                "kind": "security_identity",
+                "observation_ids": ["observation-identity-601138"],
+                "payload": {
+                    "security": {
+                        "exchange": "SSE",
+                        "code": "601138",
+                        "type": "A_SHARE",
+                    },
+                    "name": "工业富联",
+                    "issuer": {"name": "工业富联"},
                 },
-                "name": "工业富联",
-                "issuer": {"name": "工业富联"},
             }
         ]
     return {
-        **leaf_result(
-            "security_identity",
-            status,
-            evidence=[{"id": "identity-601138"}] if candidates else [],
-            limitations=(
-                [{"code": "experimental_identity_sources"}]
-                if candidates
-                else [{"code": "identity_not_resolved"}]
-            ),
+        "schema_version": "1.0",
+        "status": status,
+        "plan": {"task_type": "security_identity"},
+        "capability_registry": {},
+        "coverage": {},
+        "observations": ([{"id": "observation-identity-601138"}] if claims else []),
+        "claims": claims,
+        "calculations": [],
+        "conflicts": [],
+        "limitations": (
+            [{"code": "experimental_identity_sources"}]
+            if claims
+            else [{"code": "identity_not_resolved"}]
         ),
-        "candidates": candidates,
+        "source_errors": [],
+        "task_views": {},
+        "briefs": [],
     }
 
 
@@ -288,7 +299,7 @@ class ResearchWorkflowContractTests(unittest.TestCase):
         self,
     ) -> None:
         invalid_identity = identity_result()
-        invalid_identity["candidates"][0]["issuer"] = None
+        invalid_identity["claims"][0]["payload"]["issuer"] = None
         runtime = RecordingRuntime([invalid_identity])
 
         result = runtime.research(self._new_security_request())

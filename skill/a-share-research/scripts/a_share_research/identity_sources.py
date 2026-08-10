@@ -11,6 +11,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener
 
+from .research_result import FieldDisposition, OperationOutcome
+
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
@@ -45,7 +47,16 @@ class UrlLibTransport:
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         request = Request(url, headers=headers, method="GET")
-        return self._open(request)
+        return self._open(request, timeout_seconds=20.0)
+
+    def get_with_timeout(
+        self,
+        url: str,
+        headers: dict[str, str],
+        timeout_seconds: float,
+    ) -> HttpResponse:
+        request = Request(url, headers=headers, method="GET")
+        return self._open(request, timeout_seconds=timeout_seconds)
 
     def post(
         self,
@@ -54,11 +65,11 @@ class UrlLibTransport:
         body: bytes,
     ) -> HttpResponse:
         request = Request(url, headers=headers, data=body, method="POST")
-        return self._open(request)
+        return self._open(request, timeout_seconds=20.0)
 
-    def _open(self, request: Request) -> HttpResponse:
+    def _open(self, request: Request, *, timeout_seconds: float) -> HttpResponse:
         try:
-            with self._opener.open(request, timeout=20) as opened:
+            with self._opener.open(request, timeout=timeout_seconds) as opened:
                 body = opened.read(MAX_RESPONSE_BYTES + 1)
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise TransportError(
@@ -161,14 +172,9 @@ class IdentityObservation:
     basis: str
     retrieved_at: datetime
 
-    def to_evidence(self) -> dict[str, object]:
+    def to_observation(self, *, source_role: str) -> dict[str, object]:
         security = (
             f"{self.exchange}:{self.code}" if self.exchange is not None else self.code
-        )
-        evidence_identity = (
-            f"{self.exchange}:{self.code}"
-            if self.exchange is not None
-            else f"UNRESOLVED:{self.code}"
         )
         subject: dict[str, object] = {
             "security": security if self.exchange is not None else None,
@@ -177,8 +183,7 @@ class IdentityObservation:
         if self.exchange is None:
             subject["security_clue"] = {"code": self.code}
         return {
-            "id": f"identity-{self.source_operation}-{evidence_identity}",
-            "source_role": "authoritative_disclosure",
+            "source_role": source_role,
             "source_operation": self.source_operation,
             "experimental": True,
             "subject": subject,
@@ -219,12 +224,78 @@ class IdentityObservation:
             ],
         }
 
+    def to_evidence(self) -> dict[str, object]:
+        """Retain the pre-v0.3 internal shape for unmigrated ResearchTasks."""
+
+        evidence_identity = (
+            f"{self.exchange}:{self.code}"
+            if self.exchange is not None
+            else f"UNRESOLVED:{self.code}"
+        )
+        return {
+            "id": f"identity-{self.source_operation}-{evidence_identity}",
+            **self.to_observation(source_role="authoritative_disclosure"),
+        }
+
+
+@dataclass(frozen=True)
+class IdentityFieldContract:
+    """The declared actual fields and required subset for one identity operation."""
+
+    dispositions: tuple[FieldDisposition, ...]
+    required_fields: frozenset[str]
+
+    def accepts(self, row: object) -> bool:
+        if not isinstance(row, dict):
+            return False
+        declared_fields = {item.field for item in self.dispositions}
+        actual_fields = set(row)
+        return self.required_fields <= actual_fields <= declared_fields and all(
+            isinstance(row[field], str) and row[field] for field in self.required_fields
+        )
+
 
 class SseStockListOperation:
     """Observe current SSE A-share identity from the official stock list."""
 
     operation_id = "sse_stock_list@1"
     endpoint = "https://query.sse.com.cn/commonQuery.do"
+    field_contract = IdentityFieldContract(
+        dispositions=(
+            FieldDisposition(
+                "SECURITY_CODE_A",
+                "normalized",
+                "observations[].payload.observation.code",
+            ),
+            FieldDisposition(
+                "SECURITY_ABBR_A",
+                "normalized",
+                "observations[].payload.observation.name",
+            ),
+            FieldDisposition(
+                "FULLNAME", "normalized", "observations[].payload.subject.issuer"
+            ),
+            FieldDisposition(
+                "STATE_CODE_A_DESC",
+                "cross_check_only",
+                "claims[].payload.security.validity.status",
+            ),
+            FieldDisposition(
+                "COMPANY_CODE",
+                "cross_check_only",
+                "claims[].payload.issuer.security_relationship",
+            ),
+        ),
+        required_fields=frozenset(
+            {
+                "SECURITY_CODE_A",
+                "SECURITY_ABBR_A",
+                "FULLNAME",
+                "STATE_CODE_A_DESC",
+                "COMPANY_CODE",
+            }
+        ),
+    )
 
     def observe(
         self, query: str, transport: HttpTransport
@@ -253,17 +324,9 @@ class SseStockListOperation:
             raise _unknown_schema(self.operation_id)
         observations: list[IdentityObservation] = []
         for row in payload["result"]:
-            if not isinstance(row, dict) or not all(
-                isinstance(row.get(field), str) and row[field]
-                for field in (
-                    "SECURITY_CODE_A",
-                    "SECURITY_ABBR_A",
-                    "FULLNAME",
-                    "STATE_CODE_A_DESC",
-                    "COMPANY_CODE",
-                )
-            ):
+            if not self.field_contract.accepts(row):
                 raise _unknown_schema(self.operation_id)
+            assert isinstance(row, dict)
             if query not in {
                 row["SECURITY_CODE_A"],
                 row["SECURITY_ABBR_A"],
@@ -331,6 +394,22 @@ class SzseStockListOperation:
 
     operation_id = "szse_stock_list@1"
     endpoint = "https://www.szse.cn/api/report/ShowReport/data"
+    field_contract = IdentityFieldContract(
+        dispositions=(
+            FieldDisposition(
+                "agdm", "normalized", "observations[].payload.observation.code"
+            ),
+            FieldDisposition(
+                "agjc", "normalized", "observations[].payload.observation.name"
+            ),
+            FieldDisposition(
+                "agssrq",
+                "normalized",
+                "observations[].payload.observation.valid_from",
+            ),
+        ),
+        required_fields=frozenset({"agdm", "agjc", "agssrq"}),
+    )
 
     def observe(
         self, query: str, transport: HttpTransport
@@ -374,11 +453,9 @@ class SzseStockListOperation:
             raise _unknown_schema(self.operation_id)
         observations: list[IdentityObservation] = []
         for row in report["data"]:
-            if not isinstance(row, dict) or not all(
-                isinstance(row.get(field), str) and row[field]
-                for field in ("agdm", "agjc", "agssrq")
-            ):
+            if not self.field_contract.accepts(row):
                 raise _unknown_schema(self.operation_id)
+            assert isinstance(row, dict)
             name = _plain_text(row["agjc"])
             if row["agdm"] != query and name != query:
                 continue
@@ -406,22 +483,36 @@ class SzseStockListOperation:
         return observations
 
 
-def _cninfo_identity(code: str, org_id: str) -> tuple[str | None, bool]:
-    normalized = org_id.lower()
-    if normalized.startswith("gssh"):
-        return "SSE", normalized == f"gssh0{code}"
-    if normalized.startswith("gssz"):
-        return "SZSE", normalized == f"gssz0{code}"
-    if normalized.startswith(("gfbj", "gsbj")):
-        return "BSE", False
-    return None, False
-
-
 class CninfoSecurityDictionaryOperation:
     """Observe security-to-issuer links from the CNINFO dictionary."""
 
     operation_id = "cninfo_security_dictionary@1"
     endpoint = "https://www.cninfo.com.cn/new/data/szse_stock.json"
+    field_contract = IdentityFieldContract(
+        dispositions=(
+            FieldDisposition(
+                "code", "normalized", "observations[].payload.observation.code"
+            ),
+            FieldDisposition(
+                "zwjc", "normalized", "observations[].payload.observation.name"
+            ),
+            FieldDisposition(
+                "category", "cross_check_only", "claims[].payload.security.type"
+            ),
+            FieldDisposition(
+                "orgId",
+                "normalized",
+                "observations[].payload.observation.issuer_identifier",
+            ),
+            FieldDisposition(
+                "pinyin",
+                "excluded",
+                None,
+                "provider_search_alias_not_needed_for_identity",
+            ),
+        ),
+        required_fields=frozenset({"code", "zwjc", "category", "orgId"}),
+    )
 
     def observe(
         self, query: str, transport: HttpTransport
@@ -443,11 +534,9 @@ class CninfoSecurityDictionaryOperation:
             raise _unknown_schema(self.operation_id)
         observations: list[IdentityObservation] = []
         for row in payload["stockList"]:
-            if not isinstance(row, dict) or not all(
-                isinstance(row.get(field), str) and row[field]
-                for field in ("code", "zwjc", "category", "orgId")
-            ):
+            if not self.field_contract.accepts(row):
                 raise _unknown_schema(self.operation_id)
+            assert isinstance(row, dict)
             if row["code"] != query and row["zwjc"] != query:
                 continue
             if row["category"] != "A股":
@@ -456,28 +545,152 @@ class CninfoSecurityDictionaryOperation:
                     "security_type_mismatch",
                     "The matching CNINFO entry is not an A-share security.",
                 )
-            exchange, issuer_relationship_verified = _cninfo_identity(
-                row["code"], row["orgId"]
-            )
-            if exchange in {"SSE", "SZSE"} and not issuer_relationship_verified:
-                raise SourceOperationError(
-                    self.operation_id,
-                    "inconsistent_identity_payload",
-                    "The CNINFO issuer relationship does not match the security.",
-                )
             observations.append(
                 IdentityObservation(
                     source_operation=self.operation_id,
                     source_uri=self.endpoint,
-                    exchange=exchange,
+                    exchange=None,
                     code=row["code"],
                     name=row["zwjc"],
                     issuer_name=None,
                     issuer_identifier=row["orgId"],
-                    issuer_relationship_verified=issuer_relationship_verified,
+                    issuer_relationship_verified=False,
                     valid_from=None,
                     basis="current_security_dictionary_entry",
                     retrieved_at=response.retrieved_at,
                 )
             )
         return observations
+
+
+IDENTITY_CAPABILITY_ID = "security_identity_resolution"
+
+
+@dataclass(frozen=True)
+class IdentityOperationRequest:
+    """The bounded request accepted by every identity operation Adapter."""
+
+    query: str
+    as_of: str
+
+
+class IdentityOperationAdapter(Protocol):
+    """The only lower seam used by identity research."""
+
+    @property
+    def capability_id(self) -> str: ...
+
+    @property
+    def operation_id(self) -> str: ...
+
+    @property
+    def source_role(self) -> str: ...
+
+    @property
+    def field_dispositions(self) -> tuple[FieldDisposition, ...]: ...
+
+    def execute(
+        self, request: IdentityOperationRequest, timeout_seconds: float
+    ) -> OperationOutcome: ...
+
+
+class _ObservingOperation(Protocol):
+    operation_id: str
+    field_contract: IdentityFieldContract
+
+    def observe(
+        self, query: str, transport: HttpTransport
+    ) -> list[IdentityObservation]: ...
+
+
+@dataclass(frozen=True)
+class ProductionIdentityOperationAdapter:
+    """Turn one qualified parser operation into an operation-owned outcome."""
+
+    operation: _ObservingOperation
+    transport: HttpTransport
+    source_role: str
+    capability_id: str = IDENTITY_CAPABILITY_ID
+
+    @property
+    def operation_id(self) -> str:
+        return self.operation.operation_id
+
+    @property
+    def field_dispositions(self) -> tuple[FieldDisposition, ...]:
+        return self.operation.field_contract.dispositions
+
+    def execute(
+        self, request: IdentityOperationRequest, timeout_seconds: float
+    ) -> OperationOutcome:
+        if not request.query.strip():
+            raise ValueError("identity operation query must be non-empty")
+        if timeout_seconds <= 0:
+            raise ValueError("identity operation timeout must be positive")
+        bounded_transport = _BoundedIdentityTransport(
+            self.transport, timeout_seconds=timeout_seconds
+        )
+        try:
+            observations = self.operation.observe(request.query, bounded_transport)
+        except SourceOperationError as error:
+            return OperationOutcome(
+                capability_id=self.capability_id,
+                operation_id=self.operation_id,
+                coverage="failed",
+                source_errors=(
+                    {
+                        "source_operation": self.operation_id,
+                        "code": error.code,
+                        "message": str(error),
+                    },
+                ),
+                field_dispositions=self.field_dispositions,
+                diagnostics={"attempts": 1, "timeout_seconds": timeout_seconds},
+            )
+        normalized = tuple(
+            item.to_observation(source_role=self.source_role) for item in observations
+        )
+        return OperationOutcome(
+            capability_id=self.capability_id,
+            operation_id=self.operation_id,
+            coverage="complete" if normalized else "observed_empty",
+            observations=normalized,
+            field_dispositions=self.field_dispositions,
+            diagnostics={"attempts": 1, "timeout_seconds": timeout_seconds},
+        )
+
+
+@dataclass(frozen=True)
+class _BoundedIdentityTransport:
+    delegate: HttpTransport
+    timeout_seconds: float
+
+    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+        if isinstance(self.delegate, UrlLibTransport):
+            return self.delegate.get_with_timeout(url, headers, self.timeout_seconds)
+        return self.delegate.get(url, headers)
+
+
+def build_default_identity_operations(
+    transport: HttpTransport,
+) -> tuple[IdentityOperationAdapter, ...]:
+    """Build the three fixed production identity operation Adapters."""
+
+    operations: tuple[IdentityOperationAdapter, ...] = (
+        ProductionIdentityOperationAdapter(
+            operation=SseStockListOperation(),
+            transport=transport,
+            source_role="authoritative_disclosure",
+        ),
+        ProductionIdentityOperationAdapter(
+            operation=SzseStockListOperation(),
+            transport=transport,
+            source_role="authoritative_disclosure",
+        ),
+        ProductionIdentityOperationAdapter(
+            operation=CninfoSecurityDictionaryOperation(),
+            transport=transport,
+            source_role="market_observation",
+        ),
+    )
+    return operations
