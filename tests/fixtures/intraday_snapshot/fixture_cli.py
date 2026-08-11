@@ -123,6 +123,11 @@ class FixtureTongdaxinClient:
             values.pop("vol_scope")
             values.pop("amount_unit")
             values.pop("amount_scope")
+        elif scenario == "tdx_legal_aliases":
+            values["volume_unit"] = values.pop("vol_unit")
+            values["volume_scope"] = values.pop("vol_scope")
+        elif scenario == "tdx_unknown_quote_zero":
+            values["undisposed_zero"] = 0
         elif scenario == "tdx_quote_date_mismatch":
             values["trading_date"] = "2026-08-02"
         elif scenario in {
@@ -221,15 +226,14 @@ class FixtureTongdaxinClient:
                     }
                 ]
             )
-        return _Rows(
-            [
-                {
-                    "year": 2026,
-                    "month": 8,
-                    "day": 2 if scenario == "tdx_old_daily" else 3,
-                }
-            ]
-        )
+        row = {
+            "year": 2026,
+            "month": 8,
+            "day": 2 if scenario == "tdx_old_daily" else 3,
+        }
+        if scenario == "tdx_unknown_daily_zero":
+            row["undisposed_zero"] = 0
+        return _Rows([row])
 
     def close(self) -> None:
         return None
@@ -394,6 +398,12 @@ class FixtureTencentIntradayOperation(TencentIntradayOperation):
         scenario = os.environ.get("A_SHARE_INTRADAY_SCENARIO")
         if scenario == "unknown_prev_close_comparability":
             return replace(observation, previous_close_comparability="unknown")
+        if scenario == "unsafe_locator":
+            evidence = dict(observation.evidence[0])
+            evidence["locator"] = {
+                "uri": "https://internal.invalid/q?token=SNAPSHOT_SECRET_76"
+            }
+            return replace(observation, evidence=(evidence,))
         if scenario != "tencent_unknown_kind":
             return observation
         evidence = dict(observation.evidence[0])

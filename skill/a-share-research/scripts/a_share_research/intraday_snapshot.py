@@ -6,7 +6,7 @@ import math
 from dataclasses import replace
 from datetime import date, datetime, time
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any, Collection
+from typing import Any, Collection, cast
 
 from .intraday_contract import (
     SESSION_STATES,
@@ -15,6 +15,26 @@ from .intraday_contract import (
     IntradaySourceError,
     IntradaySourceOperation,
     session_at,
+)
+from .intraday_sources import (
+    TENCENT_INTRADAY_FIELD_DISPOSITIONS,
+    TONGDAXIN_INTRADAY_FIELD_DISPOSITIONS,
+)
+from .research_result import (
+    DirectTaskCalculation,
+    DirectTaskClaim,
+    DirectTaskConflict,
+    DirectTaskLimitation,
+    DirectTaskPlan,
+    EvidenceUsePolicy,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+    ResearchDependency,
+    UnifiedResearchResult,
+    fold_direct_task_research_result,
+    safe_public_locator,
+    safe_public_provider_id,
 )
 
 SSE_A_SHARE_PREFIXES = ("600", "601", "603", "605", "688", "689")
@@ -25,6 +45,13 @@ _SAFE_CACHE_STATES = frozenset({"source_timestamp", "uncached", "fresh"})
 _SAFE_PREVIOUS_CLOSE_BASES = frozenset(
     {"actual_close", "ex_right_reference", "source_reported_unadjudicated"}
 )
+_SNAPSHOT_CAPABILITY = "intraday_market_snapshot"
+_SNAPSHOT_EVIDENCE_USE = "intraday_snapshot_core"
+_SNAPSHOT_OPERATIONS = (TONGDAXIN_OPERATION, TENCENT_OPERATION)
+_SNAPSHOT_FIELD_DISPOSITIONS = {
+    TONGDAXIN_OPERATION: TONGDAXIN_INTRADAY_FIELD_DISPOSITIONS,
+    TENCENT_OPERATION: TENCENT_INTRADAY_FIELD_DISPOSITIONS,
+}
 
 
 class _IntradayDomainBlock(Exception):
@@ -65,73 +92,100 @@ def build_intraday_snapshot_result(
     request: dict[str, Any],
     operations: Collection[IntradaySourceOperation],
     research_now: datetime,
-) -> dict[str, Any]:
+) -> UnifiedResearchResult:
     """Collect and cross-check one current-date intraday snapshot."""
 
     try:
         query = _normalize_query(request, research_now)
     except _IntradayDomainBlock as blocked:
-        return _domain_blocked_result(request, blocked.code, str(blocked))
+        return _direct_snapshot_result(
+            request,
+            outcomes=_snapshot_skipped_outcomes("skipped_research_dependency"),
+            limitations=(DirectTaskLimitation(blocked.code, str(blocked)),),
+            summary=str(blocked),
+        )
     operation_list = list(operations)
     if len(operation_list) != 2:
         raise ValueError(
             "intraday_market_signal requires exactly two source operations"
         )
     observations: list[IntradayObservation] = []
-    source_errors: list[dict[str, Any]] = []
+    outcomes: list[OperationOutcome] = []
     for operation in operation_list:
         try:
             observation = operation.collect(query)
-            observations.append(
-                _validate_observation(observation, operation.operation_id)
-            )
+            observation = _validate_observation(observation, operation.operation_id)
+            observations.append(observation)
+            outcomes.append(_snapshot_outcome(observation=observation))
         except IntradaySourceError as error:
-            source_errors.append(_source_error_result(error))
+            outcomes.append(_snapshot_outcome(error=error))
         except Exception:
             # Adapter implementations are outside the ResearchTask boundary.  A
             # provider exception must never escape as a traceback or reveal its
             # request, credentials, or response body through the JSON contract.
-            source_errors.append(
-                {
-                    "source_operation": operation.operation_id,
-                    "code": "operation_failure",
-                    "message": "The source operation failed without a safe diagnostic.",
-                }
+            outcomes.append(
+                _snapshot_outcome(
+                    error=IntradaySourceError(
+                        operation.operation_id,
+                        "operation_failure",
+                        "The source operation failed without a safe diagnostic.",
+                    )
+                )
             )
-    if source_errors or len(observations) != 2:
-        return _blocked_result(request, query, observations, source_errors)
+    if any(item.source_errors for item in outcomes) or len(observations) != 2:
+        return _direct_snapshot_result(
+            request,
+            outcomes=tuple(outcomes),
+            limitations=(
+                DirectTaskLimitation(
+                    "intraday_sources_incomplete",
+                    "Both independent intraday source operations are required.",
+                ),
+            ),
+            summary="The required intraday source observations were incomplete.",
+        )
     baseline, cross_check = observations
     incompatibilities = _pair_incompatibility(query, baseline, cross_check)
     if incompatibilities:
-        return _incompatible_result(request, query, observations, incompatibilities)
+        return _direct_snapshot_result(
+            request,
+            outcomes=tuple(outcomes),
+            conflicts=_direct_snapshot_conflicts(incompatibilities, observations),
+            summary="The intraday observations were incompatible.",
+        )
     result_session = _result_session(query, baseline, cross_check)
     if result_session is None:
-        return _incompatible_result(
+        conflicts = [
+            _pair_conflict(
+                "intraday_session_unknown",
+                "The current time and source timestamps do not establish an applicable session.",
+                observations=(baseline, cross_check),
+            )
+        ]
+        return _direct_snapshot_result(
             request,
-            query,
-            observations,
-            [
-                _pair_conflict(
-                    "intraday_session_unknown",
-                    "The current time and source timestamps do not establish an applicable session.",
-                    observations=(baseline, cross_check),
-                )
-            ],
+            outcomes=tuple(outcomes),
+            conflicts=_direct_snapshot_conflicts(conflicts, observations),
+            summary="The current intraday session could not be established.",
         )
     freshness_conflicts = _freshness_conflicts(baseline, cross_check, result_session)
     if freshness_conflicts:
-        return _conflict_result(request, query, observations, freshness_conflicts)
+        return _direct_snapshot_result(
+            request,
+            outcomes=tuple(outcomes),
+            conflicts=_direct_snapshot_conflicts(freshness_conflicts, observations),
+            summary="The intraday observations did not satisfy freshness bounds.",
+        )
     suspension_conflicts = _suspension_conflicts(baseline, cross_check)
     if suspension_conflicts:
-        return _incompatible_result(request, query, observations, suspension_conflicts)
+        return _direct_snapshot_result(
+            request,
+            outcomes=tuple(outcomes),
+            conflicts=_direct_snapshot_conflicts(suspension_conflicts, observations),
+            summary="The intraday suspension state could not be established.",
+        )
     assert baseline.previous_close is not None
     assert baseline.previous_close_basis is not None
-    baseline_id = baseline.evidence[0]["id"]
-    cross_check_id = cross_check.evidence[0]["id"]
-    core_evidence = [baseline_id, cross_check_id]
-    all_evidence = [
-        item["id"] for observation in observations for item in observation.evidence
-    ]
     gap_seconds = abs((baseline.observed_at - cross_check.observed_at).total_seconds())
     observation_times: dict[str, str] = {
         "tongdaxin_baseline": baseline.observed_at.isoformat(),
@@ -143,9 +197,7 @@ def build_intraday_snapshot_result(
     }
     if result_session == "midday_break":
         observation_times["observation_boundary"] = "morning_last_compatible_pair"
-    result = {
-        "schema_version": request["schema_version"],
-        "status": "limited",
+    snapshot_facts: dict[str, Any] = {
         "subject": {
             "security": {
                 "exchange": query.exchange,
@@ -180,132 +232,28 @@ def build_intraday_snapshot_result(
             },
         },
         "observation_times": observation_times,
-        "source_operations": [item.source_operation for item in observations],
-        "field_lineage": {
-            "subject": {
-                "evidence_ids": core_evidence,
-                "source_fields": ["code", "market", "qt.security"],
-            },
-            "trading_date": {
-                "evidence_ids": all_evidence,
-                "source_fields": ["year", "month", "day", "day.date"],
-            },
-            "session_state": {
-                "evidence_ids": core_evidence,
-                "source_fields": ["servertime", "qt.timestamp"],
-            },
-            "trading_status": {
-                "evidence_ids": core_evidence,
-                "source_fields": [
-                    "trading_status",
-                    "no_trade_confirmed",
-                    "vol",
-                    "day.volume",
-                ],
-            },
-            "price_type": {
-                "evidence_ids": core_evidence,
-                "source_fields": ["price", "day.close", "qt.timestamp"],
-            },
-            **{
-                f"snapshot.{field}": {
-                    "evidence_ids": core_evidence,
-                    "source_fields": [
-                        *baseline.field_sources[field],
-                        *cross_check.field_sources[field],
-                    ],
-                }
-                for field in (
-                    "latest_price",
-                    "open",
-                    "high",
-                    "low",
-                )
-            },
-            "snapshot.previous_close": {
-                "evidence_ids": core_evidence,
-                "source_fields": [
-                    *baseline.field_sources["previous_close"],
-                    *cross_check.field_sources["previous_close"],
-                ],
-                "calculation": "previous_close_cross_source_adjudication@1",
-            },
-            "snapshot.cumulative_volume": {
-                "evidence_ids": [baseline_id],
-                "source_fields": list(baseline.field_sources["cumulative_volume"]),
-            },
-            "snapshot.cumulative_amount": {
-                "evidence_ids": [baseline_id],
-                "source_fields": list(baseline.field_sources["cumulative_amount"]),
-            },
-            "observation_times.tongdaxin_baseline": {
-                "evidence_ids": [baseline_id],
-                "source_fields": ["servertime"],
-            },
-            "observation_times.tencent_cross_check": {
-                "evidence_ids": [cross_check_id],
-                "source_fields": ["qt.timestamp"],
-            },
-            "observation_times.retrieved_at": {
-                "evidence_ids": all_evidence,
-                "source_fields": ["retrieved_at"],
-            },
-            "observation_times.pair_gap_seconds": {
-                "evidence_ids": core_evidence,
-                "source_fields": ["servertime", "qt.timestamp"],
-                "calculation": "absolute_time_difference_seconds@1",
-            },
-            **(
-                {
-                    "observation_times.observation_boundary": {
-                        "evidence_ids": core_evidence,
-                        "source_fields": ["observation_boundary"],
-                    }
-                }
-                if result_session == "midday_break"
-                else {}
-            ),
-        },
-        "brief": {
-            "status": "limited",
-            "summary": (
-                "Two experimental operations agree on one "
-                f"{result_session} intraday market snapshot."
-            ),
-            "evidence_ids": core_evidence,
-        },
-        "evidence": [
-            item for observation in observations for item in observation.evidence
-        ],
-        "conflicts": [],
-        "source_errors": [],
-        "limitations": [
-            {
-                "code": "experimental_intraday_sources",
-                "message": (
-                    "The source operations agree but have not completed production "
-                    "qualification; the snapshot is limited."
-                ),
-            },
-            *(
-                [
-                    {
-                        "code": "midday_break_morning_observation",
-                        "message": (
-                            "Prices and cumulative trading remain at the last compatible "
-                            "morning observation during the midday break."
-                        ),
-                    }
-                ]
-                if result_session == "midday_break"
-                else []
-            ),
-        ],
     }
     previous_close = _adjudicate_previous_close(baseline, cross_check)
-    result["snapshot"]["previous_close"] = previous_close["snapshot"]
+    snapshot_facts["snapshot"]["previous_close"] = previous_close["snapshot"]
     if _is_confirmed_suspension(baseline, cross_check):
-        return _suspended_result(result, baseline, cross_check)
+        snapshot = cast(dict[str, Any], snapshot_facts["snapshot"])
+        not_applicable = {
+            "status": "not_applicable",
+            "value": None,
+            "unit": "CNY/share",
+            "reason": "suspended",
+        }
+        for field in ("latest_price", "open", "high", "low"):
+            snapshot[field] = dict(not_applicable)
+        snapshot["cumulative_volume"] = {"value": "0", "unit": "shares"}
+        snapshot["cumulative_amount"] = {
+            "status": "not_applicable",
+            "value": None,
+            "unit": "CNY",
+            "reason": "suspended_amount_not_observed",
+        }
+        snapshot_facts["trading_status"] = "suspended"
+        snapshot_facts["price_type"] = "not_applicable"
     if previous_close["comparable"]:
         change_amount = Decimal(baseline.latest_price) - Decimal(
             baseline.previous_close
@@ -313,35 +261,301 @@ def build_intraday_snapshot_result(
         change_percent = (
             (change_amount / Decimal(baseline.previous_close)) * Decimal(100)
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        result["snapshot"]["change_amount"] = {
+        snapshot_facts["snapshot"]["change_amount"] = {
             "value": _decimal_text(change_amount),
             "unit": "CNY/share",
         }
-        result["snapshot"]["change_percent"] = {
+        snapshot_facts["snapshot"]["change_percent"] = {
             "value": _decimal_text(change_percent),
             "unit": "percent",
         }
-        result["field_lineage"]["snapshot.change_amount"] = {
-            "evidence_ids": core_evidence,
-            "source_fields": [
-                *baseline.field_sources["latest_price"],
-                *cross_check.field_sources["latest_price"],
-                *baseline.field_sources["previous_close"],
-                *cross_check.field_sources["previous_close"],
-            ],
-            "calculation": "intraday_change_amount@1",
-        }
-        result["field_lineage"]["snapshot.change_percent"] = {
-            "evidence_ids": core_evidence,
-            "source_fields": [
-                *baseline.field_sources["latest_price"],
-                *cross_check.field_sources["latest_price"],
-                *baseline.field_sources["previous_close"],
-                *cross_check.field_sources["previous_close"],
-            ],
-            "calculation": "intraday_change_percent@1",
-        }
-    return result
+    observation_keys = tuple(_snapshot_observation_key(item) for item in observations)
+    calculations = [
+        DirectTaskCalculation(
+            kind="intraday_source_pair_gap",
+            evidence_use=_SNAPSHOT_EVIDENCE_USE,
+            observation_keys=observation_keys,
+            payload={
+                "pair_gap_seconds": snapshot_facts["observation_times"][
+                    "pair_gap_seconds"
+                ],
+                "formula": "abs(baseline_observed_at - cross_check_observed_at)",
+                "operands": {
+                    "baseline_observed_at": baseline.observed_at.isoformat(),
+                    "cross_check_observed_at": cross_check.observed_at.isoformat(),
+                },
+            },
+        )
+    ]
+    if previous_close["comparable"]:
+        calculations.extend(
+            [
+                DirectTaskCalculation(
+                    kind="intraday_change_amount",
+                    evidence_use=_SNAPSHOT_EVIDENCE_USE,
+                    observation_keys=observation_keys,
+                    payload={
+                        **cast(
+                            dict[str, object],
+                            snapshot_facts["snapshot"]["change_amount"],
+                        ),
+                        "formula": "latest_price - previous_close",
+                        "operands": {
+                            "latest_price": baseline.latest_price,
+                            "previous_close": baseline.previous_close,
+                        },
+                    },
+                ),
+                DirectTaskCalculation(
+                    kind="intraday_change_percent",
+                    evidence_use=_SNAPSHOT_EVIDENCE_USE,
+                    observation_keys=observation_keys,
+                    payload={
+                        **cast(
+                            dict[str, object],
+                            snapshot_facts["snapshot"]["change_percent"],
+                        ),
+                        "formula": "(latest_price - previous_close) / previous_close * 100",
+                        "operands": {
+                            "latest_price": baseline.latest_price,
+                            "previous_close": baseline.previous_close,
+                        },
+                    },
+                ),
+            ]
+        )
+    limitations = [
+        DirectTaskLimitation(
+            "experimental_intraday_sources",
+            "The agreeing intraday operations remain experimental.",
+            observation_keys,
+        )
+    ]
+    if result_session == "midday_break":
+        limitations.append(
+            DirectTaskLimitation(
+                "midday_break_morning_observation",
+                "The snapshot retains the last compatible morning observation.",
+                observation_keys,
+            )
+        )
+    return _direct_snapshot_result(
+        request,
+        outcomes=tuple(outcomes),
+        claims=(
+            DirectTaskClaim(
+                kind="intraday_market_snapshot",
+                evidence_use=_SNAPSHOT_EVIDENCE_USE,
+                observation_keys=observation_keys,
+                payload=snapshot_facts,
+            ),
+        ),
+        calculations=tuple(calculations),
+        limitations=tuple(limitations),
+        summary=(
+            "Two experimental operations directly establish one "
+            f"{result_session} intraday market snapshot."
+        ),
+    )
+
+
+def _snapshot_observation_key(observation: IntradayObservation) -> str:
+    return f"{observation.source_operation}:{observation.security}:{observation.observed_at.isoformat()}"
+
+
+def _snapshot_observation_payload(
+    observation: IntradayObservation,
+) -> dict[str, object]:
+    """Retain one operation's contract-valid raw proof and normalized facts."""
+
+    return {
+        "id": _snapshot_observation_key(observation),
+        "source_operation": observation.source_operation,
+        "kind": "intraday_snapshot_source_observation",
+        "subject": {"security": observation.security},
+        "trading_date": observation.trading_date.isoformat(),
+        "observed_at": observation.observed_at.isoformat(),
+        "retrieved_at": observation.retrieved_at.isoformat(),
+        "session_state": observation.session_state,
+        "trading_status": observation.trading_status,
+        "price_type": observation.price_type,
+        "prices": {
+            "latest": observation.latest_price,
+            "open": observation.open_price,
+            "high": observation.high_price,
+            "low": observation.low_price,
+        },
+        "previous_close": {
+            "value": observation.previous_close,
+            "basis": observation.previous_close_basis,
+            "comparability": observation.previous_close_comparability,
+        },
+        "cumulative": {
+            "volume": observation.cumulative_volume_shares,
+            "volume_unit": "shares",
+            "amount": observation.cumulative_amount_cny,
+            "amount_unit": "CNY",
+            "scope": "trading_day",
+        },
+        "cache_state": observation.cache_state,
+        "observation_boundary": observation.observation_boundary,
+        "no_trade_confirmed": observation.no_trade_confirmed,
+        "corporate_action": observation.corporate_action,
+        "field_lineage": {
+            field: list(source_fields)
+            for field, source_fields in observation.field_sources.items()
+        },
+        "provenance": [
+            _snapshot_provenance(item, observation, index)
+            for index, item in enumerate(observation.evidence)
+        ],
+    }
+
+
+def _snapshot_provenance(
+    item: dict[str, Any], observation: IntradayObservation, index: int
+) -> dict[str, object]:
+    locator = item.get("locator")
+    uri = locator.get("uri") if isinstance(locator, dict) else None
+    return {
+        "provider_observation_id": safe_public_provider_id(
+            item.get("id"),
+            f"{observation.source_operation}:provider:{index}",
+        ),
+        "evidence_time": item.get("evidence_time"),
+        "available_at": item.get("available_at"),
+        "retrieved_at": item.get("retrieved_at"),
+        "locator": {
+            "uri": safe_public_locator(
+                uri,
+                f"source-observation:{index}",
+            )
+        },
+    }
+
+
+def _snapshot_outcome(
+    *,
+    observation: IntradayObservation | None = None,
+    error: IntradaySourceError | None = None,
+    operation_id: str | None = None,
+    skipped: str | None = None,
+) -> OperationOutcome:
+    facts = sum((observation is not None, error is not None, skipped is not None))
+    if facts != 1:
+        raise ValueError("intraday snapshot outcome requires one execution fact")
+    owner = (
+        observation.source_operation
+        if observation is not None
+        else error.source_operation
+        if error is not None
+        else operation_id
+    )
+    if owner not in _SNAPSHOT_OPERATIONS:
+        raise ValueError("intraday snapshot outcome operation is not planned")
+    if observation is not None:
+        execution = OperationExecution("succeeded", query_complete=True)
+        observations: tuple[dict[str, object], ...] = (
+            _snapshot_observation_payload(observation),
+        )
+        source_errors: tuple[dict[str, object], ...] = ()
+    elif error is not None:
+        execution = OperationExecution("failed")
+        observations = ()
+        source_errors = (cast(dict[str, object], _source_error_result(error)),)
+    else:
+        execution = OperationExecution(cast(Any, skipped))
+        observations = ()
+        source_errors = ()
+    return OperationOutcome(
+        capability_id=_SNAPSHOT_CAPABILITY,
+        operation_id=owner,
+        execution=execution,
+        observations=observations,
+        source_errors=source_errors,
+        field_dispositions=_SNAPSHOT_FIELD_DISPOSITIONS[owner],
+    )
+
+
+def _snapshot_skipped_outcomes(state: str) -> tuple[OperationOutcome, ...]:
+    return tuple(
+        _snapshot_outcome(operation_id=operation_id, skipped=state)
+        for operation_id in _SNAPSHOT_OPERATIONS
+    )
+
+
+def _direct_snapshot_conflicts(
+    conflicts: Collection[dict[str, Any]],
+    observations: Collection[IntradayObservation],
+) -> tuple[DirectTaskConflict, ...]:
+    observation_keys = tuple(_snapshot_observation_key(item) for item in observations)
+    return tuple(
+        DirectTaskConflict(
+            code=str(item.get("code", "intraday_snapshot_conflict")),
+            message=str(item.get("message", "The intraday observations conflict.")),
+            observation_keys=observation_keys,
+        )
+        for item in conflicts
+    )
+
+
+def _direct_snapshot_result(
+    request: dict[str, Any],
+    *,
+    outcomes: tuple[OperationOutcome, ...],
+    claims: tuple[DirectTaskClaim, ...] = (),
+    calculations: tuple[DirectTaskCalculation, ...] = (),
+    conflicts: tuple[DirectTaskConflict, ...] = (),
+    limitations: tuple[DirectTaskLimitation, ...] = (),
+    summary: str,
+) -> UnifiedResearchResult:
+    by_operation = {item.operation_id: item for item in outcomes}
+    if len(by_operation) != len(outcomes):
+        raise ValueError("intraday snapshot outcomes must have unique owners")
+    missing_state = (
+        "skipped_policy"
+        if not request["source_policy"]["allow_experimental"]
+        else "skipped_research_dependency"
+    )
+    for operation_id in _SNAPSHOT_OPERATIONS:
+        if operation_id not in by_operation:
+            by_operation[operation_id] = _snapshot_outcome(
+                operation_id=operation_id,
+                skipped=missing_state,
+            )
+    ordered_outcomes = tuple(by_operation[item] for item in _SNAPSHOT_OPERATIONS)
+    obligations = tuple(
+        OperationObligation(
+            capability_id=_SNAPSHOT_CAPABILITY,
+            operation_id=operation_id,
+            source_role="market_observation",
+            experimental=True,
+            exchange=None,
+            evidence_uses=(EvidenceUsePolicy(_SNAPSHOT_EVIDENCE_USE, "supporting"),),
+        )
+        for operation_id in _SNAPSHOT_OPERATIONS
+    )
+    return fold_direct_task_research_result(
+        DirectTaskPlan(
+            task_type="intraday_market_signal",
+            as_of=str(request["as_of"]),
+            obligations=obligations,
+            dependencies=(
+                ResearchDependency(
+                    consumer_id="intraday_market_snapshot",
+                    evidence_use=_SNAPSHOT_EVIDENCE_USE,
+                    minimum_supporting_observations=2,
+                    core=True,
+                ),
+            ),
+        ),
+        ordered_outcomes,
+        claims=claims,
+        calculations=calculations,
+        conflicts=conflicts,
+        limitations=limitations,
+        summary=summary,
+    )
 
 
 def _normalize_query(request: dict[str, Any], research_now: datetime) -> IntradayQuery:
@@ -636,7 +850,6 @@ def _freshness_conflicts(
                     "message": "The source cache state is missing or unknown.",
                     "source_operation": observation.source_operation,
                     "cache_state": _safe_cache_state(observation.cache_state),
-                    "evidence_ids": [item["id"] for item in observation.evidence],
                 }
             )
     if result_session in {"opening_auction", "continuous", "closing_auction"}:
@@ -648,7 +861,6 @@ def _freshness_conflicts(
                         "code": "intraday_observation_time_invalid",
                         "message": "A source observation occurs after its retrieval time.",
                         "source_operation": observation.source_operation,
-                        "evidence_ids": [item["id"] for item in observation.evidence],
                     }
                 )
             elif age > 60:
@@ -658,7 +870,6 @@ def _freshness_conflicts(
                         "message": "An active-session source observation is older than 60 seconds.",
                         "source_operation": observation.source_operation,
                         "age_seconds": _seconds_text(age),
-                        "evidence_ids": [item["id"] for item in observation.evidence],
                     }
                 )
     gap = abs((baseline.observed_at - cross_check.observed_at).total_seconds())
@@ -677,11 +888,6 @@ def _freshness_conflicts(
                 "code": "intraday_source_pair_gap_exceeded",
                 "message": "The active-session source observations are more than 60 seconds apart.",
                 "gap_seconds": _seconds_text(gap),
-                "evidence_ids": [
-                    item["id"]
-                    for observation in observations
-                    for item in observation.evidence
-                ],
             }
         )
     return conflicts
@@ -808,77 +1014,6 @@ def _has_positive_trade_evidence(observation: IntradayObservation) -> bool:
     return True
 
 
-def _suspended_result(
-    result: dict[str, Any],
-    baseline: IntradayObservation,
-    cross_check: IntradayObservation,
-) -> dict[str, Any]:
-    result = dict(result)
-    snapshot = dict(result["snapshot"])
-    not_applicable = {
-        "status": "not_applicable",
-        "value": None,
-        "unit": "CNY/share",
-        "reason": "suspended",
-    }
-    for field in ("latest_price", "open", "high", "low"):
-        snapshot[field] = dict(not_applicable)
-    snapshot["cumulative_volume"] = {"value": "0", "unit": "shares"}
-    snapshot["cumulative_amount"] = {
-        "status": "not_applicable",
-        "value": None,
-        "unit": "CNY",
-        "reason": "suspended_amount_not_observed",
-    }
-    result["snapshot"] = snapshot
-    lineage = dict(result["field_lineage"])
-    lineage["snapshot.cumulative_volume"] = {
-        "evidence_ids": [
-            baseline.evidence[0]["id"],
-            cross_check.evidence[0]["id"],
-        ],
-        "source_fields": [
-            *baseline.field_sources["cumulative_volume"],
-            *cross_check.field_sources.get("cumulative_volume", ()),
-        ],
-        "calculation": "joint_no_trade_confirmation@1",
-    }
-    lineage["snapshot.cumulative_amount"] = {
-        "evidence_ids": [
-            baseline.evidence[0]["id"],
-            cross_check.evidence[0]["id"],
-        ],
-        "source_fields": [
-            *baseline.field_sources["cumulative_amount"],
-            "trading_status",
-            "cumulative_volume",
-        ],
-        "calculation": "joint_no_trade_confirmation_amount_not_observed@1",
-    }
-    result["field_lineage"] = lineage
-    result["trading_status"] = "suspended"
-    result["price_type"] = "not_applicable"
-    result["brief"] = {
-        "status": "limited",
-        "summary": (
-            "Two experimental operations jointly confirm a current-session suspension; "
-            "prices are not applicable and no trading is confirmed."
-        ),
-        "evidence_ids": result["brief"]["evidence_ids"],
-    }
-    result["limitations"] = [
-        {
-            "code": "intraday_suspension_confirmed",
-            "message": (
-                "Both independent source operations explicitly confirm suspension "
-                "and no trading for the applicable session."
-            ),
-        },
-        *result["limitations"],
-    ]
-    return result
-
-
 def _adjudicate_previous_close(
     baseline: IntradayObservation,
     cross_check: IntradayObservation,
@@ -963,95 +1098,6 @@ def _adjudicate_previous_close(
             "unit": "CNY/share",
             "basis": baseline.previous_close_basis,
         },
-    }
-
-
-def _conflict_result(
-    request: dict[str, Any],
-    query: IntradayQuery,
-    observations: list[IntradayObservation],
-    conflicts: list[dict[str, Any]],
-) -> dict[str, Any]:
-    diagnostics = _diagnostic_fields(query, observations)
-    baseline, cross_check = observations
-    diagnostics["observation_times"] = {
-        "tongdaxin_baseline": baseline.observed_at.isoformat(),
-        "tencent_cross_check": cross_check.observed_at.isoformat(),
-        "retrieved_at": max(
-            query.retrieved_at,
-            baseline.retrieved_at,
-            cross_check.retrieved_at,
-        ).isoformat(),
-        "pair_gap_seconds": _seconds_text(
-            abs((baseline.observed_at - cross_check.observed_at).total_seconds())
-        ),
-    }
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked",
-        "subjects": request["subjects"],
-        **diagnostics,
-        "conflicts": conflicts,
-        "source_errors": [],
-        "limitations": [
-            {
-                "code": "intraday_freshness_not_satisfied",
-                "message": "Active-session observations must be fresh and mutually compatible.",
-            }
-        ],
-    }
-
-
-def _incompatible_result(
-    request: dict[str, Any],
-    query: IntradayQuery,
-    observations: list[IntradayObservation],
-    conflicts: list[dict[str, Any]],
-) -> dict[str, Any]:
-    diagnostics = _diagnostic_fields(query, observations)
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked",
-        "subjects": request["subjects"],
-        **diagnostics,
-        "conflicts": conflicts,
-        "source_errors": [],
-        "limitations": [
-            {
-                "code": "intraday_source_pair_incompatible",
-                "message": "The two source observations cannot form one snapshot.",
-            }
-        ],
-    }
-
-
-def _blocked_result(
-    request: dict[str, Any],
-    query: IntradayQuery,
-    observations: list[IntradayObservation],
-    source_errors: list[dict[str, Any]],
-) -> dict[str, Any]:
-    diagnostics = _diagnostic_fields(query, observations)
-    for source_error in source_errors:
-        operation = source_error.get("source_operation")
-        if (
-            isinstance(operation, str)
-            and operation not in diagnostics["source_operations"]
-        ):
-            diagnostics["source_operations"].append(operation)
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked",
-        "subjects": request["subjects"],
-        **diagnostics,
-        "conflicts": [],
-        "source_errors": source_errors,
-        "limitations": [
-            {
-                "code": "intraday_source_pair_incomplete",
-                "message": "Both required intraday source operations must succeed.",
-            }
-        ],
     }
 
 
@@ -1492,7 +1538,6 @@ def _pair_conflict(
     conflict: dict[str, Any] = {
         "code": code,
         "message": message,
-        "evidence_ids": _evidence_ids(observations),
     }
     if field is not None:
         conflict["field"] = field
@@ -1505,140 +1550,30 @@ def _pair_conflict(
     return conflict
 
 
-def _evidence_ids(
-    observations: tuple[IntradayObservation, ...] | list[IntradayObservation],
-) -> list[str]:
-    return [
-        item["id"]
-        for observation in observations
-        for item in observation.evidence
-        if isinstance(item.get("id"), str)
-    ]
-
-
-def _diagnostic_fields(
-    query: IntradayQuery,
-    observations: list[IntradayObservation],
-) -> dict[str, Any]:
-    evidence = [item for observation in observations for item in observation.evidence]
-    fields: dict[str, Any] = {
-        "subject": {
-            "security": {
-                "exchange": query.exchange,
-                "code": query.code,
-                "type": "A_SHARE",
-            }
-        },
-        "evidence": evidence,
-        "source_operations": [item.source_operation for item in observations],
-        "observation_times": {
-            "tongdaxin_baseline": None,
-            "tencent_cross_check": None,
-            "retrieved_at": max(
-                [query.retrieved_at, *(item.retrieved_at for item in observations)]
-            ).isoformat(),
-            "pair_gap_seconds": None,
-        },
-        "field_lineage": {},
-        "brief": {
-            "status": "blocked",
-            "summary": "The source observations could not form an applicable intraday snapshot.",
-            "evidence_ids": _evidence_ids(observations),
-        },
-    }
-    for observation in observations:
-        prefix = observation.source_operation
-        time_key = {
-            TONGDAXIN_OPERATION: "tongdaxin_baseline",
-            TENCENT_OPERATION: "tencent_cross_check",
-        }.get(prefix, prefix)
-        fields["observation_times"][time_key] = observation.observed_at.isoformat()
-        for field, source_fields in observation.field_sources.items():
-            fields["field_lineage"].setdefault(
-                f"{prefix}.{field}",
-                {
-                    "evidence_ids": [item["id"] for item in observation.evidence],
-                    "source_fields": list(source_fields),
-                },
-            )
-        fields["field_lineage"][f"observation_times.{time_key}"] = {
-            "evidence_ids": [item["id"] for item in observation.evidence],
-            "source_fields": ["observed_at"],
-        }
-    if observations:
-        fields["field_lineage"]["subject"] = {
-            "evidence_ids": _evidence_ids(observations),
-            "source_fields": ["security"],
-        }
-        fields["field_lineage"]["trading_date"] = {
-            "evidence_ids": _evidence_ids(observations),
-            "source_fields": ["trading_date"],
-        }
-        fields["field_lineage"]["observation_times.retrieved_at"] = {
-            "evidence_ids": [item["id"] for item in evidence],
-            "source_fields": ["retrieved_at"],
-        }
-    if len(observations) == 2:
-        baseline, cross_check = observations
-        fields["observation_times"]["pair_gap_seconds"] = _seconds_text(
-            abs((baseline.observed_at - cross_check.observed_at).total_seconds())
-        )
-        fields["field_lineage"]["observation_times.pair_gap_seconds"] = {
-            "evidence_ids": _evidence_ids(observations),
-            "source_fields": ["observed_at"],
-            "calculation": "absolute_time_difference_seconds@1",
-        }
-    elif observations:
-        fields["field_lineage"]["observation_times.pair_gap_seconds"] = {
-            "evidence_ids": _evidence_ids(observations),
-            "source_fields": [],
-            "reason": "unavailable_source_observation",
-        }
-    if observations:
-        fields["trading_date"] = observations[0].trading_date.isoformat()
-    fields["as_of"] = query.as_of.isoformat()
-    return fields
-
-
-def _domain_blocked_result(
-    request: dict[str, Any], code: str, message: str
-) -> dict[str, Any]:
-    subject = _canonical_subject_from_request(request)
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked",
-        "subjects": request["subjects"],
-        "subject": subject,
-        "as_of": request.get("as_of"),
-        "trading_date": None,
-        "observation_times": {"retrieved_at": None},
-        "source_operations": [],
-        "field_lineage": {},
-        "brief": {
-            "status": "blocked",
-            "summary": message,
-            "evidence_ids": [],
-        },
-        "evidence": [],
-        "conflicts": [],
-        "source_errors": [],
-        "limitations": [{"code": code, "message": message}],
-    }
-
-
 def build_intraday_blocked_result(
     request: dict[str, Any],
     *,
     code: str,
     message: str,
     limitation_details: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> UnifiedResearchResult:
     """Build a stable blocked envelope before intraday source collection."""
 
-    result = _domain_blocked_result(request, code, message)
+    detail = ""
     if limitation_details:
-        result["limitations"][0].update(limitation_details)
-    return result
+        detail = " " + ", ".join(
+            f"{key}={value}" for key, value in sorted(limitation_details.items())
+        )
+    return _direct_snapshot_result(
+        request,
+        outcomes=_snapshot_skipped_outcomes(
+            "skipped_policy"
+            if code == "source_policy_not_satisfied"
+            else "skipped_research_dependency"
+        ),
+        limitations=(DirectTaskLimitation(code, f"{message}{detail}"),),
+        summary=message,
+    )
 
 
 def _canonical_subject_from_request(request: dict[str, Any]) -> dict[str, Any] | None:

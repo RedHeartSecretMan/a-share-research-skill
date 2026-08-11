@@ -19,12 +19,40 @@ from .intraday_replay_mootdx import (
     MootdxIntradayReplayOperation,
     MootdxReplayContract,
 )
+from .research_result import FieldDisposition
+
+
+def exchange_daily_field_dispositions(
+    exchange: str,
+) -> tuple[FieldDisposition, ...]:
+    """Return the selected exchange Adapter's actual response columns."""
+
+    source_dispositions = (
+        SseDailyLineOperation.field_dispositions
+        if exchange == "SSE"
+        else SzseDailyLineOperation.field_dispositions
+    )
+    return tuple(
+        FieldDisposition(
+            item.field,
+            item.disposition,
+            "observations.payload.contract" if item.destination is not None else None,
+            item.reason,
+        )
+        for item in source_dispositions
+    )
 
 
 class ExchangeReplayDailyBoundaryOperation:
     """Use the exchange daily line as an independent boundary operation."""
 
     operation_id = "exchange_intraday_replay_daily@1"
+
+    @staticmethod
+    def field_dispositions(query: IntradayReplayQuery) -> tuple[FieldDisposition, ...]:
+        """Expose the selected exchange Adapter's actual response columns."""
+
+        return exchange_daily_field_dispositions(query.exchange)
 
     def __init__(self, transport: HttpTransport) -> None:
         self._transport = transport

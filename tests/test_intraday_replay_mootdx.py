@@ -116,6 +116,13 @@ class MootdxReplayAdapterTests(unittest.TestCase):
         self.assertEqual(batch.rows[0].open_price, "10.00")
         self.assertEqual(batch.rows[0].volume, "200")
         self.assertEqual(batch.rows[0].amount, "1200.00")
+        self.assertEqual(batch.volume_unit, "shares")
+        self.assertIsNone(batch.volume_lot_size)
+        self.assertEqual(batch.amount_unit, "CNY")
+        self.assertEqual(
+            {item.field for item in operation.field_dispositions},
+            set(operation.raw_fields),
+        )
         self.assertEqual(client.offsets[-1], 20)
         self.assertTrue(client.closed)
 

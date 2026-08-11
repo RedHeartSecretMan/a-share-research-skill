@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from decimal import (
     ROUND_HALF_EVEN,
     ROUND_HALF_UP,
@@ -102,6 +103,94 @@ _DIAGNOSTIC_FORBIDDEN_FRAGMENTS = (
 )
 _MAX_DIAGNOSTIC_BYTES = 2_048
 _MAX_RESULT_BYTES = 2 * 1024 * 1024
+_SAFE_PUBLIC_LOCATOR = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*(?::[A-Za-z0-9_.+-]+)*$")
+_SAFE_PUBLIC_PROVIDER_ID = re.compile(r"^[A-Za-z0-9_.:@+-]+$")
+_UNSAFE_PUBLIC_REFERENCE_MARKERS = (
+    "bearer",
+    "credential",
+    "http",
+    "password",
+    "secret",
+    "token",
+)
+
+
+def is_safe_public_locator(value: object) -> bool:
+    """Return whether a locator is an opaque non-endpoint public reference."""
+
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 512
+        and _SAFE_PUBLIC_LOCATOR.fullmatch(value) is not None
+        and not any(
+            marker in value.casefold() for marker in _UNSAFE_PUBLIC_REFERENCE_MARKERS
+        )
+    )
+
+
+def safe_public_locator(value: object, fallback: str) -> str:
+    """Keep a safe opaque locator or replace it with a caller-owned reference."""
+
+    if not is_safe_public_locator(fallback):
+        raise ValueError("public locator fallback is unsafe")
+    return cast(str, value) if is_safe_public_locator(value) else fallback
+
+
+def is_safe_public_provider_id(value: object) -> bool:
+    """Return whether provider provenance is non-sensitive and non-endpoint."""
+
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 512
+        and _SAFE_PUBLIC_PROVIDER_ID.fullmatch(value) is not None
+        and not any(
+            marker in value.casefold() for marker in _UNSAFE_PUBLIC_REFERENCE_MARKERS
+        )
+    )
+
+
+def safe_public_provider_id(value: object, fallback: str) -> str:
+    """Keep a safe provider ID or replace it with a stable operation-owned ID."""
+
+    if not is_safe_public_provider_id(fallback):
+        raise ValueError("public provider ID fallback is unsafe")
+    return cast(str, value) if is_safe_public_provider_id(value) else fallback
+
+
+_INTRADAY_REPLAY_PROVIDER_FIELDS = (
+    "source_timestamp",
+    "timestamp_semantics",
+    "trading_phase",
+    "trade_state",
+    "open_price",
+    "high_price",
+    "low_price",
+    "close_price",
+    "volume",
+    "amount",
+    "evidence_locator",
+    "trading_date",
+    "price_adjustment",
+    "auction_interval_start",
+    "auction_interval_end",
+)
+
+
+def intraday_replay_provider_observation_id(
+    operation_id: str, row: Mapping[str, object]
+) -> str:
+    """Derive one replay provider ID from every retained row operand."""
+
+    operands = {field: row.get(field) for field in _INTRADAY_REPLAY_PROVIDER_FIELDS}
+    digest = sha256(
+        json.dumps(
+            operands,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{operation_id}:provider:{digest}"
 
 
 def _json_copy(value: object, *, path: str, max_bytes: int) -> object:
@@ -1870,6 +1959,1021 @@ def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) 
         _validate_comparison_domain_facts(result)
     elif task_type == "etf_options":
         _validate_etf_option_domain_facts(result)
+    elif task_type == "intraday_market_signal":
+        _validate_intraday_snapshot_domain_facts(result)
+    elif task_type == "intraday_replay":
+        _validate_intraday_replay_domain_facts(result)
+
+
+def _validate_intraday_snapshot_domain_facts(
+    result: Mapping[str, object],
+) -> None:
+    claims = cast(list[dict[str, object]], result["claims"])
+    calculations = cast(list[dict[str, object]], result["calculations"])
+    snapshot_claims = [
+        item for item in claims if item.get("kind") == "intraday_market_snapshot"
+    ]
+    if len(snapshot_claims) > 1 or any(
+        item.get("kind") != "intraday_market_snapshot" for item in claims
+    ):
+        raise ValueError("intraday snapshot domain facts contain an unknown claim")
+    allowed_calculations = {
+        "intraday_source_pair_gap",
+        "intraday_change_amount",
+        "intraday_change_percent",
+    }
+    if any(item.get("kind") not in allowed_calculations for item in calculations):
+        raise ValueError(
+            "intraday snapshot domain facts contain an unknown calculation"
+        )
+    observation_payloads = [
+        _record_payload(item)
+        for item in cast(list[dict[str, object]], result["observations"])
+    ]
+    observation_keys = {
+        "id",
+        "source_operation",
+        "kind",
+        "subject",
+        "trading_date",
+        "observed_at",
+        "retrieved_at",
+        "session_state",
+        "trading_status",
+        "price_type",
+        "prices",
+        "previous_close",
+        "cumulative",
+        "cache_state",
+        "observation_boundary",
+        "no_trade_confirmed",
+        "corporate_action",
+        "field_lineage",
+        "provenance",
+    }
+    for payload in observation_payloads:
+        if (
+            set(payload) != observation_keys
+            or payload.get("kind") != "intraday_snapshot_source_observation"
+        ):
+            raise ValueError("intraday snapshot retained observation kind is invalid")
+        observed_at = datetime.fromisoformat(str(payload.get("observed_at")))
+        retrieved_at = datetime.fromisoformat(str(payload.get("retrieved_at")))
+        prices = _nested_mapping(payload, "prices")
+        cumulative = _nested_mapping(payload, "cumulative")
+        provenance = payload.get("provenance")
+        if (
+            observed_at.tzinfo is None
+            or retrieved_at.tzinfo is None
+            or observed_at > retrieved_at
+            or payload.get("session_state")
+            not in {"opening_auction", "continuous", "midday_break", "closing_auction"}
+            or payload.get("trading_status")
+            not in {
+                "traded",
+                "auction",
+                "suspended",
+                "not_traded",
+                "no_trade",
+                "unknown",
+            }
+            or cumulative.get("volume_unit") != "shares"
+            or cumulative.get("amount_unit") != "CNY"
+            or any(
+                value is not None and not isinstance(value, str)
+                for value in prices.values()
+            )
+            or not isinstance(provenance, list)
+        ):
+            raise ValueError("intraday snapshot retained observation is not typed")
+        for item in provenance:
+            if not isinstance(item, Mapping):
+                raise ValueError("intraday snapshot provenance is invalid")
+            locator = item.get("locator")
+            if (
+                not is_safe_public_provider_id(item.get("provider_observation_id"))
+                or not isinstance(locator, Mapping)
+                or not is_safe_public_locator(locator.get("uri"))
+            ):
+                raise ValueError("intraday snapshot provenance is unsafe")
+    if not snapshot_claims:
+        if calculations:
+            raise ValueError("blocked intraday snapshot exposes adopted calculations")
+        if len(observation_payloads) == 2:
+            conflicts = cast(list[dict[str, object]], result["conflicts"])
+            codes = {str(item["code"]) for item in conflicts}
+            left, right = observation_payloads
+            left_subject = _nested_mapping(left, "subject")
+            right_subject = _nested_mapping(right, "subject")
+            if (
+                left_subject != right_subject
+                and "intraday_security_mismatch" not in codes
+            ) or (
+                left.get("trading_date") != right.get("trading_date")
+                and "intraday_trading_date_mismatch" not in codes
+            ):
+                raise ValueError(
+                    "intraday snapshot blocked identity facts are inconsistent"
+                )
+            left_prices = _nested_mapping(left, "prices")
+            right_prices = _nested_mapping(right, "prices")
+            if (
+                left_prices != right_prices
+                and "intraday_core_price_mismatch" not in codes
+            ):
+                raise ValueError(
+                    "intraday snapshot blocked price facts lack a conflict"
+                )
+            left_cumulative = _nested_mapping(left, "cumulative")
+            right_cumulative = _nested_mapping(right, "cumulative")
+            if (
+                left_cumulative.get("volume") != right_cumulative.get("volume")
+                and "intraday_cumulative_volume_mismatch" not in codes
+            ):
+                raise ValueError(
+                    "intraday snapshot blocked volume facts lack a conflict"
+                )
+        return
+    if len(result["observations"]) != 2:  # type: ignore[arg-type]
+        raise ValueError("intraday snapshot claim requires two observations")
+    claim_payload = _record_payload(snapshot_claims[0])
+    snapshot = _nested_mapping(claim_payload, "snapshot")
+    observation_times = _nested_mapping(claim_payload, "observation_times")
+    subjects = [_nested_mapping(item, "subject") for item in observation_payloads]
+    claim_security = _nested_mapping(
+        _nested_mapping(claim_payload, "subject"), "security"
+    )
+    canonical_security = (
+        f"{claim_security.get('exchange')}:{claim_security.get('code')}"
+    )
+    if (
+        subjects[0] != subjects[1]
+        or subjects[0].get("security") != canonical_security
+        or claim_payload.get("as_of")
+        != _nested_mapping(result, "research_anchor").get("as_of")
+        or any(
+            item.get("trading_date") != claim_payload.get("trading_date")
+            for item in observation_payloads
+        )
+    ):
+        raise ValueError("intraday snapshot identity or date facts are inconsistent")
+    source_sessions = [item.get("session_state") for item in observation_payloads]
+    expected_session = (
+        "midday_break"
+        if claim_payload.get("session_state") == "midday_break"
+        and source_sessions == ["continuous", "continuous"]
+        else source_sessions[0]
+    )
+    source_statuses = [item.get("trading_status") for item in observation_payloads]
+    source_price_types = [item.get("price_type") for item in observation_payloads]
+    expected_price_type = (
+        "not_applicable"
+        if source_statuses == ["suspended", "suspended"]
+        else source_price_types[0]
+    )
+    if (
+        source_sessions[0] != source_sessions[1]
+        or claim_payload.get("session_state") != expected_session
+        or source_statuses[0] != source_statuses[1]
+        or claim_payload.get("trading_status") != source_statuses[0]
+        or source_price_types[0] != source_price_types[1]
+        or claim_payload.get("price_type") != expected_price_type
+    ):
+        raise ValueError("intraday snapshot session or status facts are inconsistent")
+    observed_times = [
+        datetime.fromisoformat(str(item.get("observed_at")))
+        for item in observation_payloads
+    ]
+    expected_gap = format(
+        Decimal(
+            str(abs((observed_times[0] - observed_times[1]).total_seconds()))
+        ).normalize(),
+        "f",
+    )
+    if observation_times.get("pair_gap_seconds") != expected_gap:
+        raise ValueError("intraday snapshot pair-gap fact is inconsistent")
+    if claim_payload.get("trading_status") != "suspended":
+        price_payloads = [
+            _nested_mapping(item, "prices") for item in observation_payloads
+        ]
+        for name, source_name in (
+            ("latest_price", "latest"),
+            ("open", "open"),
+            ("high", "high"),
+            ("low", "low"),
+        ):
+            projected = _nested_mapping(snapshot, name)
+            if (
+                projected.get("unit") != "CNY/share"
+                or projected.get("value") != price_payloads[0].get(source_name)
+                or projected.get("value") != price_payloads[1].get(source_name)
+            ):
+                raise ValueError("intraday snapshot price fact is inconsistent")
+        cumulative = _nested_mapping(snapshot, "cumulative_volume")
+        source_cumulative = [
+            _nested_mapping(item, "cumulative") for item in observation_payloads
+        ]
+        if (
+            cumulative.get("unit") != "shares"
+            or cumulative.get("value") != source_cumulative[0].get("volume")
+            or cumulative.get("value") != source_cumulative[1].get("volume")
+        ):
+            raise ValueError("intraday snapshot cumulative fact is inconsistent")
+        cumulative_amount = _nested_mapping(snapshot, "cumulative_amount")
+        if (
+            cumulative_amount.get("unit") != "CNY"
+            or cumulative_amount.get("value") != source_cumulative[0].get("amount")
+            or (
+                source_cumulative[1].get("amount") is not None
+                and cumulative_amount.get("value") != source_cumulative[1].get("amount")
+            )
+        ):
+            raise ValueError("intraday snapshot cumulative amount is inconsistent")
+    else:
+        cumulative = _nested_mapping(snapshot, "cumulative_volume")
+        cumulative_amount = _nested_mapping(snapshot, "cumulative_amount")
+        if (
+            cumulative != {"value": "0", "unit": "shares"}
+            or cumulative_amount.get("status") != "not_applicable"
+            or cumulative_amount.get("value") is not None
+            or cumulative_amount.get("unit") != "CNY"
+            or any(
+                _nested_mapping(item, "cumulative").get("volume") != "0"
+                for item in observation_payloads
+            )
+        ):
+            raise ValueError("suspended intraday cumulative facts are inconsistent")
+    calculations_by_kind = {str(item["kind"]): item for item in calculations}
+    pair_calculation = calculations_by_kind.get("intraday_source_pair_gap")
+    if pair_calculation is None:
+        raise ValueError("intraday snapshot pair-gap calculation is inconsistent")
+    pair_payload = _record_payload(pair_calculation)
+    if (
+        pair_payload.get("pair_gap_seconds") != expected_gap
+        or pair_payload.get("formula")
+        != "abs(baseline_observed_at - cross_check_observed_at)"
+        or _nested_mapping(pair_payload, "operands")
+        != {
+            "baseline_observed_at": observation_payloads[0]["observed_at"],
+            "cross_check_observed_at": observation_payloads[1]["observed_at"],
+        }
+    ):
+        raise ValueError("intraday snapshot pair-gap calculation is inconsistent")
+    previous_close = _nested_mapping(snapshot, "previous_close")
+    source_previous = [
+        _nested_mapping(item, "previous_close") for item in observation_payloads
+    ]
+    expected_previous_available = (
+        source_previous[0].get("value") is not None
+        and source_previous[0].get("value") == source_previous[1].get("value")
+        and source_previous[0].get("basis") == source_previous[1].get("basis")
+        and source_previous[0].get("basis") in {"actual_close", "ex_right_reference"}
+        and all(item.get("comparability") == "comparable" for item in source_previous)
+        and all(item.get("corporate_action") is None for item in observation_payloads)
+    )
+    if (
+        previous_close.get("status")
+        != ("available" if expected_previous_available else "unavailable")
+        or previous_close.get("basis") != source_previous[0].get("basis")
+        or previous_close.get("reported_value") != source_previous[0].get("value")
+        or previous_close.get("unit") != "CNY/share"
+    ):
+        raise ValueError("intraday snapshot previous-close fact is inconsistent")
+    if not expected_previous_available:
+        if set(calculations_by_kind) != {"intraday_source_pair_gap"}:
+            raise ValueError("unavailable previous close exposes change calculations")
+        return
+    if (
+        any(
+            item.get("value") != previous_close.get("value") for item in source_previous
+        )
+        or any(
+            item.get("basis") != previous_close.get("basis")
+            or item.get("comparability") != "comparable"
+            for item in source_previous
+        )
+        or previous_close.get("unit") != "CNY/share"
+    ):
+        raise ValueError("intraday snapshot previous-close fact is inconsistent")
+    latest = Decimal(str(_nested_mapping(snapshot, "latest_price").get("value")))
+    previous = Decimal(str(previous_close.get("value")))
+    expected_amount = format(
+        (latest - previous).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        "f",
+    )
+    expected_percent = format(
+        (((latest - previous) / previous) * Decimal(100)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        ),
+        "f",
+    )
+    for kind, field, expected in (
+        ("intraday_change_amount", "change_amount", expected_amount),
+        ("intraday_change_percent", "change_percent", expected_percent),
+    ):
+        calculation = calculations_by_kind.get(kind)
+        expected_formula = (
+            "latest_price - previous_close"
+            if kind == "intraday_change_amount"
+            else "(latest_price - previous_close) / previous_close * 100"
+        )
+        if (
+            calculation is None
+            or _nested_mapping(snapshot, field).get("value") != expected
+            or _record_payload(calculation).get("value") != expected
+            or _record_payload(calculation).get("formula") != expected_formula
+            or _nested_mapping(_record_payload(calculation), "operands")
+            != {
+                "latest_price": format(latest, "f"),
+                "previous_close": format(previous, "f"),
+            }
+        ):
+            raise ValueError("intraday snapshot change fact is inconsistent")
+
+
+def _validate_intraday_replay_domain_facts(result: Mapping[str, object]) -> None:
+    claims = cast(list[dict[str, object]], result["claims"])
+    calculations = cast(list[dict[str, object]], result["calculations"])
+    allowed_claims = {"intraday_replay", "intraday_daily_boundary"}
+    allowed_calculations = {
+        "intraday_replay_coverage",
+        "intraday_replay_summary",
+        "intraday_daily_boundary_cross_check",
+    }
+    if (
+        any(item.get("kind") not in allowed_claims for item in claims)
+        or any(item.get("kind") not in allowed_calculations for item in calculations)
+        or len({str(item["kind"]) for item in claims}) != len(claims)
+        or len({str(item["kind"]) for item in calculations}) != len(calculations)
+    ):
+        raise ValueError(
+            "intraday replay domain facts contain duplicate or unknown facts"
+        )
+    claims_by_kind = {str(item["kind"]): item for item in claims}
+    calculations_by_kind = {str(item["kind"]): item for item in calculations}
+    all_observations = cast(list[dict[str, object]], result["observations"])
+    observation_payloads = [
+        _record_payload(item)
+        for item in all_observations
+        if item.get("capability_id") == "intraday_replay_sequence"
+    ]
+    daily_observations = [
+        _record_payload(item)
+        for item in all_observations
+        if item.get("capability_id") == "intraday_replay_daily_boundary"
+    ]
+    if len(daily_observations) > 1:
+        raise ValueError("intraday replay daily observations are ambiguous")
+    if daily_observations:
+        _validate_retained_daily_replay_batch(daily_observations[0])
+    raw_batches = [
+        item
+        for item in observation_payloads
+        if item.get("kind") == "intraday_replay_source_batch"
+    ]
+    normalized_batches = [
+        item
+        for item in observation_payloads
+        if item.get("kind") == "intraday_replay_normalized_records"
+    ]
+    if len(raw_batches) > 1 or len(normalized_batches) > 1:
+        raise ValueError("intraday replay retained observations are ambiguous")
+    if normalized_batches and not raw_batches:
+        raise ValueError("normalized replay facts lack their retained source batch")
+    if raw_batches:
+        _validate_retained_replay_batch(raw_batches[0])
+    if normalized_batches:
+        _validate_retained_normalized_replay(normalized_batches[0], raw_batches[0])
+    daily_claim = claims_by_kind.get("intraday_daily_boundary")
+    daily_calculation = calculations_by_kind.get("intraday_daily_boundary_cross_check")
+    if daily_claim is None:
+        if daily_calculation is not None:
+            if len(daily_observations) != 1:
+                raise ValueError("intraday replay daily calculation lacks owned facts")
+            unavailable = _record_payload(daily_calculation)
+            unavailable_result = unavailable.get("result")
+            daily_contract = _nested_mapping(daily_observations[0], "contract")
+            if (
+                unavailable.get("formula") != "daily_boundary_cross_check@1"
+                or not isinstance(unavailable_result, Mapping)
+                or unavailable_result.get("status") != "unavailable"
+                or unavailable_result.get("security") != daily_contract.get("security")
+                or unavailable_result.get("trading_date")
+                != daily_contract.get("trading_date")
+            ):
+                raise ValueError(
+                    "intraday replay unavailable daily facts are inconsistent"
+                )
+    else:
+        if len(daily_observations) != 1 or daily_calculation is None:
+            raise ValueError("intraday replay daily claim lacks owned facts")
+        daily_payload = _record_payload(daily_claim)
+        calculation_payload = _record_payload(daily_calculation)
+        if (
+            calculation_payload.get("formula") != "daily_boundary_cross_check@1"
+            or calculation_payload.get("result") != daily_payload
+        ):
+            raise ValueError("intraday replay daily calculation is inconsistent")
+        _validate_daily_replay_adoption(daily_payload, daily_observations[0])
+    replay_claim = claims_by_kind.get("intraday_replay")
+    if replay_claim is None:
+        if "intraday_replay_summary" in calculations_by_kind:
+            raise ValueError("blocked intraday replay exposes an adopted summary")
+        return
+    if len(normalized_batches) != 1:
+        raise ValueError("intraday replay claim lacks normalized owned facts")
+    payload = _record_payload(replay_claim)
+    replay = _nested_mapping(payload, "replay")
+    coverage = _nested_mapping(payload, "coverage")
+    records = payload.get("records")
+    auctions = payload.get("auction_results")
+    if not isinstance(records, list) or not isinstance(auctions, list):
+        raise ValueError("intraday replay records are invalid")
+    raw_contract = _nested_mapping(raw_batches[0], "contract")
+    raw_security = raw_contract.get("security")
+    if not isinstance(raw_security, str) or ":" not in raw_security:
+        raise ValueError("intraday replay source identity is invalid")
+    exchange, code = raw_security.split(":", 1)
+    expected_replay_status = raw_contract.get("trading_status")
+    if (
+        expected_replay_status == "suspended"
+        and len(daily_observations) == 1
+        and _nested_mapping(daily_observations[0], "contract").get("trading_status")
+        == "suspended"
+    ):
+        expected_replay_status = "confirmed_suspended"
+    if (
+        replay.get("security") != raw_security
+        or replay.get("trading_date") != raw_contract.get("trading_date")
+        or replay.get("adjustment") != raw_contract.get("price_adjustment")
+        or replay.get("trading_status") != expected_replay_status
+        or payload.get("subjects")
+        != [{"security": {"exchange": exchange, "code": code, "type": "A_SHARE"}}]
+    ):
+        raise ValueError("intraday replay identity or basis facts are inconsistent")
+    if (
+        replay.get("record_count") != len(records)
+        or replay.get("auction_result_count") != len(auctions)
+        or records != normalized_batches[0].get("records")
+        or auctions != normalized_batches[0].get("auction_results")
+        or coverage != normalized_batches[0].get("coverage")
+    ):
+        raise ValueError("intraday replay record counts are inconsistent")
+    starts = [
+        str(item.get("interval_start")) for item in records if isinstance(item, Mapping)
+    ]
+    if len(starts) != len(records) or starts != sorted(starts):
+        raise ValueError("intraday replay records are not deterministically ordered")
+    coverage_calculation = calculations_by_kind.get("intraday_replay_coverage")
+    if coverage_calculation is None:
+        raise ValueError("intraday replay coverage calculation is inconsistent")
+    coverage_payload = _record_payload(coverage_calculation)
+    if (
+        coverage_payload.get("formula") != "intraday_coverage_by_expected_minute@1"
+        or coverage_payload.get("result") != coverage
+        or _nested_mapping(coverage_payload, "operands").get("normalized_record_count")
+        != len(records)
+        or _nested_mapping(coverage_payload, "operands").get("normalized_auction_count")
+        != len(auctions)
+    ):
+        raise ValueError("intraday replay coverage calculation is inconsistent")
+    ratio = coverage.get("coverage_ratio")
+    if isinstance(ratio, Mapping) and {
+        "covered_minutes",
+        "expected_minutes",
+        "value",
+    }.issubset(ratio):
+        covered = ratio.get("covered_minutes")
+        expected = ratio.get("expected_minutes")
+        if (
+            not isinstance(covered, int)
+            or isinstance(covered, bool)
+            or not isinstance(expected, int)
+            or isinstance(expected, bool)
+            or expected <= 0
+        ):
+            raise ValueError("intraday replay coverage operands are invalid")
+        expected_ratio = format(
+            (Decimal(covered) / Decimal(expected)).quantize(
+                Decimal("0.0001"), rounding=ROUND_HALF_UP
+            ),
+            "f",
+        )
+        if ratio.get("value") != expected_ratio:
+            raise ValueError("intraday replay coverage ratio is inconsistent")
+    summary = payload.get("summary")
+    summary_calculation = calculations_by_kind.get("intraday_replay_summary")
+    if summary is None:
+        if summary_calculation is not None:
+            raise ValueError("intraday replay summary calculation lacks facts")
+    elif (
+        not isinstance(summary, dict)
+        or summary_calculation is None
+        or _record_payload(summary_calculation).get("formula")
+        != "intraday_replay_summary@1"
+        or _record_payload(summary_calculation).get("result") != summary
+        or _nested_mapping(_record_payload(summary_calculation), "operands").get(
+            "normalized_record_count"
+        )
+        != len(records)
+        or _nested_mapping(summary, "counts").get("record_count") != len(records)
+    ):
+        raise ValueError("intraday replay summary is inconsistent")
+    if isinstance(summary, dict):
+        normalized_observation = next(
+            item
+            for item in all_observations
+            if _record_payload(item).get("kind") == "intraday_replay_normalized_records"
+        )
+        expected_summary = _recompute_intraday_replay_summary(
+            records,
+            auctions,
+            coverage,
+            payload.get("daily_boundary"),
+            normalized_observation,
+            next(
+                (
+                    item
+                    for item in all_observations
+                    if item.get("capability_id") == "intraday_replay_daily_boundary"
+                ),
+                None,
+            ),
+        )
+        if summary != expected_summary:
+            raise ValueError("intraday replay summary does not derive from owned rows")
+    if daily_claim is not None and _record_payload(daily_claim) != payload.get(
+        "daily_boundary"
+    ):
+        raise ValueError("intraday replay daily boundary facts are inconsistent")
+    if (
+        daily_claim is not None
+        and daily_calculation is not None
+        and _record_payload(daily_calculation).get("result")
+        != payload.get("daily_boundary")
+    ):
+        raise ValueError("intraday replay daily calculation is inconsistent")
+
+
+def _recompute_intraday_replay_summary(
+    records: list[object],
+    auction_results: list[object],
+    coverage: Mapping[str, object],
+    daily_boundary: object,
+    normalized_observation: Mapping[str, object],
+    daily_observation: Mapping[str, object] | None,
+) -> dict[str, object]:
+    from .intraday_replay_summary import (
+        ReplaySummaryRow,
+        build_intraday_replay_summary,
+    )
+
+    normalized_payload = _record_payload(normalized_observation)
+    normalized_key = normalized_payload.get("id")
+    normalized_id = normalized_observation.get("id")
+    if not isinstance(normalized_key, str) or not isinstance(normalized_id, str):
+        raise ValueError("intraday replay normalized observation identity is invalid")
+    local_to_formal = {normalized_key: normalized_id}
+    if daily_observation is not None:
+        daily_payload = _record_payload(daily_observation)
+        daily_key = daily_payload.get("id")
+        daily_id = daily_observation.get("id")
+        if not isinstance(daily_key, str) or not isinstance(daily_id, str):
+            raise ValueError("intraday replay daily observation identity is invalid")
+        local_to_formal[daily_key] = daily_id
+    formal_to_local = {formal: local for local, formal in local_to_formal.items()}
+
+    def replace_references(value: object, replacements: Mapping[str, str]) -> object:
+        if isinstance(value, Mapping):
+            return {
+                key: replace_references(nested, replacements)
+                for key, nested in value.items()
+            }
+        if isinstance(value, list):
+            return [replace_references(item, replacements) for item in value]
+        if isinstance(value, str):
+            return replacements.get(value, value)
+        return value
+
+    def replay_row(value: object) -> ReplaySummaryRow:
+        if not isinstance(value, Mapping):
+            raise ValueError("intraday replay summary row is invalid")
+        ohlc = value.get("ohlc")
+        volume = value.get("volume")
+        amount = value.get("amount")
+        if (
+            not isinstance(ohlc, Mapping)
+            or not isinstance(volume, Mapping)
+            or not isinstance(amount, Mapping)
+        ):
+            raise ValueError("intraday replay summary row operands are invalid")
+        return ReplaySummaryRow(
+            interval_start=datetime.fromisoformat(str(value.get("interval_start"))),
+            interval_end=datetime.fromisoformat(str(value.get("interval_end"))),
+            trading_phase=str(value.get("trading_phase")),
+            trade_state=str(value.get("trade_state")),
+            ohlc=ohlc,
+            volume=str(volume.get("value")),
+            amount=str(amount.get("value")),
+            evidence_id=normalized_key,
+        )
+
+    boundary = (
+        cast(
+            Mapping[str, object],
+            replace_references(daily_boundary, formal_to_local),
+        )
+        if isinstance(daily_boundary, Mapping)
+        else None
+    )
+    summary, _ = build_intraday_replay_summary(
+        [replay_row(item) for item in records],
+        [replay_row(item) for item in auction_results],
+        coverage,
+        boundary,
+    )
+    return cast(dict[str, object], replace_references(summary, local_to_formal))
+
+
+def _validate_retained_replay_batch(payload: Mapping[str, object]) -> None:
+    if (
+        set(payload)
+        != {
+            "id",
+            "source_operation",
+            "kind",
+            "contract",
+            "source_records",
+        }
+        or payload.get("kind") != "intraday_replay_source_batch"
+    ):
+        raise ValueError("intraday replay retained source batch shape is invalid")
+    contract = _nested_mapping(payload, "contract")
+    records = payload.get("source_records")
+    if (
+        contract.get("price_adjustment") != "unadjusted"
+        or contract.get("price_unit") != "CNY/share"
+        or contract.get("volume_unit") not in {"shares", "hands"}
+        or contract.get("amount_unit") not in {"CNY", "CNY_thousand"}
+        or contract.get("session_contract") != "cn_a_share_regular_v1"
+        or contract.get("coverage_bound") not in {"bounded", "indeterminate"}
+        or not isinstance(records, list)
+    ):
+        raise ValueError("intraday replay retained source contract is invalid")
+    expected_fields = {
+        "provider_observation_id",
+        "source_timestamp",
+        "timestamp_semantics",
+        "trading_phase",
+        "trade_state",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume",
+        "amount",
+        "evidence_locator",
+        "trading_date",
+        "price_adjustment",
+        "auction_interval_start",
+        "auction_interval_end",
+    }
+    source_operation = payload.get("source_operation")
+    if not isinstance(source_operation, str):
+        raise ValueError("intraday replay retained source owner is invalid")
+    for record in records:
+        if not isinstance(record, Mapping) or set(record) != expected_fields:
+            raise ValueError("intraday replay retained source row shape is invalid")
+        timestamp = datetime.fromisoformat(str(record.get("source_timestamp")))
+        if (
+            timestamp.tzinfo is None
+            or record.get("timestamp_semantics")
+            not in {"interval_start", "interval_end", "provider_default"}
+            or record.get("trading_phase")
+            not in {
+                "continuous",
+                "continuous_morning",
+                "continuous_afternoon",
+                "opening_auction",
+                "closing_auction",
+            }
+            or record.get("trade_state") not in {"traded", "no_trade"}
+            or not is_safe_public_provider_id(record.get("provider_observation_id"))
+            or not is_safe_public_locator(record.get("evidence_locator"))
+        ):
+            raise ValueError("intraday replay retained source row is not typed")
+        for field in ("open_price", "high_price", "low_price", "close_price"):
+            value = record.get(field)
+            if value is not None:
+                _replay_decimal_string(value, field)
+        _replay_decimal_string(record.get("volume"), "volume")
+        _replay_decimal_string(record.get("amount"), "amount")
+        if record.get(
+            "provider_observation_id"
+        ) != intraday_replay_provider_observation_id(source_operation, record):
+            raise ValueError("intraday replay provider observation ID is inconsistent")
+
+
+def _replay_decimal_string(value: object, field: str) -> Decimal:
+    if not isinstance(value, str):
+        raise ValueError(f"intraday replay retained {field} is not a decimal string")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError(
+            f"intraday replay retained {field} is not a decimal string"
+        ) from error
+    if not parsed.is_finite():
+        raise ValueError(f"intraday replay retained {field} is not finite")
+    return parsed
+
+
+def _validate_retained_daily_replay_batch(payload: Mapping[str, object]) -> None:
+    if (
+        set(payload) != {"id", "source_operation", "kind", "contract"}
+        or payload.get("kind") != "intraday_replay_daily_boundary_observation"
+    ):
+        raise ValueError("intraday replay retained daily observation shape is invalid")
+    contract = _nested_mapping(payload, "contract")
+    if (
+        contract.get("price_adjustment") != "unadjusted"
+        or contract.get("price_unit") != "CNY/share"
+        or contract.get("volume_unit") not in {"shares", "hands"}
+        or contract.get("amount_unit") not in {"CNY", "CNY_thousand"}
+        or contract.get("trading_status") not in {"traded", "suspended"}
+        or not isinstance(contract.get("security"), str)
+    ):
+        raise ValueError("intraday replay retained daily contract is invalid")
+    datetime.fromisoformat(str(contract.get("retrieved_at")))
+    date.fromisoformat(str(contract.get("trading_date")))
+    for field in (
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "actual_close_price",
+        "volume",
+        "amount",
+        "previous_close",
+        "ex_right_reference",
+    ):
+        value = contract.get(field)
+        if value is not None:
+            _replay_decimal_string(value, field)
+
+
+def _daily_normalized_decimal(
+    contract: Mapping[str, object], field: str, *, unit: str
+) -> str | None:
+    raw = contract.get(field)
+    if raw is None:
+        return None
+    value = _replay_decimal_string(raw, field)
+    if unit == "shares" and contract.get("volume_unit") == "hands":
+        value *= _replay_decimal_string(
+            contract.get("volume_lot_size"), "volume_lot_size"
+        )
+        quantum = Decimal(1)
+    elif unit == "CNY":
+        value *= _replay_decimal_string(
+            contract.get("amount_scale") or "1", "amount_scale"
+        )
+        quantum = Decimal(str(contract.get("amount_precision") or "0.01"))
+    elif unit == "CNY/share":
+        quantum = Decimal(
+            str(contract.get("price_minimum_tick") or contract.get("price_precision"))
+        )
+    else:
+        quantum = Decimal(1)
+    return format(value.quantize(quantum, rounding=ROUND_HALF_UP), "f")
+
+
+def _validate_daily_replay_adoption(
+    claim: Mapping[str, object], observation: Mapping[str, object]
+) -> None:
+    contract = _nested_mapping(observation, "contract")
+    if (
+        claim.get("security") != contract.get("security")
+        or claim.get("trading_date") != contract.get("trading_date")
+        or claim.get("trading_status") != contract.get("trading_status")
+    ):
+        raise ValueError("intraday replay daily identity facts are inconsistent")
+    if contract.get("trading_status") == "suspended":
+        if claim.get("status") != "suspended_observation":
+            raise ValueError("intraday replay daily suspension fact is inconsistent")
+        return
+    for claim_field, source_field in (
+        ("open", "open_price"),
+        ("high", "high_price"),
+        ("low", "low_price"),
+        ("close", "close_price"),
+        ("actual_close", "actual_close_price"),
+    ):
+        fact = _nested_mapping(claim, claim_field)
+        if fact != {
+            "value": _daily_normalized_decimal(
+                contract, source_field, unit="CNY/share"
+            ),
+            "unit": "CNY/share",
+        }:
+            raise ValueError("intraday replay daily price fact is inconsistent")
+    for claim_field, source_field, unit in (
+        ("volume", "volume", "shares"),
+        ("amount", "amount", "CNY"),
+    ):
+        fact = _nested_mapping(claim, claim_field)
+        if fact != {
+            "value": _daily_normalized_decimal(contract, source_field, unit=unit),
+            "unit": unit,
+        }:
+            raise ValueError("intraday replay daily aggregate fact is inconsistent")
+
+
+def _validate_retained_normalized_replay(
+    payload: Mapping[str, object], raw_batch: Mapping[str, object]
+) -> None:
+    records = payload.get("records")
+    auctions = payload.get("auction_results")
+    duplicates = payload.get("duplicate_records")
+    coverage = payload.get("coverage")
+    raw_records = raw_batch.get("source_records")
+    contract = _nested_mapping(raw_batch, "contract")
+    if (
+        not isinstance(records, list)
+        or not isinstance(auctions, list)
+        or not isinstance(duplicates, list)
+        or not isinstance(coverage, Mapping)
+        or not isinstance(raw_records, list)
+    ):
+        raise ValueError("intraday replay normalized facts are invalid")
+    raw_by_provider: dict[str, list[Mapping[str, object]]] = {}
+    for raw in raw_records:
+        if isinstance(raw, Mapping):
+            raw_by_provider.setdefault(
+                str(raw.get("provider_observation_id")), []
+            ).append(raw)
+    normalized = [
+        *((item, True) for item in records),
+        *((item, False) for item in auctions),
+        *((item, False) for item in duplicates),
+    ]
+    starts: list[str] = []
+    covered_minutes = Decimal(0)
+    for record, contributes_to_continuous_coverage in normalized:
+        if not isinstance(record, Mapping):
+            raise ValueError("intraday replay normalized row is invalid")
+        provenance = _nested_mapping(record, "provenance")
+        provider_id = provenance.get("provider_observation_id")
+        candidates = raw_by_provider.get(str(provider_id), [])
+        if not candidates:
+            raise ValueError(
+                "intraday replay normalized row lacks a retained source row"
+            )
+        raw = candidates.pop()
+        start = datetime.fromisoformat(str(record.get("interval_start")))
+        end = datetime.fromisoformat(str(record.get("interval_end")))
+        expected_start, expected_end, expected_phase = _replay_interval_from_raw(
+            raw, contract
+        )
+        if (
+            start.tzinfo is None
+            or end.tzinfo is None
+            or start > end
+            or (
+                start == end
+                and not str(record.get("trading_phase")).endswith("auction")
+            )
+            or record.get("trade_state") != raw.get("trade_state")
+            or record.get("timestamp_semantics") != raw.get("timestamp_semantics")
+            or record.get("source_timestamp") != raw.get("source_timestamp")
+            or start != expected_start
+            or end != expected_end
+            or record.get("trading_phase") != expected_phase
+        ):
+            raise ValueError("intraday replay normalized time or state is inconsistent")
+        phase = str(record.get("trading_phase"))
+        raw_phase = str(raw.get("trading_phase"))
+        if raw_phase != "continuous" and phase != raw_phase:
+            raise ValueError("intraday replay normalized phase is inconsistent")
+        if raw_phase == "continuous" and not phase.startswith("continuous_"):
+            raise ValueError("intraday replay normalized phase is inconsistent")
+        if contributes_to_continuous_coverage:
+            starts.append(start.isoformat())
+            if phase.startswith("continuous_"):
+                covered_minutes += Decimal(
+                    str((end - start).total_seconds())
+                ) / Decimal(60)
+        _validate_normalized_replay_values(record, raw, contract)
+    if starts != sorted(starts):
+        raise ValueError("intraday replay normalized rows are not ordered")
+    if any(raw_by_provider.values()):
+        raise ValueError("intraday replay retained source rows are not closed")
+    ratio = coverage.get("coverage_ratio")
+    if (
+        isinstance(ratio, Mapping)
+        and isinstance(ratio.get("covered_minutes"), int)
+        and ratio.get("covered_minutes") != int(covered_minutes)
+    ):
+        raise ValueError("intraday replay coverage does not derive from retained rows")
+
+
+def _replay_interval_from_raw(
+    raw: Mapping[str, object], contract: Mapping[str, object]
+) -> tuple[datetime, datetime, str]:
+    observed = datetime.fromisoformat(str(raw.get("source_timestamp")))
+    if observed.tzinfo is None or observed.utcoffset() != timedelta(hours=8):
+        raise ValueError("intraday replay retained timestamp timezone is invalid")
+    phase = raw.get("trading_phase")
+    semantics = raw.get("timestamp_semantics")
+    if phase == "opening_auction":
+        expected = datetime.combine(observed.date(), time(9, 25), observed.tzinfo)
+        if observed != expected:
+            raise ValueError("intraday replay opening auction timestamp is invalid")
+        return expected, expected, "opening_auction"
+    if phase == "closing_auction":
+        closing_start = datetime.combine(observed.date(), time(14, 57), observed.tzinfo)
+        closing_end = datetime.combine(observed.date(), time(15, 0), observed.tzinfo)
+        if contract.get("closing_auction_semantics") == "final_match_14:57_15:00":
+            if observed.time() not in {time(14, 57), time(15, 0)}:
+                raise ValueError("intraday replay closing auction timestamp is invalid")
+            return closing_start, closing_end, "closing_auction"
+        raw_start = raw.get("auction_interval_start")
+        raw_end = raw.get("auction_interval_end")
+        if raw_start is None or raw_end is None:
+            if semantics == "interval_start":
+                start, end = observed, observed + timedelta(minutes=1)
+            else:
+                start, end = observed - timedelta(minutes=1), observed
+        else:
+            start = datetime.fromisoformat(str(raw_start))
+            end = datetime.fromisoformat(str(raw_end))
+        if not (closing_start <= start < end <= closing_end):
+            raise ValueError("intraday replay closing auction interval is invalid")
+        return start, end, "closing_auction"
+    if semantics == "interval_start":
+        start, end = observed, observed + timedelta(minutes=1)
+    elif semantics == "interval_end":
+        start, end = observed - timedelta(minutes=1), observed
+    else:
+        raise ValueError("intraday replay timestamp semantics are invalid")
+    morning_start = datetime.combine(start.date(), time(9, 30), start.tzinfo)
+    morning_end = datetime.combine(start.date(), time(11, 30), start.tzinfo)
+    afternoon_start = datetime.combine(start.date(), time(13, 0), start.tzinfo)
+    afternoon_end = datetime.combine(start.date(), time(14, 57), start.tzinfo)
+    if morning_start <= start and end <= morning_end:
+        return start, end, "continuous_morning"
+    if afternoon_start <= start and end <= afternoon_end:
+        return start, end, "continuous_afternoon"
+    raise ValueError("intraday replay continuous interval is outside session")
+
+
+def _validate_normalized_replay_values(
+    record: Mapping[str, object],
+    raw: Mapping[str, object],
+    contract: Mapping[str, object],
+) -> None:
+    if (
+        _nested_mapping(record, "volume").get("unit") != "shares"
+        or _nested_mapping(record, "amount").get("unit") != "CNY"
+    ):
+        raise ValueError("intraday replay normalized units are invalid")
+    tick = Decimal(
+        str(contract.get("price_minimum_tick") or contract.get("price_precision"))
+    )
+    ohlc = _nested_mapping(record, "ohlc")
+    for field in ("open", "high", "low", "close"):
+        raw_value = raw.get(f"{field}_price")
+        normalized_value = ohlc.get(field)
+        if raw_value is None:
+            if normalized_value is not None:
+                raise ValueError("intraday replay normalized price is inconsistent")
+            continue
+        expected = format(
+            Decimal(str(raw_value)).quantize(tick, rounding=ROUND_HALF_UP), "f"
+        )
+        if (
+            not isinstance(normalized_value, Mapping)
+            or normalized_value.get("value") != expected
+            or normalized_value.get("unit") != "CNY/share"
+        ):
+            raise ValueError("intraday replay normalized price is inconsistent")
+    volume = Decimal(str(raw.get("volume")))
+    if contract.get("volume_unit") == "hands":
+        volume *= Decimal(str(contract.get("volume_lot_size")))
+    expected_volume = format(volume.quantize(Decimal(1), rounding=ROUND_HALF_UP), "f")
+    if _nested_mapping(record, "volume").get("value") != expected_volume:
+        raise ValueError("intraday replay normalized volume is inconsistent")
+    amount = Decimal(str(raw.get("amount"))) * Decimal(
+        str(contract.get("amount_scale") or "1")
+    )
+    expected_amount = format(
+        amount.quantize(
+            Decimal(str(contract.get("amount_precision"))), rounding=ROUND_HALF_UP
+        ),
+        "f",
+    )
+    if _nested_mapping(record, "amount").get("value") != expected_amount:
+        raise ValueError("intraday replay normalized amount is inconsistent")
 
 
 def _owned_observations(

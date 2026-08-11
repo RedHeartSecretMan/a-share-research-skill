@@ -450,12 +450,21 @@ class IdentityResolutionCliTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(result["task_type"], "intraday_market_signal")
+        self.assertEqual(result["plan"]["task_type"], "intraday_market_signal")
         self.assertEqual(result["status"], "blocked")
+        coverage = result["coverage"]["intraday_market_snapshot"]
+        self.assertEqual(coverage["state"], "skipped_research_dependency")
+        self.assertEqual(
+            {
+                operation["execution_state"]
+                for operation in coverage["operations"].values()
+            },
+            {"skipped_research_dependency"},
+        )
         limitation = result["limitations"][0]
         self.assertEqual(limitation["code"], "missing_optional_dependency")
-        self.assertEqual(limitation["capability"], "intraday_market_data")
-        self.assertEqual(limitation["dependency"], "mootdx")
+        self.assertIn("capability=intraday_market_data", limitation["message"])
+        self.assertIn("dependency=mootdx", limitation["message"])
 
     def test_szse_and_cninfo_return_one_canonical_candidate(self) -> None:
         result = self.run_resolve("000001", "szse_success")

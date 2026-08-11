@@ -32,7 +32,10 @@ from .identity_sources import (
     build_default_identity_operations,
 )
 from .intraday_contract import IntradaySourceOperation
-from .intraday_replay import build_intraday_replay_result
+from .intraday_replay import (
+    build_intraday_replay_blocked_result,
+    build_intraday_replay_result,
+)
 from .intraday_replay_contract import (
     IntradayReplayDailySourceOperation,
     IntradayReplaySourceOperation,
@@ -296,7 +299,7 @@ class ResearchRuntime:
                 )
         elif task_type == "intraday_replay":
             if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
+                result = build_intraday_replay_blocked_result(
                     request,
                     code="source_policy_not_satisfied",
                     message=(
@@ -308,7 +311,7 @@ class ResearchRuntime:
                 self._intraday_replay_operations is None
                 and not self._dependency_available("mootdx", "0.11.7")
             ):
-                result = _blocked_result(
+                result = build_intraday_replay_blocked_result(
                     request,
                     code="missing_optional_dependency",
                     message=(
@@ -339,7 +342,7 @@ class ResearchRuntime:
                         if replay_daily_operations is None:
                             replay_daily_operations = default_daily_operations
                     except ModuleNotFoundError:
-                        result = _blocked_result(
+                        result = build_intraday_replay_blocked_result(
                             request,
                             code="missing_optional_dependency",
                             message=(
@@ -352,7 +355,7 @@ class ResearchRuntime:
                                 "required_version": "0.11.7",
                             },
                         )
-                        return _complete_result(result, task_type)
+                        return result
                 result = build_intraday_replay_result(
                     request,
                     replay_operations or (),

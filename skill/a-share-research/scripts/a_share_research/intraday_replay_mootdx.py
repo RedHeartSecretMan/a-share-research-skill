@@ -14,8 +14,60 @@ from .intraday_replay_contract import (
     IntradayReplaySourceError,
     IntradayReplaySourceRow,
 )
+from .research_result import FieldDisposition
 
 MootdxClientFactory = Callable[..., Any]
+
+_REPLAY_RAW_FACT_DESTINATIONS = {
+    "security": "observations.payload.contract.security",
+    "code": "observations.payload.contract.security",
+    "symbol": "observations.payload.contract.security",
+    "datetime": "observations.payload.source_records.source_timestamp",
+    "date": "observations.payload.source_records.source_timestamp",
+    "time": "observations.payload.source_records.source_timestamp",
+    "timestamp": "observations.payload.source_records.source_timestamp",
+    "timestamp_semantics": ("observations.payload.source_records.timestamp_semantics"),
+    "timestamp_timezone": "observations.payload.contract.timestamp_timezone",
+    "trading_phase": "observations.payload.source_records.trading_phase",
+    "phase": "observations.payload.source_records.trading_phase",
+    "trade_state": "observations.payload.source_records.trade_state",
+    "price_adjustment": "observations.payload.contract.price_adjustment",
+    "price_unit": "observations.payload.contract.price_unit",
+    "price_minimum_tick": "observations.payload.contract.price_minimum_tick",
+    "open_price": "observations.payload.source_records.open_price",
+    "open": "observations.payload.source_records.open_price",
+    "high_price": "observations.payload.source_records.high_price",
+    "high": "observations.payload.source_records.high_price",
+    "low_price": "observations.payload.source_records.low_price",
+    "low": "observations.payload.source_records.low_price",
+    "close_price": "observations.payload.source_records.close_price",
+    "close": "observations.payload.source_records.close_price",
+    "volume": "observations.payload.source_records.volume",
+    "vol": "observations.payload.source_records.volume",
+    "volume_unit": "observations.payload.contract.volume_unit",
+    "volume_lot_size": "observations.payload.contract.volume_lot_size",
+    "amount": "observations.payload.source_records.amount",
+    "turnover": "observations.payload.source_records.amount",
+    "amount_unit": "observations.payload.contract.amount_unit",
+    "amount_scale": "observations.payload.contract.amount_scale",
+    "session_contract": "observations.payload.contract.session_contract",
+    "coverage_bound": "observations.payload.contract.coverage_bound",
+    "closing_auction_semantics": (
+        "observations.payload.contract.closing_auction_semantics"
+    ),
+    "auction_interval_start": (
+        "observations.payload.source_records.auction_interval_start"
+    ),
+    "auction_interval_end": (
+        "observations.payload.source_records.auction_interval_end"
+    ),
+}
+_REPLAY_RAW_EXCLUSIONS = {
+    "price_scale": (
+        "The Adapter consumes the qualified provider scale while producing canonical "
+        "CNY/share values; the scale is not emitted as a separate public fact."
+    )
+}
 
 
 @dataclass(frozen=True)
@@ -50,6 +102,77 @@ class MootdxIntradayReplayOperation:
 
     operation_id = "mootdx_intraday_replay@1"
     _frequency = 8
+    raw_fields = (
+        "security",
+        "code",
+        "symbol",
+        "datetime",
+        "date",
+        "time",
+        "timestamp",
+        "timestamp_semantics",
+        "timestamp_timezone",
+        "trading_phase",
+        "phase",
+        "trade_state",
+        "price_adjustment",
+        "price_unit",
+        "price_scale",
+        "price_minimum_tick",
+        "open_price",
+        "open",
+        "high_price",
+        "high",
+        "low_price",
+        "low",
+        "close_price",
+        "close",
+        "volume",
+        "vol",
+        "volume_unit",
+        "volume_lot_size",
+        "amount",
+        "turnover",
+        "amount_unit",
+        "amount_scale",
+        "session_contract",
+        "coverage_bound",
+        "closing_auction_semantics",
+        "auction_interval_start",
+        "auction_interval_end",
+    )
+    field_dispositions = tuple(
+        FieldDisposition(
+            field,
+            (
+                "excluded"
+                if field in _REPLAY_RAW_EXCLUSIONS
+                else "cross_check_only"
+                if field in {"security", "code", "symbol"}
+                else "lineage_only"
+                if field
+                in {
+                    "timestamp_semantics",
+                    "timestamp_timezone",
+                    "price_adjustment",
+                    "price_unit",
+                    "price_scale",
+                    "price_minimum_tick",
+                    "volume_unit",
+                    "volume_lot_size",
+                    "amount_unit",
+                    "amount_scale",
+                    "session_contract",
+                    "coverage_bound",
+                    "closing_auction_semantics",
+                }
+                else "normalized"
+            ),
+            _REPLAY_RAW_FACT_DESTINATIONS.get(field),
+            _REPLAY_RAW_EXCLUSIONS.get(field),
+        )
+        for field in raw_fields
+    )
 
     def __init__(
         self,
@@ -122,12 +245,12 @@ class MootdxIntradayReplayOperation:
                 raw_rows, ("price_unit",), self._contract.price_unit
             ),
             price_precision=self._contract.price_precision,
-            volume_unit=self._metadata_value(
-                raw_rows, ("volume_unit",), self._contract.volume_unit
-            ),
-            amount_unit=self._metadata_value(
-                raw_rows, ("amount_unit",), self._contract.amount_unit
-            ),
+            # Rows cross the adapter boundary in canonical shares and CNY.  The
+            # qualified source units above are consumed exactly once while
+            # parsing each raw row; advertising them here would make the
+            # runtime normalize an already-normalized batch a second time.
+            volume_unit="shares",
+            amount_unit="CNY",
             rows=tuple(normalized_rows),
             completed_trading_dates=calendar,
             source_role="market_observation",
@@ -136,9 +259,7 @@ class MootdxIntradayReplayOperation:
                 ("timestamp_timezone",),
                 self._contract.timestamp_timezone,
             ),
-            volume_lot_size=self._optional_metadata_value(
-                raw_rows, ("volume_lot_size",), self._contract.volume_lot_size
-            ),
+            volume_lot_size=None,
             amount_precision="0.01",
             session_contract=self._metadata_value(
                 raw_rows, ("session_contract",), self._contract.session_contract
@@ -201,6 +322,13 @@ class MootdxIntradayReplayOperation:
         index: int,
         query: IntradayReplayQuery,
     ) -> tuple[date, IntradayReplaySourceRow]:
+        unknown_fields = sorted(set(raw).difference(self.raw_fields))
+        if unknown_fields:
+            raise IntradayReplaySourceError(
+                self.operation_id,
+                "unknown_schema",
+                "The mootdx replay row contains fields without a disposition.",
+            )
         code = _first(raw, "security", "code", "symbol")
         if code is not None and str(code) != query.code:
             raise IntradayReplaySourceError(

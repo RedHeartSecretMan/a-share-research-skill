@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .close_sources import TencentDailyLineOperation
 from .identity_sources import HttpTransport, SourceOperationError
@@ -14,6 +14,120 @@ from .intraday_contract import (
     IntradayQuery,
     IntradaySourceError,
     session_at,
+)
+from .research_result import Disposition, FieldDisposition
+
+TONGDAXIN_INTRADAY_FIELD_DISPOSITIONS = tuple(
+    FieldDisposition(field, cast(Disposition, disposition), destination, reason)
+    for field, disposition, destination, reason in (
+        ("code", "normalized", "observations.payload.subject.security", None),
+        ("market", "normalized", "observations.payload.subject.security", None),
+        ("servertime", "normalized", "observations.payload.observed_at", None),
+        ("price", "normalized", "observations.payload.prices.latest", None),
+        ("open", "normalized", "observations.payload.prices.open", None),
+        ("high", "normalized", "observations.payload.prices.high", None),
+        ("low", "normalized", "observations.payload.prices.low", None),
+        ("last_close", "normalized", "observations.payload.previous_close.value", None),
+        ("vol", "normalized", "observations.payload.cumulative.volume", None),
+        ("amount", "normalized", "observations.payload.cumulative.amount", None),
+        (
+            "vol_unit",
+            "lineage_only",
+            "observations.payload.cumulative.volume_unit",
+            None,
+        ),
+        (
+            "volume_unit",
+            "lineage_only",
+            "observations.payload.cumulative.volume_unit",
+            None,
+        ),
+        ("vol_scope", "lineage_only", "observations.payload.cumulative.scope", None),
+        ("volume_scope", "lineage_only", "observations.payload.cumulative.scope", None),
+        (
+            "amount_unit",
+            "lineage_only",
+            "observations.payload.cumulative.amount_unit",
+            None,
+        ),
+        ("amount_scope", "lineage_only", "observations.payload.cumulative.scope", None),
+        ("cache_state", "lineage_only", "observations.payload.cache_state", None),
+        ("trading_date", "cross_check_only", "observations.payload.trading_date", None),
+        ("date", "cross_check_only", "observations.payload.trading_date", None),
+        ("trading_status", "normalized", "observations.payload.trading_status", None),
+        ("status", "cross_check_only", "observations.payload.trading_status", None),
+        ("price_type", "normalized", "observations.payload.price_type", None),
+        (
+            "previous_close_basis",
+            "lineage_only",
+            "observations.payload.previous_close.basis",
+            None,
+        ),
+        (
+            "corporate_action",
+            "lineage_only",
+            "observations.payload.corporate_action",
+            None,
+        ),
+        (
+            "observation_boundary",
+            "lineage_only",
+            "observations.payload.observation_boundary",
+            None,
+        ),
+        (
+            "daily.code",
+            "cross_check_only",
+            "observations.payload.subject.security",
+            None,
+        ),
+        (
+            "daily.market",
+            "cross_check_only",
+            "observations.payload.subject.security",
+            None,
+        ),
+        ("daily.year", "cross_check_only", "observations.payload.trading_date", None),
+        ("daily.month", "cross_check_only", "observations.payload.trading_date", None),
+        ("daily.day", "cross_check_only", "observations.payload.trading_date", None),
+    )
+)
+_TONGDAXIN_QUOTE_RAW_FIELDS = frozenset(
+    item.field
+    for item in TONGDAXIN_INTRADAY_FIELD_DISPOSITIONS
+    if not item.field.startswith("daily.")
+)
+_TONGDAXIN_DAILY_RAW_FIELDS = frozenset(
+    item.field.removeprefix("daily.")
+    for item in TONGDAXIN_INTRADAY_FIELD_DISPOSITIONS
+    if item.field.startswith("daily.")
+)
+
+TENCENT_INTRADAY_FIELD_DISPOSITIONS = tuple(
+    FieldDisposition(field, cast(Disposition, disposition), destination, reason)
+    for field, disposition, destination, reason in (
+        ("day[0]", "normalized", "observations.payload.trading_date", None),
+        ("day[1]", "normalized", "observations.payload.prices.open", None),
+        ("day[2]", "normalized", "observations.payload.prices.latest", None),
+        ("day[3]", "normalized", "observations.payload.prices.high", None),
+        ("day[4]", "normalized", "observations.payload.prices.low", None),
+        ("day[5]", "normalized", "observations.payload.cumulative.volume", None),
+        ("day[6]", "lineage_only", "observations.payload.corporate_action", None),
+        ("qt[2]", "cross_check_only", "observations.payload.subject.security", None),
+        ("qt[3]", "cross_check_only", "observations.payload.prices.latest", None),
+        (
+            "qt[4]",
+            "cross_check_only",
+            "observations.payload.previous_close.value",
+            None,
+        ),
+        ("qt[6]", "cross_check_only", "observations.payload.cumulative.volume", None),
+        ("qt[30]", "lineage_only", "observations.payload.observed_at", None),
+        ("qt[31]", "cross_check_only", "observations.payload.prices.open", None),
+        ("qt[32]", "cross_check_only", "observations.payload.prices.high", None),
+        ("qt[33]", "cross_check_only", "observations.payload.prices.low", None),
+        ("qt[34]", "cross_check_only", "observations.payload.trading_status", None),
+    )
 )
 
 
@@ -37,6 +151,21 @@ def _row(frame: Any, index: int, operation: str) -> dict[str, object]:
             "The source observation row does not match the expected schema.",
         )
     return value
+
+
+def _validate_raw_mapping(
+    row: dict[str, object],
+    allowed_fields: frozenset[str],
+    operation: str,
+) -> None:
+    """Reject every undeclared raw key, including falsey provider values."""
+
+    if set(row).difference(allowed_fields):
+        raise _source_error(
+            operation,
+            "unknown_schema",
+            "The source observation contains a field without a static disposition.",
+        )
 
 
 def _text_decimal(value: object, operation: str, field: str) -> str:
@@ -247,6 +376,7 @@ class TongdaxinIntradayOperation:
     """Bind one mootdx quote to its same-client latest daily bar."""
 
     operation_id = "tongdaxin_intraday_snapshot@1"
+    field_dispositions = TONGDAXIN_INTRADAY_FIELD_DISPOSITIONS
 
     def __init__(self, client_factory: Callable[..., Any]) -> None:
         self._client_factory = client_factory
@@ -264,6 +394,16 @@ class TongdaxinIntradayOperation:
                     offset=1,
                 ),
                 -1,
+                self.operation_id,
+            )
+            _validate_raw_mapping(
+                quote,
+                _TONGDAXIN_QUOTE_RAW_FIELDS,
+                self.operation_id,
+            )
+            _validate_raw_mapping(
+                daily_bar,
+                _TONGDAXIN_DAILY_RAW_FIELDS,
                 self.operation_id,
             )
         except IntradaySourceError:
@@ -538,6 +678,7 @@ class TencentIntradayOperation:
     """Cross-check intraday OHLC through Tencent's verified daily-line boundary."""
 
     operation_id = "tencent_intraday_snapshot@1"
+    field_dispositions = TENCENT_INTRADAY_FIELD_DISPOSITIONS
 
     def __init__(self, transport: HttpTransport) -> None:
         self._transport = transport

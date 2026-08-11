@@ -276,6 +276,18 @@ class FixtureIntradayReplayOperation:
             ),
         )
         scenario = os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO")
+        if scenario == "empty_response":
+            raise IntradayReplaySourceError(
+                self.operation_id,
+                "empty_response",
+                "Synthetic replay source returned no rows.",
+            )
+        if scenario == "source_failure":
+            raise IntradayReplaySourceError(
+                self.operation_id,
+                "upstream_unavailable",
+                "Synthetic replay source was unavailable.",
+            )
         trading_status = (
             "suspended"
             if scenario
@@ -294,6 +306,16 @@ class FixtureIntradayReplayOperation:
             rows = (
                 replace(rows[0], open_price=10.2000000001, amount=2044.0000000001),
                 replace(rows[1], close_price=10.2000000001),
+            )
+        elif scenario == "unsafe_locator":
+            rows = (
+                replace(
+                    rows[0],
+                    evidence_locator=(
+                        "https://internal.invalid/bars?token=SYNTHETIC_SECRET_76"
+                    ),
+                ),
+                rows[1],
             )
         elif scenario == "duplicate":
             rows = (*rows, replace(rows[1], evidence_locator="fixture:duplicate:0930"))

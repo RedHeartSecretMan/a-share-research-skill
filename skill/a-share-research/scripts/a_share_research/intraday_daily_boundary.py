@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -25,7 +23,6 @@ _EXPLANATION_CODES = frozenset(
 _EXPLAINABLE_FIELDS = frozenset(
     {"open", "high", "low", "close", "actual_close", "volume", "amount"}
 )
-_SAFE_LOCATOR = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*(?::[A-Za-z0-9_.-]+)*$")
 
 
 @dataclass(frozen=True)
@@ -43,10 +40,9 @@ class DailyBoundaryMinute:
 
 @dataclass(frozen=True)
 class DailyBoundaryAssessment:
-    """Daily-boundary projection plus evidence and conflict outputs."""
+    """Daily-boundary facts plus conflict and availability outputs."""
 
     boundary: dict[str, Any]
-    evidence: list[dict[str, Any]]
     conflicts: list[dict[str, Any]]
     unavailable_fields: list[dict[str, str]]
 
@@ -205,11 +201,11 @@ def assess_daily_boundary(
     minute_operation_id: str,
     minute_rows: Sequence[DailyBoundaryMinute],
     minute_price_tick: str | None,
+    daily_observation_id: str,
 ) -> DailyBoundaryAssessment:
     """Compare normalized daily values using exact Decimal equality."""
 
-    daily_id = _daily_evidence_id(batch, query)
-    evidence = [_daily_evidence(batch, query, daily_id)]
+    daily_id = daily_observation_id
     if batch.trading_status == "suspended":
         boundary: dict[str, Any] = {
             "status": "suspended_observation",
@@ -220,7 +216,7 @@ def assess_daily_boundary(
             "lineage": _normalization_lineage(batch, minute_price_tick),
             "baselines": _baselines(batch, query, daily_id),
         }
-        return DailyBoundaryAssessment(boundary, evidence, [], [])
+        return DailyBoundaryAssessment(boundary, [], [])
 
     normalized = _normalized_daily_values(batch)
     traded_rows = [row for row in minute_rows if row.trade_state == "traded"]
@@ -236,7 +232,6 @@ def assess_daily_boundary(
         }
         return DailyBoundaryAssessment(
             boundary,
-            evidence,
             [],
             [
                 {
@@ -324,7 +319,7 @@ def assess_daily_boundary(
             }
             for field in ("replay.opening_gap", "replay.relative_return")
         )
-    return DailyBoundaryAssessment(boundary, evidence, conflicts, unavailable_fields)
+    return DailyBoundaryAssessment(boundary, conflicts, unavailable_fields)
 
 
 def build_unavailable_boundary(reason: str, message: str) -> dict[str, Any]:
@@ -643,94 +638,6 @@ def _baselines(
 
 def _price_value(value: str) -> dict[str, str]:
     return {"value": value, "unit": "CNY/share"}
-
-
-def _daily_evidence_id(
-    batch: IntradayReplayDailySourceBatch, query: IntradayReplayQuery
-) -> str:
-    digest = hashlib.sha256(
-        f"{batch.operation_id}|{query.security}|{query.replay_date.isoformat()}".encode(
-            "utf-8"
-        )
-    ).hexdigest()[:16]
-    return f"intraday-daily-boundary-{batch.operation_id}-{digest}"
-
-
-def _daily_evidence(
-    batch: IntradayReplayDailySourceBatch,
-    query: IntradayReplayQuery,
-    evidence_id: str,
-) -> dict[str, Any]:
-    values: dict[str, Any] = {
-        "trading_status": batch.trading_status,
-        "price_adjustment": batch.price_adjustment,
-        "price_unit": batch.price_unit,
-        "volume_unit": batch.volume_unit,
-        "amount_unit": batch.amount_unit,
-    }
-    if batch.trading_status == "traded":
-        values.update(
-            {
-                "open": batch.open_price,
-                "high": batch.high_price,
-                "low": batch.low_price,
-                "close": batch.close_price,
-                "actual_close": batch.actual_close_price or batch.close_price,
-                "volume": batch.volume,
-                "amount": batch.amount,
-            }
-        )
-    locator = batch.evidence_locator
-    if not isinstance(locator, str) or not locator or not _safe_locator(locator):
-        locator = f"daily-boundary:{query.security}:{query.replay_date.isoformat()}"
-    retrieved_at = batch.retrieved_at.astimezone(
-        query.research_boundary.tzinfo
-    ).isoformat()
-    return {
-        "id": evidence_id,
-        "source_role": batch.source_role,
-        "source_operation": batch.operation_id,
-        "contract_version": batch.contract_version,
-        "experimental": batch.experimental,
-        "subject": {"security": query.security},
-        "observed_value": values,
-        "basis": {
-            "price_adjustment": batch.price_adjustment,
-            "price_minimum_tick": batch.price_minimum_tick or batch.price_precision,
-            "volume_unit": batch.volume_unit,
-            "amount_unit": batch.amount_unit,
-            "amount_scale": batch.amount_scale,
-        },
-        "observation": {
-            "kind": "intraday_daily_boundary",
-            "trading_date": query.replay_date.isoformat(),
-            "trading_status": batch.trading_status,
-        },
-        "evidence_time": f"{query.replay_date.isoformat()}T15:00:00+08:00",
-        "available_at": (
-            batch.available_at.astimezone(query.research_boundary.tzinfo).isoformat()
-            if batch.available_at is not None
-            else None
-        ),
-        "retrieved_at": retrieved_at,
-        "locator": {"uri": locator, "observation": "daily boundary"},
-        "limitations": [
-            *(["experimental_source_operation"] if batch.experimental else []),
-            *(["public_availability_unverified"] if batch.available_at is None else []),
-        ],
-    }
-
-
-def _safe_locator(value: str) -> bool:
-    lowered = value.lower()
-    return (
-        len(value) <= 200
-        and _SAFE_LOCATOR.fullmatch(value) is not None
-        and not any(
-            marker in lowered
-            for marker in ("http", "//", "bearer", "token", "secret", "password")
-        )
-    )
 
 
 def _decimal(value: object, source_operation: str, field: str) -> Decimal:
