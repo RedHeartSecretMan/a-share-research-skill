@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, TypeVar
@@ -11,7 +12,11 @@ from tests.skill_imports import add_skill_scripts_to_path
 
 add_skill_scripts_to_path()
 
-from a_share_research.etf_option_contract import OptionQuery  # noqa: E402
+from a_share_research.etf_option_contract import (  # noqa: E402
+    OptionCoverage,
+    OptionQuery,
+    OptionSourceFailure,
+)
 from a_share_research.etf_option_sources import (  # noqa: E402
     SinaEtfOptionSnapshotOperation,
 )
@@ -212,6 +217,422 @@ def query(
 
 
 class SinaEtfOptionSnapshotTests(unittest.TestCase):
+    def test_invalid_analytics_field_retains_valid_field_siblings(self) -> None:
+        analytics_text = (FIXTURES / "analytics_510050_2608.txt").read_text(
+            encoding="utf-8"
+        )
+        invalid_gamma = analytics_text.replace("2.2988", "oops", 1)
+
+        batch = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(overrides={"CON_SO_": text_response(invalid_gamma)}),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+
+        call = next(item for item in batch.contracts if item.option_type == "call")
+        put = next(item for item in batch.contracts if item.option_type == "put")
+        self.assertEqual(
+            set(call.analytics),
+            {
+                "delta",
+                "theta",
+                "vega",
+                "implied_volatility",
+                "theoretical_value",
+            },
+        )
+        self.assertEqual(set(put.analytics), set(call.analytics) | {"gamma"})
+        failure = next(
+            item
+            for item in batch.source_errors
+            if item.details.get("contract_code") == "10011855"
+        )
+        self.assertEqual(failure.code, "unknown_schema")
+        self.assertEqual(failure.details["scope"], "analytics_field")
+        self.assertEqual(failure.details["analytics_field"], "gamma")
+        analytics_coverage = batch.coverage["provider_analytics"]
+        self.assertEqual(analytics_coverage.state, "partial")
+        self.assertEqual(analytics_coverage.expected_count, 2)
+        self.assertEqual(analytics_coverage.observed_count, 1)
+        self.assertEqual(analytics_coverage.details["expected_field_count"], 12)
+        self.assertEqual(analytics_coverage.details["observed_field_count"], 11)
+        self.assertEqual(batch.acquisition_state, "partial")
+
+    def test_invalid_month_item_retains_valid_month_and_continues(self) -> None:
+        months = json_response(
+            {
+                "result": {
+                    "status": {"code": 0},
+                    "data": {
+                        "contractMonth": ["2026-08", "bad-month"],
+                        "stockId": "510050",
+                    },
+                }
+            }
+        )
+
+        batch = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(overrides={"getStockName": months}),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+
+        self.assertEqual(batch.month_evidence.observed_months, ("2026-08",))
+        self.assertEqual(len(batch.contracts), 2)
+        failure = next(
+            item
+            for item in batch.source_errors
+            if item.details.get("scope") == "contract_month_item"
+        )
+        self.assertEqual(failure.code, "unknown_schema")
+        self.assertEqual(failure.details["item_index"], 1)
+        self.assertEqual(batch.acquisition_state, "partial")
+
+    def test_invalid_listing_item_retains_valid_code_and_continues(self) -> None:
+        call_listing = text_response(
+            'var hq_str_OP_UP_5100502608="CON_OP_10011855,BAD";'
+        )
+
+        batch = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(overrides={"OP_UP_": call_listing}),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+
+        call = next(
+            item for item in batch.listing_evidence if item.option_type == "call"
+        )
+        self.assertEqual(call.contract_codes, ("10011855",))
+        self.assertEqual(len(batch.contracts), 2)
+        failure = next(
+            item
+            for item in batch.source_errors
+            if item.details.get("scope") == "contract_listing_item"
+        )
+        self.assertEqual(failure.code, "unknown_schema")
+        self.assertEqual(failure.details["option_type"], "call")
+        self.assertEqual(failure.details["item_index"], 1)
+        self.assertEqual(batch.acquisition_state, "partial")
+
+    def test_exact_expiry_selection_does_not_erase_contract_valid_quotes(self) -> None:
+        transport = FixtureTransport()
+
+        batch = SinaEtfOptionSnapshotOperation(
+            transport, request_gate=DiagnosticGate()
+        ).collect(query(expiry_mode="exact", expiry_date="2026-08-25"))
+
+        self.assertTrue(any("CON_OP_" in url for url in transport.get_calls))
+        self.assertEqual(
+            [(item.security["code"], item.expiry_date) for item in batch.contracts],
+            [("10011855", "2026-08-26"), ("10011864", "2026-08-26")],
+        )
+        self.assertEqual(batch.source_errors, ())
+
+    def test_quote_contract_and_group_failures_retain_valid_siblings(self) -> None:
+        quote_text = (FIXTURES / "tquotes_510050_2608.txt").read_text(encoding="utf-8")
+        quote_lines = quote_text.splitlines()
+        invalid_put_lines = list(quote_lines)
+        invalid_put_lines[1] = invalid_put_lines[1].replace("510050", "510300")
+        conflicting_time_lines = list(quote_lines)
+        conflicting_time_lines[1] = conflicting_time_lines[1].replace(
+            "2026-07-31 15:00:00", "2026-07-31 14:59:59"
+        )
+        cases = (
+            (
+                "missing_put",
+                quote_lines[0] + "\n",
+                ["10011855"],
+                "batch_response_incomplete",
+            ),
+            (
+                "invalid_put_underlying",
+                "\n".join(invalid_put_lines) + "\n",
+                ["10011855"],
+                "wrong_underlying_payload",
+            ),
+            (
+                "quote_time_conflict",
+                "\n".join(conflicting_time_lines) + "\n",
+                ["10011855", "10011864"],
+                "quote_time_conflict",
+            ),
+        )
+
+        for name, response_text, expected_codes, expected_error in cases:
+            with self.subTest(name=name):
+                batch = SinaEtfOptionSnapshotOperation(
+                    FixtureTransport(
+                        overrides={"CON_OP_": text_response(response_text)}
+                    ),
+                    request_gate=DiagnosticGate(),
+                ).collect(query())
+
+                self.assertEqual(
+                    [item.security["code"] for item in batch.contracts],
+                    expected_codes,
+                )
+                self.assertEqual(batch.acquisition_state, "partial")
+                self.assertEqual(batch.coverage["option_quotes"].state, "partial")
+                self.assertIn(
+                    expected_error, {item.code for item in batch.source_errors}
+                )
+
+    def test_analytics_failures_retain_quotes_and_valid_analytics_siblings(
+        self,
+    ) -> None:
+        analytics_text = (FIXTURES / "analytics_510050_2608.txt").read_text(
+            encoding="utf-8"
+        )
+        analytics_lines = analytics_text.splitlines()
+        invalid_first = analytics_text.replace(",,,,78077", ",,,78077", 1)
+        cases = (
+            ("missing_put", analytics_lines[0] + "\n", [True, False]),
+            ("invalid_call", invalid_first, [False, True]),
+        )
+
+        for name, response_text, expected_analytics in cases:
+            with self.subTest(name=name):
+                batch = SinaEtfOptionSnapshotOperation(
+                    FixtureTransport(
+                        overrides={"CON_SO_": text_response(response_text)}
+                    ),
+                    request_gate=DiagnosticGate(),
+                ).collect(query())
+
+                self.assertEqual(
+                    [item.security["code"] for item in batch.contracts],
+                    ["10011855", "10011864"],
+                )
+                self.assertEqual(
+                    [bool(item.analytics) for item in batch.contracts],
+                    expected_analytics,
+                )
+                self.assertEqual(batch.acquisition_state, "partial")
+                self.assertEqual(batch.coverage["provider_analytics"].observed_count, 1)
+                self.assertEqual(batch.coverage["provider_analytics"].state, "partial")
+                self.assertEqual(len(batch.source_errors), 1)
+
+    def test_late_failures_preserve_acquired_lineage_and_child_error_owner(
+        self,
+    ) -> None:
+        invalid_gbk = HttpResponse(
+            status=200,
+            content_type="text/plain",
+            body=b"\x81",
+            retrieved_at=RETRIEVED_AT,
+        )
+        quote_failure = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(overrides={"CON_OP_": invalid_gbk}),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+        put_listing_failure = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(overrides={"OP_DOWN_": invalid_gbk}),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+        sse_failure = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(
+                overrides={
+                    "commonSoaQuery.do": json_response(
+                        {
+                            "pageHelp": {"total": 0},
+                            "result": [],
+                            "sqlId": "FUND_LIST",
+                        }
+                    )
+                }
+            ),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+        snapshot_failure = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(
+                overrides={
+                    "yunhq.sse.com.cn": json_response(
+                        {"code": "510050", "date": 20260731, "snap": []}
+                    )
+                }
+            ),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+
+        self.assertEqual(quote_failure.subject.code, "510050")
+        self.assertEqual(quote_failure.session.reference_price, "3.03")
+        self.assertEqual(
+            quote_failure.session.reference_source_operation,
+            "sse_etf_snapshot@1",
+        )
+        self.assertEqual(quote_failure.month_evidence.observed_months[0], "2026-08")
+        self.assertEqual(
+            {
+                item.option_type: item.contract_codes
+                for item in quote_failure.listing_evidence
+            },
+            {"call": ("10011855",), "put": ("10011864",)},
+        )
+        self.assertTrue(
+            all(item.locator_uri for item in quote_failure.listing_evidence)
+        )
+        self.assertTrue(
+            all(
+                item.retrieved_at == RETRIEVED_AT
+                for item in quote_failure.listing_evidence
+            )
+        )
+        self.assertEqual(
+            [
+                (item.option_type, item.contract_codes)
+                for item in put_listing_failure.listing_evidence
+            ],
+            [("call", ("10011855",))],
+        )
+        self.assertEqual(
+            sse_failure.source_errors[0].source_operation,
+            "sse_etf_list@1",
+        )
+        self.assertEqual(snapshot_failure.subject.code, "510050")
+        self.assertEqual(
+            snapshot_failure.source_errors[0].source_operation,
+            "sse_etf_snapshot@1",
+        )
+        self.assertEqual(quote_failure.acquisition_state, "failure")
+
+    def test_acquisition_material_defensively_copies_and_deeply_freezes_values(
+        self,
+    ) -> None:
+        batch = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(), request_gate=DiagnosticGate()
+        ).collect(query())
+        security = {"exchange": "SSE", "code": "10011855", "type": "ETF_OPTION"}
+        analytics = dict(batch.contracts[0].analytics)
+        copied_contract = replace(
+            batch.contracts[0], security=security, analytics=analytics
+        )
+        coverage_details = {
+            "evidence_ids": ["listing-call"],
+            "nested": {"codes": ["10011855"]},
+        }
+        copied_coverage = OptionCoverage(
+            "partial", observed_count=1, details=coverage_details
+        )
+        error_details = {
+            "contract_codes": ["10011864"],
+            "nested": {"stage": ["quote"]},
+        }
+        copied_error = OptionSourceFailure(
+            "sina_etf_option_snapshot@1",
+            "batch_response_incomplete",
+            "The source batch omitted one requested contract.",
+            error_details,
+        )
+        coverage_map = {"option_quotes": copied_coverage}
+        copied_batch = replace(
+            batch, coverage=coverage_map, source_errors=(copied_error,)
+        )
+
+        security["code"] = "FORGED"
+        analytics.clear()
+        coverage_details["evidence_ids"][0] = "FORGED"
+        error_details["contract_codes"][0] = "FORGED"
+        coverage_map.clear()
+
+        self.assertEqual(copied_contract.security["code"], "10011855")
+        self.assertTrue(copied_contract.analytics)
+        self.assertEqual(copied_coverage.details["evidence_ids"], ("listing-call",))
+        self.assertEqual(copied_error.details["contract_codes"], ("10011864",))
+        self.assertIn("option_quotes", copied_batch.coverage)
+        with self.assertRaises(TypeError):
+            copied_contract.security["code"] = "FORGED"
+        with self.assertRaises(TypeError):
+            copied_contract.analytics["delta"] = copied_contract.analytics["gamma"]
+        with self.assertRaises(TypeError):
+            copied_batch.coverage["option_quotes"] = copied_coverage
+        with self.assertRaises(TypeError):
+            copied_coverage.details["nested"]["codes"][0] = "FORGED"
+        with self.assertRaises(TypeError):
+            copied_error.details["nested"]["stage"][0] = "FORGED"
+
+    def test_production_declaration_and_four_states_match_acquired_facts(
+        self,
+    ) -> None:
+        operation = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(), request_gate=DiagnosticGate()
+        )
+        success = operation.collect(query())
+        empty = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(
+                overrides={"OP_UP_": text_response('var hq_str_OP_UP_5100502608="";')}
+            ),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+        failure = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(
+                overrides={
+                    "getStockName": json_response(
+                        {"result": {"status": {"code": 1}, "data": {}}}
+                    )
+                }
+            ),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+        only_call = (
+            (FIXTURES / "tquotes_510050_2608.txt")
+            .read_text(encoding="utf-8")
+            .splitlines()[0]
+        )
+        partial = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(overrides={"CON_OP_": text_response(only_call)}),
+            request_gate=DiagnosticGate(),
+        ).collect(query())
+
+        self.assertEqual(
+            (
+                operation.acquisition_owners.executor_operation,
+                operation.acquisition_owners.identity_operation,
+                operation.acquisition_owners.reference_operation,
+                operation.acquisition_owners.option_operation,
+            ),
+            (
+                "sina_etf_option_snapshot@1",
+                "sse_etf_list@1",
+                "sse_etf_snapshot@1",
+                "sina_etf_option_snapshot@1",
+            ),
+        )
+        self.assertEqual(success.owners, operation.acquisition_owners)
+        self.assertEqual(success.subject.identity_source_operation, "sse_etf_list@1")
+        self.assertEqual(
+            success.session.reference_source_operation, "sse_etf_snapshot@1"
+        )
+        self.assertTrue(
+            all(
+                item.source_operation == "sina_etf_option_snapshot@1"
+                for item in success.contracts
+            )
+        )
+        self.assertEqual(
+            {
+                success.acquisition_state,
+                empty.acquisition_state,
+                failure.acquisition_state,
+                partial.acquisition_state,
+            },
+            {"success", "empty", "failure", "partial"},
+        )
+        self.assertNotEqual(empty.coverage["contract_listing"].state, "observed_empty")
+        self.assertEqual(
+            set(operation.raw_fields),
+            {
+                "months.result.status.code",
+                "months.result.data.stockId",
+                "months.result.data.contractMonth[]",
+                "listing[]",
+                *(
+                    f"quote[{index}]"
+                    for index in (0, 1, 2, 3, 4, 5, 7, 32, 36, 41, 43, 45, 46)
+                ),
+                *(
+                    f"analytics[{index}]"
+                    for index in (1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16)
+                ),
+            },
+        )
+
     def test_collects_gbk_call_put_quotes_and_provider_analytics(self) -> None:
         transport = FixtureTransport()
         batch = SinaEtfOptionSnapshotOperation(
@@ -328,9 +749,12 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
             transport, request_gate=DiagnosticGate()
         ).collect(query())
 
-        self.assertEqual(batch.contracts, ())
+        self.assertEqual(len(batch.contracts), 2)
+        self.assertEqual(
+            [bool(item.analytics) for item in batch.contracts], [True, False]
+        )
         self.assertEqual(batch.source_errors[0].code, "batch_response_incomplete")
-        self.assertEqual(batch.coverage["provider_analytics"].state, "indeterminate")
+        self.assertEqual(batch.coverage["provider_analytics"].state, "partial")
 
     def test_shifted_analytics_fields_fail_schema_validation(self) -> None:
         text = (FIXTURES / "analytics_510050_2608.txt").read_text(encoding="utf-8")
@@ -341,7 +765,10 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
             transport, request_gate=DiagnosticGate()
         ).collect(query())
 
-        self.assertEqual(batch.contracts, ())
+        self.assertEqual(len(batch.contracts), 2)
+        self.assertEqual(
+            [bool(item.analytics) for item in batch.contracts], [False, True]
+        )
         self.assertEqual(batch.source_errors[0].code, "unknown_schema")
 
     def test_non_gbk_javascript_fails_schema_validation(self) -> None:
@@ -371,7 +798,7 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
         self.assertEqual(call.strike, "6.3850")
         self.assertEqual(call.expiry_date, "2026-09-23")
 
-    def test_exact_expiry_validates_the_full_date_not_only_the_month(self) -> None:
+    def test_exact_expiry_full_date_is_left_to_domain_selection(self) -> None:
         batch = SinaEtfOptionSnapshotOperation(
             FixtureTransport(), request_gate=DiagnosticGate()
         ).collect(
@@ -381,8 +808,9 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(batch.contracts, ())
-        self.assertEqual(batch.source_errors[0].code, "option_expiry_not_available")
+        self.assertEqual(len(batch.contracts), 2)
+        self.assertEqual({item.expiry_date for item in batch.contracts}, {"2026-08-26"})
+        self.assertEqual(batch.source_errors, ())
 
     def test_nearest_month_selection_is_independent_of_provider_order(self) -> None:
         months = json_response(
@@ -418,7 +846,9 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
             transport, request_gate=DiagnosticGate()
         ).collect(query())
 
-        self.assertEqual(batch.contracts, ())
+        self.assertEqual(
+            [item.security["code"] for item in batch.contracts], ["10011864"]
+        )
         self.assertEqual(batch.source_errors[0].code, "duplicate_contract_conflict")
 
     def test_quote_and_analytics_contract_identity_must_match(self) -> None:
@@ -432,7 +862,10 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
             transport, request_gate=DiagnosticGate()
         ).collect(query())
 
-        self.assertEqual(batch.contracts, ())
+        self.assertEqual(len(batch.contracts), 2)
+        self.assertEqual(
+            [bool(item.analytics) for item in batch.contracts], [False, True]
+        )
         self.assertEqual(batch.source_errors[0].code, "analytics_identity_mismatch")
 
     def test_analytics_trade_code_strike_must_match_quote(self) -> None:
@@ -444,7 +877,10 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
             transport, request_gate=DiagnosticGate()
         ).collect(query())
 
-        self.assertEqual(batch.contracts, ())
+        self.assertEqual(len(batch.contracts), 2)
+        self.assertEqual(
+            [bool(item.analytics) for item in batch.contracts], [False, True]
+        )
         self.assertEqual(batch.source_errors[0].code, "analytics_identity_mismatch")
 
     def test_no_quote_is_explicit_partial_coverage(self) -> None:
@@ -518,19 +954,19 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
             transport, request_gate=DiagnosticGate()
         ).collect(query())
 
-        self.assertEqual(batch.contracts, ())
+        self.assertEqual(len(batch.contracts), 2)
         failure = batch.source_errors[0]
         self.assertEqual(failure.code, "quote_time_conflict")
         self.assertEqual(
             failure.details["observed_at"],
-            [
+            (
                 "2026-07-31T00:00:00+08:00",
                 "2026-07-31T15:00:00+08:00",
-            ],
+            ),
         )
         self.assertEqual(
             failure.details["contract_counts_by_observed_at"],
-            [
+            (
                 {
                     "observed_at": "2026-07-31T00:00:00+08:00",
                     "contract_count": 1,
@@ -539,7 +975,7 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
                     "observed_at": "2026-07-31T15:00:00+08:00",
                     "contract_count": 1,
                 },
-            ],
+            ),
         )
         quote_batch_evidence = failure.details["quote_batch_evidence"]
         self.assertEqual(len(quote_batch_evidence), 1)
@@ -557,10 +993,10 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
         self.assertEqual(quote_batch_evidence[0]["contract_count"], 2)
         self.assertEqual(
             quote_batch_evidence[0]["observed_at"],
-            [
+            (
                 "2026-07-31T00:00:00+08:00",
                 "2026-07-31T15:00:00+08:00",
-            ],
+            ),
         )
         self.assertNotIn("raw_payload", quote_batch_evidence[0])
 
@@ -573,7 +1009,7 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
             transport, request_gate=DiagnosticGate()
         ).collect(query())
 
-        self.assertEqual(batch.contracts, ())
+        self.assertEqual(len(batch.contracts), 2)
         self.assertEqual(batch.source_errors[0].code, "session_state_unknown")
 
     def test_current_snapshot_does_not_claim_historical_coverage(self) -> None:

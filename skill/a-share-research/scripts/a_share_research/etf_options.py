@@ -13,6 +13,7 @@ from .etf_option_contract import (
     OptionQuery,
     OptionSourceBatch,
     OptionSourceOperation,
+    json_safe_copy,
 )
 
 SUPPORTED_ETF_CODES = frozenset({"510050", "510300", "510500", "588000"})
@@ -334,7 +335,7 @@ def _duplicate_contract_conflicts(
             conflicts.append(
                 {
                     "code": "duplicate_option_contract_conflict",
-                    "contract_security": item.security,
+                    "contract_security": json_safe_copy(item.security),
                     "series": item.series,
                     "strike": item.strike,
                     "option_type": item.option_type,
@@ -460,7 +461,7 @@ def _contract_result(item: OptionContractQuote) -> dict[str, Any]:
 
 def _contract_identity(item: OptionContractQuote) -> dict[str, Any]:
     return {
-        "security": item.security,
+        "security": json_safe_copy(item.security),
         "option_type": item.option_type,
         "strike": {"value": item.strike, "unit": "CNY/share"},
         "contract_month": item.contract_month,
@@ -533,7 +534,7 @@ def _evidence(
                 "source_role": "market_observation",
                 "source_operation": item.source_operation,
                 "experimental": True,
-                "subject": {"security": item.security},
+                "subject": {"security": json_safe_copy(item.security)},
                 "observation": {
                     "contract": _contract_identity(item),
                     "quote": _quote_result(item),
@@ -554,7 +555,7 @@ def _evidence(
                 "source_role": "market_observation",
                 "source_operation": item.source_operation,
                 "experimental": True,
-                "subject": {"security": item.security},
+                "subject": {"security": json_safe_copy(item.security)},
                 "observation": {
                     "contract": _contract_identity(item),
                     "provider_analytics": _analytics_result(item),
@@ -840,15 +841,15 @@ def _t_quote_rows(contracts: list[OptionContractQuote]) -> list[dict[str, Any]]:
                 "expiry_date": expiry,
                 "series": series,
                 "strike": {"value": call.strike, "unit": "CNY/share"},
-                "call_security": call.security,
-                "put_security": put.security,
+                "call_security": json_safe_copy(call.security),
+                "put_security": json_safe_copy(put.security),
                 "call": {
-                    "security": call.security,
+                    "security": json_safe_copy(call.security),
                     "quote": _quote_result(call),
                     "analytics": _analytics_result(call),
                 },
                 "put": {
-                    "security": put.security,
+                    "security": json_safe_copy(put.security),
                     "quote": _quote_result(put),
                     "analytics": _analytics_result(put),
                 },

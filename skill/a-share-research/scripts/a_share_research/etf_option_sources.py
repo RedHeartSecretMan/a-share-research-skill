@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from functools import partial
@@ -12,7 +13,9 @@ from urllib.parse import urlencode
 
 from .etf_market import SseEtfListOperation, SseEtfSnapshotOperation
 from .etf_option_contract import (
+    OPTION_ANALYTIC_NAMES,
     EtfOptionSubject,
+    OptionAcquisitionOwners,
     OptionAnalytic,
     OptionContractListingEvidence,
     OptionContractMonthEvidence,
@@ -74,6 +77,23 @@ class SinaEtfOptionSnapshotOperation:
     """Collect one bounded option month with quotes and provider analytics."""
 
     operation_id = "sina_etf_option_snapshot@1"
+    acquisition_owners = OptionAcquisitionOwners(
+        executor_operation=operation_id,
+        identity_operation="sse_etf_list@1",
+        reference_operation="sse_etf_snapshot@1",
+        option_operation=operation_id,
+    )
+    raw_fields = (
+        "months.result.status.code",
+        "months.result.data.stockId",
+        "months.result.data.contractMonth[]",
+        "listing[]",
+        *(f"quote[{index}]" for index in (0, 1, 2, 3, 4, 5, 7, 32, 36, 41, 43, 45, 46)),
+        *(
+            f"analytics[{index}]"
+            for index in (1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16)
+        ),
+    )
 
     def __init__(
         self,
@@ -93,7 +113,9 @@ class SinaEtfOptionSnapshotOperation:
         session: OptionSession | None = None
         coverage = _indeterminate_coverage()
         degradations: list[OptionSourceFailure] = []
-        listing_evidence: tuple[OptionContractListingEvidence, ...] = ()
+        source_errors: list[OptionSourceFailure] = []
+        contracts: dict[str, OptionContractQuote] = {}
+        listing_evidence: list[OptionContractListingEvidence] = []
         month_evidence: OptionContractMonthEvidence | None = None
         try:
             category = UNDERLYING_CATEGORIES.get(query.subject_clue)
@@ -105,23 +127,37 @@ class SinaEtfOptionSnapshotOperation:
             identity = SseEtfListOperation().observe(
                 query.subject_clue, self._transport
             )
-            snapshot = SseEtfSnapshotOperation().observe(
-                query.subject_clue, self._transport
-            )
             subject = EtfOptionSubject(
                 "SSE",
                 identity.code,
                 identity.name,
+                identity_source_operation=self.acquisition_owners.identity_operation,
                 identity_evidence_id=identity.evidence_id,
                 identity_locator_uri=identity.source_uri,
                 identity_retrieved_at=identity.retrieved_at,
                 identity_observed_on=identity.listing_date.isoformat(),
+            )
+            snapshot = SseEtfSnapshotOperation().observe(
+                query.subject_clue, self._transport
             )
             if snapshot.code != identity.code:
                 raise _SourceError(
                     "wrong_security_payload",
                     "The ETF identity and reference quote disagree.",
                 )
+            session = OptionSession(
+                trading_date=snapshot.observed_at.date().isoformat(),
+                observed_at=snapshot.observed_at.isoformat(),
+                market_state=_market_state(snapshot.observed_at.time()),
+                reference_price=snapshot.last_value,
+                reference_price_kind="last",
+                reference_evidence_id=snapshot.evidence_id,
+                locator_uri=snapshot.source_uri,
+                retrieved_at=snapshot.retrieved_at,
+                reference_observed_at=snapshot.observed_at.isoformat(),
+                reference_source_operation=self.acquisition_owners.reference_operation,
+                reference_retrieved_at=snapshot.retrieved_at,
+            )
             months_url = (
                 f"{MONTHS_ENDPOINT}?{urlencode({'exchange': 'null', 'cate': category})}"
             )
@@ -134,8 +170,14 @@ class SinaEtfOptionSnapshotOperation:
                 locator_uri=months_url,
                 retrieved_at=months_response.retrieved_at,
             )
-            months = _contract_months(
+            months, month_item_errors = _contract_months(
                 months_response, expected_underlying=query.subject_clue
+            )
+            source_errors.extend(
+                OptionSourceFailure(
+                    self.operation_id, error.code, str(error), error.details
+                )
+                for error in month_item_errors
             )
             month_evidence = OptionContractMonthEvidence(
                 source_operation=self.operation_id,
@@ -152,22 +194,38 @@ class SinaEtfOptionSnapshotOperation:
                     "The requested option month is not available from the source.",
                 )
             month_code = month[2:4] + month[5:7]
-            call_codes, call_listing = self._contract_codes(
+            call_codes, call_listing, call_listing_errors = self._contract_codes(
                 query.subject_clue,
                 month_code,
                 contract_month=month,
                 option_type="call",
                 degradations=degradations,
             )
-            put_codes, put_listing = self._contract_codes(
+            source_errors.extend(
+                OptionSourceFailure(
+                    self.operation_id, error.code, str(error), error.details
+                )
+                for error in call_listing_errors
+            )
+            listing_evidence.append(call_listing)
+            coverage["contract_listing"] = _listing_coverage(
+                listing_evidence, contract_month=month
+            )
+            put_codes, put_listing, put_listing_errors = self._contract_codes(
                 query.subject_clue,
                 month_code,
                 contract_month=month,
                 option_type="put",
                 degradations=degradations,
             )
+            source_errors.extend(
+                OptionSourceFailure(
+                    self.operation_id, error.code, str(error), error.details
+                )
+                for error in put_listing_errors
+            )
+            listing_evidence.append(put_listing)
             rights = {"call": call_codes, "put": put_codes}
-            listing_evidence = (call_listing, put_listing)
             code_rights: dict[str, str] = {}
             for option_type, codes in rights.items():
                 for code in codes:
@@ -183,175 +241,231 @@ class SinaEtfOptionSnapshotOperation:
                     "empty_contract_list_unverified",
                     "The source did not establish a non-empty option contract list.",
                 )
-            coverage["contract_listing"] = OptionCoverage(
-                "partial",
-                observed_count=len(code_rights),
-                details={
-                    "contract_month": month,
-                    "authoritative_total_available": False,
-                    "evidence_ids": [item.evidence_id for item in listing_evidence],
-                },
+            coverage["contract_listing"] = _listing_coverage(
+                listing_evidence, contract_month=month
             )
-            quote_rows, quote_locators, quote_retrieved = self._batched_rows(
-                "CON_OP_", tuple(code_rights), degradations
-            )
-            analytic_rows, analytic_locators, analytic_retrieved = self._batched_rows(
-                "CON_SO_", tuple(code_rights), degradations
-            )
-            contracts: list[OptionContractQuote] = []
+            (
+                quote_rows,
+                quote_locators,
+                quote_retrieved,
+                quote_row_errors,
+            ) = self._batched_rows("CON_OP_", tuple(code_rights), degradations)
+            source_errors.extend(quote_row_errors)
             quote_times: set[datetime] = set()
             quote_times_by_code: dict[str, datetime] = {}
             no_quote_codes: list[str] = []
             for code, option_type in code_rights.items():
-                quote = _parse_quote(
-                    code,
-                    quote_rows[code],
-                    expected_underlying=query.subject_clue,
-                    expected_option_type=option_type,
-                    expected_month=month,
-                    observed_on=query.observed_on,
-                )
-                if (
-                    query.expiry_mode == "exact"
-                    and quote["expiry_date"] != query.expiry_date
-                ):
-                    raise _SourceError(
-                        "option_expiry_not_available",
-                        "The provider contract expiry does not match the requested date.",
+                raw_quote = quote_rows.get(code)
+                if raw_quote is None:
+                    continue
+                try:
+                    quote = _parse_quote(
+                        code,
+                        raw_quote,
+                        expected_underlying=query.subject_clue,
+                        expected_option_type=option_type,
+                        expected_month=month,
+                        observed_on=query.observed_on,
                     )
-                analytics = _parse_analytics(
-                    code,
-                    analytic_rows[code],
-                    expected_underlying=query.subject_clue,
-                    expected_option_type=option_type,
-                    expected_month=month,
-                    quote=quote,
-                )
+                except _SourceError as error:
+                    source_errors.append(
+                        _scoped_failure(self.operation_id, error, code)
+                    )
+                    continue
                 quote_times.add(quote["observed_at"])
                 quote_times_by_code[code] = quote["observed_at"]
                 if quote["quote_state"] == "no_quote":
                     no_quote_codes.append(code)
-                contracts.append(
-                    OptionContractQuote(
-                        security={
-                            "exchange": "SSE",
-                            "code": code,
-                            "type": "ETF_OPTION",
-                        },
-                        option_type=option_type,
-                        strike=quote["strike"],
-                        contract_month=month,
-                        expiry_date=quote["expiry_date"],
-                        series=quote["series"],
-                        quote_state=quote["quote_state"],
-                        last=quote["last"],
-                        bid=quote["bid"],
-                        ask=quote["ask"],
-                        observed_at=quote["observed_at"].isoformat(),
-                        analytics=analytics,
-                        source_operation=self.operation_id,
-                        evidence_id=(
-                            f"option-quote-sina-{code}-{quote['observed_at'].strftime('%Y%m%dT%H%M%S%z')}"
-                        ),
-                        locator_uri=quote_locators[code],
-                        limitations=tuple(
-                            [
-                                "provider_analytics_not_independently_verified",
-                                "no_qualified_independent_fallback",
-                            ]
-                            + list(quote["limitations"])
-                        ),
-                        bid_size=quote["bid_size"],
-                        ask_size=quote["ask_size"],
-                        volume=quote["volume"],
-                        open_interest=quote["open_interest"],
-                        analytics_evidence_id=(
-                            f"option-analytics-sina-{code}-{quote['observed_at'].strftime('%Y%m%dT%H%M%S%z')}"
-                        ),
-                        analytics_locator_uri=analytic_locators[code],
-                        quote_retrieved_at=quote_retrieved[code],
-                        analytics_retrieved_at=analytic_retrieved[code],
-                    )
-                )
-            if len(quote_times) != 1:
-                raise _SourceError(
-                    "quote_time_conflict",
-                    "Option contracts in one snapshot have different quote times.",
-                    _quote_time_conflict_details(
-                        operation_id=self.operation_id,
-                        underlying=query.subject_clue,
-                        contract_month=month,
-                        quote_times_by_code=quote_times_by_code,
-                        quote_locators=quote_locators,
-                        quote_retrieved=quote_retrieved,
+                contracts[code] = OptionContractQuote(
+                    security={
+                        "exchange": "SSE",
+                        "code": code,
+                        "type": "ETF_OPTION",
+                    },
+                    option_type=option_type,
+                    strike=quote["strike"],
+                    contract_month=month,
+                    expiry_date=quote["expiry_date"],
+                    series=quote["series"],
+                    quote_state=quote["quote_state"],
+                    last=quote["last"],
+                    bid=quote["bid"],
+                    ask=quote["ask"],
+                    observed_at=quote["observed_at"].isoformat(),
+                    analytics={},
+                    source_operation=self.operation_id,
+                    evidence_id=(
+                        f"option-quote-sina-{code}-{quote['observed_at'].strftime('%Y%m%dT%H%M%S%z')}"
                     ),
+                    locator_uri=quote_locators[code],
+                    limitations=tuple(
+                        ["no_qualified_independent_fallback"]
+                        + list(quote["limitations"])
+                    ),
+                    bid_size=quote["bid_size"],
+                    ask_size=quote["ask_size"],
+                    volume=quote["volume"],
+                    open_interest=quote["open_interest"],
+                    quote_retrieved_at=quote_retrieved[code],
                 )
-            observed_at = next(iter(quote_times))
-            market_state = _market_state(observed_at.time())
-            if market_state == "unknown":
-                raise _SourceError(
-                    "session_state_unknown",
-                    "The option quote time does not establish an intraday or completed session.",
-                )
-            if query.quote_mode == "latest_completed" and market_state != "completed":
-                raise _SourceError(
-                    "session_not_completed",
-                    "The option quote is intraday rather than a completed session.",
-                )
-            if snapshot.observed_at.date().isoformat() != query.observed_on:
-                raise _SourceError(
-                    "underlying_quote_date_mismatch",
-                    "The ETF reference price does not match the option trading date.",
-                )
-            session = OptionSession(
-                trading_date=query.observed_on,
-                observed_at=observed_at.isoformat(),
-                market_state=market_state,
-                reference_price=snapshot.last_value,
-                reference_price_kind="last",
-                reference_evidence_id=snapshot.evidence_id,
-                locator_uri=snapshot.source_uri,
-                retrieved_at=max(
-                    snapshot.retrieved_at,
-                    months_response.retrieved_at,
-                    *quote_retrieved.values(),
-                    *analytic_retrieved.values(),
-                ),
-                reference_observed_at=snapshot.observed_at.isoformat(),
-                reference_source_operation="sse_etf_snapshot@1",
-                reference_retrieved_at=snapshot.retrieved_at,
+            quoted_count = sum(
+                item.quote_state == "quoted" for item in contracts.values()
             )
-            quoted_count = len(contracts) - len(no_quote_codes)
-            quote_state = "observed_nonempty" if not no_quote_codes else "partial"
             coverage["option_quotes"] = OptionCoverage(
-                quote_state,
-                expected_count=len(contracts),
+                (
+                    "observed_nonempty"
+                    if len(contracts) == len(code_rights) and not no_quote_codes
+                    else "partial"
+                ),
+                expected_count=len(code_rights),
                 observed_count=quoted_count,
             )
-            coverage["provider_analytics"] = OptionCoverage(
-                "observed_nonempty",
-                expected_count=len(contracts),
-                observed_count=len(contracts),
-            )
-            source_errors = (
-                (
+            if no_quote_codes:
+                source_errors.append(
                     OptionSourceFailure(
                         self.operation_id,
                         "no_quote",
                         "One or more option contracts have no usable market quote.",
                         {"contract_codes": sorted(no_quote_codes)},
-                    ),
+                    )
                 )
-                if no_quote_codes
-                else ()
+            if len(quote_times) > 1:
+                coverage["option_quotes"] = OptionCoverage(
+                    "partial",
+                    expected_count=len(code_rights),
+                    observed_count=quoted_count,
+                    details={"group_constraint": "quote_time_conflict"},
+                )
+                source_errors.append(
+                    OptionSourceFailure(
+                        self.operation_id,
+                        "quote_time_conflict",
+                        "Option contracts in one snapshot have different quote times.",
+                        _quote_time_conflict_details(
+                            operation_id=self.operation_id,
+                            underlying=query.subject_clue,
+                            contract_month=month,
+                            quote_times_by_code=quote_times_by_code,
+                            quote_locators=quote_locators,
+                            quote_retrieved=quote_retrieved,
+                        ),
+                    )
+                )
+            elif len(quote_times) == 1:
+                observed_at = next(iter(quote_times))
+                market_state = _market_state(observed_at.time())
+                if market_state == "unknown":
+                    source_errors.append(
+                        OptionSourceFailure(
+                            self.operation_id,
+                            "session_state_unknown",
+                            "The option quote time does not establish an intraday or completed session.",
+                        )
+                    )
+                elif (
+                    query.quote_mode == "latest_completed"
+                    and market_state != "completed"
+                ):
+                    source_errors.append(
+                        OptionSourceFailure(
+                            self.operation_id,
+                            "session_not_completed",
+                            "The option quote is intraday rather than a completed session.",
+                        )
+                    )
+                elif snapshot.observed_at.date().isoformat() != query.observed_on:
+                    source_errors.append(
+                        OptionSourceFailure(
+                            self.operation_id,
+                            "underlying_quote_date_mismatch",
+                            "The ETF reference price does not match the option trading date.",
+                        )
+                    )
+                else:
+                    session = replace(
+                        session,
+                        observed_at=observed_at.isoformat(),
+                        market_state=market_state,
+                        retrieved_at=max(
+                            snapshot.retrieved_at,
+                            months_response.retrieved_at,
+                            *quote_retrieved.values(),
+                        ),
+                    )
+            (
+                analytic_rows,
+                analytic_locators,
+                analytic_retrieved,
+                analytic_row_errors,
+            ) = self._batched_rows("CON_SO_", tuple(code_rights), degradations)
+            source_errors.extend(analytic_row_errors)
+            analytic_count = 0
+            analytic_field_count = 0
+            for code, contract in tuple(contracts.items()):
+                raw_analytics = analytic_rows.get(code)
+                if raw_analytics is None:
+                    continue
+                try:
+                    analytics, analytics_errors = _parse_analytics(
+                        code,
+                        raw_analytics,
+                        expected_underlying=query.subject_clue,
+                        expected_option_type=contract.option_type,
+                        expected_month=month,
+                        quote={
+                            "series": contract.series,
+                            "strike": contract.strike,
+                            "last": contract.last,
+                            "volume": contract.volume,
+                        },
+                    )
+                except _SourceError as error:
+                    source_errors.append(
+                        _scoped_failure(self.operation_id, error, code)
+                    )
+                    continue
+                source_errors.extend(
+                    _scoped_failure(self.operation_id, error, code)
+                    for error in analytics_errors
+                )
+                analytic_field_count += len(analytics)
+                if len(analytics) == len(OPTION_ANALYTIC_NAMES):
+                    analytic_count += 1
+                contracts[code] = replace(
+                    contract,
+                    analytics=analytics,
+                    limitations=(
+                        "provider_analytics_not_independently_verified",
+                        *contract.limitations,
+                    ),
+                    analytics_evidence_id=(
+                        f"option-analytics-sina-{code}-{contract.observed_at.replace(':', '').replace('-', '')}"
+                    ),
+                    analytics_locator_uri=analytic_locators[code],
+                    analytics_retrieved_at=analytic_retrieved[code],
+                )
+            coverage["provider_analytics"] = OptionCoverage(
+                (
+                    "observed_nonempty"
+                    if analytic_count == len(code_rights)
+                    else "partial"
+                ),
+                expected_count=len(code_rights),
+                observed_count=analytic_count,
+                details={
+                    "expected_field_count": len(code_rights)
+                    * len(OPTION_ANALYTIC_NAMES),
+                    "observed_field_count": analytic_field_count,
+                },
             )
             return OptionSourceBatch(
                 operation_id=self.operation_id,
+                owners=self.acquisition_owners,
                 subject=subject,
                 session=session,
-                contracts=tuple(contracts),
+                contracts=tuple(contracts.values()),
                 coverage=coverage,
-                source_errors=source_errors,
+                source_errors=tuple(_deduplicate_failures(source_errors)),
                 degradations=tuple(_deduplicate_failures(degradations)),
                 limitations=tuple(
                     [
@@ -363,19 +477,18 @@ class SinaEtfOptionSnapshotOperation:
                     ]
                     + (
                         ["adjustment_terms_not_exposed"]
-                        if any(item.series == "A" for item in contracts)
+                        if any(item.series == "A" for item in contracts.values())
                         else []
                     )
                 ),
-                listing_evidence=listing_evidence,
+                listing_evidence=tuple(listing_evidence),
                 month_evidence=month_evidence,
             )
         except SourceOperationError as error:
             failure = OptionSourceFailure(
-                self.operation_id,
+                error.source_operation,
                 error.code,
                 "The SSE ETF reference operation could not establish its contract.",
-                {"basis_source_operation": error.source_operation},
             )
         except _SourceError as error:
             failure = OptionSourceFailure(
@@ -383,13 +496,15 @@ class SinaEtfOptionSnapshotOperation:
             )
         return OptionSourceBatch(
             operation_id=self.operation_id,
+            owners=self.acquisition_owners,
             subject=subject,
             session=session,
+            contracts=tuple(contracts.values()),
             coverage=coverage,
-            source_errors=(failure,),
+            source_errors=tuple(_deduplicate_failures([*source_errors, failure])),
             degradations=tuple(_deduplicate_failures(degradations)),
             limitations=("experimental_sina_option_source",),
-            listing_evidence=listing_evidence,
+            listing_evidence=tuple(listing_evidence),
             month_evidence=month_evidence,
         )
 
@@ -427,7 +542,9 @@ class SinaEtfOptionSnapshotOperation:
         contract_month: str,
         option_type: str,
         degradations: list[OptionSourceFailure],
-    ) -> tuple[tuple[str, ...], OptionContractListingEvidence]:
+    ) -> tuple[
+        tuple[str, ...], OptionContractListingEvidence, tuple[_SourceError, ...]
+    ]:
         prefix = "OP_UP_" if option_type == "call" else "OP_DOWN_"
         symbol = f"{prefix}{underlying}{month_code}"
         response_url = f"{HQ_ENDPOINT}?{urlencode({'list': symbol})}"
@@ -436,18 +553,29 @@ class SinaEtfOptionSnapshotOperation:
         values = [item for item in rows[symbol].split(",") if item]
         codes: list[str] = []
         seen: set[str] = set()
-        for item in values:
+        errors: list[_SourceError] = []
+        for item_index, item in enumerate(values):
             if not item.startswith("CON_OP_") or not item[7:].isdigit():
-                raise _SourceError(
-                    "unknown_schema",
-                    "The option contract list contains an invalid code.",
+                errors.append(
+                    _SourceError(
+                        "unknown_schema",
+                        "The option contract list contains an invalid code.",
+                        {
+                            "scope": "contract_listing_item",
+                            "option_type": option_type,
+                            "item_index": item_index,
+                        },
+                    )
                 )
+                continue
             code = item[7:]
             if code in seen:
                 continue
             seen.add(code)
             codes.append(code)
         if not codes:
+            if errors:
+                raise errors[0]
             raise _SourceError(
                 "empty_contract_list_unverified",
                 "The source returned an empty contract list without a provider total.",
@@ -464,7 +592,9 @@ class SinaEtfOptionSnapshotOperation:
                 observed_count=len(codes),
                 locator_uri=response_url,
                 retrieved_at=response.retrieved_at,
+                contract_codes=tuple(codes),
             ),
+            tuple(errors),
         )
 
     def _batched_rows(
@@ -472,37 +602,66 @@ class SinaEtfOptionSnapshotOperation:
         prefix: str,
         codes: tuple[str, ...],
         degradations: list[OptionSourceFailure],
-    ) -> tuple[dict[str, str], dict[str, str], dict[str, datetime]]:
+    ) -> tuple[
+        dict[str, str],
+        dict[str, str],
+        dict[str, datetime],
+        tuple[OptionSourceFailure, ...],
+    ]:
         rows: dict[str, str] = {}
         locators: dict[str, str] = {}
         retrieved_values: dict[str, datetime] = {}
+        failures: list[OptionSourceFailure] = []
         for chunk in _chunks(codes, self._batch_size):
             symbols = tuple(f"{prefix}{code}" for code in chunk)
             url = f"{HQ_ENDPOINT}?{urlencode({'list': ','.join(symbols)}, safe=',')}"
-            response = self._get(url, degradations)
-            parsed = _javascript_rows(response, symbols)
+            try:
+                response = self._get(url, degradations)
+                parsed, parse_errors = _incremental_javascript_rows(response, symbols)
+            except _SourceError as error:
+                details = {
+                    **error.details,
+                    "contract_codes": tuple(chunk),
+                }
+                failures.append(
+                    OptionSourceFailure(
+                        self.operation_id, error.code, str(error), details
+                    )
+                )
+                continue
+            failures.extend(
+                OptionSourceFailure(
+                    self.operation_id,
+                    error.code,
+                    str(error),
+                    error.details,
+                )
+                for error in parse_errors
+            )
             for symbol, value in parsed.items():
                 code = symbol.removeprefix(prefix)
                 if code in rows and rows[code] != value:
-                    raise _SourceError(
-                        "duplicate_contract_conflict",
-                        "Duplicate option rows disagree within one source snapshot.",
+                    rows.pop(code)
+                    locators.pop(code, None)
+                    retrieved_values.pop(code, None)
+                    failures.append(
+                        OptionSourceFailure(
+                            self.operation_id,
+                            "duplicate_contract_conflict",
+                            "Duplicate option rows disagree within one source snapshot.",
+                            {"contract_code": code},
+                        )
                     )
+                    continue
                 rows[code] = value
                 locators[code] = url
                 retrieved_values[code] = response.retrieved_at
-        missing = sorted(set(codes).difference(rows))
-        if missing:
-            raise _SourceError(
-                "batch_response_incomplete",
-                "The source batch omitted requested option contracts.",
-            )
-        return rows, locators, retrieved_values
+        return rows, locators, retrieved_values, tuple(failures)
 
 
 def _contract_months(
     response: HttpResponse, *, expected_underlying: str
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], tuple[_SourceError, ...]]:
     media_type = response.content_type.split(";", 1)[0].strip().lower()
     if media_type not in {"application/json", "text/json", "text/plain"}:
         raise _SourceError("unknown_schema", "The option month response is not JSON.")
@@ -533,27 +692,38 @@ def _contract_months(
             code, "The option month response has an invalid identity or schema."
         )
     months: list[str] = []
-    for value in data["contractMonth"]:
+    errors: list[_SourceError] = []
+    for item_index, value in enumerate(data["contractMonth"]):
         if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}", value):
-            raise _SourceError(
-                "unknown_schema",
-                "The option source returned an invalid contract month.",
+            errors.append(
+                _SourceError(
+                    "unknown_schema",
+                    "The option source returned an invalid contract month.",
+                    {"scope": "contract_month_item", "item_index": item_index},
+                )
             )
+            continue
         try:
             date.fromisoformat(value + "-01")
-        except ValueError as error:
-            raise _SourceError(
-                "unknown_schema",
-                "The option source returned an invalid contract month.",
-            ) from error
+        except ValueError:
+            errors.append(
+                _SourceError(
+                    "unknown_schema",
+                    "The option source returned an invalid contract month.",
+                    {"scope": "contract_month_item", "item_index": item_index},
+                )
+            )
+            continue
         if value not in months:
             months.append(value)
     if not months:
+        if errors:
+            raise errors[0]
         raise _SourceError(
             "empty_contract_months_unverified",
             "The option source did not establish any contract months.",
         )
-    return tuple(months)
+    return tuple(months), tuple(errors)
 
 
 def _select_month(query: OptionQuery, months: tuple[str, ...]) -> str | None:
@@ -604,6 +774,67 @@ def _javascript_rows(
             "The source response omitted one or more requested option symbols.",
         )
     return rows
+
+
+def _incremental_javascript_rows(
+    response: HttpResponse, expected_symbols: Iterable[str]
+) -> tuple[dict[str, str], tuple[_SourceError, ...]]:
+    media_type = response.content_type.split(";", 1)[0].strip().lower()
+    if media_type not in {"text/plain", "application/javascript", "text/javascript"}:
+        raise _SourceError(
+            "unknown_schema", "The option quote response has an invalid media type."
+        )
+    try:
+        text = response.body.decode("gbk")
+    except UnicodeDecodeError as error:
+        raise _SourceError(
+            "unknown_schema", "The option quote response is not valid GBK."
+        ) from error
+    expected = set(expected_symbols)
+    rows: dict[str, str] = {}
+    invalid_symbols: set[str] = set()
+    errors: list[_SourceError] = []
+    for line in (value.strip() for value in text.splitlines() if value.strip()):
+        match = _ASSIGNMENT.fullmatch(line)
+        if match is None or match.group(1) not in expected:
+            errors.append(
+                _SourceError(
+                    "unknown_schema",
+                    "The option quote response has an invalid JS shell.",
+                    {"scope": "response_row"},
+                )
+            )
+            continue
+        symbol, value = match.groups()
+        if symbol in invalid_symbols:
+            continue
+        previous = rows.get(symbol)
+        if previous is not None and previous != value:
+            rows.pop(symbol)
+            invalid_symbols.add(symbol)
+            errors.append(
+                _SourceError(
+                    "duplicate_contract_conflict",
+                    "Duplicate option rows disagree within one source response.",
+                    {"contract_code": symbol.rsplit("_", 1)[-1]},
+                )
+            )
+            continue
+        rows[symbol] = value
+    missing = sorted(expected.difference(rows).difference(invalid_symbols))
+    if missing:
+        errors.append(
+            _SourceError(
+                "batch_response_incomplete",
+                "The source response omitted one or more requested option symbols.",
+                {
+                    "contract_codes": tuple(
+                        symbol.rsplit("_", 1)[-1] for symbol in missing
+                    )
+                },
+            )
+        )
+    return rows, tuple(errors)
 
 
 def _parse_quote(
@@ -677,7 +908,7 @@ def _parse_analytics(
     expected_option_type: str,
     expected_month: str,
     quote: dict[str, Any],
-) -> dict[str, OptionAnalytic]:
+) -> tuple[dict[str, OptionAnalytic], tuple[_SourceError, ...]]:
     fields = value.split(",")
     if len(fields) != 17 or fields[1:4] != ["", "", ""]:
         raise _SourceError(
@@ -716,32 +947,47 @@ def _parse_analytics(
             "quote_analytics_mismatch",
             "The quote and provider analytics disagree on shared fields.",
         )
-    values = {
-        "delta": OptionAnalytic(_decimal(fields[5], "delta"), "dimensionless"),
-        "gamma": OptionAnalytic(
-            _decimal(fields[6], "gamma"), "provider_native_unverified"
-        ),
-        "theta": OptionAnalytic(
-            _decimal(fields[7], "theta"), "provider_native_unverified"
-        ),
-        "vega": OptionAnalytic(
-            _decimal(fields[8], "vega"), "provider_native_unverified"
-        ),
-        "implied_volatility": OptionAnalytic(
-            _decimal(fields[9], "implied volatility", nonnegative=True),
-            "decimal_fraction",
-        ),
-        "theoretical_value": OptionAnalytic(
-            _decimal(fields[15], "theoretical value", nonnegative=True),
-            "CNY/share",
-        ),
-    }
     if fields[16] != quote["series"]:
         raise _SourceError(
             "analytics_identity_mismatch",
             "The quote and provider analytics series disagree.",
         )
-    return values
+    specs = (
+        ("delta", 5, "delta", "dimensionless", False),
+        ("gamma", 6, "gamma", "provider_native_unverified", False),
+        ("theta", 7, "theta", "provider_native_unverified", False),
+        ("vega", 8, "vega", "provider_native_unverified", False),
+        (
+            "implied_volatility",
+            9,
+            "implied volatility",
+            "decimal_fraction",
+            True,
+        ),
+        (
+            "theoretical_value",
+            15,
+            "theoretical value",
+            "CNY/share",
+            True,
+        ),
+    )
+    values: dict[str, OptionAnalytic] = {}
+    errors: list[_SourceError] = []
+    for name, field_index, field_label, unit, nonnegative in specs:
+        try:
+            value = _decimal(fields[field_index], field_label, nonnegative=nonnegative)
+        except _SourceError as error:
+            errors.append(
+                _SourceError(
+                    error.code,
+                    str(error),
+                    {"scope": "analytics_field", "analytics_field": name},
+                )
+            )
+            continue
+        values[name] = OptionAnalytic(value, unit)
+    return values, tuple(errors)
 
 
 def _decimal(
@@ -882,6 +1128,34 @@ def _deduplicate_failures(
     for item in failures:
         selected.setdefault((item.source_operation, item.code, str(item.details)), item)
     return list(selected.values())
+
+
+def _scoped_failure(
+    operation_id: str, error: _SourceError, contract_code: str
+) -> OptionSourceFailure:
+    return OptionSourceFailure(
+        operation_id,
+        error.code,
+        str(error),
+        {**error.details, "contract_code": contract_code},
+    )
+
+
+def _listing_coverage(
+    listing_evidence: Iterable[OptionContractListingEvidence],
+    *,
+    contract_month: str,
+) -> OptionCoverage:
+    items = tuple(listing_evidence)
+    return OptionCoverage(
+        "partial",
+        observed_count=sum(len(item.contract_codes) for item in items),
+        details={
+            "contract_month": contract_month,
+            "authoritative_total_available": False,
+            "evidence_ids": tuple(item.evidence_id for item in items),
+        },
+    )
 
 
 def _indeterminate_coverage() -> dict[str, OptionCoverage]:
