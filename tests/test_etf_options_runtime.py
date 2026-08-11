@@ -17,6 +17,7 @@ add_skill_scripts_to_path()
 from a_share_research.cli import main  # noqa: E402
 from a_share_research.etf_option_contract import (  # noqa: E402
     EtfOptionSubject,
+    OptionAcquisitionOwners,
     OptionAnalytic,
     OptionContractListingEvidence,
     OptionContractMonthEvidence,
@@ -34,6 +35,12 @@ from a_share_research.research_runtime import ResearchRuntime, research  # noqa:
 from tests.test_etf_option_sources import DiagnosticGate, FixtureTransport  # noqa: E402
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
+TEST_OWNERS = OptionAcquisitionOwners(
+    executor_operation="fixed_options@1",
+    identity_operation="fixed_identity@1",
+    reference_operation="fixed_underlying@1",
+    option_operation="fixed_options@1",
+)
 
 
 def option_request(*, allow_experimental: bool = True) -> dict[str, Any]:
@@ -98,7 +105,10 @@ def complete_batch() -> OptionSourceBatch:
     retrieved_at = datetime(2026, 8, 3, 10, 35, tzinfo=CHINA_STANDARD_TIME)
     return OptionSourceBatch(
         operation_id="fixed_options@1",
-        subject=EtfOptionSubject("SSE", "510050", "上证50ETF"),
+        owners=TEST_OWNERS,
+        subject=EtfOptionSubject(
+            "SSE", "510050", "上证50ETF", identity_source_operation="fixed_identity@1"
+        ),
         session=OptionSession(
             trading_date="2026-08-03",
             observed_at="2026-08-03T10:35:00+08:00",
@@ -132,6 +142,11 @@ def complete_batch() -> OptionSourceBatch:
                 option_type=option_type,
                 contract_month="2026-08",
                 observed_count=1,
+                contract_codes=tuple(
+                    item.security["code"]
+                    for item in contracts
+                    if item.option_type == option_type
+                ),
                 locator_uri=f"https://example.test/options/list/{option_type}",
                 retrieved_at=retrieved_at,
             )
@@ -150,6 +165,8 @@ def complete_batch() -> OptionSourceBatch:
 
 class FixedOptionOperation:
     operation_id = "fixed_options@1"
+    acquisition_owners = TEST_OWNERS
+    raw_fields = ("fixture_contract",)
 
     def __init__(self) -> None:
         self.called = False
@@ -169,14 +186,18 @@ class EtfOptionsRuntimeTests(unittest.TestCase):
     def test_research_runtime_routes_an_injected_option_operation(self) -> None:
         operation = FixedOptionOperation()
 
-        result = ResearchRuntime(
-            etf_option_operations=[operation],
-            etf_option_transport=NoNetworkTransport(),
-        ).research(option_request())
+        result = (
+            ResearchRuntime(
+                etf_option_operations=[operation],
+                etf_option_transport=NoNetworkTransport(),
+            )
+            .research(option_request())
+            .to_dict()
+        )
 
         self.assertTrue(operation.called)
         self.assertEqual(operation.query.subject_clue, "510050")
-        self.assertEqual(result["task_type"], "etf_options")
+        self.assertEqual(result["plan"]["task_type"], "etf_options")
         self.assertEqual(result["status"], "limited")
 
     def test_research_function_forwards_option_dependencies(self) -> None:
@@ -186,20 +207,22 @@ class EtfOptionsRuntimeTests(unittest.TestCase):
             option_request(),
             etf_option_operations=[operation],
             etf_option_transport=NoNetworkTransport(),
-        )
+        ).to_dict()
 
         self.assertTrue(operation.called)
-        self.assertEqual(result["task_type"], "etf_options")
+        self.assertEqual(result["plan"]["task_type"], "etf_options")
 
     def test_source_policy_blocks_before_collecting(self) -> None:
         operation = FixedOptionOperation()
 
-        result = ResearchRuntime(etf_option_operations=[operation]).research(
-            option_request(allow_experimental=False)
+        result = (
+            ResearchRuntime(etf_option_operations=[operation])
+            .research(option_request(allow_experimental=False))
+            .to_dict()
         )
 
         self.assertFalse(operation.called)
-        self.assertEqual(result["task_type"], "etf_options")
+        self.assertEqual(result["plan"]["task_type"], "etf_options")
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
             result["limitations"][0]["code"], "source_policy_not_satisfied"
@@ -212,12 +235,14 @@ class EtfOptionsRuntimeTests(unittest.TestCase):
             "a_share_research.etf_option_registry.build_default_etf_option_operations",
             return_value=(operation,),
         ) as registry:
-            result = ResearchRuntime(etf_option_transport=transport).research(
-                option_request()
+            result = (
+                ResearchRuntime(etf_option_transport=transport)
+                .research(option_request())
+                .to_dict()
             )
 
         registry.assert_called_once_with(transport)
-        self.assertEqual(result["task_type"], "etf_options")
+        self.assertEqual(result["plan"]["task_type"], "etf_options")
 
     def test_cli_run_uses_injected_operation_without_network(self) -> None:
         operation = FixedOptionOperation()
@@ -235,7 +260,7 @@ class EtfOptionsRuntimeTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertTrue(operation.called)
         result = json.loads(stdout.getvalue())
-        self.assertEqual(result["task_type"], "etf_options")
+        self.assertEqual(result["plan"]["task_type"], "etf_options")
         self.assertEqual(result["status"], "limited")
 
     def test_cli_runs_production_adapter_against_offline_source_fixtures(self) -> None:
@@ -263,23 +288,33 @@ class EtfOptionsRuntimeTests(unittest.TestCase):
         result = json.loads(stdout.getvalue())
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["brief"]["coverage"]["contract_listing"]["state"],
+            result["coverage"]["etf_option_contracts"]["state"],
             "partial",
         )
-        evidence = {item["id"]: item for item in result["evidence"]}
-        self.assertIn("option-months-sina-510050", evidence)
+        observations = result["observations"]
+        month = next(
+            item
+            for item in observations
+            if item["payload"]["kind"] == "etf_option_contract_months"
+        )
+        self.assertEqual(
+            month["payload"]["provenance"]["provider_record_id"],
+            "option-months-sina-510050",
+        )
         analytic = next(
             item
-            for item in evidence.values()
-            if item["id"].startswith("option-analytics-sina-")
+            for item in observations
+            if item["payload"]["kind"] == "etf_option_analytics"
         )
-        self.assertIn("CON_SO_", analytic["locator"]["uri"])
+        self.assertIn("CON_SO_", analytic["payload"]["locator"]["uri"])
         reference = next(
             item
-            for item in evidence.values()
-            if item["source_operation"] == "sse_etf_snapshot@1"
+            for item in observations
+            if item["operation_id"] == "sse_etf_snapshot@1"
         )
-        self.assertEqual(reference["evidence_time"], "2026-07-31T15:00:00+08:00")
+        self.assertEqual(
+            reference["payload"]["observed_at"], "2026-07-31T15:00:00+08:00"
+        )
 
 
 if __name__ == "__main__":

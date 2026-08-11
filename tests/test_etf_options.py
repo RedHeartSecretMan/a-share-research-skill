@@ -11,6 +11,7 @@ add_skill_scripts_to_path()
 
 from a_share_research.etf_option_contract import (  # noqa: E402
     EtfOptionSubject,
+    OptionAcquisitionOwners,
     OptionAnalytic,
     OptionContractListingEvidence,
     OptionContractMonthEvidence,
@@ -21,9 +22,37 @@ from a_share_research.etf_option_contract import (  # noqa: E402
     OptionSourceBatch,
     OptionSourceFailure,
 )
-from a_share_research.etf_options import build_etf_options_result  # noqa: E402
+from a_share_research.etf_options import (  # noqa: E402
+    build_etf_options_result as build_unified_etf_options_result,
+)
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
+TEST_OWNERS = OptionAcquisitionOwners(
+    executor_operation="fixed_options@1",
+    identity_operation="fixed_identity@1",
+    reference_operation="fixed_underlying@1",
+    option_operation="fixed_options@1",
+)
+
+
+def build_etf_options_result(
+    request: dict[str, Any], operations: list[Any]
+) -> dict[str, Any]:
+    """Serialize through the formal public boundary used by the installed CLI."""
+
+    return build_unified_etf_options_result(request, operations).to_dict()
+
+
+def claim_payload(result: dict[str, Any], kind: str) -> dict[str, Any]:
+    return next(item["payload"] for item in result["claims"] if item["kind"] == kind)
+
+
+def selection_payload(result: dict[str, Any]) -> dict[str, Any]:
+    return claim_payload(result, "etf_option_selection")
+
+
+def observations_of_kind(result: dict[str, Any], kind: str) -> list[dict[str, Any]]:
+    return [item for item in result["observations"] if item["payload"]["kind"] == kind]
 
 
 def option_request() -> dict[str, Any]:
@@ -97,6 +126,8 @@ def contract(
 
 class FixedOptionOperation:
     operation_id = "fixed_options@1"
+    acquisition_owners = TEST_OWNERS
+    raw_fields = ("fixture_contract",)
 
     def __init__(self, batch: OptionSourceBatch) -> None:
         self.batch = batch
@@ -108,9 +139,19 @@ class FixedOptionOperation:
 
 def complete_batch(*contracts: OptionContractQuote) -> OptionSourceBatch:
     retrieved_at = datetime(2026, 8, 3, 10, 35, tzinfo=CHINA_STANDARD_TIME)
+    contract_months = {item.contract_month for item in contracts}
+    assert len(contract_months) <= 1
+    listing_month = next(iter(contract_months), "2026-08")
+    observed_months = tuple(sorted({item.contract_month for item in contracts})) or (
+        "2026-08",
+        "2026-09",
+    )
     return OptionSourceBatch(
         operation_id="fixed_options@1",
-        subject=EtfOptionSubject("SSE", "510050", "上证50ETF"),
+        owners=TEST_OWNERS,
+        subject=EtfOptionSubject(
+            "SSE", "510050", "上证50ETF", identity_source_operation="fixed_identity@1"
+        ),
         session=OptionSession(
             trading_date="2026-08-03",
             observed_at="2026-08-03T10:35:00+08:00",
@@ -149,9 +190,14 @@ def complete_batch(*contracts: OptionContractQuote) -> OptionSourceBatch:
                 source_operation="fixed_options@1",
                 evidence_id=f"listing-{option_type}",
                 option_type=option_type,
-                contract_month="2026-08",
+                contract_month=listing_month,
                 observed_count=sum(
                     item.option_type == option_type for item in contracts
+                ),
+                contract_codes=tuple(
+                    item.security["code"]
+                    for item in contracts
+                    if item.option_type == option_type
                 ),
                 locator_uri=f"https://example.test/options/list/{option_type}",
                 retrieved_at=retrieved_at,
@@ -161,7 +207,7 @@ def complete_batch(*contracts: OptionContractQuote) -> OptionSourceBatch:
         month_evidence=OptionContractMonthEvidence(
             source_operation="fixed_options@1",
             evidence_id="listing-months",
-            observed_months=("2026-08", "2026-09"),
+            observed_months=observed_months,
             identity_status="validated",
             locator_uri="https://example.test/options/months",
             retrieved_at=retrieved_at,
@@ -182,37 +228,50 @@ class EtfOptionsContractTests(unittest.TestCase):
 
         result = build_etf_options_result(option_request(), [operation])
 
-        self.assertEqual(result["task_type"], "etf_options")
+        self.assertEqual(result["plan"]["task_type"], "etf_options")
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["atm"]["status"], "identified")
-        self.assertEqual(result["atm"]["strike_candidates"], ["3.00"])
-        self.assertEqual(len(result["contracts"]), 2)
+        self.assertEqual(selection_payload(result)["atm"]["status"], "identified")
         self.assertEqual(
-            {item["contract"]["option_type"] for item in result["contracts"]},
+            selection_payload(result)["atm"]["strike_candidates"], ["3.00"]
+        )
+        self.assertEqual(len(selection_payload(result)["contracts"]), 2)
+        self.assertEqual(
+            {
+                item["contract"]["option_type"]
+                for item in selection_payload(result)["contracts"]
+            },
             {"call", "put"},
         )
         self.assertEqual(
-            result["contracts"][0]["analytics"]["delta"]["origin"],
+            selection_payload(result)["contracts"][0]["analytics"]["delta"]["origin"],
             "provider_reported",
         )
-        self.assertEqual(result["calculations"], [])
-        self.assertEqual(operation.query.view, "atm")
-        evidence = {item["id"]: item for item in result["evidence"]}
         self.assertEqual(
-            evidence["underlying-510050"]["source_operation"],
+            [item["kind"] for item in result["calculations"]],
+            ["etf_option_atm"],
+        )
+        self.assertEqual(operation.query.view, "atm")
+        reference = observations_of_kind(result, "etf_option_reference")[0]
+        self.assertEqual(
+            reference["operation_id"],
             "fixed_underlying@1",
         )
         self.assertEqual(
-            evidence["underlying-510050"]["evidence_time"],
+            reference["payload"]["observed_at"],
             "2026-08-03T10:34:59+08:00",
         )
+        analytic = next(
+            item
+            for item in observations_of_kind(result, "etf_option_analytics")
+            if item["payload"]["contract"]["security"]["code"] == "10000001"
+        )
         self.assertEqual(
-            evidence["option-analytics-10000001"]["locator"]["uri"],
+            analytic["payload"]["locator"]["uri"],
             "https://example.test/options/10000001/analytics",
         )
         self.assertEqual(
-            result["contracts"][0]["analytics"]["delta"]["evidence_ids"],
-            ["option-analytics-10000001"],
+            selection_payload(result)["contracts"][0]["analytics_evidence_ids"],
+            [analytic["id"]],
         )
 
     def test_chain_keeps_standard_and_adjusted_series_as_distinct_pairs(self) -> None:
@@ -236,27 +295,31 @@ class EtfOptionsContractTests(unittest.TestCase):
         result = build_etf_options_result(request, [operation])
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["contracts"]), 4)
+        self.assertEqual(len(selection_payload(result)["contracts"]), 4)
         self.assertEqual(
-            [item["contract"]["series"] for item in result["contracts"]],
+            [
+                item["contract"]["series"]
+                for item in selection_payload(result)["contracts"]
+            ],
             ["M", "M", "A", "A"],
         )
-        self.assertEqual(len(result["t_quote"]["rows"]), 2)
+        self.assertEqual(len(selection_payload(result)["t_quote"]["rows"]), 2)
         self.assertEqual(
-            [item["series"] for item in result["t_quote"]["rows"]], ["A", "M"]
+            [item["series"] for item in selection_payload(result)["t_quote"]["rows"]],
+            ["A", "M"],
         )
         self.assertTrue(
             all(
-                row["call_security"]["code"] != row["put_security"]["code"]
-                for row in result["t_quote"]["rows"]
+                row["call"]["contract"]["security"]["code"]
+                != row["put"]["contract"]["security"]["code"]
+                for row in selection_payload(result)["t_quote"]["rows"]
             )
         )
         self.assertTrue(
             all(
                 row[side]["quote"]["observed_at"]
-                and row[side]["analytics"]["implied_volatility"]["origin"]
-                == "provider_reported"
-                for row in result["t_quote"]["rows"]
+                and row[side]["analytics_evidence_ids"]
+                for row in selection_payload(result)["t_quote"]["rows"]
                 for side in ("call", "put")
             )
         )
@@ -318,8 +381,14 @@ class EtfOptionsContractTests(unittest.TestCase):
         result = build_etf_options_result(option_request(), [operation])
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["contracts"][0]["quote"]["state"], "no_quote")
-        self.assertEqual(result["brief"]["no_quote_contract_count"], 1)
+        self.assertIn(
+            "no_quote",
+            {
+                item["payload"]["quote"]["state"]
+                for item in observations_of_kind(result, "etf_option_quote")
+            },
+        )
+        self.assertEqual(len(observations_of_kind(result, "etf_option_quote")), 2)
         self.assertIn(
             "option_quote_unavailable",
             {item["code"] for item in result["limitations"]},
@@ -384,10 +453,7 @@ class EtfOptionsContractTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(
-            result["brief"]["coverage"]["contract_listing"]["state"],
-            "indeterminate",
-        )
+        self.assertEqual(result["coverage"]["etf_option_contracts"]["state"], "partial")
         self.assertEqual(result["source_errors"][0]["code"], "upstream_unavailable")
 
     def test_blocked_source_boundary_retains_referenced_etf_identity_evidence(
@@ -402,6 +468,7 @@ class EtfOptionsContractTests(unittest.TestCase):
                 "SSE",
                 "510050",
                 "上证50ETF",
+                identity_source_operation="fixed_identity@1",
                 identity_evidence_id="etf-identity-sse_etf_list@1-SSE:510050",
                 identity_locator_uri="https://example.test/etf-list/510050",
                 identity_retrieved_at=identity_retrieved_at,
@@ -422,15 +489,15 @@ class EtfOptionsContractTests(unittest.TestCase):
             option_request(), [FixedOptionOperation(batch)]
         )
 
-        subject_evidence_id = result["subjects"][0]["evidence_ids"][0]
-        evidence = {item["id"]: item for item in result["evidence"]}
-        self.assertIn(subject_evidence_id, evidence)
+        identity = observations_of_kind(result, "etf_option_identity")[0]
         self.assertEqual(
-            evidence[subject_evidence_id]["locator"]["uri"],
+            identity["payload"]["locator"]["uri"],
             "https://example.test/etf-list/510050",
         )
+        self.assertEqual(identity["operation_id"], "fixed_identity@1")
         self.assertEqual(
-            evidence[subject_evidence_id]["source_operation"], "sse_etf_list@1"
+            identity["payload"]["provenance"]["provider_record_id"],
+            "etf-identity-sse_etf_list@1-SSE:510050",
         )
 
     def test_equidistant_standard_strikes_are_all_retained_as_atm(self) -> None:
@@ -445,9 +512,11 @@ class EtfOptionsContractTests(unittest.TestCase):
 
         result = build_etf_options_result(option_request(), [operation])
 
-        self.assertEqual(result["atm"]["status"], "tie")
-        self.assertEqual(result["atm"]["strike_candidates"], ["3.00", "3.04"])
-        self.assertEqual(len(result["contracts"]), 4)
+        self.assertEqual(selection_payload(result)["atm"]["status"], "tie")
+        self.assertEqual(
+            selection_payload(result)["atm"]["strike_candidates"], ["3.00", "3.04"]
+        )
+        self.assertEqual(len(selection_payload(result)["contracts"]), 4)
 
     def test_request_requires_supported_subject_single_day_and_known_modes(
         self,
@@ -493,14 +562,8 @@ class EtfOptionsContractTests(unittest.TestCase):
             )
         )
 
-        result = build_etf_options_result(option_request(), [operation])
-
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["calculations"], [])
-        self.assertIn(
-            "option_metric_origin_unverified",
-            {item["code"] for item in result["limitations"]},
-        )
+        with self.assertRaisesRegex(ValueError, "ETF-option domain facts"):
+            build_etf_options_result(option_request(), [operation])
 
     def test_source_subject_and_all_quote_times_must_match_request(self) -> None:
         base = complete_batch(
@@ -508,7 +571,13 @@ class EtfOptionsContractTests(unittest.TestCase):
             contract("10000002", "put", "3.00", delta="-0.45"),
         )
         wrong_subject = replace(
-            base, subject=EtfOptionSubject("SSE", "510300", "沪深300ETF")
+            base,
+            subject=EtfOptionSubject(
+                "SSE",
+                "510300",
+                "沪深300ETF",
+                identity_source_operation="fixed_identity@1",
+            ),
         )
         wrong_session_day = replace(
             base,
@@ -522,20 +591,23 @@ class EtfOptionsContractTests(unittest.TestCase):
             ),
         )
 
+        result = build_etf_options_result(
+            option_request(), [FixedOptionOperation(wrong_subject)]
+        )
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn(
+            "option_subject_identity_mismatch",
+            {item["code"] for item in result["limitations"]},
+        )
         for batch, expected_code in (
-            (wrong_subject, "option_subject_identity_mismatch"),
             (wrong_session_day, "option_session_date_mismatch"),
             (wrong_quote_day, "option_quote_time_mismatch"),
         ):
             with self.subTest(expected_code=expected_code):
-                result = build_etf_options_result(
-                    option_request(), [FixedOptionOperation(batch)]
-                )
-                self.assertEqual(result["status"], "blocked")
-                self.assertIn(
-                    expected_code,
-                    {item["code"] for item in result["limitations"]},
-                )
+                with self.assertRaisesRegex(ValueError, "ETF-option domain facts"):
+                    build_etf_options_result(
+                        option_request(), [FixedOptionOperation(batch)]
+                    )
 
     def test_complete_looking_batch_with_source_error_or_bad_coverage_blocks(
         self,
@@ -599,24 +671,42 @@ class EtfOptionsContractTests(unittest.TestCase):
                 },
             ),
         )
-        for call in variants:
+        for index, call in enumerate(variants):
             with self.subTest(call=call):
-                result = build_etf_options_result(
-                    option_request(),
-                    [
-                        FixedOptionOperation(
-                            complete_batch(
-                                call,
-                                contract("10000002", "put", "3.00", delta="-0.45"),
+
+                def build(candidate: OptionContractQuote = call) -> dict[str, Any]:
+                    return build_etf_options_result(
+                        option_request(),
+                        [
+                            FixedOptionOperation(
+                                complete_batch(
+                                    candidate,
+                                    contract("10000002", "put", "3.00", delta="-0.45"),
+                                )
                             )
-                        )
-                    ],
-                )
-                self.assertEqual(result["status"], "blocked")
-                self.assertIn(
-                    "option_analytics_contract_invalid",
-                    {item["code"] for item in result["limitations"]},
-                )
+                        ],
+                    )
+
+                if index == 1:
+                    with self.assertRaisesRegex(ValueError, "ETF-option domain facts"):
+                        build()
+                    continue
+                result = build()
+                if index == 0:
+                    self.assertEqual(result["status"], "limited")
+                    self.assertEqual(
+                        len(observations_of_kind(result, "etf_option_quote")), 2
+                    )
+                    self.assertEqual(
+                        [item["kind"] for item in result["calculations"]],
+                        ["etf_option_atm"],
+                    )
+                else:
+                    self.assertEqual(result["status"], "blocked")
+                    self.assertIn(
+                        "option_analytics_contract_invalid",
+                        {item["code"] for item in result["limitations"]},
+                    )
 
     def test_multiple_expiries_are_distinct_and_exact_must_exist(self) -> None:
         august = (
@@ -627,8 +717,7 @@ class EtfOptionsContractTests(unittest.TestCase):
             replace(
                 item,
                 security={**item.security, "code": str(int(item.security["code"]) + 2)},
-                contract_month="2026-09",
-                expiry_date="2026-09-23",
+                expiry_date="2026-08-27",
             )
             for item in august
         )
@@ -636,13 +725,15 @@ class EtfOptionsContractTests(unittest.TestCase):
         request = option_request()
         request["parameters"]["expiry"] = {
             "mode": "exact",
-            "date": "2026-09-23",
+            "date": "2026-08-27",
         }
 
         result = build_etf_options_result(request, [FixedOptionOperation(batch)])
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["contract_set"]["expiry_date"], "2026-09-23")
+        self.assertEqual(
+            selection_payload(result)["contract_set"]["expiry_date"], "2026-08-27"
+        )
         missing = option_request()
         missing["parameters"]["expiry"] = {
             "mode": "exact",
@@ -664,8 +755,8 @@ class EtfOptionsContractTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["atm"]["strike_candidates"], ["3.0"])
-        quote = result["contracts"][0]["quote"]
+        self.assertEqual(selection_payload(result)["atm"]["strike_candidates"], ["3.0"])
+        quote = selection_payload(result)["contracts"][0]["quote"]
         self.assertEqual(quote["bid_size"], {"value": "10", "unit": "contract"})
         self.assertEqual(quote["volume"], {"value": "1000", "unit": "contract"})
 

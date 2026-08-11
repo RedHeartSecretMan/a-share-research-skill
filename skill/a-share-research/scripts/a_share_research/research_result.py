@@ -1868,6 +1868,8 @@ def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) 
         _validate_valuation_domain_facts(result)
     elif task_type == "valuation_compare":
         _validate_comparison_domain_facts(result)
+    elif task_type == "etf_options":
+        _validate_etf_option_domain_facts(result)
 
 
 def _owned_observations(
@@ -1943,6 +1945,561 @@ def _claim_by_kind(result: Mapping[str, object], kind: str) -> dict[str, object]
         ),
         None,
     )
+
+
+def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
+    observations = _owned_observations(result)
+
+    def reject_private_references(value: object) -> None:
+        if isinstance(value, Mapping):
+            if "evidence_id" in value or "evidence_ids" in value:
+                raise ValueError(
+                    "ETF-option domain facts expose provider-local formal references"
+                )
+            for nested in value.values():
+                reject_private_references(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                reject_private_references(nested)
+
+    for observation in observations:
+        reject_private_references(_record_payload(observation))
+
+    observations_by_id = {str(item["id"]): item for item in observations}
+    payloads_by_kind: dict[str, list[dict[str, object]]] = {}
+    expected_capabilities = {
+        "etf_option_identity": "etf_option_identity",
+        "etf_option_reference": "etf_option_reference",
+        "etf_option_contract_months": "etf_option_contracts",
+        "etf_option_contract_listing": "etf_option_contracts",
+        "etf_option_quote": "etf_option_contracts",
+        "etf_option_analytics": "etf_option_contracts",
+    }
+    option_operation: str | None = None
+    for observation in observations:
+        observation_payload = _record_payload(observation)
+        kind = observation_payload.get("kind")
+        if not isinstance(kind, str) or kind not in expected_capabilities:
+            raise ValueError("ETF-option domain facts contain an unknown observation")
+        if observation.get("capability_id") != expected_capabilities[kind]:
+            raise ValueError("ETF-option domain facts contradict observation ownership")
+        payloads_by_kind.setdefault(kind, []).append(observation_payload)
+        if kind not in {"etf_option_identity", "etf_option_reference"}:
+            current_operation = observation.get("operation_id")
+            if not isinstance(current_operation, str) or (
+                option_operation is not None and current_operation != option_operation
+            ):
+                raise ValueError(
+                    "ETF-option domain facts contradict option observation ownership"
+                )
+            option_operation = current_operation
+
+    def iso_date(value: object, *, month: bool = False) -> str:
+        if not isinstance(value, str):
+            raise ValueError("ETF-option domain facts contain an invalid date")
+        candidate = f"{value}-01" if month else value
+        try:
+            parsed = datetime.strptime(candidate, "%Y-%m-%d")
+        except ValueError as error:
+            raise ValueError(
+                "ETF-option domain facts contain an invalid date"
+            ) from error
+        expected = parsed.strftime("%Y-%m" if month else "%Y-%m-%d")
+        if value != expected:
+            raise ValueError("ETF-option domain facts contain an invalid date")
+        return value
+
+    def typed_security(value: object, expected_type: str) -> dict[str, object]:
+        security = _nested_mapping({"security": value}, "security")
+        if (
+            security.get("exchange") != "SSE"
+            or security.get("type") != expected_type
+            or not isinstance(security.get("code"), str)
+            or not security["code"]
+        ):
+            raise ValueError("ETF-option domain facts contain an invalid security")
+        return security
+
+    def iso_datetime(value: object) -> datetime:
+        if not isinstance(value, str):
+            raise ValueError("ETF-option domain facts contain an invalid timestamp")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError(
+                "ETF-option domain facts contain an invalid timestamp"
+            ) from error
+        if parsed.tzinfo is None:
+            raise ValueError("ETF-option domain facts contain an invalid timestamp")
+        return parsed
+
+    def typed_contract(value: object) -> dict[str, object]:
+        contract = _nested_mapping({"contract": value}, "contract")
+        typed_security(contract.get("security"), "ETF_OPTION")
+        strike = _nested_mapping(contract, "strike")
+        if strike.get("unit") != "CNY/share":
+            raise ValueError("ETF-option domain facts contain an invalid strike")
+        _decimal_fact(strike.get("value"))
+        month = iso_date(contract.get("contract_month"), month=True)
+        expiry = iso_date(contract.get("expiry_date"))
+        if (
+            expiry[:7] != month
+            or contract.get("option_type") not in {"call", "put"}
+            or contract.get("series") not in {"M", "A"}
+        ):
+            raise ValueError("ETF-option domain facts contain an invalid contract")
+        return contract
+
+    identities = payloads_by_kind.get("etf_option_identity", [])
+    references = payloads_by_kind.get("etf_option_reference", [])
+    if len(identities) > 1 or len(references) > 1:
+        raise ValueError("ETF-option domain facts duplicate ETF session identity")
+    identity_security: dict[str, object] | None = None
+    if identities:
+        identity_subject = _nested_mapping(identities[0], "subject")
+        identity_security = typed_security(identity_subject.get("security"), "ETF")
+    reference_trading_date: str | None = None
+    if references:
+        reference_subject = _nested_mapping(references[0], "subject")
+        reference_security = typed_security(reference_subject.get("security"), "ETF")
+        reference_price = _nested_mapping(references[0], "reference_price")
+        if (
+            identity_security is not None
+            and reference_security != identity_security
+            or reference_price.get("unit") != "CNY/share"
+            or references[0].get("market_state")
+            not in {"intraday", "completed", "unknown"}
+        ):
+            raise ValueError("ETF-option domain facts contradict the ETF reference")
+        _decimal_fact(reference_price.get("value"))
+        reference_trading_date = iso_date(references[0].get("trading_date"))
+
+    retained_observed_months: set[str] = set()
+    for month_payload in payloads_by_kind.get("etf_option_contract_months", []):
+        if identity_security is not None and month_payload.get(
+            "subject_code"
+        ) != identity_security.get("code"):
+            raise ValueError("ETF-option domain facts contradict the ETF identity")
+        months = month_payload.get("observed_months")
+        if not isinstance(months, list) or not months:
+            raise ValueError("ETF-option domain facts contain invalid contract months")
+        retained_observed_months.update(iso_date(item, month=True) for item in months)
+
+    listings: list[dict[str, object]] = []
+    for listing in payloads_by_kind.get("etf_option_contract_listing", []):
+        if identity_security is not None and listing.get(
+            "subject_code"
+        ) != identity_security.get("code"):
+            raise ValueError("ETF-option domain facts contradict the ETF identity")
+        month = iso_date(listing.get("contract_month"), month=True)
+        codes = listing.get("contract_codes")
+        if (
+            month not in retained_observed_months
+            or listing.get("option_type") not in {"call", "put"}
+            or not isinstance(codes, list)
+            or any(not isinstance(code, str) or not code for code in codes)
+        ):
+            raise ValueError("ETF-option domain facts contain an invalid listing")
+        listings.append(listing)
+
+    quote_contracts: list[dict[str, object]] = []
+    for quote in payloads_by_kind.get("etf_option_quote", []):
+        contract = typed_contract(quote.get("contract"))
+        security = _nested_mapping(contract, "security")
+        code = security.get("code")
+        quote_fact = _nested_mapping(quote, "quote")
+        _require_exact_keys(
+            quote_fact,
+            {
+                "state",
+                "observed_at",
+                "last",
+                "bid",
+                "ask",
+                "bid_size",
+                "ask_size",
+                "volume",
+                "open_interest",
+            },
+            path="ETF-option domain facts quote",
+        )
+
+        def typed_optional_measure(value: object, unit: str) -> None:
+            if value is None:
+                return
+            if not isinstance(value, dict):
+                raise ValueError("ETF-option domain facts contain an invalid quote")
+            _require_exact_keys(
+                value,
+                {"value", "unit"},
+                path="ETF-option domain facts quote measure",
+            )
+            if value.get("unit") != unit:
+                raise ValueError("ETF-option domain facts contain an invalid quote")
+            _decimal_fact(value.get("value"))
+
+        for name in ("last", "bid", "ask"):
+            typed_optional_measure(quote_fact.get(name), "CNY/share")
+        for name in ("bid_size", "ask_size", "volume", "open_interest"):
+            typed_optional_measure(quote_fact.get(name), "contract")
+        quote_time = iso_datetime(quote_fact.get("observed_at"))
+        quote_state = quote_fact.get("state")
+        availability_invalid = (
+            quote_state == "quoted"
+            and (quote_fact.get("bid") is None or quote_fact.get("ask") is None)
+        ) or (
+            quote_state == "no_quote"
+            and quote_fact.get("bid") is not None
+            and quote_fact.get("ask") is not None
+        )
+        if (
+            contract.get("contract_month") not in retained_observed_months
+            or not any(
+                code in cast(list[str], listing["contract_codes"])
+                and listing.get("contract_month") == contract.get("contract_month")
+                and listing.get("option_type") == contract.get("option_type")
+                for listing in listings
+            )
+            or quote_state not in {"quoted", "no_quote"}
+            or availability_invalid
+            or reference_trading_date is None
+            or quote_time.date().isoformat() != reference_trading_date
+        ):
+            raise ValueError("ETF-option domain facts contradict acquired quote facts")
+        quote_contracts.append(contract)
+
+    for analytics in payloads_by_kind.get("etf_option_analytics", []):
+        contract = typed_contract(analytics.get("contract"))
+        if contract not in quote_contracts:
+            raise ValueError(
+                "ETF-option domain facts contradict an owned quote for analytics"
+            )
+        analytics_facts = analytics.get("analytics")
+        analytic_units = {
+            "delta": "dimensionless",
+            "gamma": "provider_native_unverified",
+            "theta": "provider_native_unverified",
+            "vega": "provider_native_unverified",
+            "implied_volatility": "decimal_fraction",
+            "theoretical_value": "CNY/share",
+        }
+        if (
+            not isinstance(analytics_facts, dict)
+            or not analytics_facts
+            or not set(analytics_facts).issubset(analytic_units)
+        ):
+            raise ValueError("ETF-option domain facts contain invalid analytics")
+        for name, fact in analytics_facts.items():
+            if not isinstance(fact, dict):
+                raise ValueError("ETF-option domain facts contain invalid analytics")
+            _require_exact_keys(
+                fact,
+                {"status", "value", "unit", "origin"},
+                path="ETF-option analytic",
+            )
+            if (
+                fact.get("status") != "observed"
+                or fact.get("origin") != "provider_reported"
+                or fact.get("unit") != analytic_units[name]
+            ):
+                raise ValueError("ETF-option domain facts contain invalid analytics")
+            _decimal_fact(fact.get("value"))
+
+    selection = _claim_by_kind(result, "etf_option_selection")
+    if selection is None:
+        return
+    payload = _nested_mapping(selection, "payload")
+    request = _nested_mapping(payload, "request")
+    session = _nested_mapping(payload, "session")
+    contract_set = _nested_mapping(payload, "contract_set")
+    atm = _nested_mapping(payload, "atm")
+    contracts = payload.get("contracts")
+    t_quote = payload.get("t_quote")
+    if (
+        request.get("view") not in {"atm", "chain"}
+        or request.get("expiry_mode") not in {"nearest_unexpired", "exact"}
+        or request.get("quote_mode") not in {"latest", "latest_completed"}
+        or not isinstance(contracts, list)
+        or not contracts
+        or not isinstance(t_quote, dict)
+    ):
+        raise ValueError("ETF-option domain facts are incomplete")
+
+    identity_claim = _claim_by_kind(result, "etf_option_identity")
+    if identity_claim is None:
+        raise ValueError("ETF-option domain facts lack the ETF identity claim")
+    identity_payload = _nested_mapping(identity_claim, "payload")
+    identity_subject = _nested_mapping(identity_payload, "subject")
+    identity_security = _nested_mapping(identity_subject, "security")
+    identity_ids = identity_payload.get("identity_evidence_ids")
+    if not isinstance(identity_ids, list) or len(identity_ids) != 1:
+        raise ValueError("ETF-option domain facts lack one ETF identity observation")
+    identity_record = observations_by_id.get(str(identity_ids[0]))
+    if identity_record is None:
+        raise ValueError("ETF-option domain facts reference an unknown ETF identity")
+    acquired_identity = _record_payload(identity_record)
+    if (
+        acquired_identity.get("kind") != "etf_option_identity"
+        or acquired_identity.get("subject") != identity_subject
+        or request.get("subject_clue") != identity_security.get("code")
+    ):
+        raise ValueError("ETF-option domain facts contradict the acquired ETF identity")
+    reference_ids = session.get("reference_evidence_ids")
+    if not isinstance(reference_ids, list) or len(reference_ids) != 1:
+        raise ValueError("ETF-option domain facts lack one reference observation")
+    reference_record = observations_by_id.get(str(reference_ids[0]))
+    if reference_record is None:
+        raise ValueError("ETF-option domain facts reference an unknown ETF quote")
+    reference_payload = _record_payload(reference_record)
+    reference_price = _nested_mapping(reference_payload, "reference_price")
+    reference_subject = _nested_mapping(reference_payload, "subject", "security")
+    if (
+        reference_payload.get("kind") != "etf_option_reference"
+        or request.get("subject_clue") != reference_subject.get("code")
+        or session.get("trading_date") != reference_payload.get("trading_date")
+        or session.get("market_state") != reference_payload.get("market_state")
+        or session.get("reference_price") != reference_price
+        or request.get("quote_mode") != session.get("quote_mode")
+        or request.get("observed_on") != session.get("trading_date")
+        or (
+            request.get("quote_mode") == "latest_completed"
+            and session.get("market_state") != "completed"
+        )
+    ):
+        raise ValueError("ETF-option domain facts contradict the reference session")
+
+    selected_quotes: list[dict[str, object]] = []
+    selected_analytics: dict[str, dict[str, object]] = {}
+    for row in contracts:
+        if not isinstance(row, dict):
+            raise ValueError("ETF-option domain facts contain an invalid contract")
+        quote_ids = row.get("quote_evidence_ids")
+        analytics_ids = row.get("analytics_evidence_ids")
+        if (
+            not isinstance(quote_ids, list)
+            or len(quote_ids) != 1
+            or not isinstance(analytics_ids, list)
+        ):
+            raise ValueError("ETF-option domain facts lack contract references")
+        quote_record = observations_by_id.get(str(quote_ids[0]))
+        if quote_record is None:
+            raise ValueError("ETF-option domain facts reference an unknown quote")
+        quote_payload = _record_payload(quote_record)
+        if (
+            quote_payload.get("kind") != "etf_option_quote"
+            or row.get("contract") != quote_payload.get("contract")
+            or row.get("quote") != quote_payload.get("quote")
+        ):
+            raise ValueError("ETF-option domain facts contradict an owned quote")
+        selected_quotes.append(quote_payload)
+        contract = _nested_mapping(quote_payload, "contract")
+        security = _nested_mapping(contract, "security")
+        code = security.get("code")
+        if not isinstance(code, str) or not code:
+            raise ValueError("ETF-option domain facts contain an invalid contract code")
+        if len(analytics_ids) > 1:
+            raise ValueError("ETF-option domain facts duplicate contract analytics")
+        if analytics_ids:
+            analytic_record = observations_by_id.get(str(analytics_ids[0]))
+            if analytic_record is None:
+                raise ValueError(
+                    "ETF-option domain facts reference unknown contract analytics"
+                )
+            analytic_payload = _record_payload(analytic_record)
+            if (
+                analytic_payload.get("kind") != "etf_option_analytics"
+                or analytic_payload.get("contract") != contract
+                or row.get("analytics") != analytic_payload.get("analytics")
+            ):
+                raise ValueError(
+                    "ETF-option domain facts contradict owned contract analytics"
+                )
+            selected_analytics[code] = analytic_payload
+        elif row.get("analytics") != {}:
+            raise ValueError("ETF-option domain facts forge unavailable analytics")
+
+    contract_facts = [_nested_mapping(item, "contract") for item in selected_quotes]
+    quote_claim = _claim_by_kind(result, "etf_option_quote")
+    if (
+        quote_claim is None
+        or _nested_mapping(quote_claim, "payload").get("contracts") != contracts
+    ):
+        raise ValueError("ETF-option domain facts contradict the quote claim")
+    expected_analytics_contracts = [
+        row
+        for row in contracts
+        if isinstance(row, dict) and row.get("analytics_evidence_ids")
+    ]
+    analytics_claim = _claim_by_kind(result, "etf_option_analytics")
+    if expected_analytics_contracts:
+        if (
+            analytics_claim is None
+            or _nested_mapping(analytics_claim, "payload").get("contracts")
+            != expected_analytics_contracts
+        ):
+            raise ValueError(
+                "ETF-option domain facts discard an acquired analytics sibling"
+            )
+    elif analytics_claim is not None:
+        raise ValueError("ETF-option domain facts forge an analytics claim")
+    expiry_dates = {item.get("expiry_date") for item in contract_facts}
+    months = sorted({str(item.get("contract_month")) for item in contract_facts})
+    series = sorted({str(item.get("series")) for item in contract_facts})
+    if (
+        len(expiry_dates) != 1
+        or contract_set.get("expiry_date") != next(iter(expiry_dates))
+        or contract_set.get("contract_months") != months
+        or contract_set.get("series") != series
+        or contract_set.get("contract_count") != len(contract_facts)
+    ):
+        raise ValueError("ETF-option domain facts contradict the selected contracts")
+    if request.get("expiry_mode") == "exact" and request.get(
+        "expiry_date"
+    ) != contract_set.get("expiry_date"):
+        raise ValueError("ETF-option domain facts contradict exact-expiry selection")
+
+    listing_ids = contract_set.get("listing_evidence_ids")
+    if not isinstance(listing_ids, list) or not listing_ids:
+        raise ValueError("ETF-option domain facts lack listing lineage")
+    listed_codes: set[str] = set()
+    observed_months: set[str] = set()
+    for item in listing_ids:
+        record = observations_by_id.get(str(item))
+        if record is None:
+            raise ValueError("ETF-option domain facts reference unknown listing facts")
+        listing_payload = _record_payload(record)
+        kind = listing_payload.get("kind")
+        if kind == "etf_option_contract_listing":
+            codes = listing_payload.get("contract_codes")
+            if not isinstance(codes, list) or any(
+                not isinstance(code, str) for code in codes
+            ):
+                raise ValueError(
+                    "ETF-option domain facts contain invalid listing codes"
+                )
+            listed_codes.update(cast(list[str], codes))
+        elif kind == "etf_option_contract_months":
+            values = listing_payload.get("observed_months")
+            if not isinstance(values, list) or any(
+                not isinstance(value, str) for value in values
+            ):
+                raise ValueError(
+                    "ETF-option domain facts contain invalid contract months"
+                )
+            observed_months.update(cast(list[str], values))
+        else:
+            raise ValueError("ETF-option domain facts misuse listing lineage")
+    selected_codes = {
+        str(_nested_mapping(item, "security").get("code")) for item in contract_facts
+    }
+    if not selected_codes.issubset(listed_codes) or not set(months).issubset(
+        observed_months
+    ):
+        raise ValueError("ETF-option domain facts contradict acquired listings")
+
+    grouped: dict[Decimal, set[str]] = {}
+    strike_text: dict[Decimal, str] = {}
+    for item in contract_facts:
+        if item.get("series") != "M":
+            continue
+        strike = _nested_mapping(item, "strike")
+        value = _decimal_fact(strike.get("value"))
+        option_type = item.get("option_type")
+        if option_type not in {"call", "put"}:
+            raise ValueError("ETF-option domain facts contain an invalid option side")
+        grouped.setdefault(value, set()).add(cast(str, option_type))
+        if option_type == "call":
+            strike_text[value] = str(strike.get("value"))
+    complete_strikes = [
+        value for value, sides in grouped.items() if sides == {"call", "put"}
+    ]
+    if not complete_strikes:
+        raise ValueError("ETF-option domain facts lack a complete ATM pair")
+    reference_value = _decimal_fact(reference_price.get("value"))
+    minimum_distance = min(abs(item - reference_value) for item in complete_strikes)
+    expected_candidates = [
+        strike_text[item]
+        for item in sorted(complete_strikes)
+        if abs(item - reference_value) == minimum_distance
+    ]
+    if (
+        atm.get("method_id") != "nearest_strike_to_underlying_reference@1"
+        or atm.get("strike_candidates") != expected_candidates
+        or atm.get("status")
+        != ("tie" if len(expected_candidates) > 1 else "identified")
+        or atm.get("basis_evidence_ids") != reference_ids
+    ):
+        raise ValueError("ETF-option domain facts forge ATM selection")
+
+    calculation = next(
+        (
+            item
+            for item in cast(list[dict[str, object]], result["calculations"])
+            if item.get("kind") == "etf_option_atm"
+        ),
+        None,
+    )
+    if calculation is None:
+        raise ValueError("ETF-option domain facts lack the ATM calculation")
+    calculation_payload = _nested_mapping(calculation, "payload")
+    if (
+        calculation_payload.get("method_id")
+        != "nearest_strike_to_underlying_reference@1"
+        or _decimal_fact(calculation_payload.get("reference_price")) != reference_value
+        or calculation_payload.get("candidate_strikes") != expected_candidates
+    ):
+        raise ValueError("ETF-option domain facts contradict the ATM calculation")
+
+    if t_quote.get("grouping") != [
+        "contract_month",
+        "expiry_date",
+        "series",
+        "strike",
+    ] or not isinstance(t_quote.get("rows"), list):
+        raise ValueError("ETF-option domain facts contain an invalid T quote")
+    grouped_rows: dict[tuple[str, str, str, Decimal], dict[str, dict[str, object]]] = {}
+    for row in contracts:
+        assert isinstance(row, dict)
+        contract = _nested_mapping(row, "contract")
+        strike = _nested_mapping(contract, "strike")
+        option_type = contract.get("option_type")
+        if option_type not in {"call", "put"}:
+            raise ValueError("ETF-option domain facts contain an invalid T quote side")
+        key = (
+            str(contract.get("contract_month")),
+            str(contract.get("expiry_date")),
+            str(contract.get("series")),
+            _decimal_fact(strike.get("value")),
+        )
+        grouped_rows.setdefault(key, {})[cast(str, option_type)] = row
+    expected_t_quote: list[dict[str, object]] = []
+    for key, sides in sorted(grouped_rows.items()):
+        if set(sides) != {"call", "put"}:
+            raise ValueError("ETF-option domain facts contain an incomplete T quote")
+        call, put = sides["call"], sides["put"]
+        call_contract = _nested_mapping(call, "contract")
+        expected_t_quote.append(
+            {
+                "contract_month": key[0],
+                "expiry_date": key[1],
+                "series": key[2],
+                "strike": call_contract["strike"],
+                "call": {
+                    "contract": call["contract"],
+                    "quote": call["quote"],
+                    "quote_evidence_ids": call["quote_evidence_ids"],
+                    "analytics_evidence_ids": call["analytics_evidence_ids"],
+                },
+                "put": {
+                    "contract": put["contract"],
+                    "quote": put["quote"],
+                    "quote_evidence_ids": put["quote_evidence_ids"],
+                    "analytics_evidence_ids": put["analytics_evidence_ids"],
+                },
+            }
+        )
+    if t_quote.get("rows") != expected_t_quote:
+        raise ValueError("ETF-option domain facts contradict the selected T quote")
 
 
 def _validate_market_domain_facts(result: Mapping[str, object]) -> None:

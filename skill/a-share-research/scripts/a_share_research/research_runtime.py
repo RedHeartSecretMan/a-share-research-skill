@@ -166,25 +166,14 @@ class ResearchRuntime:
                 self._research_now,
             )
         elif task_type == "etf_options":
-            if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
-                    request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "etf_options currently requires experimental source operations"
-                    ),
-                )
-            else:
-                etf_option_operations = self._etf_option_operations
-                if etf_option_operations is None:
-                    from .etf_option_registry import (
-                        build_default_etf_option_operations,
-                    )
+            etf_option_operations = self._etf_option_operations
+            if etf_option_operations is None:
+                from .etf_option_registry import build_default_etf_option_operations
 
-                    etf_option_operations = build_default_etf_option_operations(
-                        self._etf_option_transport
-                    )
-                result = build_etf_options_result(request, etf_option_operations)
+                etf_option_operations = build_default_etf_option_operations(
+                    self._etf_option_transport
+                )
+            result = build_etf_options_result(request, etf_option_operations)
         elif task_type == "security_valuation":
             result = build_security_valuation_result(
                 request,

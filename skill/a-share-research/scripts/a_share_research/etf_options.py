@@ -4,16 +4,33 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, Collection
+from typing import Any, Collection, Mapping, cast
 
 from .etf_option_contract import (
     OPTION_ANALYTIC_NAMES,
     EtfOptionSubject,
+    OptionAcquisitionOwners,
     OptionContractQuote,
     OptionQuery,
     OptionSourceBatch,
     OptionSourceOperation,
     json_safe_copy,
+)
+from .research_result import (
+    DirectTaskCalculation,
+    DirectTaskClaim,
+    DirectTaskConflict,
+    DirectTaskLimitation,
+    DirectTaskPlan,
+    EvidenceUsePolicy,
+    FieldDisposition,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+    ResearchDependency,
+    UnifiedResearchResult,
+    fold_direct_task_research_result,
+    stable_result_id,
 )
 
 SUPPORTED_ETF_CODES = frozenset({"510050", "510300", "510500", "588000"})
@@ -29,77 +46,1116 @@ ANALYTIC_UNITS = {
     "theoretical_value": "CNY/share",
 }
 
+_DEFAULT_OWNERS = OptionAcquisitionOwners(
+    executor_operation="sina_etf_option_snapshot@1",
+    identity_operation="sse_etf_list@1",
+    reference_operation="sse_etf_snapshot@1",
+    option_operation="sina_etf_option_snapshot@1",
+)
+_EVIDENCE_USES = (
+    "etf_option_identity",
+    "etf_option_selection",
+    "etf_option_quote",
+    "etf_option_analytics",
+    "etf_option_atm",
+)
+_IDENTITY_RAW_FIELDS = (
+    "fundCode",
+    "fundAbbr",
+    "secNameFull",
+    "companyName",
+    "listingDate",
+    "fundType",
+    "subClass",
+)
+_REFERENCE_RAW_FIELDS = (
+    "name",
+    "cpxxextendname",
+    "open",
+    "high",
+    "low",
+    "last",
+    "prev_close",
+    "chg_rate",
+    "volume",
+    "amount",
+    "tradephase",
+    "code",
+    "date",
+    "time",
+)
+
+
+def _declared_owners(operation: OptionSourceOperation) -> OptionAcquisitionOwners:
+    owners = getattr(operation, "acquisition_owners", None)
+    if not isinstance(owners, OptionAcquisitionOwners):
+        raise ValueError("ETF-option operation must declare acquisition owners")
+    if operation.operation_id != owners.executor_operation:
+        raise ValueError("ETF-option executor contradicts its declared owner map")
+    return owners
+
+
+def _declared_raw_fields(operation: OptionSourceOperation) -> tuple[str, ...]:
+    raw_fields = getattr(operation, "raw_fields", None)
+    if (
+        not isinstance(raw_fields, tuple)
+        or not raw_fields
+        or any(not isinstance(item, str) or not item for item in raw_fields)
+        or len(raw_fields) != len(set(raw_fields))
+    ):
+        raise ValueError("ETF-option operation must declare unique active raw fields")
+    return raw_fields
+
+
+def _batch_matches_declared_owners(
+    batch: OptionSourceBatch, expected: OptionAcquisitionOwners
+) -> bool:
+    if batch.owners != expected or batch.operation_id != expected.executor_operation:
+        return False
+    if (
+        batch.subject is not None
+        and batch.subject.identity_source_operation != expected.identity_operation
+    ):
+        return False
+    if (
+        batch.session is not None
+        and batch.session.reference_source_operation != expected.reference_operation
+    ):
+        return False
+    option_children = (
+        *batch.contracts,
+        *batch.listing_evidence,
+        *(() if batch.month_evidence is None else (batch.month_evidence,)),
+    )
+    if any(
+        item.source_operation != expected.option_operation for item in option_children
+    ):
+        return False
+    allowed_error_owners = {
+        expected.identity_operation,
+        expected.reference_operation,
+        expected.option_operation,
+    }
+    return not any(
+        item.source_operation not in allowed_error_owners
+        for item in (*batch.source_errors, *batch.degradations)
+    )
+
+
+def _dispositions(
+    operation_id: str,
+    owners: OptionAcquisitionOwners,
+    raw_fields: tuple[str, ...],
+) -> tuple[FieldDisposition, ...]:
+    if operation_id == owners.identity_operation:
+        normalized = {
+            "fundCode": "observations.payload.subject.security.code",
+            "secNameFull": "observations.payload.subject.name",
+            "listingDate": "observations.payload.observed_on",
+        }
+        excluded = {
+            "fundAbbr": "The ETF abbreviation is not used or retained.",
+            "companyName": "The fund manager is outside the ETF-option fact set.",
+            "fundType": "The ETF type is used for qualification but not retained.",
+            "subClass": "The ETF subclass is used for qualification but not retained.",
+        }
+        return tuple(
+            FieldDisposition(
+                field,
+                "normalized" if field in normalized else "excluded",
+                normalized.get(field),
+                excluded.get(field),
+            )
+            for field in _IDENTITY_RAW_FIELDS
+        )
+    if operation_id == owners.reference_operation:
+        normalized = {
+            "last": "observations.payload.reference_price",
+            "date": "observations.payload.trading_date",
+            "time": "observations.payload.observed_at",
+        }
+        cross_checks = {
+            "cpxxextendname": "acquisition.identity_validation",
+            "code": "observations.payload.subject.security.code",
+        }
+        excluded = {
+            "name": "The short name is schema-validated but not retained.",
+            "open": "The open price is outside the ETF-option reference fact.",
+            "high": "The high price is outside the ETF-option reference fact.",
+            "low": "The low price is outside the ETF-option reference fact.",
+            "prev_close": "The previous close is outside the ETF-option reference fact.",
+            "chg_rate": "The change rate is outside the ETF-option reference fact.",
+            "volume": "ETF volume is outside the ETF-option reference fact.",
+            "amount": "ETF turnover is outside the ETF-option reference fact.",
+            "tradephase": "The trade phase is validated but not retained.",
+        }
+        return tuple(
+            FieldDisposition(
+                field,
+                "normalized"
+                if field in normalized
+                else "cross_check_only"
+                if field in cross_checks
+                else "excluded",
+                normalized.get(field, cross_checks.get(field)),
+                excluded.get(field),
+            )
+            for field in _REFERENCE_RAW_FIELDS
+        )
+    fields = raw_fields
+    if not fields:
+        return (
+            FieldDisposition(
+                "operation_not_executed",
+                "excluded",
+                None,
+                "No source operation was available to declare active raw fields.",
+            ),
+        )
+    normalized = {
+        "months.result.data.contractMonth[]": "observations.payload.observed_months",
+        "listing[]": "observations.payload.contract_codes",
+        "quote[0]": "observations.payload.quote.bid_size",
+        "quote[1]": "observations.payload.quote.bid",
+        "quote[2]": "observations.payload.quote.last",
+        "quote[3]": "observations.payload.quote.ask",
+        "quote[4]": "observations.payload.quote.ask_size",
+        "quote[5]": "observations.payload.quote.open_interest",
+        "quote[7]": "observations.payload.contract.strike",
+        "quote[32]": "observations.payload.quote.observed_at",
+        "quote[41]": "observations.payload.quote.volume",
+        "quote[43]": "observations.payload.contract.series",
+        "quote[45]": "observations.payload.contract.option_type",
+        "quote[46]": "observations.payload.contract.expiry_date",
+        "analytics[5]": "observations.payload.analytics.delta",
+        "analytics[6]": "observations.payload.analytics.gamma",
+        "analytics[7]": "observations.payload.analytics.theta",
+        "analytics[8]": "observations.payload.analytics.vega",
+        "analytics[9]": "observations.payload.analytics.implied_volatility",
+        "analytics[15]": "observations.payload.analytics.theoretical_value",
+    }
+    cross_checks = {
+        "months.result.status.code": "acquisition.schema_validation",
+        "months.result.data.stockId": "acquisition.identity_validation",
+        "quote[36]": "acquisition.identity_validation",
+        "analytics[1]": "acquisition.schema_validation",
+        "analytics[2]": "acquisition.schema_validation",
+        "analytics[3]": "acquisition.schema_validation",
+        "analytics[4]": "acquisition.quote_analytics_validation",
+        "analytics[12]": "acquisition.identity_validation",
+        "analytics[13]": "acquisition.quote_analytics_validation",
+        "analytics[14]": "acquisition.quote_analytics_validation",
+        "analytics[16]": "acquisition.identity_validation",
+    }
+    return tuple(
+        FieldDisposition(
+            field,
+            "normalized" if field not in cross_checks else "cross_check_only",
+            normalized.get(field, cross_checks.get(field, "observations.payload")),
+        )
+        for field in fields
+    )
+
+
+def _operation_obligations(
+    owners: OptionAcquisitionOwners,
+) -> tuple[OperationObligation, ...]:
+    contracts = (
+        (
+            "etf_option_identity",
+            owners.identity_operation,
+            "authoritative_disclosure",
+            {"etf_option_identity": "supporting"},
+        ),
+        (
+            "etf_option_reference",
+            owners.reference_operation,
+            "market_observation",
+            {"etf_option_atm": "supporting"},
+        ),
+        (
+            "etf_option_contracts",
+            owners.option_operation,
+            "market_observation",
+            {
+                "etf_option_selection": "supporting",
+                "etf_option_quote": "supporting",
+                "etf_option_analytics": "supporting",
+                "etf_option_atm": "supporting",
+            },
+        ),
+    )
+    return tuple(
+        OperationObligation(
+            capability_id=capability_id,
+            operation_id=operation_id,
+            source_role=source_role,
+            experimental=True,
+            exchange="SSE",
+            evidence_uses=tuple(
+                EvidenceUsePolicy(
+                    evidence_use,
+                    cast(Any, roles.get(evidence_use, "not_applicable")),
+                )
+                for evidence_use in _EVIDENCE_USES
+            ),
+        )
+        for capability_id, operation_id, source_role, roles in contracts
+    )
+
+
+def _option_plan(
+    request: Mapping[str, object], owners: OptionAcquisitionOwners
+) -> DirectTaskPlan:
+    return DirectTaskPlan(
+        task_type="etf_options",
+        as_of=cast(str, request["as_of"]),
+        obligations=_operation_obligations(owners),
+        dependencies=(
+            ResearchDependency("etf_option_identity", "etf_option_identity", 1, True),
+            ResearchDependency("etf_option_selection", "etf_option_selection", 1, True),
+            ResearchDependency("etf_option_quote", "etf_option_quote", 2, True),
+            ResearchDependency(
+                "etf_option_analytics", "etf_option_analytics", 1, False
+            ),
+            ResearchDependency("etf_option_atm", "etf_option_atm", 2, True),
+        ),
+    )
+
+
+def _outcome(
+    owners: OptionAcquisitionOwners,
+    raw_fields: tuple[str, ...],
+    operation_id: str,
+    *,
+    observations: tuple[Mapping[str, object], ...] = (),
+    errors: tuple[Mapping[str, object], ...] = (),
+    skipped: str | None = None,
+    query_complete: bool = True,
+) -> OperationOutcome:
+    capability_id = next(
+        item.capability_id
+        for item in _operation_obligations(owners)
+        if item.operation_id == operation_id
+    )
+    execution = (
+        OperationExecution(cast(Any, skipped))
+        if skipped is not None
+        else OperationExecution("failed")
+        if errors
+        else OperationExecution("succeeded", query_complete=query_complete)
+    )
+    return OperationOutcome(
+        capability_id=capability_id,
+        operation_id=operation_id,
+        execution=execution,
+        observations=observations,
+        source_errors=errors,
+        field_dispositions=_dispositions(operation_id, owners, raw_fields),
+    )
+
+
+def _skipped_option_outcomes(
+    owners: OptionAcquisitionOwners,
+    raw_fields: tuple[str, ...],
+    state: str,
+) -> tuple[OperationOutcome, ...]:
+    return tuple(
+        _outcome(owners, raw_fields, operation_id, skipped=state)
+        for operation_id in (
+            owners.identity_operation,
+            owners.reference_operation,
+            owners.option_operation,
+        )
+    )
+
+
+def _quarantined_option_outcomes(
+    owners: OptionAcquisitionOwners, raw_fields: tuple[str, ...]
+) -> tuple[OperationOutcome, ...]:
+    local_error = {
+        "source_operation": owners.option_operation,
+        "code": "option_source_owner_mismatch",
+        "message": "The source batch contradicted its externally declared owners.",
+    }
+    return (
+        _outcome(
+            owners,
+            raw_fields,
+            owners.identity_operation,
+            skipped="skipped_research_dependency",
+        ),
+        _outcome(
+            owners,
+            raw_fields,
+            owners.reference_operation,
+            skipped="skipped_research_dependency",
+        ),
+        _outcome(
+            owners,
+            raw_fields,
+            owners.option_operation,
+            errors=(local_error,),
+        ),
+    )
+
+
+def _direct_option_result(
+    request: Mapping[str, object],
+    *,
+    owners: OptionAcquisitionOwners,
+    raw_fields: tuple[str, ...],
+    outcomes: tuple[OperationOutcome, ...],
+    claims: tuple[DirectTaskClaim, ...] = (),
+    calculations: tuple[DirectTaskCalculation, ...] = (),
+    conflicts: tuple[DirectTaskConflict, ...] = (),
+    limitations: tuple[DirectTaskLimitation, ...] = (),
+    summary: str = "ETF-option research could not establish an adoptable contract view.",
+) -> UnifiedResearchResult:
+    del raw_fields
+    return fold_direct_task_research_result(
+        _option_plan(request, owners),
+        outcomes,
+        claims=claims,
+        calculations=calculations,
+        conflicts=conflicts,
+        limitations=limitations,
+        summary=summary,
+    )
+
+
+def _local_observation(kind: str, payload: Mapping[str, object]) -> dict[str, object]:
+    content = {"kind": kind, **dict(payload)}
+    return {"id": stable_result_id("option-local", content), **content}
+
+
+def _identity_observation(subject: EtfOptionSubject, owner: str) -> dict[str, object]:
+    return _local_observation(
+        "etf_option_identity",
+        {
+            "source_operation": owner,
+            "subject": {
+                "security": {
+                    "exchange": subject.exchange,
+                    "code": subject.code,
+                    "type": "ETF",
+                },
+                "name": subject.name,
+            },
+            "observed_on": subject.identity_observed_on,
+            "retrieved_at": (
+                None
+                if subject.identity_retrieved_at is None
+                else subject.identity_retrieved_at.isoformat()
+            ),
+            "locator": {"uri": subject.identity_locator_uri},
+            "provenance": {"provider_record_id": subject.identity_evidence_id},
+        },
+    )
+
+
+def _reference_observation(batch: OptionSourceBatch, owner: str) -> dict[str, object]:
+    assert batch.subject is not None and batch.session is not None
+    session = batch.session
+    return _local_observation(
+        "etf_option_reference",
+        {
+            "source_operation": owner,
+            "subject": {
+                "security": {
+                    "exchange": batch.subject.exchange,
+                    "code": batch.subject.code,
+                    "type": "ETF",
+                }
+            },
+            "trading_date": session.trading_date,
+            "observed_at": session.reference_observed_at,
+            "market_state": session.market_state,
+            "reference_price": {
+                "value": session.reference_price,
+                "unit": "CNY/share",
+                "kind": session.reference_price_kind,
+            },
+            "retrieved_at": (
+                session.reference_retrieved_at or session.retrieved_at
+            ).isoformat(),
+            "locator": {"uri": session.locator_uri},
+            "provenance": {"provider_record_id": session.reference_evidence_id},
+        },
+    )
+
+
+def _month_observation(
+    batch: OptionSourceBatch, owner: str
+) -> dict[str, object] | None:
+    item = batch.month_evidence
+    if item is None:
+        return None
+    return _local_observation(
+        "etf_option_contract_months",
+        {
+            "source_operation": owner,
+            "subject_code": None if batch.subject is None else batch.subject.code,
+            "observed_months": list(item.observed_months),
+            "identity_status": item.identity_status,
+            "retrieved_at": item.retrieved_at.isoformat(),
+            "locator": {"uri": item.locator_uri},
+            "provenance": {"provider_record_id": item.evidence_id},
+        },
+    )
+
+
+def _listing_observation(
+    item: object, owner: str, subject_code: str | None
+) -> dict[str, object]:
+    listing = cast(Any, item)
+    return _local_observation(
+        "etf_option_contract_listing",
+        {
+            "source_operation": owner,
+            "subject_code": subject_code,
+            "option_type": listing.option_type,
+            "contract_month": listing.contract_month,
+            "observed_count": listing.observed_count,
+            "contract_codes": list(listing.contract_codes),
+            "authoritative_total_available": False,
+            "retrieved_at": listing.retrieved_at.isoformat(),
+            "locator": {"uri": listing.locator_uri},
+            "provenance": {"provider_record_id": listing.evidence_id},
+        },
+    )
+
+
+def _contract_fact(item: OptionContractQuote) -> dict[str, object]:
+    return {
+        "security": json_safe_copy(item.security),
+        "option_type": item.option_type,
+        "strike": {"value": item.strike, "unit": "CNY/share"},
+        "contract_month": item.contract_month,
+        "expiry_date": item.expiry_date,
+        "series": item.series,
+    }
+
+
+def _quote_fact(item: OptionContractQuote) -> dict[str, object]:
+    return {
+        "state": item.quote_state,
+        "observed_at": item.observed_at,
+        "last": _price(item.last),
+        "bid": _price(item.bid),
+        "ask": _price(item.ask),
+        "bid_size": _contracts(item.bid_size),
+        "ask_size": _contracts(item.ask_size),
+        "volume": _contracts(item.volume),
+        "open_interest": _contracts(item.open_interest),
+    }
+
+
+def _quote_observation(item: OptionContractQuote, owner: str) -> dict[str, object]:
+    return _local_observation(
+        "etf_option_quote",
+        {
+            "source_operation": owner,
+            "contract": _contract_fact(item),
+            "quote": _quote_fact(item),
+            "retrieved_at": (
+                None
+                if item.quote_retrieved_at is None
+                else item.quote_retrieved_at.isoformat()
+            ),
+            "locator": {"uri": item.locator_uri},
+            "limitations": list(item.limitations),
+            "provenance": {"provider_record_id": item.evidence_id},
+        },
+    )
+
+
+def _analytics_observation(
+    item: OptionContractQuote, owner: str
+) -> dict[str, object] | None:
+    if not item.analytics:
+        return None
+    return _local_observation(
+        "etf_option_analytics",
+        {
+            "source_operation": owner,
+            "contract": _contract_fact(item),
+            "analytics": {
+                name: {
+                    "status": "observed",
+                    "value": analytic.value,
+                    "unit": analytic.unit,
+                    "origin": analytic.origin,
+                }
+                for name, analytic in sorted(item.analytics.items())
+            },
+            "retrieved_at": (
+                None
+                if item.analytics_retrieved_at is None
+                else item.analytics_retrieved_at.isoformat()
+            ),
+            "locator": {"uri": item.analytics_locator_uri},
+            "provenance": {
+                "provider_record_id": item.analytics_evidence_id,
+                "provider_contract_id": item.evidence_id,
+            },
+        },
+    )
+
+
+def _deduplicate_observations(
+    observations: Collection[Mapping[str, object]],
+) -> tuple[Mapping[str, object], ...]:
+    by_key = {str(item["id"]): item for item in observations}
+    return tuple(by_key[key] for key in sorted(by_key))
+
+
+def _owned_errors(
+    batch: OptionSourceBatch, owner: str
+) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {
+            "source_operation": owner,
+            "code": item.code,
+            "message": item.message,
+        }
+        for item in batch.source_errors
+        if item.source_operation == owner
+    )
+
+
+def _option_outcomes(
+    batch: OptionSourceBatch,
+    owners: OptionAcquisitionOwners,
+    raw_fields: tuple[str, ...],
+) -> tuple[OperationOutcome, ...]:
+    identity_observations = (
+        ()
+        if batch.subject is None
+        else (_identity_observation(batch.subject, owners.identity_operation),)
+    )
+    reference_observations = (
+        ()
+        if batch.subject is None or batch.session is None
+        else (_reference_observation(batch, owners.reference_operation),)
+    )
+    option_observations: list[Mapping[str, object]] = []
+    month = _month_observation(batch, owners.option_operation)
+    if month is not None:
+        option_observations.append(month)
+    option_observations.extend(
+        _listing_observation(
+            item,
+            owners.option_operation,
+            None if batch.subject is None else batch.subject.code,
+        )
+        for item in batch.listing_evidence
+    )
+    for item in batch.contracts:
+        option_observations.append(_quote_observation(item, owners.option_operation))
+        analytics = _analytics_observation(item, owners.option_operation)
+        if analytics is not None:
+            option_observations.append(analytics)
+    outcomes: list[OperationOutcome] = []
+    for operation_id, observations in (
+        (owners.identity_operation, identity_observations),
+        (owners.reference_operation, reference_observations),
+        (owners.option_operation, _deduplicate_observations(option_observations)),
+    ):
+        errors = _owned_errors(batch, operation_id)
+        outcomes.append(
+            _outcome(
+                owners,
+                raw_fields,
+                operation_id,
+                observations=tuple(observations),
+                errors=errors,
+                query_complete=(
+                    not errors
+                    and (
+                        operation_id != owners.option_operation
+                        or all(
+                            item.state in {"observed_nonempty", "observed_empty"}
+                            for item in batch.coverage.values()
+                        )
+                    )
+                ),
+            )
+        )
+    return tuple(outcomes)
+
+
+def _observations_by_kind(
+    outcomes: Collection[OperationOutcome], kind: str
+) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        item
+        for outcome in outcomes
+        for item in outcome.observations
+        if item.get("kind") == kind
+    )
+
+
+def _has_only_local_analytics_failures(batch: OptionSourceBatch) -> bool:
+    analytics_coverage = batch.coverage.get("provider_analytics")
+    quote_coverage = batch.coverage.get("option_quotes")
+    contract_count = len(batch.contracts)
+    if (
+        analytics_coverage is None
+        or analytics_coverage.state != "partial"
+        or analytics_coverage.expected_count != contract_count
+        or not any(item.analytics for item in batch.contracts)
+        or quote_coverage is None
+        or quote_coverage.state != "observed_nonempty"
+        or quote_coverage.expected_count != contract_count
+        or quote_coverage.observed_count != contract_count
+        or any(item.quote_state != "quoted" for item in batch.contracts)
+    ):
+        return False
+    if batch.owners is None:
+        return False
+    option_owner = batch.owners.option_operation
+    contract_codes = {str(item.security["code"]) for item in batch.contracts}
+    for failure in batch.source_errors:
+        if failure.source_operation != option_owner:
+            return False
+        affected_many = failure.details.get("contract_codes")
+        if isinstance(affected_many, tuple) and affected_many:
+            if any(
+                key in failure.details
+                for key in ("scope", "contract_code", "analytics_field")
+            ):
+                return False
+            if not {str(item) for item in affected_many}.issubset(contract_codes):
+                return False
+            continue
+        affected_one = failure.details.get("contract_code")
+        scope = failure.details.get("scope")
+        if not isinstance(affected_one, str) or affected_one not in contract_codes:
+            return False
+        if scope not in {None, "analytics_field"}:
+            return False
+        analytics_field = failure.details.get("analytics_field")
+        if (
+            scope == "analytics_field" and analytics_field not in OPTION_ANALYTIC_NAMES
+        ) or (scope is None and analytics_field is not None):
+            return False
+    return True
+
+
+def _observation_key(item: Mapping[str, object]) -> str:
+    return cast(str, item["id"])
+
+
+def _observation_contract_code(item: Mapping[str, object]) -> str:
+    contract = cast(Mapping[str, object], item["contract"])
+    security = cast(Mapping[str, object], contract["security"])
+    return str(security["code"])
+
+
+def _selected_option_result(
+    request: Mapping[str, object],
+    query: OptionQuery,
+    batch: OptionSourceBatch,
+    owners: OptionAcquisitionOwners,
+    raw_fields: tuple[str, ...],
+    outcomes: tuple[OperationOutcome, ...],
+    expiry_date: str,
+    candidates: list[str],
+    selected: list[OptionContractQuote],
+    limitations: tuple[DirectTaskLimitation, ...],
+) -> UnifiedResearchResult:
+    assert batch.subject is not None and batch.session is not None
+    identity = _observations_by_kind(outcomes, "etf_option_identity")
+    reference = _observations_by_kind(outcomes, "etf_option_reference")
+    months = _observations_by_kind(outcomes, "etf_option_contract_months")
+    listings = _observations_by_kind(outcomes, "etf_option_contract_listing")
+    quotes = _observations_by_kind(outcomes, "etf_option_quote")
+    analytics = _observations_by_kind(outcomes, "etf_option_analytics")
+
+    selected_codes = {str(item.security["code"]) for item in selected}
+    selected_quotes = tuple(
+        item for item in quotes if _observation_contract_code(item) in selected_codes
+    )
+    selected_analytics = tuple(
+        item for item in analytics if _observation_contract_code(item) in selected_codes
+    )
+    quote_key_by_code = {
+        _observation_contract_code(item): _observation_key(item)
+        for item in selected_quotes
+    }
+    analytics_key_by_code = {
+        _observation_contract_code(item): _observation_key(item)
+        for item in selected_analytics
+    }
+    contract_rows: list[dict[str, object]] = []
+    for item in selected:
+        code = str(item.security["code"])
+        contract_rows.append(
+            {
+                "contract": _contract_fact(item),
+                "quote": _quote_fact(item),
+                "analytics": {
+                    name: {
+                        "status": "observed",
+                        "value": analytic.value,
+                        "unit": analytic.unit,
+                        "origin": analytic.origin,
+                    }
+                    for name, analytic in sorted(item.analytics.items())
+                },
+                "quote_evidence_ids": [quote_key_by_code[code]],
+                "analytics_evidence_ids": (
+                    [analytics_key_by_code[code]]
+                    if code in analytics_key_by_code
+                    else []
+                ),
+                "limitations": list(item.limitations),
+            }
+        )
+    selection_keys = tuple(
+        _observation_key(item) for item in (*months, *listings, *selected_quotes)
+    )
+    quote_keys = tuple(_observation_key(item) for item in selected_quotes)
+    analytic_keys = tuple(_observation_key(item) for item in selected_analytics)
+    reference_keys = tuple(_observation_key(item) for item in reference)
+    identity_keys = tuple(_observation_key(item) for item in identity)
+    claims: list[DirectTaskClaim] = []
+    if identity_keys:
+        claims.append(
+            DirectTaskClaim(
+                "etf_option_identity",
+                "etf_option_identity",
+                identity_keys,
+                {
+                    "subject": {
+                        "security": {
+                            "exchange": batch.subject.exchange,
+                            "code": batch.subject.code,
+                            "type": "ETF",
+                        },
+                        "name": batch.subject.name,
+                    },
+                    "identity_evidence_ids": list(identity_keys),
+                },
+            )
+        )
+    claims.append(
+        DirectTaskClaim(
+            "etf_option_selection",
+            "etf_option_selection",
+            selection_keys,
+            {
+                "request": {
+                    "subject_clue": query.subject_clue,
+                    "observed_on": query.observed_on,
+                    "view": query.view,
+                    "expiry_mode": query.expiry_mode,
+                    "expiry_date": query.expiry_date,
+                    "quote_mode": query.quote_mode,
+                },
+                "session": {
+                    "trading_date": batch.session.trading_date,
+                    "observed_at": batch.session.observed_at,
+                    "market_state": batch.session.market_state,
+                    "quote_mode": query.quote_mode,
+                    "reference_price": {
+                        "value": batch.session.reference_price,
+                        "unit": "CNY/share",
+                        "kind": batch.session.reference_price_kind,
+                    },
+                    "reference_evidence_ids": list(reference_keys),
+                },
+                "contract_set": {
+                    "expiry_date": expiry_date,
+                    "contract_months": sorted(
+                        {item.contract_month for item in selected}
+                    ),
+                    "series": sorted({item.series for item in selected}),
+                    "contract_count": len(selected),
+                    "listing_evidence_ids": [
+                        _observation_key(item) for item in (*months, *listings)
+                    ],
+                },
+                "atm": {
+                    "status": "tie" if len(candidates) > 1 else "identified",
+                    "method_id": "nearest_strike_to_underlying_reference@1",
+                    "strike_candidates": candidates,
+                    "basis_evidence_ids": list(reference_keys),
+                },
+                "contracts": contract_rows,
+                "t_quote": {
+                    "grouping": [
+                        "contract_month",
+                        "expiry_date",
+                        "series",
+                        "strike",
+                    ],
+                    "rows": _direct_t_quote_rows(
+                        selected, quote_key_by_code, analytics_key_by_code
+                    ),
+                },
+            },
+        )
+    )
+    claims.append(
+        DirectTaskClaim(
+            "etf_option_quote",
+            "etf_option_quote",
+            quote_keys,
+            {"contracts": contract_rows},
+        )
+    )
+    if analytic_keys:
+        claims.append(
+            DirectTaskClaim(
+                "etf_option_analytics",
+                "etf_option_analytics",
+                analytic_keys,
+                {
+                    "contracts": [
+                        row for row in contract_rows if row["analytics_evidence_ids"]
+                    ]
+                },
+            )
+        )
+    calculations = (
+        DirectTaskCalculation(
+            "etf_option_atm",
+            "etf_option_atm",
+            (*reference_keys, *quote_keys),
+            {
+                "method_id": "nearest_strike_to_underlying_reference@1",
+                "reference_price": batch.session.reference_price,
+                "candidate_strikes": candidates,
+                "basis_evidence_ids": [*reference_keys, *quote_keys],
+            },
+        ),
+    )
+    return _direct_option_result(
+        request,
+        owners=owners,
+        raw_fields=raw_fields,
+        outcomes=outcomes,
+        claims=tuple(claims),
+        calculations=calculations,
+        limitations=limitations,
+        summary=(
+            f"Retained {len(batch.contracts)} acquired ETF-option contracts and "
+            f"adopted {len(selected)} for the requested view."
+        ),
+    )
+
+
+def _direct_t_quote_rows(
+    selected: list[OptionContractQuote],
+    quote_key_by_code: Mapping[str, str],
+    analytics_key_by_code: Mapping[str, str],
+) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, str, str, Decimal], dict[str, OptionContractQuote]] = {}
+    for item in selected:
+        key = (
+            item.contract_month,
+            item.expiry_date,
+            item.series,
+            _decimal(item.strike, "strike"),
+        )
+        grouped.setdefault(key, {})[item.option_type] = item
+    rows: list[dict[str, object]] = []
+    for _key, sides in sorted(grouped.items()):
+        if set(sides) != {"call", "put"}:
+            continue
+        call, put = sides["call"], sides["put"]
+        call_code = str(call.security["code"])
+        put_code = str(put.security["code"])
+        rows.append(
+            {
+                "contract_month": call.contract_month,
+                "expiry_date": call.expiry_date,
+                "series": call.series,
+                "strike": {"value": call.strike, "unit": "CNY/share"},
+                "call": {
+                    "contract": _contract_fact(call),
+                    "quote": _quote_fact(call),
+                    "quote_evidence_ids": [quote_key_by_code[call_code]],
+                    "analytics_evidence_ids": (
+                        [analytics_key_by_code[call_code]]
+                        if call_code in analytics_key_by_code
+                        else []
+                    ),
+                },
+                "put": {
+                    "contract": _contract_fact(put),
+                    "quote": _quote_fact(put),
+                    "quote_evidence_ids": [quote_key_by_code[put_code]],
+                    "analytics_evidence_ids": (
+                        [analytics_key_by_code[put_code]]
+                        if put_code in analytics_key_by_code
+                        else []
+                    ),
+                },
+            }
+        )
+    return rows
+
 
 def build_etf_options_result(
     request: dict[str, Any], operations: Collection[OptionSourceOperation]
-) -> dict[str, Any]:
-    """Return a stable ETF-option result from typed source batches."""
+) -> UnifiedResearchResult:
+    """Fold trusted typed acquisition material directly into the public result."""
 
     query = _normalize_query(request)
     operation_list = list(operations)
     if len(operation_list) != 1:
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "option_source_count_invalid",
-            "ETF-option v0.1 requires exactly one explicitly selected source operation.",
-            [],
+            owners=_DEFAULT_OWNERS,
+            raw_fields=(),
+            outcomes=_skipped_option_outcomes(
+                _DEFAULT_OWNERS, (), "skipped_research_dependency"
+            ),
+            limitations=(
+                DirectTaskLimitation(
+                    "option_source_count_invalid",
+                    "ETF-option research requires exactly one declared source operation.",
+                ),
+            ),
         )
-    batches = [operation_list[0].collect(query)]
-    batch = batches[0]
-    if batch.subject is None or batch.session is None:
-        return _blocked_result(
+    operation = operation_list[0]
+    owners = _declared_owners(operation)
+    raw_fields = _declared_raw_fields(operation)
+    if not request["source_policy"]["allow_experimental"]:
+        return _direct_option_result(
             request,
-            "option_source_incomplete",
-            "The source did not establish both a canonical ETF identity and a usable option session.",
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=_skipped_option_outcomes(owners, raw_fields, "skipped_policy"),
+            limitations=(
+                DirectTaskLimitation(
+                    "source_policy_not_satisfied",
+                    "etf_options currently requires experimental source operations",
+                ),
+            ),
+        )
+    batch = operation.collect(query)
+    if not _batch_matches_declared_owners(batch, owners):
+        return _direct_option_result(
+            request,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=_quarantined_option_outcomes(owners, raw_fields),
+            limitations=(
+                DirectTaskLimitation(
+                    "option_source_owner_mismatch",
+                    "The source batch contradicted its externally declared owners and was quarantined.",
+                ),
+            ),
+        )
+    outcomes = _option_outcomes(batch, owners, raw_fields)
+    if batch.subject is None or batch.session is None:
+        return _direct_option_result(
+            request,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_source_incomplete",
+                    "The source did not establish both a canonical ETF identity and a usable option session.",
+                ),
+            ),
         )
     if batch.subject.exchange != "SSE" or batch.subject.code != query.subject_clue:
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "option_subject_identity_mismatch",
-            "The source ETF identity does not match the requested underlying.",
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_subject_identity_mismatch",
+                    "The source ETF identity does not match the requested underlying.",
+                ),
+            ),
         )
     source_problem = _source_completeness_problem(batch)
     if source_problem is not None:
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "option_source_not_complete",
-            source_problem,
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation("option_source_not_complete", source_problem),
+            ),
+        )
+    if batch.source_errors and not _has_only_local_analytics_failures(batch):
+        return _direct_option_result(
+            request,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_source_not_complete",
+                    "The ETF-option batch contains a non-local source failure.",
+                ),
+            ),
         )
     time_problem = _time_contract_problem(query, batch)
     if time_problem is not None:
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            time_problem[0],
-            time_problem[1],
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(DirectTaskLimitation(time_problem[0], time_problem[1]),),
         )
     if any(
         analytic.origin != "provider_reported"
         for item in batch.contracts
         for analytic in item.analytics.values()
     ):
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "option_metric_origin_unverified",
-            "Source analytics must remain explicitly provider-reported.",
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_metric_origin_unverified",
+                    "Source analytics must remain explicitly provider-reported.",
+                ),
+            ),
+        )
+    if (
+        query.quote_mode == "latest_completed"
+        and batch.session.market_state != "completed"
+    ):
+        return _direct_option_result(
+            request,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_quote_mode_mismatch",
+                    "The source snapshot is not a completed trading session.",
+                ),
+            ),
         )
     analytics_problem = _analytics_contract_problem(batch.contracts)
     if analytics_problem is not None:
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "option_analytics_contract_invalid",
-            analytics_problem,
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_analytics_contract_invalid", analytics_problem
+                ),
+            ),
         )
     if (
         query.expiry_mode == "exact"
@@ -107,55 +1163,84 @@ def build_etf_options_result(
         and _date(query.expiry_date, "expiry date")
         < _date(query.observed_on, "observation date")
     ):
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "option_contract_expired",
-            "The requested option expiry precedes the quote observation date.",
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_contract_expired",
+                    "The requested option expiry precedes the quote observation date.",
+                ),
+            ),
         )
     duplicate_conflicts = _duplicate_contract_conflicts(batch.contracts)
     if duplicate_conflicts:
-        return _blocked_result(
+        quote_keys = tuple(
+            _observation_key(item)
+            for item in _observations_by_kind(outcomes, "etf_option_quote")
+        )
+        return _direct_option_result(
             request,
-            "duplicate_option_contract_conflict",
-            "Duplicate option-contract rows disagree on canonical contract data.",
-            batches,
-            subject=batch.subject,
-            conflicts=duplicate_conflicts,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            conflicts=(
+                DirectTaskConflict(
+                    "duplicate_option_contract_conflict",
+                    "Duplicate option-contract rows disagree on canonical contract data.",
+                    quote_keys,
+                ),
+            ),
         )
     expiry_date = _select_expiry(query, batch.contracts)
     if expiry_date is None:
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "option_expiry_not_available",
-            "The requested unexpired option expiry was not established.",
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_expiry_not_available",
+                    "The requested unexpired option expiry was not established.",
+                ),
+            ),
         )
     expiry_contracts = [
         item for item in batch.contracts if item.expiry_date == expiry_date
     ]
     incomplete_pairs = _incomplete_pair_keys(expiry_contracts)
     if incomplete_pairs:
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "option_pair_incomplete",
-            "The selected expiry does not contain complete call-put pairs.",
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_pair_incomplete",
+                    "The selected expiry does not contain complete call-put pairs.",
+                ),
+            ),
         )
     standard = [item for item in expiry_contracts if item.series == "M"]
     pairs = _contract_pairs(standard)
     reference_price = _decimal(batch.session.reference_price, "reference price")
     distances = {strike: abs(strike - reference_price) for strike in pairs}
     if not distances:
-        return _blocked_result(
+        return _direct_option_result(
             request,
-            "atm_not_identifiable",
-            "No complete standard call-put pair can establish an ATM strike.",
-            batches,
-            subject=batch.subject,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "atm_not_identifiable",
+                    "No complete standard call-put pair can establish an ATM strike.",
+                ),
+            ),
         )
     minimum_distance = min(distances.values())
     candidate_values = sorted(
@@ -170,35 +1255,49 @@ def build_etf_options_result(
         selected = sorted(expiry_contracts, key=_contract_sort_key)
     else:
         selected = [item for strike in candidate_values for item in pairs[strike]]
-    result = _result(request, query, batch, expiry_date, candidates, selected)
     if query.view == "atm" and any(item.quote_state != "quoted" for item in selected):
-        result["status"] = "blocked"
-        result["limitations"].append(
-            {
-                "code": "option_quote_unavailable",
-                "message": "At least one selected ATM contract has no usable quote.",
-            }
+        return _direct_option_result(
+            request,
+            owners=owners,
+            raw_fields=raw_fields,
+            outcomes=outcomes,
+            limitations=(
+                DirectTaskLimitation(
+                    "option_quote_unavailable",
+                    "At least one selected ATM contract has no usable quote.",
+                ),
+            ),
         )
-    if (
-        query.quote_mode == "latest_completed"
-        and batch.session.market_state != "completed"
-    ):
-        result["status"] = "blocked"
-        result["limitations"].append(
-            {
-                "code": "option_quote_mode_mismatch",
-                "message": "The source snapshot is not a completed trading session.",
-            }
-        )
+    limitations: list[DirectTaskLimitation] = [
+        DirectTaskLimitation(
+            "experimental_etf_option_sources",
+            "ETF-option observations use experimental source operations.",
+        ),
+        *(
+            DirectTaskLimitation(code, "The source disclosed an ETF-option limitation.")
+            for code in sorted(set(batch.limitations))
+        ),
+        *(DirectTaskLimitation(item.code, item.message) for item in batch.degradations),
+    ]
     if batch.source_errors:
-        result["status"] = "blocked"
-        result["limitations"].append(
-            {
-                "code": "option_quote_unavailable",
-                "message": "The source reported one or more contracts without a usable quote.",
-            }
+        limitations.append(
+            DirectTaskLimitation(
+                "option_acquisition_partial",
+                "One or more ETF-option acquisition facts were unavailable or invalid.",
+            )
         )
-    return result
+    return _selected_option_result(
+        request,
+        query,
+        batch,
+        owners,
+        raw_fields,
+        outcomes,
+        expiry_date,
+        candidates,
+        selected,
+        tuple(limitations),
+    )
 
 
 def _normalize_query(request: dict[str, Any]) -> OptionQuery:
@@ -348,276 +1447,6 @@ def _duplicate_contract_conflicts(
     return conflicts
 
 
-def _result(
-    request: dict[str, Any],
-    query: OptionQuery,
-    batch: OptionSourceBatch,
-    expiry_date: str,
-    candidates: list[str],
-    selected: list[OptionContractQuote],
-) -> dict[str, Any]:
-    assert batch.subject is not None and batch.session is not None
-    contracts = [_contract_result(item) for item in selected]
-    return {
-        "schema_version": request["schema_version"],
-        "task_type": "etf_options",
-        "status": "limited",
-        "subjects": [batch.subject.to_result()],
-        "research": {
-            "as_of": query.as_of,
-            "timezone": "Asia/Shanghai",
-            "retrieved_at": batch.session.retrieved_at.isoformat(),
-        },
-        "session": {
-            "trading_date": batch.session.trading_date,
-            "observed_at": batch.session.observed_at,
-            "market_state": batch.session.market_state,
-            "quote_mode": query.quote_mode,
-            "underlying_reference": {
-                "price": {
-                    "value": batch.session.reference_price,
-                    "unit": "CNY/share",
-                },
-                "price_kind": batch.session.reference_price_kind,
-                "observed_at": batch.session.reference_observed_at,
-                "evidence_ids": [batch.session.reference_evidence_id],
-            },
-        },
-        "contract_set": {
-            "expiry_date": expiry_date,
-            "contract_months": sorted({item.contract_month for item in selected}),
-            "series": sorted({item.series for item in selected}),
-            "contract_count": len(selected),
-            "source_operation": batch.operation_id,
-            "evidence_ids": [
-                *(
-                    [batch.month_evidence.evidence_id]
-                    if batch.month_evidence is not None
-                    else []
-                ),
-                *(item.evidence_id for item in batch.listing_evidence),
-            ],
-        },
-        "atm": {
-            "status": "tie" if len(candidates) > 1 else "identified",
-            "method_id": "nearest_strike_to_underlying_reference@1",
-            "strike_candidates": candidates,
-            "basis_evidence_ids": [batch.session.reference_evidence_id],
-        },
-        "contracts": contracts,
-        "t_quote": {
-            "grouping": ["contract_month", "expiry_date", "series", "strike"],
-            "rows": _t_quote_rows(selected),
-        },
-        "brief": {
-            "contract_count": len(contracts),
-            "quoted_contract_count": sum(
-                item.quote_state == "quoted" for item in selected
-            ),
-            "no_quote_contract_count": sum(
-                item.quote_state == "no_quote" for item in selected
-            ),
-            "coverage": {
-                key: value.to_result() for key, value in sorted(batch.coverage.items())
-            },
-        },
-        "calculations": [],
-        "evidence": _evidence(batch, selected),
-        "conflicts": [],
-        "source_errors": [item.to_result() for item in batch.source_errors],
-        "degradations": [item.to_result() for item in batch.degradations],
-        "limitations": [
-            {
-                "code": "experimental_etf_option_sources",
-                "message": "ETF-option observations use experimental source operations.",
-            },
-            *(
-                [
-                    {
-                        "code": code,
-                        "message": "The source disclosed an ETF-option limitation.",
-                    }
-                    for code in sorted(set(batch.limitations))
-                ]
-            ),
-        ],
-    }
-
-
-def _contract_result(item: OptionContractQuote) -> dict[str, Any]:
-    return {
-        "contract": _contract_identity(item),
-        "quote": _quote_result(item),
-        "analytics": _analytics_result(item),
-        "evidence_ids": sorted(
-            {
-                item.evidence_id,
-                item.analytics_evidence_id or item.evidence_id,
-            }
-        ),
-        "limitations": list(item.limitations),
-    }
-
-
-def _contract_identity(item: OptionContractQuote) -> dict[str, Any]:
-    return {
-        "security": json_safe_copy(item.security),
-        "option_type": item.option_type,
-        "strike": {"value": item.strike, "unit": "CNY/share"},
-        "contract_month": item.contract_month,
-        "expiry_date": item.expiry_date,
-        "series": item.series,
-    }
-
-
-def _quote_result(item: OptionContractQuote) -> dict[str, Any]:
-    return {
-        "state": item.quote_state,
-        "observed_at": item.observed_at,
-        "last": _price(item.last),
-        "bid": _price(item.bid),
-        "ask": _price(item.ask),
-        "bid_size": _contracts(item.bid_size),
-        "ask_size": _contracts(item.ask_size),
-        "volume": _contracts(item.volume),
-        "open_interest": _contracts(item.open_interest),
-        "evidence_ids": [item.evidence_id],
-    }
-
-
-def _analytics_result(item: OptionContractQuote) -> dict[str, Any]:
-    evidence_id = item.analytics_evidence_id or item.evidence_id
-    return {
-        key: {
-            **item.analytics[key].to_result(evidence_id),
-            "source_operation": item.source_operation,
-        }
-        for key in sorted(OPTION_ANALYTIC_NAMES.intersection(item.analytics))
-    }
-
-
-def _evidence(
-    batch: OptionSourceBatch, contracts: list[OptionContractQuote]
-) -> list[dict[str, Any]]:
-    assert batch.subject is not None and batch.session is not None
-    subject = batch.subject.to_result()
-    result: list[dict[str, Any]] = _source_boundary_evidence(batch)
-    reference_time = batch.session.reference_observed_at
-    reference_retrieved_at = (
-        batch.session.reference_retrieved_at or batch.session.retrieved_at
-    )
-    result.append(
-        {
-            "id": batch.session.reference_evidence_id,
-            "source_role": "market_observation",
-            "source_operation": (
-                batch.session.reference_source_operation or batch.operation_id
-            ),
-            "experimental": True,
-            "subject": subject,
-            "observation": {
-                "kind": "ETF underlying reference quote",
-                "value": batch.session.reference_price,
-                "unit": "CNY/share",
-            },
-            "evidence_time": reference_time,
-            "available_at": reference_time,
-            "retrieved_at": reference_retrieved_at.isoformat(),
-            "locator": {"uri": batch.session.locator_uri},
-            "limitations": [],
-        }
-    )
-    for item in contracts:
-        result.append(
-            {
-                "id": item.evidence_id,
-                "source_role": "market_observation",
-                "source_operation": item.source_operation,
-                "experimental": True,
-                "subject": {"security": json_safe_copy(item.security)},
-                "observation": {
-                    "contract": _contract_identity(item),
-                    "quote": _quote_result(item),
-                },
-                "evidence_time": item.observed_at,
-                "available_at": item.observed_at,
-                "retrieved_at": (
-                    item.quote_retrieved_at or batch.session.retrieved_at
-                ).isoformat(),
-                "locator": {"uri": item.locator_uri},
-                "limitations": list(item.limitations),
-            }
-        )
-        analytics_evidence_id = item.analytics_evidence_id or item.evidence_id
-        result.append(
-            {
-                "id": analytics_evidence_id,
-                "source_role": "market_observation",
-                "source_operation": item.source_operation,
-                "experimental": True,
-                "subject": {"security": json_safe_copy(item.security)},
-                "observation": {
-                    "contract": _contract_identity(item),
-                    "provider_analytics": _analytics_result(item),
-                },
-                "evidence_time": item.observed_at,
-                "available_at": item.observed_at,
-                "retrieved_at": (
-                    item.analytics_retrieved_at or batch.session.retrieved_at
-                ).isoformat(),
-                "locator": {"uri": item.analytics_locator_uri or item.locator_uri},
-                "limitations": ["provider_analytics_not_independently_verified"],
-            }
-        )
-    return result
-
-
-def _blocked_result(
-    request: dict[str, Any],
-    code: str,
-    message: str,
-    batches: list[OptionSourceBatch],
-    *,
-    subject: EtfOptionSubject | None = None,
-    conflicts: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    return {
-        "schema_version": request["schema_version"],
-        "task_type": "etf_options",
-        "status": "blocked",
-        "subjects": [subject.to_result()]
-        if subject is not None
-        else request["subjects"],
-        "session": {"status": "unresolved"},
-        "contract_set": {"status": "unresolved"},
-        "atm": {"status": "not_identifiable"},
-        "contracts": [],
-        "t_quote": {"status": "unresolved", "rows": []},
-        "brief": {
-            "contract_count": 0,
-            "quoted_contract_count": 0,
-            "no_quote_contract_count": 0,
-            "coverage": {
-                key: value.to_result()
-                for batch in batches
-                for key, value in sorted(batch.coverage.items())
-            },
-        },
-        "calculations": [],
-        "evidence": [
-            evidence for batch in batches for evidence in _blocked_evidence(batch)
-        ],
-        "conflicts": conflicts or [],
-        "source_errors": [
-            item.to_result() for batch in batches for item in batch.source_errors
-        ],
-        "degradations": [
-            item.to_result() for batch in batches for item in batch.degradations
-        ],
-        "limitations": [{"code": code, "message": message}],
-    }
-
-
 def _price(value: str | None) -> dict[str, str] | None:
     return None if value is None else {"value": value, "unit": "CNY/share"}
 
@@ -627,9 +1456,6 @@ def _contracts(value: str | None) -> dict[str, str] | None:
 
 
 def _source_completeness_problem(batch: OptionSourceBatch) -> str | None:
-    fatal_errors = [item for item in batch.source_errors if item.code != "no_quote"]
-    if fatal_errors:
-        return "The source reported a fatal acquisition or schema error."
     if (
         batch.month_evidence is None
         or batch.month_evidence.identity_status != "validated"
@@ -643,6 +1469,8 @@ def _source_completeness_problem(batch: OptionSourceBatch) -> str | None:
     if not required.issubset(batch.coverage):
         return "The source did not report every required coverage dimension."
     contract_count = len(batch.contracts)
+    if contract_count == 0:
+        return "The source did not retain any contract-valid quote facts."
     for name in sorted(required):
         coverage = batch.coverage[name]
         if name == "contract_listing" and coverage.state == "partial":
@@ -654,28 +1482,14 @@ def _source_completeness_problem(batch: OptionSourceBatch) -> str | None:
             ):
                 return "The partial contract listing is not bounded or disclosed correctly."
             continue
-        allowed_states = (
-            {"observed_nonempty", "partial"}
-            if name == "option_quotes" and batch.source_errors
-            else {"observed_nonempty"}
-        )
+        allowed_states = {"observed_nonempty", "partial"}
         if coverage.state not in allowed_states:
             return f"The {name} coverage is not complete enough for research."
-        if coverage.expected_count is None or coverage.observed_count is None:
+        if name != "contract_listing" and (
+            coverage.expected_count is None or coverage.observed_count is None
+        ):
             return f"The {name} coverage did not expose bounded counts."
-        if name in {"contract_listing", "provider_analytics"} and (
-            coverage.expected_count != contract_count
-            or coverage.observed_count != contract_count
-        ):
-            return f"The {name} coverage counts disagree with the contract set."
-        if (
-            name == "option_quotes"
-            and not batch.source_errors
-            and (
-                coverage.expected_count != contract_count
-                or coverage.observed_count != contract_count
-            )
-        ):
+        if name == "option_quotes" and coverage.observed_count != contract_count:
             return "The option quote coverage counts disagree with the contract set."
     return None
 
@@ -746,18 +1560,17 @@ def _analytics_contract_problem(
 ) -> str | None:
     for item in contracts:
         names = set(item.analytics)
-        if not REQUIRED_ANALYTICS.issubset(names) or not names.issubset(
-            OPTION_ANALYTIC_NAMES
-        ):
+        if not names.issubset(OPTION_ANALYTIC_NAMES):
             return "Provider analytics fields are missing or have changed."
         if item.option_type not in {"call", "put"} or item.series not in {"M", "A"}:
             return "Option type or contract series is invalid."
         if item.quote_state not in {"quoted", "no_quote"}:
             return "Option quote state is invalid."
-        if (
+        if item.quote_retrieved_at is None:
+            return "Quote evidence is not independently traceable."
+        if item.analytics and (
             item.analytics_evidence_id is None
             or item.analytics_locator_uri is None
-            or item.quote_retrieved_at is None
             or item.analytics_retrieved_at is None
             or item.analytics_evidence_id == item.evidence_id
         ):
@@ -817,90 +1630,6 @@ def _contract_sort_key(item: OptionContractQuote) -> tuple[int, Decimal, int, st
         0 if item.option_type == "call" else 1,
         item.security.get("code", ""),
     )
-
-
-def _t_quote_rows(contracts: list[OptionContractQuote]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str, Decimal], dict[str, OptionContractQuote]] = {}
-    for item in contracts:
-        key = (
-            item.contract_month,
-            item.expiry_date,
-            item.series,
-            _decimal(item.strike, "strike"),
-        )
-        grouped.setdefault(key, {})[item.option_type] = item
-    rows = []
-    for key in sorted(grouped, key=lambda item: (item[0], item[1], item[2], item[3])):
-        month, expiry, series, _ = key
-        sides = grouped[key]
-        call = sides["call"]
-        put = sides["put"]
-        rows.append(
-            {
-                "contract_month": month,
-                "expiry_date": expiry,
-                "series": series,
-                "strike": {"value": call.strike, "unit": "CNY/share"},
-                "call_security": json_safe_copy(call.security),
-                "put_security": json_safe_copy(put.security),
-                "call": {
-                    "security": json_safe_copy(call.security),
-                    "quote": _quote_result(call),
-                    "analytics": _analytics_result(call),
-                },
-                "put": {
-                    "security": json_safe_copy(put.security),
-                    "quote": _quote_result(put),
-                    "analytics": _analytics_result(put),
-                },
-                "call_evidence_ids": [call.evidence_id],
-                "put_evidence_ids": [put.evidence_id],
-            }
-        )
-    return rows
-
-
-def _source_boundary_evidence(batch: OptionSourceBatch) -> list[dict[str, Any]]:
-    result = _identity_evidence(batch.subject)
-    if batch.month_evidence is not None:
-        result.append(batch.month_evidence.to_evidence(batch.subject))
-    if batch.subject is not None:
-        result.extend(
-            item.to_evidence(batch.subject) for item in batch.listing_evidence
-        )
-    return result
-
-
-def _identity_evidence(subject: EtfOptionSubject | None) -> list[dict[str, Any]]:
-    if (
-        subject is None
-        or subject.identity_evidence_id is None
-        or subject.identity_locator_uri is None
-        or subject.identity_retrieved_at is None
-        or subject.identity_observed_on is None
-    ):
-        return []
-    return [
-        {
-            "id": subject.identity_evidence_id,
-            "source_role": "authoritative_disclosure",
-            "source_operation": "sse_etf_list@1",
-            "experimental": True,
-            "subject": subject.to_result(),
-            "observation": {"kind": "SSE ETF identity", "name": subject.name},
-            "evidence_time": subject.identity_observed_on,
-            "available_at": None,
-            "retrieved_at": subject.identity_retrieved_at.isoformat(),
-            "locator": {"uri": subject.identity_locator_uri},
-            "limitations": ["availability_time_unknown"],
-        }
-    ]
-
-
-def _blocked_evidence(batch: OptionSourceBatch) -> list[dict[str, Any]]:
-    if batch.subject is not None and batch.session is not None:
-        return _evidence(batch, list(batch.contracts))
-    return _source_boundary_evidence(batch)
 
 
 def _date(value: str, field: str) -> date:
