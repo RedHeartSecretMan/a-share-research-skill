@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from re import fullmatch
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -22,14 +22,19 @@ from a_share_research.identity_sources import (  # noqa: E402
     HttpResponse,
     TransportError,
 )
+from a_share_research.report_sources import EastmoneyReportOperation  # noqa: E402
 from a_share_research.research_runtime import ResearchRuntime  # noqa: E402
+from a_share_research.source_throttle import SerialRequestGate  # noqa: E402
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
+REPORT_FIXTURES = Path(__file__).parent / "fixtures" / "research_content" / "reports"
+FIXTURE_RAW_FIELDS = ("fixture_observation",)
 
 
 class FixedReportOperation:
     operation_id = "fixed_reports@1"
     supported_material_types = frozenset({"research_report"})
+    raw_fields = FIXTURE_RAW_FIELDS
 
     def collect(self, query: ContentQuery) -> SourceBatch:
         self.asserted_query = query
@@ -92,6 +97,7 @@ class FixedReportOperation:
 class FixedInvestorQaOperation:
     operation_id = "fixed_investor_qa@1"
     supported_material_types = frozenset({"investor_qa"})
+    raw_fields = FIXTURE_RAW_FIELDS
 
     def collect(self, query: ContentQuery) -> SourceBatch:
         assert query.subject is not None
@@ -232,46 +238,197 @@ class ResearchContentProcessTests(unittest.TestCase):
         request["parameters"] = parameters
         return request
 
+    def test_content_operation_without_static_raw_fields_fails_closed(self) -> None:
+        class MissingRawFieldsOperation:
+            operation_id = "missing_raw_fields@1"
+            supported_material_types = frozenset({"research_report"})
+
+            def collect(self, query: ContentQuery) -> SourceBatch:
+                return SourceBatch(operation_id=self.operation_id)
+
+        with self.assertRaisesRegex(ValueError, "raw_fields"):
+            ResearchRuntime(content_operations=(MissingRawFieldsOperation(),)).research(
+                self.research_report_request()
+            )
+
+    def test_invalid_fallback_graphs_fail_before_source_collection(self) -> None:
+        calls: list[str] = []
+
+        class GraphOperation:
+            raw_fields = FIXTURE_RAW_FIELDS
+
+            def __init__(
+                self,
+                operation_id: str,
+                supported_material_types: frozenset[str],
+                fallback_for: str | None = None,
+            ) -> None:
+                self.operation_id = operation_id
+                self.supported_material_types = supported_material_types
+                self.fallback_for = fallback_for
+
+            def collect(self, query: ContentQuery) -> SourceBatch:
+                calls.append(self.operation_id)
+                return SourceBatch(operation_id=self.operation_id)
+
+        research = frozenset({"research_report"})
+        industry = frozenset({"industry_report"})
+        cases = (
+            (
+                "missing",
+                (GraphOperation("fallback@1", research, "absent@1"),),
+            ),
+            (
+                "cycle",
+                (
+                    GraphOperation("a@1", research, "b@1"),
+                    GraphOperation("b@1", research, "a@1"),
+                ),
+            ),
+            (
+                "scope",
+                (
+                    GraphOperation("primary@1", research),
+                    GraphOperation("fallback@1", industry, "primary@1"),
+                ),
+            ),
+        )
+        for expected, operations in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(ValueError, expected):
+                    ResearchRuntime(content_operations=operations).research(
+                        self.research_report_request()
+                    )
+        self.assertEqual(calls, [])
+
     def test_theme_reports_are_time_bounded_deduplicated_attributed_opinions(
         self,
     ) -> None:
         operation = FixedReportOperation()
         request = self.research_report_request()
 
-        result = ResearchRuntime(content_operations=(operation,)).research(request)
+        result = (
+            ResearchRuntime(content_operations=(operation,)).research(request).to_dict()
+        )
 
-        self.assertEqual(result["task_type"], "research_content")
+        self.assertEqual(result["plan"]["task_type"], "research_content")
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["materials"]), 1)
-        self.assertEqual(result["materials"][0]["source_document_id"], "AP-1")
+        materials = [
+            item
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(len(materials), 2)
         self.assertEqual(
-            result["materials"][0]["claim_eligibility"],
-            "experimental_observation_only",
-        )
-        self.assertEqual(result["materials"][0]["source_role"], "attributed_opinion")
-        self.assertEqual(result["materials"][0]["duplicate_sources"], [])
-        self.assertEqual(
-            result["materials"][0]["published_at"], "2026-07-31T00:00:00+08:00"
+            {item["payload"]["source_document_id"] for item in materials}, {"AP-1"}
         )
         self.assertEqual(
-            {item["code"] for item in result["limitations"]},
+            {item["payload"]["source_role"] for item in materials},
+            {"attributed_opinion"},
+        )
+        self.assertEqual(
+            {item["payload"]["published_at"] for item in materials},
+            {"2026-07-31T00:00:00+08:00"},
+        )
+        groups = [
+            item
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
+        ]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["payload"]["member_count"], 2)
+        self.assertEqual(
+            set(groups[0]["observation_ids"]), {item["id"] for item in materials}
+        )
+        self.assertTrue(
             {
                 "experimental_research_content_sources",
                 "publication_time_precision_is_date_only",
-            },
+            }.issubset({item["code"] for item in result["limitations"]})
         )
-        self.assertEqual(result["source_errors"], [])
+        self.assertEqual(
+            {(item["operation_id"], item["code"]) for item in result["source_errors"]},
+            {("fixed_reports@1", "invalid_observation_time")},
+        )
         self.assertEqual(operation.asserted_query.material_types, ("research_report",))
         self.assertEqual(operation.asserted_query.keywords, ("人形机器人", "丝杠"))
-        content_evidence = [
+        observation_ids = [item["id"] for item in result["observations"]]
+        self.assertEqual(len(observation_ids), len(set(observation_ids)))
+
+    def test_multitype_report_failure_retains_prior_operation_observations(
+        self,
+    ) -> None:
+        class LaterTypeUnknownSchemaTransport:
+            def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                query = parse_qs(urlparse(url).query)
+                if query["qType"] == ["0"]:
+                    fixture = f"eastmoney_stock_page_{query['pageNo'][0]}.json"
+                    body = (REPORT_FIXTURES / fixture).read_bytes()
+                else:
+                    payload = json.loads(
+                        (REPORT_FIXTURES / "eastmoney_industry_page_1.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    payload["unexpected_provider_field"] = "must-fail-closed"
+                    body = json.dumps(payload).encode("utf-8")
+                return HttpResponse(
+                    status=200,
+                    content_type="text/plain",
+                    body=body,
+                    retrieved_at=datetime(
+                        2026, 8, 2, 18, 30, tzinfo=CHINA_STANDARD_TIME
+                    ),
+                )
+
+            def post(
+                self, url: str, headers: dict[str, str], body: bytes
+            ) -> HttpResponse:
+                raise AssertionError("Eastmoney reports must use GET")
+
+        request = self.research_report_request()
+        request["parameters"] = {
+            "material_types": ["research_report", "industry_report"],
+            "query": ["AI服务器"],
+            "industry_code": "1037",
+            "limit": 20,
+        }
+        result = (
+            ResearchRuntime(
+                content_operations=(
+                    EastmoneyReportOperation(
+                        LaterTypeUnknownSchemaTransport(),
+                        request_gate=SerialRequestGate(
+                            minimum_interval_seconds=0,
+                            jitter_bounds=(0, 0),
+                            rate_limit_backoffs=(),
+                        ),
+                    ),
+                )
+            )
+            .research(request)
+            .to_dict()
+        )
+
+        materials = [
             item
-            for item in result["evidence"]
-            if item["source_operation"] == "fixed_reports@1"
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
         ]
-        self.assertEqual(len(content_evidence), 1)
-        evidence_ids = [item["id"] for item in result["evidence"]]
-        self.assertEqual(len(evidence_ids), len(set(evidence_ids)))
-        self.assertIsNotNone(fullmatch(r"content-[0-9a-f]{64}", evidence_ids[0]))
+        self.assertGreater(len(materials), 0)
+        self.assertEqual(
+            {item["payload"]["material_type"] for item in materials},
+            {"research_report"},
+        )
+        operation = result["coverage"]["research_content_materials"]["operations"][
+            "eastmoney_reports@1"
+        ]
+        self.assertEqual(operation["state"], "partial")
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(
+            {(item["operation_id"], item["code"]) for item in result["source_errors"]},
+            {("eastmoney_reports@1", "unknown_schema")},
+        )
 
     def test_date_only_report_uses_strict_publication_date_without_inventing_time(
         self,
@@ -279,6 +436,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class DateOnlyReportOperation:
             operation_id = "date_only_reports@1"
             supported_material_types = frozenset({"research_report"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 retrieved_at = datetime(2026, 8, 2, 19, 30, tzinfo=CHINA_STANDARD_TIME)
@@ -313,29 +471,41 @@ class ResearchContentProcessTests(unittest.TestCase):
                     ),
                 )
 
-        result = ResearchRuntime(
-            content_operations=(DateOnlyReportOperation(),)
-        ).research(self.research_report_request())
-
-        self.assertEqual(
-            [material["source_document_id"] for material in result["materials"]],
-            ["IN-WINDOW"],
+        result = (
+            ResearchRuntime(content_operations=(DateOnlyReportOperation(),))
+            .research(self.research_report_request())
+            .to_dict()
         )
-        material = result["materials"][0]
+
+        materials = [
+            item["payload"]
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(
+            [material["source_document_id"] for material in materials],
+            ["IN-WINDOW", "OUTSIDE-WINDOW"],
+        )
+        material = materials[0]
         self.assertIsNone(material["published_at"])
         self.assertEqual(material["attributes"]["publication_date"], "2026-07-31")
-        evidence = next(
+        self.assertEqual(material["available_at"], "2026-08-02T19:30:00+08:00")
+        group = next(
             item
-            for item in result["evidence"]
-            if item["source_operation"] == "date_only_reports@1"
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
         )
-        self.assertIsNone(evidence["evidence_time"])
-        self.assertEqual(evidence["available_at"], "2026-08-02T19:30:00+08:00")
+        self.assertEqual(group["payload"]["source_document_id"], "IN-WINDOW")
+        self.assertEqual(
+            {(item["operation_id"], item["code"]) for item in result["source_errors"]},
+            {("date_only_reports@1", "invalid_observation_time")},
+        )
 
     def test_no_usable_material_is_blocked_without_claiming_no_coverage(self) -> None:
         class FailedReportOperation:
             operation_id = "failed_reports@1"
             supported_material_types = frozenset({"research_report"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 return SourceBatch(
@@ -349,13 +519,28 @@ class ResearchContentProcessTests(unittest.TestCase):
                     ),
                 )
 
-        result = ResearchRuntime(
-            content_operations=(FailedReportOperation(),)
-        ).research(self.research_report_request())
+        result = (
+            ResearchRuntime(content_operations=(FailedReportOperation(),))
+            .research(self.research_report_request())
+            .to_dict()
+        )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["materials"], [])
+        self.assertEqual(
+            [
+                item
+                for item in result["observations"]
+                if item["payload"].get("kind") == "research_content_material"
+            ],
+            [],
+        )
         self.assertEqual(result["source_errors"][0]["code"], "empty_response")
+        self.assertEqual(
+            result["coverage"]["research_content_materials"]["operations"][
+                "failed_reports@1"
+            ]["state"],
+            "failed",
+        )
         self.assertIn(
             "research_content_unavailable",
             {item["code"] for item in result["limitations"]},
@@ -365,6 +550,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class BoundedSemanticSearchOperation:
             operation_id = "bounded_semantic_search@1"
             supported_material_types = frozenset({"research_report"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 return SourceBatch(
@@ -393,18 +579,27 @@ class ResearchContentProcessTests(unittest.TestCase):
                     complete=False,
                 )
 
-        result = ResearchRuntime(
-            content_operations=(BoundedSemanticSearchOperation(),)
-        ).research(self.research_report_request())
+        result = (
+            ResearchRuntime(content_operations=(BoundedSemanticSearchOperation(),))
+            .research(self.research_report_request())
+            .to_dict()
+        )
 
         limitation_codes = {item["code"] for item in result["limitations"]}
         self.assertIn("semantic_search_completeness_unproven", limitation_codes)
         self.assertNotIn("pagination_incomplete", limitation_codes)
+        self.assertEqual(
+            result["coverage"]["research_content_materials"]["operations"][
+                "bounded_semantic_search@1"
+            ]["state"],
+            "partial",
+        )
 
     def test_materials_require_aware_causally_ordered_timestamps(self) -> None:
         class TimestampedReportOperation:
             operation_id = "timestamped_reports@1"
             supported_material_types = frozenset({"research_report"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 aware_retrieved_at = datetime(
@@ -459,13 +654,19 @@ class ResearchContentProcessTests(unittest.TestCase):
                     ),
                 )
 
-        result = ResearchRuntime(
-            content_operations=(TimestampedReportOperation(),)
-        ).research(self.research_report_request())
+        result = (
+            ResearchRuntime(content_operations=(TimestampedReportOperation(),))
+            .research(self.research_report_request())
+            .to_dict()
+        )
 
+        materials = [
+            item["payload"]
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
         self.assertEqual(
-            [material["source_document_id"] for material in result["materials"]],
-            ["SAFE"],
+            [material["source_document_id"] for material in materials], ["SAFE"]
         )
 
     def test_identity_blocked_result_keeps_the_brief_shape(self) -> None:
@@ -484,14 +685,21 @@ class ResearchContentProcessTests(unittest.TestCase):
             "limit": 20,
         }
 
-        result = ResearchRuntime(
-            identity_transport=UnavailableIdentityTransport(),
-            content_operations=(),
-        ).research(request)
+        result = (
+            ResearchRuntime(
+                identity_transport=UnavailableIdentityTransport(),
+                content_operations=(),
+            )
+            .research(request)
+            .to_dict()
+        )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["brief"]["material_count"], 0)
-        self.assertEqual(result["brief"]["material_type_counts"], {})
+        self.assertEqual(result["claims"], [])
+        self.assertEqual(
+            result["task_views"]["research_content"]["observation_ids"],
+            result["briefs"][0]["observation_ids"],
+        )
 
     def test_identity_blocked_investor_qa_keeps_theme_aggregation_limitation(
         self,
@@ -503,30 +711,29 @@ class ResearchContentProcessTests(unittest.TestCase):
                     "The source request could not be completed.",
                 )
 
-        result = ResearchRuntime(
-            identity_transport=UnavailableIdentityTransport(),
-            content_operations=(),
-        ).research(self.investor_qa_request([], ["算力"]))
+        result = (
+            ResearchRuntime(
+                identity_transport=UnavailableIdentityTransport(),
+                content_operations=(),
+            )
+            .research(self.investor_qa_request([], ["算力"]))
+            .to_dict()
+        )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(
-            result["brief"]["theme_aggregation"],
-            {
-                "status": "unavailable",
-                "method": "theme_keyword_literal_frequency",
-                "audited_fields": ["title", "summary", "content"],
-                "themes": [],
-            },
+        self.assertFalse(
+            any(
+                item["kind"] == "research_content_material_group"
+                for item in result["claims"]
+            )
         )
-        self.assertIn(
-            "investor_qa_theme_aggregation_unavailable",
-            {item["code"] for item in result["limitations"]},
-        )
+        self.assertEqual(result["calculations"], [])
 
     def test_subject_material_uses_cross_checked_canonical_security(self) -> None:
         class AnnouncementOperation:
             operation_id = "fixed_announcements@1"
             supported_material_types = frozenset({"announcement"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 assert query.subject is not None
@@ -564,10 +771,14 @@ class ResearchContentProcessTests(unittest.TestCase):
             "limit": 20,
         }
 
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(operation,),
-        ).research(request)
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(operation,),
+            )
+            .research(request)
+            .to_dict()
+        )
 
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
@@ -586,7 +797,18 @@ class ResearchContentProcessTests(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual(result["subjects"], [operation.subject])
+        identity_claim = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "research_content_subject_identity"
+        )
+        self.assertEqual(identity_claim["payload"], operation.subject)
+        material = next(
+            item["payload"]
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        )
+        self.assertEqual(material["subject"], operation.subject)
         self.assertIn(
             "experimental_identity_sources",
             {item["code"] for item in result["limitations"]},
@@ -667,6 +889,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class MixedSchemaOperation:
             operation_id = "mixed_schema@1"
             supported_material_types = frozenset({"research_report"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 retrieved_at = datetime(2026, 8, 2, 19, 30, tzinfo=CHINA_STANDARD_TIME)
@@ -714,31 +937,32 @@ class ResearchContentProcessTests(unittest.TestCase):
                     ),
                 )
 
-        result = ResearchRuntime(content_operations=(MixedSchemaOperation(),)).research(
-            self.research_report_request()
+        result = (
+            ResearchRuntime(content_operations=(MixedSchemaOperation(),))
+            .research(self.research_report_request())
+            .to_dict()
         )
 
-        self.assertEqual(
-            [item["source_document_id"] for item in result["materials"]],
-            ["valid"],
-        )
-        content_evidence = [
+        materials = [
             item
-            for item in result["evidence"]
-            if item["source_operation"] == "mixed_schema@1"
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
         ]
-        self.assertEqual(len(content_evidence), 1)
         self.assertEqual(
-            content_evidence[0]["observation"]["source_document_id"],
-            "valid",
+            [item["payload"]["source_document_id"] for item in materials], ["valid"]
         )
         schema_errors = [
             item for item in result["source_errors"] if item["code"] == "unknown_schema"
         ]
         self.assertEqual(len(schema_errors), 2)
         self.assertEqual(
-            {tuple(item["invalid_fields"]) for item in schema_errors},
-            {("material_type",), ("source_role",)},
+            {item["operation_id"] for item in schema_errors}, {"mixed_schema@1"}
+        )
+        self.assertEqual(
+            result["coverage"]["research_content_materials"]["operations"][
+                "mixed_schema@1"
+            ]["state"],
+            "partial",
         )
 
     def test_same_document_id_in_different_namespaces_is_not_deduplicated(
@@ -746,6 +970,7 @@ class ResearchContentProcessTests(unittest.TestCase):
     ) -> None:
         class NamespacedAnnouncementOperation:
             supported_material_types = frozenset({"announcement"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def __init__(self, operation_id: str, namespace: str | None) -> None:
                 self.operation_id = operation_id
@@ -785,44 +1010,63 @@ class ResearchContentProcessTests(unittest.TestCase):
             "query": [],
             "limit": 20,
         }
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(
-                NamespacedAnnouncementOperation("source_a@1", "source-a-document"),
-                NamespacedAnnouncementOperation("source_b@1", "source-b-document"),
-            ),
-        ).research(request)
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(
+                    NamespacedAnnouncementOperation("source_a@1", "source-a-document"),
+                    NamespacedAnnouncementOperation("source_b@1", "source-b-document"),
+                ),
+            )
+            .research(request)
+            .to_dict()
+        )
 
-        self.assertEqual(len(result["materials"]), 2)
+        materials = [
+            item
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(len(materials), 2)
         self.assertEqual(
-            {item["source_document_namespace"] for item in result["materials"]},
+            {item["payload"]["source_document_namespace"] for item in materials},
             {"source-a-document", "source-b-document"},
         )
-        content_evidence = [
+        groups = [
             item
-            for item in result["evidence"]
-            if item["source_operation"] in {"source_a@1", "source_b@1"}
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
         ]
-        self.assertEqual(len(content_evidence), 2)
-        self.assertEqual(
-            len({item["id"] for item in content_evidence}),
-            len(content_evidence),
+        self.assertEqual(len(groups), 2)
+
+        operation_local_result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(
+                    NamespacedAnnouncementOperation("source_a@1", None),
+                    NamespacedAnnouncementOperation("source_b@1", None),
+                ),
+            )
+            .research(request)
+            .to_dict()
         )
 
-        operation_local_result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(
-                NamespacedAnnouncementOperation("source_a@1", None),
-                NamespacedAnnouncementOperation("source_b@1", None),
-            ),
-        ).research(request)
-
-        self.assertEqual(len(operation_local_result["materials"]), 2)
+        local_materials = [
+            item
+            for item in operation_local_result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(len(local_materials), 2)
+        self.assertEqual(
+            {item["payload"]["source_document_namespace"] for item in local_materials},
+            {"operation:source_a@1", "operation:source_b@1"},
+        )
 
     def test_same_operation_document_keeps_distinct_source_metadata(self) -> None:
         class RevisedMetadataOperation:
             operation_id = "revised_metadata@1"
             supported_material_types = frozenset({"research_report"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 return SourceBatch(
@@ -867,42 +1111,36 @@ class ResearchContentProcessTests(unittest.TestCase):
                     ),
                 )
 
-        result = ResearchRuntime(
-            content_operations=(RevisedMetadataOperation(),)
-        ).research(self.research_report_request())
-
-        self.assertEqual(len(result["materials"]), 1)
-        material = result["materials"][0]
-        self.assertEqual(material["duplicate_sources"], [])
-        self.assertEqual(len(material["source_observations"]), 2)
-        self.assertEqual(
-            {conflict["field"] for conflict in material["metadata_conflicts"]},
-            {
-                "title",
-                "author",
-                "source_role",
-                "published_at",
-                "retrieved_at",
-                "locator",
-                "document_locator",
-                "attributes",
-                "limitations",
-            },
+        result = (
+            ResearchRuntime(content_operations=(RevisedMetadataOperation(),))
+            .research(self.research_report_request())
+            .to_dict()
         )
-        content_evidence = [
+
+        materials = [
             item
-            for item in result["evidence"]
-            if item["source_operation"] == "revised_metadata@1"
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
         ]
-        self.assertEqual(len(content_evidence), 1)
+        self.assertEqual(len(materials), 2)
+        group = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
+        )
+        self.assertEqual(group["payload"]["member_count"], 2)
         self.assertEqual(
-            len({item["id"] for item in result["evidence"]}),
-            len(result["evidence"]),
+            set(group["observation_ids"]), {item["id"] for item in materials}
+        )
+        self.assertIn(
+            "research_content_metadata_conflict",
+            {item["code"] for item in result["conflicts"]},
         )
 
     def test_cross_source_duplicate_preserves_both_official_locators(self) -> None:
         class OfficialAnnouncementOperation:
             supported_material_types = frozenset({"announcement"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def __init__(
                 self,
@@ -960,116 +1198,75 @@ class ResearchContentProcessTests(unittest.TestCase):
             "query": [],
             "limit": 20,
         }
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(
-                OfficialAnnouncementOperation(
-                    "cninfo_announcements@1",
-                    "https://cninfo.test/1225378221",
-                    "authoritative_disclosure",
-                    "2026-06-18T17:30:00+08:00",
-                    datetime(2026, 8, 2, 19, 20, tzinfo=CHINA_STANDARD_TIME),
-                    "2025年年度权益分派实施公告（巨潮）",
-                    "北京蓝色光标数据科技股份有限公司",
-                    {"route": "cninfo"},
-                    ("issuer_relationship_unverified",),
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(
+                    OfficialAnnouncementOperation(
+                        "cninfo_announcements@1",
+                        "https://cninfo.test/1225378221",
+                        "authoritative_disclosure",
+                        "2026-06-18T17:30:00+08:00",
+                        datetime(2026, 8, 2, 19, 20, tzinfo=CHINA_STANDARD_TIME),
+                        "2025年年度权益分派实施公告（巨潮）",
+                        "北京蓝色光标数据科技股份有限公司",
+                        {"route": "cninfo"},
+                        ("issuer_relationship_unverified",),
+                    ),
+                    OfficialAnnouncementOperation(
+                        "szse_announcements@1",
+                        "https://szse.test/1225378221",
+                        "market_observation",
+                        "2026-06-18T17:32:10+08:00",
+                        datetime(2026, 8, 2, 19, 30, tzinfo=CHINA_STANDARD_TIME),
+                        "2025年年度权益分派实施公告",
+                        "蓝色光标",
+                        {"route": "szse"},
+                        ("security_relationship_unverified",),
+                    ),
                 ),
-                OfficialAnnouncementOperation(
-                    "szse_announcements@1",
-                    "https://szse.test/1225378221",
-                    "market_observation",
-                    "2026-06-18T17:32:10+08:00",
-                    datetime(2026, 8, 2, 19, 30, tzinfo=CHINA_STANDARD_TIME),
-                    "2025年年度权益分派实施公告",
-                    "蓝色光标",
-                    {"route": "szse"},
-                    ("security_relationship_unverified",),
-                ),
-            ),
-        ).research(request)
-
-        self.assertEqual(len(result["materials"]), 1)
-        material = result["materials"][0]
-        self.assertEqual(
-            material["source_document_namespace"],
-            "cninfo-szse-official-announcement",
+            )
+            .research(request)
+            .to_dict()
         )
+
+        materials = [
+            item
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(len(materials), 2)
         self.assertEqual(
-            {item["source_operation"] for item in material["source_observations"]},
+            {item["operation_id"] for item in materials},
             {"cninfo_announcements@1", "szse_announcements@1"},
         )
         self.assertEqual(
-            {item["locator"]["uri"] for item in material["source_observations"]},
-            {
-                "https://cninfo.test/1225378221",
-                "https://szse.test/1225378221",
-            },
+            {item["payload"]["source_document_namespace"] for item in materials},
+            {"cninfo-szse-official-announcement"},
         )
         self.assertEqual(
-            {
-                item["source_operation"]: {
-                    "source_document_namespace": item["source_document_namespace"],
-                    "source_document_id": item["source_document_id"],
-                    "title": item["title"],
-                    "author": item["author"],
-                    "source_role": item["source_role"],
-                    "published_at": item["published_at"],
-                    "retrieved_at": item["retrieved_at"],
-                    "locator": item["locator"],
-                    "document_locator": item["document_locator"],
-                    "attributes": item["attributes"],
-                    "limitations": item["limitations"],
-                }
-                for item in material["source_observations"]
-            },
-            {
-                "cninfo_announcements@1": {
-                    "source_document_namespace": ("cninfo-szse-official-announcement"),
-                    "source_document_id": "1225378221",
-                    "title": "2025年年度权益分派实施公告（巨潮）",
-                    "author": "北京蓝色光标数据科技股份有限公司",
-                    "source_role": "authoritative_disclosure",
-                    "published_at": "2026-06-18T17:30:00+08:00",
-                    "retrieved_at": "2026-08-02T19:20:00+08:00",
-                    "locator": {"uri": "https://cninfo.test/1225378221"},
-                    "document_locator": "https://cninfo.test/1225378221.pdf",
-                    "attributes": {"route": "cninfo"},
-                    "limitations": ["issuer_relationship_unverified"],
-                },
-                "szse_announcements@1": {
-                    "source_document_namespace": ("cninfo-szse-official-announcement"),
-                    "source_document_id": "1225378221",
-                    "title": "2025年年度权益分派实施公告",
-                    "author": "蓝色光标",
-                    "source_role": "market_observation",
-                    "published_at": "2026-06-18T17:32:10+08:00",
-                    "retrieved_at": "2026-08-02T19:30:00+08:00",
-                    "locator": {"uri": "https://szse.test/1225378221"},
-                    "document_locator": "https://szse.test/1225378221.pdf",
-                    "attributes": {"route": "szse"},
-                    "limitations": ["security_relationship_unverified"],
-                },
-            },
+            {item["payload"]["title"] for item in materials},
+            {"2025年年度权益分派实施公告（巨潮）", "2025年年度权益分派实施公告"},
         )
+        group = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
+        )
+        self.assertEqual(group["payload"]["member_count"], 2)
         self.assertEqual(
-            {conflict["field"] for conflict in material["metadata_conflicts"]},
-            {
-                "title",
-                "author",
-                "source_role",
-                "published_at",
-                "retrieved_at",
-                "locator",
-                "document_locator",
-                "attributes",
-                "limitations",
-            },
+            set(group["observation_ids"]), {item["id"] for item in materials}
+        )
+        self.assertIn(
+            "research_content_metadata_conflict",
+            {item["code"] for item in result["conflicts"]},
         )
 
     def test_partial_material_type_coverage_names_the_missing_type(self) -> None:
         class PartialOperation:
             operation_id = "partial_content@1"
             supported_material_types = frozenset({"announcement", "stock_news"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 assert query.subject is not None
@@ -1104,19 +1301,32 @@ class ResearchContentProcessTests(unittest.TestCase):
             "query": [],
             "limit": 20,
         }
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(PartialOperation(),),
-        ).research(request)
-
-        self.assertEqual(result["status"], "blocked")
-        missing = next(
-            item
-            for item in result["limitations"]
-            if item["code"] == "requested_material_type_unavailable"
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(PartialOperation(),),
+            )
+            .research(request)
+            .to_dict()
         )
-        self.assertEqual(missing["material_types"], ["stock_news"])
-        self.assertEqual(result["brief"]["material_type_counts"], {"announcement": 1})
+
+        self.assertEqual(result["status"], "limited")
+        self.assertIn(
+            "requested_material_type_unavailable",
+            {item["code"] for item in result["limitations"]},
+        )
+        materials = [
+            item["payload"]
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(
+            [item["material_type"] for item in materials], ["announcement"]
+        )
+        self.assertEqual(
+            materials[0]["query_scope"]["material_types"],
+            ["announcement", "stock_news"],
+        )
 
     def test_missing_requested_type_blocks_without_discarding_other_materials_or_diagnostics(
         self,
@@ -1124,6 +1334,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class NewsOperation:
             operation_id = "fixed_news@1"
             supported_material_types = frozenset({"stock_news"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 assert query.subject is not None
@@ -1154,6 +1365,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class CninfoAnnouncementOperation:
             operation_id = "cninfo_announcement@1"
             supported_material_types = frozenset({"announcement"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 return SourceBatch(
@@ -1170,6 +1382,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class SzseAnnouncementOperation:
             operation_id = "szse_announcement@1"
             supported_material_types = frozenset({"announcement"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 return SourceBatch(
@@ -1190,24 +1403,31 @@ class ResearchContentProcessTests(unittest.TestCase):
             "query": [],
             "limit": 20,
         }
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(
-                NewsOperation(),
-                CninfoAnnouncementOperation(),
-                SzseAnnouncementOperation(),
-            ),
-        ).research(request)
-
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(
-            [material["material_type"] for material in result["materials"]],
-            ["stock_news"],
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(
+                    NewsOperation(),
+                    CninfoAnnouncementOperation(),
+                    SzseAnnouncementOperation(),
+                ),
+            )
+            .research(request)
+            .to_dict()
         )
-        self.assertEqual(result["brief"]["material_type_counts"], {"stock_news": 1})
+
+        self.assertEqual(result["status"], "limited")
         self.assertEqual(
             [
-                (error["source_operation"], error["code"])
+                item["payload"]["material_type"]
+                for item in result["observations"]
+                if item["payload"].get("kind") == "research_content_material"
+            ],
+            ["stock_news"],
+        )
+        self.assertEqual(
+            [
+                (error["operation_id"], error["code"])
                 for error in result["source_errors"]
             ],
             [
@@ -1215,12 +1435,10 @@ class ResearchContentProcessTests(unittest.TestCase):
                 ("szse_announcement@1", "pagination_incomplete"),
             ],
         )
-        missing = next(
-            item
-            for item in result["limitations"]
-            if item["code"] == "requested_material_type_unavailable"
+        self.assertIn(
+            "requested_material_type_unavailable",
+            {item["code"] for item in result["limitations"]},
         )
-        self.assertEqual(missing["material_types"], ["announcement"])
 
     def test_parallel_source_can_cover_type_without_hiding_peer_diagnostic(
         self,
@@ -1228,6 +1446,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class SuccessfulMixedOperation:
             operation_id = "successful_mixed@1"
             supported_material_types = frozenset({"announcement", "stock_news"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 assert query.subject is not None
@@ -1266,6 +1485,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class FailedAnnouncementOperation:
             operation_id = "failed_announcement@1"
             supported_material_types = frozenset({"announcement"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 return SourceBatch(
@@ -1286,22 +1506,30 @@ class ResearchContentProcessTests(unittest.TestCase):
             "query": [],
             "limit": 20,
         }
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(
-                FailedAnnouncementOperation(),
-                SuccessfulMixedOperation(),
-            ),
-        ).research(request)
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(
+                    FailedAnnouncementOperation(),
+                    SuccessfulMixedOperation(),
+                ),
+            )
+            .research(request)
+            .to_dict()
+        )
 
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["brief"]["material_type_counts"],
-            {"stock_news": 1, "announcement": 1},
+            {
+                item["payload"]["material_type"]
+                for item in result["observations"]
+                if item["payload"].get("kind") == "research_content_material"
+            },
+            {"stock_news", "announcement"},
         )
         self.assertEqual(
             [
-                (error["source_operation"], error["code"])
+                (error["operation_id"], error["code"])
                 for error in result["source_errors"]
             ],
             [("failed_announcement@1", "upstream_unavailable")],
@@ -1321,6 +1549,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class CurrentProfileOperation:
             operation_id = "fixed_f10@1"
             supported_material_types = frozenset({"issuer_profile"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 assert query.subject is not None
@@ -1358,22 +1587,24 @@ class ResearchContentProcessTests(unittest.TestCase):
             "query": [],
             "limit": 20,
         }
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(CurrentProfileOperation(),),
-        ).research(request)
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(CurrentProfileOperation(),),
+            )
+            .research(request)
+            .to_dict()
+        )
 
         self.assertEqual(result["status"], "limited")
-        material = result["materials"][0]
-        self.assertIsNone(material["published_at"])
-        self.assertIsNone(material["source_document_id"])
-        content_evidence = next(
-            item
-            for item in result["evidence"]
-            if item["source_operation"] == "fixed_f10@1"
+        material = next(
+            item["payload"]
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
         )
-        self.assertIsNone(content_evidence["evidence_time"])
-        self.assertEqual(content_evidence["available_at"], "2026-08-02T19:30:00+08:00")
+        self.assertIsNone(material["published_at"])
+        self.assertIsInstance(material["source_document_id"], str)
+        self.assertEqual(material["available_at"], "2026-08-02T19:30:00+08:00")
 
     def test_default_registry_executes_credentialed_theme_report_search(self) -> None:
         request = self.research_report_request()
@@ -1390,14 +1621,18 @@ class ResearchContentProcessTests(unittest.TestCase):
             },
             clear=False,
         ):
-            result = ResearchRuntime(content_transport=transport).research(request)
+            result = (
+                ResearchRuntime(content_transport=transport).research(request).to_dict()
+            )
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["materials"]), 1)
-        self.assertEqual(
-            result["materials"][0]["source_operation"],
-            "iwencai_content_search@1",
-        )
+        materials = [
+            item
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(len(materials), 1)
+        self.assertEqual(materials[0]["operation_id"], "iwencai_content_search@1")
         self.assertEqual(result["source_errors"], [])
         self.assertEqual(transport.authorization, "Bearer test-secret-not-for-output")
         self.assertNotIn("test-secret-not-for-output", str(result))
@@ -1406,6 +1641,7 @@ class ResearchContentProcessTests(unittest.TestCase):
         class MixedOperation:
             operation_id = "mixed_content@1"
             supported_material_types = frozenset({"announcement", "stock_news"})
+            raw_fields = FIXTURE_RAW_FIELDS
 
             def collect(self, query: ContentQuery) -> SourceBatch:
                 assert query.subject is not None
@@ -1456,73 +1692,78 @@ class ResearchContentProcessTests(unittest.TestCase):
             "query": [],
             "limit": 1,
         }
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(MixedOperation(),),
-        ).research(request)
-
-        self.assertEqual(len(result["materials"]), 2)
-        self.assertEqual(
-            result["brief"]["material_type_counts"],
-            {"stock_news": 1, "announcement": 1},
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(MixedOperation(),),
+            )
+            .research(request)
+            .to_dict()
         )
 
-    def test_investor_qa_brief_aggregates_request_themes_with_auditable_counts(
+        materials = [
+            item
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(len(materials), 2)
+        groups = [
+            item
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
+        ]
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(
+            {item["payload"]["material_type"] for item in groups},
+            {"stock_news", "announcement"},
+        )
+
+    def test_investor_qa_retains_auditable_theme_material_members(
         self,
     ) -> None:
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(FixedInvestorQaOperation(),),
-        ).research(self.investor_qa_request(["服务端检索词"], [" 算力 ", "AI"]))
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(FixedInvestorQaOperation(),),
+            )
+            .research(self.investor_qa_request(["服务端检索词"], [" 算力 ", "AI"]))
+            .to_dict()
+        )
 
+        materials = [
+            item["payload"]
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
         self.assertEqual(
-            result["brief"]["theme_aggregation"],
+            {item["source_document_id"] for item in materials},
+            {"answer-1", "question-1"},
+        )
+        self.assertEqual(
+            {item["summary"] for item in materials},
             {
-                "status": "available",
-                "method": "theme_keyword_literal_frequency",
-                "audited_fields": ["title", "summary", "content"],
-                "themes": [
-                    {
-                        "theme": "算力",
-                        "mention_count": 3,
-                        "material_count": 2,
-                        "source_document_ids": ["answer-1", "question-1"],
-                    },
-                    {
-                        "theme": "AI",
-                        "mention_count": 2,
-                        "material_count": 2,
-                        "source_document_ids": ["answer-1", "question-1"],
-                    },
-                ],
+                "公司正在建设 AI 算力平台，并扩充算力中心资源。",
+                "公司的 AI 算力业务今年有什么进展？",
             },
         )
 
-    def test_investor_qa_without_auditable_theme_basis_reports_a_limitation(
+    def test_investor_qa_without_theme_match_still_retains_source_summaries(
         self,
     ) -> None:
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            content_operations=(FixedInvestorQaOperation(),),
-        ).research(self.investor_qa_request(["AI"]))
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                content_operations=(FixedInvestorQaOperation(),),
+            )
+            .research(self.investor_qa_request(["AI"]))
+            .to_dict()
+        )
 
         self.assertEqual(
-            result["brief"]["theme_aggregation"],
             {
-                "status": "unavailable",
-                "method": "theme_keyword_literal_frequency",
-                "audited_fields": ["title", "summary", "content"],
-                "themes": [],
-            },
-        )
-        self.assertIn(
-            "investor_qa_theme_aggregation_unavailable",
-            {item["code"] for item in result["limitations"]},
-        )
-        self.assertEqual(
-            {
-                material["source_document_id"]: material["summary"]
-                for material in result["materials"]
+                item["payload"]["source_document_id"]: item["payload"]["summary"]
+                for item in result["observations"]
+                if item["payload"].get("kind") == "research_content_material"
             },
             {
                 "answer-1": "公司正在建设 AI 算力平台，并扩充算力中心资源。",

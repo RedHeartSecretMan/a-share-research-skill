@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ add_skill_scripts_to_path()
 
 from a_share_research.communication_sources import (  # noqa: E402
     ClsMarketFlashOperation,
+    EastmoneyMarketFlashOperation,
     FallbackMarketFlashOperation,
 )
 from a_share_research.content_contract import ContentQuery  # noqa: E402
@@ -129,16 +131,21 @@ class ExchangeApplicabilityTests(unittest.TestCase):
                 for operation in operations
             )
         )
-        self.assertEqual(
-            sum(
-                isinstance(operation, FallbackMarketFlashOperation)
+        self.assertTrue(
+            any(
+                isinstance(operation, ClsMarketFlashOperation)
                 for operation in operations
-            ),
-            1,
+            )
+        )
+        self.assertTrue(
+            any(
+                isinstance(operation, EastmoneyMarketFlashOperation)
+                for operation in operations
+            )
         )
         self.assertFalse(
             any(
-                isinstance(operation, ClsMarketFlashOperation)
+                isinstance(operation, FallbackMarketFlashOperation)
                 for operation in operations
             )
         )
@@ -180,6 +187,24 @@ class ExchangeApplicabilityTests(unittest.TestCase):
 
 
 class SseAnnouncementOperationTests(unittest.TestCase):
+    def test_unknown_provider_field_fails_closed_before_observation_ownership(
+        self,
+    ) -> None:
+        payload = json.loads(
+            Path(FIXTURES, "sse_announcements_page_1.json").read_text()
+        )
+        payload["unexpected_provider_field"] = "must-not-be-silently-dropped"
+
+        batch = SseAnnouncementOperation(
+            FixedTransport([inline_response(json.dumps(payload))]), page_size=2
+        ).collect(query(limit=1))
+
+        self.assertFalse(batch.complete)
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(
+            [error.code for error in batch.source_errors], ["unknown_schema"]
+        )
+
     def test_official_announcements_paginate_and_keep_full_time_and_pdf_locator(
         self,
     ) -> None:

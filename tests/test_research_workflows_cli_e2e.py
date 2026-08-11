@@ -159,20 +159,23 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         self.assert_successful_process(completed)
         self.assertEqual(result["workflow"]["id"], "theme_report_research")
         content = result["steps"][0]["result"]
-        self.assertEqual(content["task_type"], "research_content")
+        self.assertEqual(content["plan"]["task_type"], "research_content")
+        materials = [
+            item
+            for item in content["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
         self.assertEqual(
-            content["brief"]["material_type_counts"], {"research_report": 2}
+            [item["payload"]["material_type"] for item in materials],
+            ["research_report", "research_report"],
         )
         self.assertEqual(
-            {item["source_operation"] for item in content["materials"]},
+            {item["operation_id"] for item in materials},
             {"eastmoney_reports@1"},
         )
         self.assertIn(
             ("iwencai_content_search@1", "missing_credential"),
-            {
-                (item["source_operation"], item["code"])
-                for item in content["source_errors"]
-            },
+            {(item["operation_id"], item["code"]) for item in content["source_errors"]},
         )
         self.assertEqual(result["status"], "limited")
 
@@ -201,8 +204,13 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         self.assert_successful_process(completed)
         content = result["steps"][0]["result"]
         self.assertEqual(content["status"], "limited")
+        materials = [
+            item
+            for item in content["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
         self.assertEqual(
-            {item["source_operation"] for item in content["materials"]},
+            {item["operation_id"] for item in materials},
             {"eastmoney_reports@1", "iwencai_content_search@1"},
         )
         self.assertNotIn(
@@ -291,6 +299,28 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         )
         for step in result["steps"][1:]:
             if step["step_id"] == "valuation":
+                continue
+            if step["step_id"] == "institutional_coverage":
+                self.assertEqual(
+                    set(step["result"]),
+                    {
+                        "schema_version",
+                        "status",
+                        "research_anchor",
+                        "plan",
+                        "capability_registry",
+                        "coverage",
+                        "observations",
+                        "claims",
+                        "calculations",
+                        "conflicts",
+                        "limitations",
+                        "source_errors",
+                        "task_views",
+                        "briefs",
+                    },
+                )
+                self.assertNotIn("evidence", step["result"])
                 continue
             for field in (
                 "evidence",

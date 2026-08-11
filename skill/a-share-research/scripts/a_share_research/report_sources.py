@@ -18,6 +18,7 @@ from .content_contract import (
     ContentQuery,
     SourceBatch,
     SourceFailure,
+    undeclared_raw_fields,
 )
 from .identity_sources import SourceOperationError, TransportError
 from .source_throttle import (
@@ -56,6 +57,32 @@ class EastmoneyReportOperation:
 
     operation_id = "eastmoney_reports@1"
     supported_material_types = frozenset({"research_report", "industry_report"})
+    raw_fields = (
+        "hits",
+        "TotalPage",
+        "pageNo",
+        "size",
+        "data[]",
+        "currentYear",
+        "data[].publishDate",
+        "data[].infoCode",
+        "data[].title",
+        "data[].orgSName",
+        "data[].orgCode",
+        "data[].stockCode",
+        "data[].stockName",
+        "data[].industryCode",
+        "data[].industryName",
+        "data[].predictThisYearEps",
+        "data[].predictNextYearEps",
+        "data[].predictNextTwoYearEps",
+        "data[].indvInduCode",
+        "data[].indvInduName",
+        "data[].emRatingName",
+        "data[].reportType",
+        "data[].attachPages",
+        "data[].attachSize",
+    )
 
     def __init__(
         self,
@@ -89,6 +116,7 @@ class EastmoneyReportOperation:
         except _ReportSourceError as error:
             return SourceBatch(
                 operation_id=self.operation_id,
+                observations=tuple(observations),
                 source_errors=(
                     SourceFailure(
                         source_operation=self.operation_id,
@@ -96,6 +124,7 @@ class EastmoneyReportOperation:
                         message=str(error),
                     ),
                 ),
+                degradations=tuple(degradations),
                 complete=False,
             )
         except RequestGateError as gate_error:
@@ -122,6 +151,7 @@ class EastmoneyReportOperation:
         except TransportError as error:
             return SourceBatch(
                 operation_id=self.operation_id,
+                observations=tuple(observations),
                 source_errors=(
                     SourceFailure(
                         source_operation=self.operation_id,
@@ -129,6 +159,7 @@ class EastmoneyReportOperation:
                         message=str(error),
                     ),
                 ),
+                degradations=tuple(degradations),
                 complete=False,
             )
         limitations: list[str] = []
@@ -286,6 +317,20 @@ class IwencaiContentSearchOperation:
     supported_material_types = frozenset(
         {"research_report", "announcement", "stock_news"}
     )
+    raw_fields = (
+        "status_code",
+        "status_msg",
+        "data[]",
+        "data[].uid",
+        "data[].title",
+        "data[].publish_date",
+        "data[].stock_infos[]",
+        "data[].stock_infos[].code",
+        "data[].stock_infos[].name",
+        "data[].extra",
+        "data[].extra.organization",
+        "data[].score",
+    )
     _channels = {
         "research_report": "report",
         "announcement": "announcement",
@@ -371,7 +416,7 @@ class IwencaiContentSearchOperation:
                         separators=(",", ":"),
                     ).encode("utf-8"),
                 )
-                rows = _decode_iwencai_rows(response)
+                rows = _decode_iwencai_rows(response, self.raw_fields)
                 for row in rows:
                     observation, future = _iwencai_observation(
                         row=row,
@@ -394,9 +439,19 @@ class IwencaiContentSearchOperation:
                     elif observation is not None:
                         observations.append(observation)
             except _ReportSourceError as error:
-                return self._failed(error.code, str(error))
+                return self._failed(
+                    error.code,
+                    str(error),
+                    observations=observations,
+                    degradations=degradations,
+                )
             except TransportError as error:
-                return self._failed(error.code, str(error))
+                return self._failed(
+                    error.code,
+                    str(error),
+                    observations=observations,
+                    degradations=degradations,
+                )
         return SourceBatch(
             operation_id=self.operation_id,
             observations=tuple(observations),
@@ -405,15 +460,27 @@ class IwencaiContentSearchOperation:
             complete=False,
         )
 
-    def _failed(self, code: str, message: str) -> SourceBatch:
+    def _failed(
+        self,
+        code: str,
+        message: str,
+        *,
+        observations: list[ContentObservation] | None = None,
+        degradations: list[SourceFailure] | None = None,
+    ) -> SourceBatch:
         return SourceBatch(
             operation_id=self.operation_id,
+            observations=tuple(observations or ()),
             source_errors=(
                 SourceFailure(
                     source_operation=self.operation_id,
                     code=code,
                     message=message,
                 ),
+            ),
+            degradations=tuple(degradations or ()),
+            limitations=(
+                ("semantic_search_completeness_unproven",) if observations else ()
             ),
             complete=False,
         )
@@ -424,6 +491,16 @@ class ThsConsensusMaterialOperation:
 
     operation_id = "ths_consensus_material@1"
     supported_material_types = frozenset({"consensus_material"})
+    raw_fields = (
+        "security",
+        "retrieved_at",
+        "source_uri",
+        "forecasts[].year",
+        "forecasts[].institutions",
+        "forecasts[].minimum",
+        "forecasts[].mean",
+        "forecasts[].maximum",
+    )
 
     def __init__(
         self,
@@ -529,7 +606,9 @@ def _is_https_origin(value: str) -> bool:
     )
 
 
-def _decode_iwencai_rows(response: Any) -> tuple[dict[str, Any], ...]:
+def _decode_iwencai_rows(
+    response: Any, declared_fields: tuple[str, ...]
+) -> tuple[dict[str, Any], ...]:
     if response.status != 200:
         raise _ReportSourceError(
             "upstream_http_error",
@@ -552,6 +631,11 @@ def _decode_iwencai_rows(response: Any) -> tuple[dict[str, Any], ...]:
         raise _ReportSourceError(
             "unknown_schema",
             "The source response does not match the expected search schema.",
+        )
+    if undeclared_raw_fields(payload, declared_fields):
+        raise _ReportSourceError(
+            "unknown_schema",
+            "The source response contains undeclared provider fields.",
         )
     status_code = payload.get("status_code")
     if isinstance(status_code, bool) or not isinstance(status_code, int):
@@ -627,6 +711,11 @@ def _iwencai_observation(
         raise _ReportSourceError(
             "unknown_schema",
             "A semantic-search extra field is invalid.",
+        )
+    if undeclared_raw_fields(extra, ("organization",)):
+        raise _ReportSourceError(
+            "unknown_schema",
+            "A semantic-search extra field contains undeclared provider fields.",
         )
     author = extra.get("organization")
     if author is not None and (not isinstance(author, str) or not author.strip()):
@@ -789,6 +878,21 @@ def _decode_report_page(response: Any, expected_page: int) -> _ReportPage:
         raise _ReportSourceError(
             "unknown_schema",
             "The source response does not match the expected report schema.",
+        )
+    allowed_page_fields = {"hits", "TotalPage", "pageNo", "size", "data", "currentYear"}
+    allowed_row_fields = {
+        field.removeprefix("data[].")
+        for field in EastmoneyReportOperation.raw_fields
+        if field.startswith("data[].")
+    }
+    if set(payload).difference(allowed_page_fields) or any(
+        isinstance(row, dict) and set(row).difference(allowed_row_fields)
+        for row in payload.get("data", ())
+        if isinstance(payload.get("data"), list)
+    ):
+        raise _ReportSourceError(
+            "unknown_schema",
+            "The source response contains an undeclared report field.",
         )
     hits = _nonnegative_int(payload.get("hits"))
     total_pages = _nonnegative_int(payload.get("TotalPage"))

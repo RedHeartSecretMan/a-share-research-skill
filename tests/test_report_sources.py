@@ -68,9 +68,16 @@ class EastmoneyFixtureTransport:
 
 
 class IwencaiFixtureTransport:
-    def __init__(self, fixture: str, *, publish_date: str | None = None) -> None:
+    def __init__(
+        self,
+        fixture: str,
+        *,
+        publish_date: str | None = None,
+        unexpected_field: bool = False,
+    ) -> None:
         self._fixture = fixture
         self._publish_date = publish_date
+        self._unexpected_field = unexpected_field
         self.posts: list[tuple[str, dict[str, str], bytes]] = []
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
@@ -84,9 +91,12 @@ class IwencaiFixtureTransport:
     ) -> HttpResponse:
         self.posts.append((url, headers, body))
         response_body = (FIXTURES / self._fixture).read_bytes()
-        if self._publish_date is not None:
+        if self._publish_date is not None or self._unexpected_field:
             payload = json.loads(response_body)
-            payload["data"][0]["publish_date"] = self._publish_date
+            if self._publish_date is not None:
+                payload["data"][0]["publish_date"] = self._publish_date
+            if self._unexpected_field:
+                payload["data"][0]["unexpected_provider_field"] = {}
             response_body = json.dumps(payload).encode("utf-8")
         return HttpResponse(
             status=200,
@@ -228,6 +238,38 @@ def consensus_query(*, as_of: str = "2026-08-02") -> ContentQuery:
 
 
 class EastmoneyReportOperationTests(unittest.TestCase):
+    def test_report_unknown_raw_field_fails_closed_before_observation_ownership(
+        self,
+    ) -> None:
+        payload = json.loads(
+            (FIXTURES / "eastmoney_stock_page_1.json").read_text(encoding="utf-8")
+        )
+        payload["data"][0]["unexpected_provider_field"] = "must-not-leak"
+
+        class UnknownFieldTransport:
+            def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                return HttpResponse(
+                    status=200,
+                    content_type="text/plain",
+                    body=json.dumps(payload).encode("utf-8"),
+                    retrieved_at=RETRIEVED_AT,
+                )
+
+            def post(
+                self, url: str, headers: dict[str, str], body: bytes
+            ) -> HttpResponse:
+                raise AssertionError("report discovery must use GET")
+
+        batch = EastmoneyReportOperation(
+            UnknownFieldTransport(), request_gate=no_wait_gate()
+        ).collect(stock_query(limit=1))
+
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(
+            [item.code for item in batch.source_errors], ["unknown_schema"]
+        )
+        self.assertNotIn("must-not-leak", str(batch))
+
     def test_report_request_uses_injected_gate_and_keeps_diagnostic(self) -> None:
         transport = EastmoneyFixtureTransport({1: "eastmoney_industry_page_1.json"})
         gate = DiagnosticRequestGate()
@@ -541,6 +583,78 @@ class EastmoneyReportOperationTests(unittest.TestCase):
 
 
 class IwencaiContentSearchOperationTests(unittest.TestCase):
+    def test_unknown_provider_field_fails_closed_before_observation_ownership(
+        self,
+    ) -> None:
+        operation = IwencaiContentSearchOperation(
+            IwencaiFixtureTransport(
+                "iwencai_report_success.json", unexpected_field=True
+            ),
+            environ={"IWENCAI_API_KEY": "fixture-key"},
+        )
+
+        batch = operation.collect(semantic_query())
+
+        self.assertFalse(batch.complete)
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(
+            [error.code for error in batch.source_errors], ["unknown_schema"]
+        )
+
+    def test_later_channel_failure_retains_prior_channel_observations(self) -> None:
+        class LaterChannelUnknownSchemaTransport:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                raise AssertionError("iwencai search must use POST")
+
+            def post(
+                self, url: str, headers: dict[str, str], body: bytes
+            ) -> HttpResponse:
+                self.calls += 1
+                payload = json.loads(
+                    (FIXTURES / "iwencai_report_success.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                if self.calls == 2:
+                    payload["data"][0]["unexpected_provider_field"] = {}
+                return HttpResponse(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(payload).encode("utf-8"),
+                    retrieved_at=RETRIEVED_AT,
+                )
+
+        query = semantic_query()
+        query = ContentQuery(
+            material_types=("research_report", "stock_news"),
+            keywords=query.keywords,
+            as_of=query.as_of,
+            published_from=query.published_from,
+            published_to=query.published_to,
+            limit=query.limit,
+            subject=query.subject,
+            parameters=query.parameters,
+            allow_credentials=query.allow_credentials,
+            allow_fallback=query.allow_fallback,
+        )
+        operation = IwencaiContentSearchOperation(
+            LaterChannelUnknownSchemaTransport(),
+            environ={"IWENCAI_API_KEY": "fixture-key"},
+        )
+
+        batch = operation.collect(query)
+
+        self.assertFalse(batch.complete)
+        self.assertEqual(
+            [item.material_type for item in batch.observations], ["research_report"]
+        )
+        self.assertEqual(
+            [error.code for error in batch.source_errors], ["unknown_schema"]
+        )
+
     def test_missing_or_disallowed_credentials_fail_without_exposing_values(
         self,
     ) -> None:

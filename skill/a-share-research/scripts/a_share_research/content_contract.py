@@ -57,6 +57,32 @@ def valid_f10_profile_categories(value: object) -> bool:
     )
 
 
+def undeclared_raw_fields(
+    value: object, declared_fields: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Return provider field paths absent from one operation's static contract."""
+
+    actual: set[str] = set()
+
+    def visit(item: object, path: str) -> None:
+        if isinstance(item, dict):
+            if not item and path:
+                actual.add(path)
+            for key, nested in item.items():
+                nested_path = f"{path}.{key}" if path else key
+                visit(nested, nested_path)
+        elif isinstance(item, list):
+            array_path = f"{path}[]"
+            actual.add(array_path)
+            for nested in item:
+                visit(nested, array_path)
+        else:
+            actual.add(path)
+
+    visit(value, "")
+    return tuple(sorted(actual.difference(declared_fields)))
+
+
 @dataclass(frozen=True)
 class ContentQuery:
     """Normalized query passed to one source operation."""
@@ -130,6 +156,9 @@ class ContentSourceOperation(Protocol):
 
     operation_id: str
     supported_material_types: frozenset[str]
+
+    @property
+    def raw_fields(self) -> tuple[str, ...]: ...
 
     def collect(self, query: ContentQuery) -> SourceBatch: ...
 

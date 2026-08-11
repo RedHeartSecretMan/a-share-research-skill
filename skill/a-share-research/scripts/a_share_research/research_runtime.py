@@ -50,7 +50,10 @@ from .market_signal_contract import (
     MarketSignalSourceOperation,
 )
 from .market_signals import build_market_signals_result
-from .research_content import build_research_content_result
+from .research_content import (
+    build_research_content_blocked_result,
+    build_research_content_result,
+)
 from .research_result import UnifiedResearchResult
 from .research_workflows import build_research_workflow_result
 
@@ -190,24 +193,20 @@ class ResearchRuntime:
                 self._research_now,
             )
         elif task_type == "research_content":
+            content_operations = self._content_operations
+            if content_operations is None:
+                content_operations = build_default_content_operations(
+                    self._content_transport,
+                    allow_credentials=request["source_policy"]["allow_credentials"],
+                    allow_fallback=request["source_policy"]["allow_fallback"],
+                    research_now=self._research_now,
+                )
             if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
+                result = build_research_content_blocked_result(
                     request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "research_content currently requires experimental "
-                        "source operations"
-                    ),
+                    content_operations,
                 )
             else:
-                content_operations = self._content_operations
-                if content_operations is None:
-                    content_operations = build_default_content_operations(
-                        self._content_transport,
-                        allow_credentials=request["source_policy"]["allow_credentials"],
-                        allow_fallback=request["source_policy"]["allow_fallback"],
-                        research_now=self._research_now,
-                    )
                 result = build_research_content_result(
                     request,
                     content_operations,

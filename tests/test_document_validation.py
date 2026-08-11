@@ -126,6 +126,7 @@ class DocumentValidatorTests(unittest.TestCase):
 class FixedDocumentMaterialOperation:
     operation_id = "fixed_document_material@1"
     supported_material_types = frozenset({"research_report"})
+    raw_fields = ("fixture_observation",)
 
     def __init__(self, document_locator: str | None) -> None:
         self.document_locator = document_locator
@@ -157,6 +158,7 @@ class FixedDocumentMaterialOperation:
 class DuplicateDocumentMaterialOperation:
     operation_id = "duplicate_document_material@1"
     supported_material_types = frozenset({"research_report"})
+    raw_fields = ("fixture_observation",)
 
     def collect(self, query: ContentQuery) -> SourceBatch:
         observations = []
@@ -219,62 +221,71 @@ class DocumentValidationProcessTests(unittest.TestCase):
     def test_document_verification_is_not_requested_by_default(self) -> None:
         transport = FixedDocumentTransport([])
 
-        result = ResearchRuntime(
-            content_operations=(
-                FixedDocumentMaterialOperation("https://example.test/REPORT-1.pdf"),
-            ),
-            content_transport=transport,
-        ).research(research_request())
-
-        self.assertEqual(transport.calls, [])
-        self.assertEqual(
-            result["materials"][0]["document_validation"]["status"],
-            "not_requested",
+        result = (
+            ResearchRuntime(
+                content_operations=(
+                    FixedDocumentMaterialOperation("https://example.test/REPORT-1.pdf"),
+                ),
+                content_transport=transport,
+            )
+            .research(research_request())
+            .to_dict()
         )
 
-    def test_opt_in_download_failure_is_visible_without_dropping_locator(self) -> None:
+        self.assertEqual(transport.calls, [])
+        material = next(item["payload"] for item in result["observations"])
+        self.assertNotIn("document_validation", material)
+        self.assertTrue(
+            material["document_locator"]["uri"].startswith("source-document-content:")
+        )
+
+    def test_legacy_opt_in_does_not_reintroduce_a_second_result_or_downloader(
+        self,
+    ) -> None:
         transport = FixedDocumentTransport(
             [TransportError("upstream_unavailable", "temporary disconnect")]
         )
 
-        result = ResearchRuntime(
-            content_operations=(
-                FixedDocumentMaterialOperation("https://example.test/REPORT-1.pdf"),
-            ),
-            content_transport=transport,
-        ).research(research_request(verify_documents=True))
-
-        material = result["materials"][0]
-        self.assertEqual(material["document_validation"]["status"], "failed")
-        self.assertEqual(
-            material["document_locator"], "https://example.test/REPORT-1.pdf"
+        result = (
+            ResearchRuntime(
+                content_operations=(
+                    FixedDocumentMaterialOperation("https://example.test/REPORT-1.pdf"),
+                ),
+                content_transport=transport,
+            )
+            .research(research_request(verify_documents=True))
+            .to_dict()
         )
-        self.assertEqual(
-            [error["code"] for error in result["source_errors"]],
-            ["document_download_failed"],
-        )
-        self.assertEqual(len(transport.calls), 1)
 
-    def test_partial_range_validation_is_an_explicit_degradation(self) -> None:
+        material = next(item["payload"] for item in result["observations"])
+        self.assertNotIn("document_validation", material)
+        self.assertIsNotNone(material["document_locator"])
+        self.assertEqual(result["source_errors"], [])
+        self.assertEqual(transport.calls, [])
+
+    def test_legacy_range_verification_does_not_mutate_formal_coverage(self) -> None:
         transport = FixedDocumentTransport([response(b"%PDF-1.7", status=206)])
 
-        result = ResearchRuntime(
-            content_operations=(
-                FixedDocumentMaterialOperation("https://example.test/REPORT-1.pdf"),
-            ),
-            content_transport=transport,
-        ).research(research_request(verify_documents=True))
-
-        self.assertEqual(
-            result["materials"][0]["document_validation"]["status"],
-            "partial",
-        )
-        self.assertEqual(
-            [item["code"] for item in result["degradations"]],
-            ["document_partially_validated"],
+        result = (
+            ResearchRuntime(
+                content_operations=(
+                    FixedDocumentMaterialOperation("https://example.test/REPORT-1.pdf"),
+                ),
+                content_transport=transport,
+            )
+            .research(research_request(verify_documents=True))
+            .to_dict()
         )
 
-    def test_mixed_duplicate_source_validation_is_only_partial(self) -> None:
+        self.assertEqual(
+            result["coverage"]["research_content_materials"]["operations"][
+                "fixed_document_material@1"
+            ]["state"],
+            "complete",
+        )
+        self.assertEqual(transport.calls, [])
+
+    def test_sibling_owned_duplicate_batch_fails_closed_before_grouping(self) -> None:
         transport = FixedDocumentTransport(
             [
                 response(b"%PDF-1.7\nfixture"),
@@ -282,21 +293,22 @@ class DocumentValidationProcessTests(unittest.TestCase):
             ]
         )
 
-        result = ResearchRuntime(
-            content_operations=(DuplicateDocumentMaterialOperation(),),
-            content_transport=transport,
-        ).research(research_request(verify_documents=True))
-
-        validation = result["materials"][0]["document_validation"]
-        self.assertEqual(validation["status"], "partial")
-        self.assertEqual(
-            {item["status"] for item in validation["sources"]},
-            {"verified", "failed"},
+        result = (
+            ResearchRuntime(
+                content_operations=(DuplicateDocumentMaterialOperation(),),
+                content_transport=transport,
+            )
+            .research(research_request(verify_documents=True))
+            .to_dict()
         )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["observations"], [])
         self.assertEqual(
             [error["code"] for error in result["source_errors"]],
-            ["document_download_failed"],
+            ["operation_owner_mismatch"],
         )
+        self.assertEqual(transport.calls, [])
 
     def test_verify_documents_must_be_an_explicit_boolean(self) -> None:
         request = research_request()

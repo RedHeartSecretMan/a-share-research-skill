@@ -13,6 +13,7 @@ from .content_contract import (
     ContentQuery,
     SourceBatch,
     SourceFailure,
+    undeclared_raw_fields,
 )
 from .identity_sources import HttpResponse, HttpTransport, TransportError
 
@@ -169,6 +170,41 @@ class SseAnnouncementOperation:
 
     operation_id = "sse_announcement@1"
     supported_material_types = frozenset({"announcement"})
+    raw_fields = (
+        "beginDate",
+        "endDate",
+        "isPagination",
+        "productId",
+        "reportType",
+        "reportType2",
+        "securityType",
+        "pageHelp.beginPage",
+        "pageHelp.endPage",
+        "pageHelp.pageCount",
+        "pageHelp.pageNo",
+        "pageHelp.pageSize",
+        "pageHelp.pageSizeWithOutLimit",
+        "pageHelp.cacheSize",
+        "pageHelp.total",
+        "pageHelp.data[]",
+        "pageHelp.data[].SECURITY_CODE",
+        "pageHelp.data[].SECURITY_NAME",
+        "pageHelp.data[].TITLE",
+        "pageHelp.data[].BULLETIN_HEADING",
+        "pageHelp.data[].BULLETIN_TYPE",
+        "pageHelp.data[].ADDDATE",
+        "pageHelp.data[].SSEDATE",
+        "pageHelp.data[].URL",
+        "result[]",
+        "result[].SECURITY_CODE",
+        "result[].SECURITY_NAME",
+        "result[].TITLE",
+        "result[].BULLETIN_HEADING",
+        "result[].BULLETIN_TYPE",
+        "result[].ADDDATE",
+        "result[].SSEDATE",
+        "result[].URL",
+    )
     endpoint = "https://query.sse.com.cn/security/stock/queryCompanyBulletin.do"
 
     def __init__(
@@ -280,6 +316,11 @@ class SseAnnouncementOperation:
         if not isinstance(payload, dict):
             raise _OperationError(
                 "unknown_schema", "The SSE announcement schema is unknown."
+            )
+        if undeclared_raw_fields(payload, self.raw_fields):
+            raise _OperationError(
+                "unknown_schema",
+                "The SSE announcement contains undeclared provider fields.",
             )
         rows = payload.get("result")
         page_help = payload.get("pageHelp")

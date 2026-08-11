@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import date, datetime
-from typing import Any, Collection
+from typing import Any, Collection, Mapping, cast
 
 from .content_contract import (
     PUBLIC_MATERIAL_TYPES,
@@ -18,14 +18,23 @@ from .content_contract import (
     SourceFailure,
     valid_f10_profile_categories,
 )
-from .document_validation import (
-    DOCUMENT_VALIDATION_OPERATION,
-    DocumentTarget,
-    DocumentValidationResult,
-    DocumentValidator,
+from .identity_resolution import execute_security_identity_research
+from .identity_sources import HttpTransport, build_default_identity_operations
+from .research_result import (
+    DirectTaskClaim,
+    DirectTaskConflict,
+    DirectTaskLimitation,
+    DirectTaskPlan,
+    EvidenceUsePolicy,
+    FieldDisposition,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+    ResearchDependency,
+    UnifiedResearchResult,
+    fold_direct_task_research_result,
+    safe_public_locator,
 )
-from .identity_resolution import resolve_security_identity
-from .identity_sources import HttpTransport
 
 MATERIAL_TYPES = PUBLIC_MATERIAL_TYPES
 SUBJECT_REQUIRED_TYPES = frozenset(
@@ -37,6 +46,57 @@ SUBJECT_REQUIRED_TYPES = frozenset(
         "investor_qa",
     }
 )
+_CONTENT_CAPABILITY = "research_content_materials"
+_CONTENT_EVIDENCE_USE = "research_content_material"
+
+
+def build_research_content_blocked_result(
+    request: dict[str, Any],
+    operations: Collection[ContentSourceOperation],
+) -> UnifiedResearchResult:
+    """Return the formal result when policy prevents content acquisition."""
+
+    query = _normalize_query(request)
+    operation_list = tuple(operations)
+    _validate_and_order_content_operations(operation_list, query)
+    selected = {
+        operation.operation_id
+        for operation in operation_list
+        if operation.supported_material_types.intersection(query.material_types)
+    }
+    if not selected:
+        raise ValueError("research_content has no applicable source operation")
+    obligations = tuple(_content_obligation(operation) for operation in operation_list)
+    outcomes = tuple(
+        _content_skipped_outcome(
+            operation,
+            "skipped_policy" if operation.operation_id in selected else "not_requested",
+        )
+        for operation in operation_list
+    )
+    return fold_direct_task_research_result(
+        DirectTaskPlan(
+            task_type="research_content",
+            as_of=str(request["as_of"]),
+            obligations=obligations,
+            dependencies=(
+                ResearchDependency(
+                    consumer_id="research_content_material",
+                    evidence_use=_CONTENT_EVIDENCE_USE,
+                    minimum_supporting_observations=1,
+                    core=True,
+                ),
+            ),
+        ),
+        outcomes,
+        limitations=(
+            DirectTaskLimitation(
+                "source_policy_not_satisfied",
+                "research_content currently requires experimental source operations",
+            ),
+        ),
+        summary="Research-content acquisition was blocked by source policy.",
+    )
 
 
 def build_research_content_result(
@@ -44,141 +104,590 @@ def build_research_content_result(
     operations: Collection[ContentSourceOperation],
     identity_transport: HttpTransport,
     document_transport: ContentHttpTransport | None = None,
-) -> dict[str, Any]:
+) -> UnifiedResearchResult:
     """Collect, time-bound, and reconcile research materials."""
 
+    del document_transport
     query = _normalize_query(request)
-    identity = _resolve_subject(request, identity_transport)
-    if identity["status"] == "blocked":
-        theme_aggregation = _aggregate_investor_qa_themes([], query)
-        blocked_brief: dict[str, Any] = {
-            "material_count": 0,
-            "material_types": list(query.material_types),
-            "material_type_counts": {},
+    operation_list = tuple(operations)
+    execution_operations = _validate_and_order_content_operations(operation_list, query)
+    identity_obligations: tuple[OperationObligation, ...] = ()
+    identity_outcomes: tuple[OperationOutcome, ...] = ()
+    identity_claims: tuple[DirectTaskClaim, ...] = ()
+    identity_dependencies: tuple[ResearchDependency, ...] = ()
+    identity_limitations: tuple[DirectTaskLimitation, ...] = ()
+    identity_blocked = False
+    if query.subject is not None:
+        clue = query.subject.get("clue")
+        if not isinstance(clue, str) or not clue.strip():
+            raise ValueError("research_content subject requires a non-empty clue")
+        identity_request: dict[str, object] = {
+            **request,
+            "task_type": "security_identity",
+            "subjects": [{"clue": clue.strip()}],
+            "window": None,
+            "parameters": {},
         }
-        blocked_limitations = list(identity["limitations"])
-        if theme_aggregation is not None:
-            blocked_brief["theme_aggregation"] = theme_aggregation
-            blocked_limitations.append(_unavailable_theme_aggregation_limitation())
-        return {
-            "schema_version": request["schema_version"],
-            "status": "blocked",
-            "subjects": [],
-            "materials": [],
-            "brief": blocked_brief,
-            "evidence": identity["evidence"],
-            "conflicts": identity["conflicts"],
-            "source_errors": identity["source_errors"],
-            "degradations": [],
-            "limitations": blocked_limitations,
-        }
-    if identity["subjects"]:
-        query = replace(query, subject=identity["subjects"][0])
-    selected = [
-        operation
-        for operation in operations
-        if operation.supported_material_types.intersection(query.material_types)
-    ]
-    source_errors: list[dict[str, Any]] = []
-    degradations: list[dict[str, Any]] = []
-    observations: list[ContentObservation] = []
-    batch_limitations: set[str] = set()
-    for operation in selected:
-        batch = operation.collect(query)
-        valid_observations, schema_errors = _validate_observation_enums(
-            batch.operation_id,
-            batch.observations,
+        identity_execution = execute_security_identity_research(
+            identity_request,
+            build_default_identity_operations(identity_transport),
         )
-        observations.extend(valid_observations)
-        source_errors.extend(item.to_result() for item in schema_errors)
-        source_errors.extend(item.to_result() for item in batch.source_errors)
-        degradations.extend(item.to_result() for item in batch.degradations)
-        batch_limitations.update(batch.limitations)
+        identity_obligations = identity_execution.plan.obligations
+        identity_outcomes = identity_execution.outcomes
+        material = identity_execution.material
+        identity_limitations = tuple(
+            DirectTaskLimitation(item.code, item.message)
+            for item in material.limitations
+        )
+        canonical = material.canonical_identity
+        identity_blocked = material.status == "blocked" or canonical is None
+        if not identity_blocked and canonical is not None:
+            canonical_subject = {
+                "security": {
+                    "exchange": canonical.exchange,
+                    "code": canonical.code,
+                    "type": canonical.security_type,
+                },
+                "name": canonical.name,
+                "issuer": {
+                    "name": canonical.issuer_name,
+                    "identifier": canonical.issuer_identifier,
+                    "security_relationship": canonical.issuer_relationship,
+                },
+            }
+            query = replace(query, subject=canonical_subject)
+            identity_claims = (
+                DirectTaskClaim(
+                    kind="research_content_subject_identity",
+                    evidence_use="security_identity",
+                    observation_keys=material.observation_keys,
+                    payload=canonical_subject,
+                ),
+            )
+        if identity_obligations:
+            identity_dependencies = (
+                ResearchDependency(
+                    consumer_id="research_content_subject_identity",
+                    evidence_use="security_identity",
+                    minimum_supporting_observations=1,
+                    core=True,
+                ),
+            )
+    outcomes: list[OperationOutcome] = []
+    accepted_by_operation: dict[str, list[tuple[ContentObservation, str]]] = {}
+    owned_material_count = 0
+    limitation_codes: set[str] = {"experimental_research_content_sources"}
+    for operation in execution_operations:
+        if not operation.supported_material_types.intersection(query.material_types):
+            outcomes.append(_content_skipped_outcome(operation, "not_requested"))
+            continue
+        if identity_blocked:
+            outcomes.append(
+                _content_skipped_outcome(operation, "skipped_research_dependency")
+            )
+            continue
+        fallback_for = getattr(operation, "fallback_for", None)
+        if fallback_for is not None:
+            if not query.allow_fallback or accepted_by_operation.get(fallback_for):
+                outcomes.append(_content_skipped_outcome(operation, "not_requested"))
+                continue
+        try:
+            batch = operation.collect(query)
+        except Exception:
+            outcomes.append(
+                _content_failed_outcome(
+                    operation,
+                    SourceFailure(
+                        operation.operation_id,
+                        "operation_failure",
+                        "The source operation failed without a safe diagnostic.",
+                    ),
+                )
+            )
+            continue
+        if batch.operation_id != operation.operation_id:
+            outcomes.append(
+                _content_failed_outcome(
+                    operation,
+                    SourceFailure(
+                        operation.operation_id,
+                        "operation_owner_mismatch",
+                        "The source batch contradicted its operation owner.",
+                    ),
+                )
+            )
+            continue
+        valid, schema_errors = _validate_observation_enums(
+            operation.operation_id, batch.observations
+        )
+        owned = [
+            (item, _content_observation_key(item, index))
+            for index, item in enumerate(valid)
+        ]
+        accepted = [
+            (item, key) for item, key in owned if _within_research_window(item, query)
+        ]
+        accepted_by_operation[operation.operation_id] = accepted
+        owned_material_count += len(valid)
+        errors = (*schema_errors, *batch.source_errors)
+        outcomes.append(
+            _content_outcome(
+                operation,
+                observations=tuple(
+                    _content_observation_payload(item, index, query)
+                    for index, item in enumerate(valid)
+                ),
+                errors=tuple(errors),
+                query_complete=batch.complete,
+            )
+        )
+        limitation_codes.update(batch.limitations)
+        limitation_codes.update(code for item in valid for code in item.limitations)
+        limitation_codes.update(item.code for item in batch.degradations)
 
     accepted = [
-        observation
-        for observation in observations
-        if _within_research_window(observation, query)
+        item
+        for operation in operation_list
+        for item in accepted_by_operation.get(operation.operation_id, ())
     ]
-    materials = _limit_per_material_type(_deduplicate(accepted), query.limit)
-    document_source_errors, document_degradations = _validate_documents(
-        materials,
-        enabled=query.parameters.get("verify_documents", False),
-        transport=document_transport,
-    )
-    source_errors.extend(document_source_errors)
-    degradations.extend(document_degradations)
-    material_type_counts: dict[str, int] = {}
-    for material in materials:
-        material_type = material["material_type"]
-        material_type_counts[material_type] = (
-            material_type_counts.get(material_type, 0) + 1
+    claims, conflicts, selected_materials = _content_material_groups(accepted, query)
+    present_types = {item.material_type for item in selected_materials}
+    missing_types = sorted(set(query.material_types).difference(present_types))
+    limitations = [
+        DirectTaskLimitation(code, _limitation_message(code))
+        for code in sorted(limitation_codes)
+    ]
+    if missing_types:
+        limitations.append(
+            DirectTaskLimitation(
+                "requested_material_type_unavailable",
+                "At least one requested material type produced no usable observation.",
+            )
         )
-    theme_aggregation = _aggregate_investor_qa_themes(materials, query)
-    material_limitations = {
-        limitation for observation in accepted for limitation in observation.limitations
-    }
-    limitations: list[dict[str, Any]] = [
-        {
-            "code": "experimental_research_content_sources",
-            "message": (
-                "Research content currently uses experimental source operations."
+    if not selected_materials:
+        limitations.append(
+            DirectTaskLimitation(
+                "research_content_unavailable",
+                "No usable material was established for the requested window.",
+            )
+        )
+    obligations = (
+        *identity_obligations,
+        *(tuple(_content_obligation(item) for item in operation_list)),
+    )
+    outcomes_by_operation = {item.operation_id: item for item in outcomes}
+    ordered_outcomes = tuple(
+        outcomes_by_operation[operation.operation_id] for operation in operation_list
+    )
+    return fold_direct_task_research_result(
+        DirectTaskPlan(
+            task_type="research_content",
+            as_of=str(request["as_of"]),
+            obligations=obligations,
+            dependencies=(
+                *identity_dependencies,
+                *(
+                    (
+                        ResearchDependency(
+                            consumer_id="research_content_material_group",
+                            evidence_use=_CONTENT_EVIDENCE_USE,
+                            minimum_supporting_observations=1,
+                            core=True,
+                        ),
+                    )
+                    if operation_list
+                    else ()
+                ),
             ),
-        }
-    ]
-    if theme_aggregation is not None and theme_aggregation["status"] == "unavailable":
-        limitations.append(_unavailable_theme_aggregation_limitation())
-    for code in sorted(batch_limitations | material_limitations):
-        limitations.append({"code": code, "message": _limitation_message(code)})
-    missing_material_types = sorted(
-        set(query.material_types).difference(material_type_counts)
+        ),
+        (*identity_outcomes, *ordered_outcomes),
+        claims=(*identity_claims, *claims),
+        conflicts=conflicts,
+        limitations=(*identity_limitations, *tuple(limitations)),
+        summary=(
+            f"Research content retained {owned_material_count} operation-owned material "
+            f"observation(s) in {len(selected_materials)} reversible group(s)."
+        ),
     )
-    if missing_material_types:
-        limitations.append(
-            {
-                "code": "requested_material_type_unavailable",
-                "message": (
-                    "At least one requested material type produced no usable "
-                    "observation; this does not prove the material does not exist."
-                ),
-                "material_types": missing_material_types,
-            }
-        )
-    limitations.extend(identity["limitations"])
-    if not materials:
-        limitations.append(
-            {
-                "code": "research_content_unavailable",
-                "message": (
-                    "No usable material was established for the requested window; "
-                    "this does not prove that no such material exists."
-                ),
-            }
-        )
 
-    brief: dict[str, Any] = {
-        "material_count": len(materials),
-        "material_types": list(query.material_types),
-        "material_type_counts": material_type_counts,
+
+def _content_obligation(operation: ContentSourceOperation) -> OperationObligation:
+    return OperationObligation(
+        capability_id=_CONTENT_CAPABILITY,
+        operation_id=operation.operation_id,
+        source_role="declared_per_observation",
+        experimental=True,
+        exchange=None,
+        evidence_uses=(EvidenceUsePolicy(_CONTENT_EVIDENCE_USE, "supporting"),),
+    )
+
+
+def _validate_and_order_content_operations(
+    operations: tuple[ContentSourceOperation, ...],
+    query: ContentQuery,
+) -> tuple[ContentSourceOperation, ...]:
+    operations_by_id = {operation.operation_id: operation for operation in operations}
+    if len(operations_by_id) != len(operations):
+        raise ValueError("content operation IDs must be unique")
+    fallback_edges: dict[str, str] = {}
+    for operation in operations:
+        _content_dispositions(operation)
+        fallback_for = getattr(operation, "fallback_for", None)
+        if fallback_for is None:
+            continue
+        primary = (
+            operations_by_id.get(fallback_for)
+            if isinstance(fallback_for, str)
+            else None
+        )
+        if primary is None:
+            raise ValueError("content fallback primary is missing")
+        if primary.supported_material_types.intersection(
+            query.material_types
+        ) != operation.supported_material_types.intersection(query.material_types):
+            raise ValueError("content fallback scope is incompatible with its primary")
+        fallback_edges[operation.operation_id] = fallback_for
+
+    ordered: list[ContentSourceOperation] = []
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(operation_id: str) -> None:
+        if operation_id in visited:
+            return
+        if operation_id in visiting:
+            raise ValueError("content fallback graph contains a cycle")
+        visiting.add(operation_id)
+        primary_id = fallback_edges.get(operation_id)
+        if primary_id is not None:
+            visit(primary_id)
+        visiting.remove(operation_id)
+        visited.add(operation_id)
+        ordered.append(operations_by_id[operation_id])
+
+    for operation in operations:
+        visit(operation.operation_id)
+    return tuple(ordered)
+
+
+def _content_dispositions(
+    operation: ContentSourceOperation,
+) -> tuple[FieldDisposition, ...]:
+    try:
+        raw_fields = operation.raw_fields
+    except AttributeError as error:
+        raise ValueError(
+            "content operation raw_fields must be a unique non-empty tuple"
+        ) from error
+    if (
+        not isinstance(raw_fields, tuple)
+        or not raw_fields
+        or any(not isinstance(item, str) or not item for item in raw_fields)
+        or len(set(raw_fields)) != len(raw_fields)
+    ):
+        raise ValueError(
+            "content operation raw_fields must be a unique non-empty tuple of text"
+        )
+    return tuple(
+        _content_field_disposition(operation.operation_id, field)
+        for field in raw_fields
+    )
+
+
+def _content_field_disposition(operation_id: str, field: str) -> FieldDisposition:
+    leaf = field.rsplit(".", 1)[-1].removesuffix("[]").casefold()
+    if field.endswith("[]"):
+        return FieldDisposition(
+            field,
+            "excluded",
+            None,
+            "Provider collection containers are not retained in the public result.",
+        )
+    destinations = {
+        "report_id": ("normalized", "observations[].payload.source_document_id"),
+        "infocode": ("normalized", "observations[].payload.source_document_id"),
+        "uid": ("normalized", "observations[].payload.source_document_id"),
+        "announcementid": (
+            "normalized",
+            "observations[].payload.source_document_id",
+        ),
+        "annid": ("normalized", "observations[].payload.source_document_id"),
+        "indexid": ("normalized", "observations[].payload.source_document_id"),
+        "title": ("normalized", "observations[].payload.title"),
+        "announcementtitle": ("normalized", "observations[].payload.title"),
+        "bulletin_heading": ("normalized", "observations[].payload.title"),
+        "published_at": ("normalized", "observations[].payload.published_at"),
+        "publishdate": ("normalized", "observations[].payload.published_at"),
+        "publish_date": (
+            "normalized",
+            "observations[].payload.attributes.publication_date",
+        ),
+        "date": ("normalized", "observations[].payload.published_at"),
+        "announcementtime": ("normalized", "observations[].payload.published_at"),
+        "publishtime": ("normalized", "observations[].payload.published_at"),
+        "pubdate": ("normalized", "observations[].payload.published_at"),
+        "showtime": ("normalized", "observations[].payload.published_at"),
+        "ctime": ("normalized", "observations[].payload.published_at"),
+        "attachedpubdate": ("normalized", "observations[].payload.published_at"),
+        "adddate": ("normalized", "observations[].payload.available_at"),
+        "retrieved_at": ("lineage_only", "observations[].payload.retrieved_at"),
+        "summary": ("normalized", "observations[].payload.summary"),
+        "brief": ("normalized", "observations[].payload.summary"),
+        "content": ("normalized", "observations[].payload.content"),
+        "maincontent": ("normalized", "observations[].payload.content"),
+        "attachedcontent": ("normalized", "observations[].payload.content"),
+        "locator": ("lineage_only", "observations[].payload.locator.uri"),
+        "url": ("lineage_only", "observations[].payload.locator.uri"),
+        "source_uri": ("lineage_only", "observations[].payload.locator.uri"),
+        "shareurl": ("lineage_only", "observations[].payload.locator.uri"),
+        "adjuncturl": (
+            "lineage_only",
+            "observations[].payload.document_locator.uri",
+        ),
+        "attachpath": (
+            "lineage_only",
+            "observations[].payload.document_locator.uri",
+        ),
+        "medianame": ("normalized", "observations[].payload.author"),
+        "authorname": ("normalized", "observations[].payload.author"),
+        "attachedauthor": ("normalized", "observations[].payload.author"),
+        "orgsname": ("normalized", "observations[].payload.author"),
+        "organization": ("normalized", "observations[].payload.author"),
+        "category": ("normalized", "observations[].payload.attributes.category"),
+        "companyshortname": (
+            "cross_check_only",
+            "observations[].payload.subject.name",
+        ),
+        "secname": ("cross_check_only", "observations[].payload.subject.name"),
+        "security_name": (
+            "cross_check_only",
+            "observations[].payload.subject.name",
+        ),
+        "stockcode": (
+            "cross_check_only",
+            "observations[].payload.subject.security.code",
+        ),
+        "seccode": (
+            "cross_check_only",
+            "observations[].payload.subject.security.code",
+        ),
+        "security_code": (
+            "cross_check_only",
+            "observations[].payload.subject.security.code",
+        ),
     }
-    if theme_aggregation is not None:
-        brief["theme_aggregation"] = theme_aggregation
+    if leaf in {"code", "id"} and any(
+        marker in field.casefold()
+        for marker in ("cmsarticlewebold", "fastnewslist", "roll_data")
+    ):
+        return FieldDisposition(
+            field,
+            "normalized",
+            "observations[].payload.source_document_id",
+        )
+    if field.startswith("forecasts[]."):
+        return FieldDisposition(
+            field,
+            "normalized",
+            "observations[].payload.attributes.forecasts",
+        )
+    retained = destinations.get(leaf)
+    if retained is not None:
+        disposition, destination = retained
+        return FieldDisposition(field, cast(Any, disposition), destination)
+    if any(
+        marker in leaf
+        for marker in (
+            "page",
+            "total",
+            "count",
+            "size",
+            "index",
+            "hasmore",
+            "sortend",
+        )
+    ):
+        return FieldDisposition(
+            field,
+            "cross_check_only",
+            f"coverage.research_content_materials.operations.{operation_id}.query_complete",
+        )
+    return FieldDisposition(
+        field,
+        "excluded",
+        None,
+        "The field is used only for source-contract validation and is not retained.",
+    )
 
+
+def _content_skipped_outcome(
+    operation: ContentSourceOperation, state: str
+) -> OperationOutcome:
+    return OperationOutcome(
+        capability_id=_CONTENT_CAPABILITY,
+        operation_id=operation.operation_id,
+        execution=OperationExecution(cast(Any, state)),
+        field_dispositions=_content_dispositions(operation),
+    )
+
+
+def _content_failed_outcome(
+    operation: ContentSourceOperation, error: SourceFailure
+) -> OperationOutcome:
+    return _content_outcome(operation, errors=(error,), query_complete=False)
+
+
+def _content_outcome(
+    operation: ContentSourceOperation,
+    *,
+    observations: tuple[Mapping[str, object], ...] = (),
+    errors: tuple[SourceFailure, ...] = (),
+    query_complete: bool,
+) -> OperationOutcome:
+    execution = (
+        OperationExecution("failed")
+        if errors
+        else OperationExecution("succeeded", query_complete=query_complete)
+    )
+    return OperationOutcome(
+        capability_id=_CONTENT_CAPABILITY,
+        operation_id=operation.operation_id,
+        execution=execution,
+        observations=observations,
+        source_errors=tuple(item.to_result() for item in errors),
+        field_dispositions=_content_dispositions(operation),
+    )
+
+
+def _content_observation_key(observation: ContentObservation, index: int) -> str:
+    fingerprint = _observation_fingerprint(observation)[:16]
+    return f"{observation.source_operation}:{fingerprint}:{index}"
+
+
+def _content_observation_payload(
+    observation: ContentObservation, index: int, query: ContentQuery
+) -> dict[str, object]:
+    namespace = _effective_document_namespace(observation)
+    document_id = (
+        observation.source_document_id or _observation_fingerprint(observation)[:24]
+    )
+    public_document_key = hashlib.sha256(
+        f"{namespace}\0{document_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    locator_fallback = f"source-document:{public_document_key}"
+    document_fallback = f"source-document-content:{public_document_key}"
+    license_value = observation.attributes.get("license")
+    license_boundary = (
+        license_value
+        if isinstance(license_value, str) and license_value
+        else "not_established"
+    )
     return {
-        "schema_version": request["schema_version"],
-        "status": "blocked" if missing_material_types else "limited",
-        "subjects": identity["subjects"],
-        "materials": materials,
-        "brief": brief,
-        "evidence": [
-            *identity["evidence"],
-            *[_to_evidence(item) for item in _unique_canonical_observations(accepted)],
-        ],
-        "conflicts": identity["conflicts"],
-        "source_errors": [*identity["source_errors"], *source_errors],
-        "degradations": degradations,
-        "limitations": limitations,
+        "id": _content_observation_key(observation, index),
+        "source_operation": observation.source_operation,
+        "kind": "research_content_material",
+        "material_type": observation.material_type,
+        "query_scope": {
+            "as_of": query.as_of,
+            "published_from": query.published_from,
+            "published_to": query.published_to,
+            "material_types": list(query.material_types),
+            "limit": query.limit,
+        },
+        "source_role": observation.source_role,
+        "source_document_namespace": namespace,
+        "source_document_id": document_id,
+        "title": observation.title,
+        "published_at": observation.published_at,
+        "available_at": (
+            observation.published_at
+            if observation.published_at is not None
+            else observation.retrieved_at.isoformat()
+        ),
+        "retrieved_at": observation.retrieved_at.isoformat(),
+        "locator": {
+            "uri": safe_public_locator(observation.locator_uri, locator_fallback)
+        },
+        "document_locator": (
+            {
+                "uri": safe_public_locator(
+                    observation.document_locator, document_fallback
+                )
+            }
+            if observation.document_locator is not None
+            else None
+        ),
+        "subject": observation.subject,
+        "author": observation.author,
+        "summary": observation.summary,
+        "content": observation.content,
+        "attributes": observation.attributes,
+        "limitations": list(observation.limitations),
+        "license_boundary": {
+            "status": license_boundary,
+            "raw_payload": "excluded",
+        },
     }
+
+
+def _content_material_groups(
+    observations: list[tuple[ContentObservation, str]], query: ContentQuery
+) -> tuple[
+    tuple[DirectTaskClaim, ...],
+    tuple[DirectTaskConflict, ...],
+    tuple[ContentObservation, ...],
+]:
+    grouped: dict[tuple[str, str, str], list[tuple[ContentObservation, str]]] = {}
+    for observation, observation_key in observations:
+        grouped.setdefault(_canonical_observation_key(observation), []).append(
+            (observation, observation_key)
+        )
+    counts: dict[str, int] = {}
+    selected: list[ContentObservation] = []
+    claims: list[DirectTaskClaim] = []
+    conflicts: list[DirectTaskConflict] = []
+    for group_key, members in grouped.items():
+        material_type = group_key[0]
+        if counts.get(material_type, 0) >= query.limit:
+            continue
+        counts[material_type] = counts.get(material_type, 0) + 1
+        selected.append(members[0][0])
+        keys = tuple(item[1] for item in members)
+        claims.append(
+            DirectTaskClaim(
+                kind="research_content_material_group",
+                evidence_use=_CONTENT_EVIDENCE_USE,
+                observation_keys=keys,
+                payload={
+                    "material_type": material_type,
+                    "source_document_namespace": group_key[1],
+                    "source_document_id": (
+                        members[0][0].source_document_id
+                        or _observation_fingerprint(members[0][0])[:24]
+                    ),
+                    "member_evidence_ids": list(keys),
+                    "member_count": len(keys),
+                },
+            )
+        )
+        comparable = {
+            (
+                item[0].title,
+                item[0].author,
+                item[0].published_at,
+                item[0].summary,
+            )
+            for item in members
+        }
+        if len(comparable) > 1:
+            conflicts.append(
+                DirectTaskConflict(
+                    "research_content_metadata_conflict",
+                    "Grouped source members report different material metadata.",
+                    keys,
+                )
+            )
+    return tuple(claims), tuple(conflicts), tuple(selected)
 
 
 def _normalize_query(request: dict[str, Any]) -> ContentQuery:
@@ -273,20 +782,34 @@ def _validate_observation_enums(
 ) -> tuple[list[ContentObservation], list[SourceFailure]]:
     accepted: list[ContentObservation] = []
     errors: list[SourceFailure] = []
+    seen_errors: set[tuple[str, tuple[str, ...]]] = set()
     for observation in observations:
         invalid_fields: list[str] = []
+        error_code = "unknown_schema"
+        if observation.source_operation != operation_id:
+            invalid_fields.append("source_operation")
+            error_code = "operation_owner_mismatch"
         if observation.material_type not in PUBLIC_MATERIAL_TYPES:
             invalid_fields.append("material_type")
         if observation.source_role not in PUBLIC_SOURCE_ROLES:
             invalid_fields.append("source_role")
+        invalid_time_fields = _invalid_observation_time_fields(observation)
+        if invalid_time_fields:
+            invalid_fields.extend(invalid_time_fields)
+            if error_code != "operation_owner_mismatch":
+                error_code = "invalid_observation_time"
         if invalid_fields:
+            error_key = (error_code, tuple(invalid_fields))
+            if error_key in seen_errors:
+                continue
+            seen_errors.add(error_key)
             errors.append(
                 SourceFailure(
                     source_operation=operation_id,
-                    code="unknown_schema",
+                    code=error_code,
                     message=(
                         "A source observation uses a value outside the public "
-                        "content contract."
+                        "content contract: " + ", ".join(invalid_fields) + "."
                     ),
                     details={"invalid_fields": invalid_fields},
                 )
@@ -294,6 +817,40 @@ def _validate_observation_enums(
             continue
         accepted.append(observation)
     return accepted, errors
+
+
+def _invalid_observation_time_fields(
+    observation: ContentObservation,
+) -> list[str]:
+    invalid_fields: list[str] = []
+    retrieved_is_aware = observation.retrieved_at.utcoffset() is not None
+    if not retrieved_is_aware:
+        invalid_fields.append("retrieved_at")
+    if observation.published_at is not None:
+        try:
+            published = datetime.fromisoformat(observation.published_at)
+        except ValueError:
+            published = None
+        if (
+            published is None
+            or published.utcoffset() is None
+            or retrieved_is_aware
+            and published > observation.retrieved_at
+        ):
+            invalid_fields.append("published_at")
+    elif "publication_date" in observation.attributes:
+        publication_date = _strict_publication_date(
+            observation.attributes["publication_date"]
+        )
+        if (
+            publication_date is None
+            or retrieved_is_aware
+            and publication_date > observation.retrieved_at.date().isoformat()
+        ):
+            invalid_fields.append("attributes.publication_date")
+    elif "publication_time_unknown" not in observation.limitations:
+        invalid_fields.append("published_at")
+    return invalid_fields
 
 
 def _validate_material_scope(
@@ -326,63 +883,6 @@ def _validate_material_scope(
             )
     if "research_report" in selected and subject is None and not keywords:
         raise ValueError("a theme research_report requires query keywords")
-
-
-def _resolve_subject(
-    request: dict[str, Any], transport: HttpTransport
-) -> dict[str, Any]:
-    subjects = request["subjects"]
-    if not subjects:
-        return {
-            "status": "limited",
-            "subjects": [],
-            "evidence": [],
-            "conflicts": [],
-            "source_errors": [],
-            "limitations": [],
-        }
-    subject = subjects[0]
-    if not isinstance(subject, dict):
-        raise ValueError("research_content subject must be an object")
-    clue = subject.get("clue")
-    if not isinstance(clue, str) or not clue.strip():
-        raise ValueError("research_content subject requires a non-empty clue")
-    resolved = resolve_security_identity(clue.strip(), request["as_of"], transport)
-    candidates_value = resolved.get("candidates", [])
-    candidates = candidates_value if isinstance(candidates_value, list) else []
-    if resolved["status"] == "blocked" or len(candidates) != 1:
-        return {
-            "status": "blocked",
-            "subjects": [],
-            "evidence": resolved.get("evidence", []),
-            "conflicts": resolved.get("conflicts", []),
-            "source_errors": resolved.get("source_errors", []),
-            "limitations": resolved.get("limitations", []),
-        }
-    candidate = candidates[0]
-    if not isinstance(candidate, dict) or not isinstance(
-        candidate.get("security"), dict
-    ):
-        raise ValueError("identity result does not contain a canonical security")
-    security = candidate["security"]
-    return {
-        "status": resolved["status"],
-        "subjects": [
-            {
-                "security": {
-                    "exchange": security["exchange"],
-                    "code": security["code"],
-                    "type": security["type"],
-                },
-                "name": candidate["name"],
-                "issuer": candidate["issuer"],
-            }
-        ],
-        "evidence": resolved.get("evidence", []),
-        "conflicts": resolved.get("conflicts", []),
-        "source_errors": resolved.get("source_errors", []),
-        "limitations": resolved.get("limitations", []),
-    }
 
 
 def _explicit_date(value: object, field: str) -> str:
@@ -437,41 +937,6 @@ def _strict_publication_date(value: object) -> str | None:
     return value if parsed.isoformat() == value else None
 
 
-def _deduplicate(observations: list[ContentObservation]) -> list[dict[str, Any]]:
-    selected: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for observation in sorted(
-        observations,
-        key=lambda item: (
-            item.published_at or item.retrieved_at.isoformat(),
-            item.source_document_id or "",
-            item.source_operation,
-        ),
-        reverse=True,
-    ):
-        key = _deduplication_key(observation)
-        material = selected.get(key)
-        if material is None:
-            selected[key] = _to_material(observation)
-            continue
-        source_observation = _source_observation(observation)
-        if source_observation in material["source_observations"]:
-            continue
-        if (
-            observation.source_operation != material["source_operation"]
-            and observation.source_operation not in material["duplicate_sources"]
-        ):
-            material["duplicate_sources"].append(observation.source_operation)
-        material["source_observations"].append(source_observation)
-        material["metadata_conflicts"] = _metadata_conflicts(
-            material["source_observations"]
-        )
-    return list(selected.values())
-
-
-def _deduplication_key(observation: ContentObservation) -> tuple[str, str, str]:
-    return _canonical_observation_key(observation)
-
-
 def _canonical_observation_key(
     observation: ContentObservation,
 ) -> tuple[str, str, str]:
@@ -519,302 +984,6 @@ def _observation_fingerprint(observation: ContentObservation) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
-def _unique_canonical_observations(
-    observations: list[ContentObservation],
-) -> list[ContentObservation]:
-    selected: dict[tuple[str, str, str], ContentObservation] = {}
-    for observation in observations:
-        selected.setdefault(_canonical_observation_key(observation), observation)
-    return list(selected.values())
-
-
-def _limit_per_material_type(
-    materials: list[dict[str, Any]], limit: int
-) -> list[dict[str, Any]]:
-    counts: dict[str, int] = {}
-    selected: list[dict[str, Any]] = []
-    for material in materials:
-        material_type = material["material_type"]
-        count = counts.get(material_type, 0)
-        if count >= limit:
-            continue
-        selected.append(material)
-        counts[material_type] = count + 1
-    return selected
-
-
-def _aggregate_investor_qa_themes(
-    materials: list[dict[str, Any]], query: ContentQuery
-) -> dict[str, Any] | None:
-    if "investor_qa" not in query.material_types:
-        return None
-    requested_keywords = query.parameters.get("theme_keywords", [])
-    theme_keywords = requested_keywords if isinstance(requested_keywords, list) else []
-    unique_keywords: dict[str, str] = {}
-    for keyword in theme_keywords:
-        if not isinstance(keyword, str):
-            continue
-        normalized = keyword.casefold()
-        unique_keywords.setdefault(normalized, keyword)
-    themes: list[dict[str, Any]] = []
-    for normalized, keyword in unique_keywords.items():
-        mention_count = 0
-        material_count = 0
-        matching_materials: list[str] = []
-        for material in materials:
-            if material.get("material_type") != "investor_qa":
-                continue
-            material_mentions = sum(
-                value.casefold().count(normalized)
-                for field in ("title", "summary", "content")
-                if isinstance((value := material.get(field)), str)
-            )
-            if not material_mentions:
-                continue
-            mention_count += material_mentions
-            material_count += 1
-            source_document_id = material.get("source_document_id")
-            if isinstance(source_document_id, str):
-                matching_materials.append(source_document_id)
-        if mention_count:
-            themes.append(
-                {
-                    "theme": keyword,
-                    "mention_count": mention_count,
-                    "material_count": material_count,
-                    "source_document_ids": sorted(matching_materials),
-                }
-            )
-    themes.sort(
-        key=lambda item: (
-            -item["mention_count"],
-            -item["material_count"],
-            item["theme"].casefold(),
-        )
-    )
-    return {
-        "status": "available" if themes else "unavailable",
-        "method": "theme_keyword_literal_frequency",
-        "audited_fields": ["title", "summary", "content"],
-        "themes": themes,
-    }
-
-
-def _unavailable_theme_aggregation_limitation() -> dict[str, str]:
-    return {
-        "code": "investor_qa_theme_aggregation_unavailable",
-        "message": (
-            "Investor Q&A themes could not be aggregated reliably because no "
-            "requested theme keyword had an auditable literal match."
-        ),
-    }
-
-
-def _to_material(observation: ContentObservation) -> dict[str, Any]:
-    return {
-        "material_type": observation.material_type,
-        "source_document_namespace": observation.source_document_namespace,
-        "source_document_id": observation.source_document_id,
-        "title": observation.title,
-        "published_at": observation.published_at,
-        "retrieved_at": observation.retrieved_at.isoformat(),
-        "source_role": observation.source_role,
-        "claim_eligibility": "experimental_observation_only",
-        "source_operation": observation.source_operation,
-        "subject": observation.subject,
-        "author": observation.author,
-        "summary": observation.summary,
-        "content": observation.content,
-        "locator": {"uri": observation.locator_uri},
-        "document_locator": observation.document_locator,
-        "attributes": observation.attributes,
-        "duplicate_sources": [],
-        "source_observations": [_source_observation(observation)],
-        "metadata_conflicts": [],
-        "limitations": list(observation.limitations),
-    }
-
-
-def _source_observation(observation: ContentObservation) -> dict[str, Any]:
-    return {
-        "source_operation": observation.source_operation,
-        "source_document_namespace": observation.source_document_namespace,
-        "source_document_id": observation.source_document_id,
-        "title": observation.title,
-        "author": observation.author,
-        "source_role": observation.source_role,
-        "published_at": observation.published_at,
-        "retrieved_at": observation.retrieved_at.isoformat(),
-        "locator": {"uri": observation.locator_uri},
-        "document_locator": observation.document_locator,
-        "attributes": observation.attributes,
-        "limitations": list(observation.limitations),
-    }
-
-
-def _metadata_conflicts(
-    source_observations: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    conflicts: list[dict[str, Any]] = []
-    for field in (
-        "title",
-        "author",
-        "source_role",
-        "published_at",
-        "retrieved_at",
-        "locator",
-        "document_locator",
-        "attributes",
-        "limitations",
-    ):
-        values = [observation[field] for observation in source_observations]
-        if all(value == values[0] for value in values[1:]):
-            continue
-        conflicts.append(
-            {
-                "field": field,
-                "observations": [
-                    {
-                        "source_operation": observation["source_operation"],
-                        "value": observation[field],
-                    }
-                    for observation in source_observations
-                ],
-            }
-        )
-    return conflicts
-
-
-def _validate_documents(
-    materials: list[dict[str, Any]],
-    *,
-    enabled: bool,
-    transport: ContentHttpTransport | None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    source_errors: list[dict[str, Any]] = []
-    degradations: list[dict[str, Any]] = []
-    for material in materials:
-        material["document_validation"] = {
-            "status": "not_requested",
-            "sources": [],
-        }
-    if not enabled:
-        return source_errors, degradations
-    if transport is None:
-        failure = {
-            "source_operation": DOCUMENT_VALIDATION_OPERATION,
-            "code": "document_validation_unavailable",
-            "message": "No document-validation transport is available.",
-        }
-        source_errors.append(failure)
-        for material in materials:
-            material["document_validation"] = {
-                "status": "failed",
-                "sources": [],
-            }
-        return source_errors, degradations
-
-    validator = DocumentValidator(transport)
-    for material in materials:
-        results: list[DocumentValidationResult] = []
-        unavailable_count = 0
-        source_observations = material.get("source_observations", [])
-        if not isinstance(source_observations, list):
-            source_observations = []
-        for source_observation in source_observations:
-            if not isinstance(source_observation, dict):
-                continue
-            source_operation = source_observation.get("source_operation")
-            document_locator = source_observation.get("document_locator")
-            if not isinstance(source_operation, str):
-                continue
-            if not isinstance(document_locator, str) or not document_locator:
-                unavailable_count += 1
-                degradation = {
-                    "source_operation": DOCUMENT_VALIDATION_OPERATION,
-                    "code": "document_locator_unavailable",
-                    "message": (
-                        "The selected material has no source-provided document locator."
-                    ),
-                    "material_source_operation": source_operation,
-                    "source_document_id": material.get("source_document_id"),
-                }
-                degradations.append(degradation)
-                source_observation["document_validation"] = {
-                    "status": "unavailable",
-                    "validation_operation": DOCUMENT_VALIDATION_OPERATION,
-                    "source_operation": source_operation,
-                    "source_document_id": material.get("source_document_id"),
-                }
-                continue
-            result = validator.validate(
-                DocumentTarget(
-                    material_source_operation=source_operation,
-                    source_document_id=(
-                        material["source_document_id"]
-                        if isinstance(material.get("source_document_id"), str)
-                        else None
-                    ),
-                    locator_uri=document_locator,
-                )
-            )
-            results.append(result)
-            source_observation["document_validation"] = result.to_result()
-            if result.source_error is not None:
-                source_errors.append(result.source_error.to_result())
-            if result.degradation is not None:
-                degradations.append(result.degradation.to_result())
-        statuses = [result.status for result in results]
-        if (
-            statuses
-            and all(item == "verified" for item in statuses)
-            and not unavailable_count
-        ):
-            status = "verified"
-        elif "verified" in statuses or "partial" in statuses:
-            status = "partial"
-        elif "failed" in statuses:
-            status = "failed"
-        else:
-            status = "unavailable"
-        material["document_validation"] = {
-            "status": status,
-            "sources": [result.to_result() for result in results],
-        }
-    return source_errors, degradations
-
-
-def _to_evidence(observation: ContentObservation) -> dict[str, Any]:
-    canonical_identity = json.dumps(
-        _canonical_observation_key(observation),
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
-    evidence_identity = hashlib.sha256(canonical_identity.encode("utf-8")).hexdigest()
-    return {
-        "id": f"content-{evidence_identity}",
-        "source_role": observation.source_role,
-        "source_operation": observation.source_operation,
-        "experimental": True,
-        "subject": observation.subject,
-        "observation": {
-            "kind": observation.material_type,
-            "source_document_namespace": observation.source_document_namespace,
-            "source_document_id": observation.source_document_id,
-            "title": observation.title,
-        },
-        "evidence_time": observation.published_at,
-        "available_at": (
-            observation.published_at
-            if observation.published_at is not None
-            else observation.retrieved_at.isoformat()
-        ),
-        "retrieved_at": observation.retrieved_at.isoformat(),
-        "locator": {"uri": observation.locator_uri},
-        "limitations": list(observation.limitations),
-    }
 
 
 def _limitation_message(code: str) -> str:

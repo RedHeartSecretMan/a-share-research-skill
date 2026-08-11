@@ -20,6 +20,7 @@ from .content_contract import (
     ContentSourceOperation,
     SourceBatch,
     SourceFailure,
+    undeclared_raw_fields,
     valid_f10_profile_categories,
 )
 from .identity_sources import HttpResponse, TransportError
@@ -39,6 +40,20 @@ class ClsMarketFlashOperation:
 
     operation_id = "cls_market_flash@1"
     supported_material_types = frozenset({"market_flash"})
+    raw_fields = (
+        "errno",
+        "msg",
+        "data.roll_data[]",
+        "data.roll_data[].id",
+        "data.roll_data[].title",
+        "data.roll_data[].brief",
+        "data.roll_data[].content",
+        "data.roll_data[].ctime",
+        "data.roll_data[].modified_time",
+        "data.roll_data[].shareurl",
+        "data.roll_data[].stock_list[]",
+        "data.roll_data[].subjects[]",
+    )
     endpoint = "https://www.cls.cn/v1/roll/get_roll_list"
 
     def __init__(self, transport: ContentHttpTransport) -> None:
@@ -64,7 +79,7 @@ class ClsMarketFlashOperation:
             )
         except TransportError as error:
             return _failed_batch(self.operation_id, error.code, str(error))
-        payload, failure = _json_object(self.operation_id, response)
+        payload, failure = _json_object(self.operation_id, response, self.raw_fields)
         if failure is not None:
             return _batch_with_failure(self.operation_id, failure)
         if payload.get("errno") != 0:
@@ -110,7 +125,25 @@ class EastmoneyMarketFlashOperation:
     """Collect the Eastmoney 7x24 feed as an independent market-signal source."""
 
     operation_id = "eastmoney_market_flash@1"
+    fallback_for = "cls_market_flash@1"
     supported_material_types = frozenset({"market_flash"})
+    raw_fields = (
+        "code",
+        "message",
+        "req_trace",
+        "data",
+        "data.index",
+        "data.size",
+        "data.total",
+        "data.sortEnd",
+        "data.fastNewsList[]",
+        "data.fastNewsList[].code",
+        "data.fastNewsList[].title",
+        "data.fastNewsList[].summary",
+        "data.fastNewsList[].showTime",
+        "data.fastNewsList[].realSort",
+        "data.fastNewsList[].stockList[]",
+    )
     endpoint = "https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
 
     def __init__(
@@ -162,7 +195,7 @@ class EastmoneyMarketFlashOperation:
         except TransportError as error:
             return _failed_batch(self.operation_id, error.code, str(error))
         degradations = _request_gate_degradations(self.operation_id, gate_diagnostics)
-        payload, failure = _json_object(self.operation_id, response)
+        payload, failure = _json_object(self.operation_id, response, self.raw_fields)
         if failure is not None:
             return _append_degradations(
                 _batch_with_failure(self.operation_id, failure), degradations
@@ -233,6 +266,14 @@ class FallbackMarketFlashOperation:
 
     operation_id = "fallback_market_flash@1"
     supported_material_types = frozenset({"market_flash"})
+    raw_fields = tuple(
+        dict.fromkeys(
+            (
+                *ClsMarketFlashOperation.raw_fields,
+                *EastmoneyMarketFlashOperation.raw_fields,
+            )
+        )
+    )
 
     def __init__(
         self,
@@ -276,6 +317,35 @@ class CninfoInvestorQaOperation:
 
     operation_id = "cninfo_investor_qa@1"
     supported_material_types = frozenset({"investor_qa"})
+    raw_fields = (
+        "lookup.code",
+        "lookup.statusCode",
+        "lookup.message",
+        "lookup.data[]",
+        "lookup.data[].stockCode",
+        "lookup.data[].shortName",
+        "lookup.data[].secid",
+        "lookup.data[].stockType",
+        "lookup.data[].pinyin",
+        "count",
+        "pageNo",
+        "pageSize",
+        "total",
+        "totalPage",
+        "rows[]",
+        "rows[].indexId",
+        "rows[].stockCode",
+        "rows[].companyShortName",
+        "rows[].mainContent",
+        "rows[].pubDate",
+        "rows[].updateDate",
+        "rows[].authorName",
+        "rows[].qaStatus",
+        "rows[].attachedId",
+        "rows[].attachedAuthor",
+        "rows[].attachedContent",
+        "rows[].attachedPubDate",
+    )
     lookup_endpoint = "https://irm.cninfo.com.cn/newircs/index/queryKeyboardInfo"
     question_endpoint = "https://irm.cninfo.com.cn/newircs/company/question"
 
@@ -303,7 +373,15 @@ class CninfoInvestorQaOperation:
             )
         except TransportError as error:
             return _failed_batch(self.operation_id, error.code, str(error))
-        lookup, failure = _json_object(self.operation_id, lookup_response)
+        lookup, failure = _json_object(
+            self.operation_id,
+            lookup_response,
+            tuple(
+                field.removeprefix("lookup.")
+                for field in self.raw_fields
+                if field.startswith("lookup.")
+            ),
+        )
         if failure is not None:
             return _batch_with_failure(self.operation_id, failure)
         identity, identity_failure = _cninfo_identity(
@@ -333,7 +411,13 @@ class CninfoInvestorQaOperation:
             )
         except TransportError as error:
             return _failed_batch(self.operation_id, error.code, str(error))
-        payload, failure = _json_object(self.operation_id, question_response)
+        payload, failure = _json_object(
+            self.operation_id,
+            question_response,
+            tuple(
+                field for field in self.raw_fields if not field.startswith("lookup.")
+            ),
+        )
         if failure is not None:
             return _batch_with_failure(self.operation_id, failure)
         rows = payload.get("rows")
@@ -402,6 +486,7 @@ class MootdxF10Operation:
 
     operation_id = "mootdx_f10@1"
     supported_material_types = frozenset({"issuer_profile"})
+    raw_fields = ("category", "content")
     allowed_categories = F10_PROFILE_CATEGORIES
 
     def __init__(
@@ -905,7 +990,9 @@ def _optional_unix_time(value: object, *, seconds: bool) -> str | None:
 
 
 def _json_object(
-    operation_id: str, response: HttpResponse
+    operation_id: str,
+    response: HttpResponse,
+    declared_raw_fields: tuple[str, ...],
 ) -> tuple[dict[str, Any], SourceFailure | None]:
     if response.status != 200:
         return {}, SourceFailure(
@@ -939,6 +1026,12 @@ def _json_object(
             operation_id,
             "unknown_schema",
             "The source response does not match the expected schema.",
+        )
+    if undeclared_raw_fields(payload, declared_raw_fields):
+        return {}, SourceFailure(
+            operation_id,
+            "unknown_schema",
+            "The source response contains an undeclared field.",
         )
     return payload, None
 

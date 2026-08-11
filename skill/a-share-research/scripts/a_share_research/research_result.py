@@ -1963,6 +1963,401 @@ def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) 
         _validate_intraday_snapshot_domain_facts(result)
     elif task_type == "intraday_replay":
         _validate_intraday_replay_domain_facts(result)
+    elif task_type == "research_content":
+        _validate_research_content_domain_facts(result)
+
+
+def _validate_research_content_domain_facts(
+    result: Mapping[str, object],
+) -> None:
+    observations = cast(list[dict[str, object]], result["observations"])
+    claims = cast(list[dict[str, object]], result["claims"])
+    materials: list[tuple[str, dict[str, object]]] = []
+    window_applicable_materials: list[tuple[str, dict[str, object]]] = []
+    scope: dict[str, object] | None = None
+    anchor = cast(dict[str, object], result["research_anchor"])
+    as_of = anchor.get("as_of")
+    for record in observations:
+        payload = _record_payload(record)
+        capability_id = record.get("capability_id")
+        if capability_id == "security_identity_resolution":
+            if set(payload) != {
+                "source_operation",
+                "source_role",
+                "experimental",
+                "subject",
+                "observed_value",
+                "basis",
+                "observation",
+                "locator",
+                "evidence_time",
+                "available_at",
+                "retrieved_at",
+                "limitations",
+            }:
+                raise ValueError(
+                    "research content identity observation schema is invalid"
+                )
+            obligation = _research_content_identity_obligation(result, record)
+            if (
+                obligation is None
+                or _identity_observation_ineligibility(
+                    record,
+                    obligation,
+                    as_of=cast(str, as_of),
+                )
+                == "observation_contract_incomplete"
+            ):
+                raise ValueError("research content identity observation is invalid")
+            continue
+        if (
+            capability_id != "research_content_materials"
+            or payload.get("kind") != "research_content_material"
+        ):
+            raise ValueError("research content observation kind is unsupported")
+        expected_keys = {
+            "id",
+            "source_operation",
+            "kind",
+            "material_type",
+            "query_scope",
+            "source_role",
+            "source_document_namespace",
+            "source_document_id",
+            "title",
+            "published_at",
+            "available_at",
+            "retrieved_at",
+            "locator",
+            "document_locator",
+            "subject",
+            "author",
+            "summary",
+            "content",
+            "attributes",
+            "limitations",
+            "license_boundary",
+        }
+        if set(payload) != expected_keys:
+            raise ValueError("research content material schema is invalid")
+        candidate_scope = _nested_mapping(payload, "query_scope")
+        if scope is None:
+            scope = candidate_scope
+        elif candidate_scope != scope:
+            raise ValueError("research content query scopes are inconsistent")
+        if set(candidate_scope) != {
+            "as_of",
+            "published_from",
+            "published_to",
+            "material_types",
+            "limit",
+        }:
+            raise ValueError("research content query scope is invalid")
+        published_from = candidate_scope.get("published_from")
+        published_to = candidate_scope.get("published_to")
+        material_types = candidate_scope.get("material_types")
+        limit = candidate_scope.get("limit")
+        try:
+            from_date = date.fromisoformat(cast(str, published_from))
+            to_date = date.fromisoformat(cast(str, published_to))
+            anchor_date = date.fromisoformat(cast(str, as_of))
+        except (TypeError, ValueError) as error:
+            raise ValueError("research content query window is invalid") from error
+        if (
+            candidate_scope.get("as_of") != as_of
+            or from_date.isoformat() != published_from
+            or to_date.isoformat() != published_to
+            or anchor_date.isoformat() != as_of
+            or not from_date <= to_date <= anchor_date
+            or not isinstance(material_types, list)
+            or not material_types
+            or any(not isinstance(item, str) or not item for item in material_types)
+            or len(set(material_types)) != len(material_types)
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+            or payload.get("material_type") not in material_types
+        ):
+            raise ValueError("research content query scope is invalid")
+        published_at = payload.get("published_at")
+        available_at = payload.get("available_at")
+        retrieved_at = payload.get("retrieved_at")
+        try:
+            published = (
+                datetime.fromisoformat(published_at)
+                if isinstance(published_at, str)
+                else None
+            )
+            available = datetime.fromisoformat(cast(str, available_at))
+            retrieved = datetime.fromisoformat(cast(str, retrieved_at))
+        except (TypeError, ValueError) as error:
+            raise ValueError("research content material time is invalid") from error
+        if (
+            published_at is not None
+            and published is None
+            or available.utcoffset() is None
+            or retrieved.utcoffset() is None
+            or published is not None
+            and published.utcoffset() is None
+            or published is not None
+            and published > available
+            or published is not None
+            and available != published
+            or published is None
+            and available != retrieved
+            or available > retrieved
+        ):
+            raise ValueError("research content material time is invalid")
+        locator = _nested_mapping(payload, "locator")
+        document_locator = payload.get("document_locator")
+        if (
+            set(locator) != {"uri"}
+            or not is_safe_public_locator(locator.get("uri"))
+            or document_locator is not None
+            and (
+                not isinstance(document_locator, dict)
+                or set(document_locator) != {"uri"}
+                or not is_safe_public_locator(document_locator.get("uri"))
+            )
+        ):
+            raise ValueError("research content material locator is unsafe")
+        license_boundary = _nested_mapping(payload, "license_boundary")
+        attributes = payload.get("attributes")
+        limitations = payload.get("limitations")
+        if (
+            set(license_boundary) != {"status", "raw_payload"}
+            or not isinstance(license_boundary.get("status"), str)
+            or not license_boundary.get("status")
+            or license_boundary.get("raw_payload") != "excluded"
+            or not isinstance(attributes, dict)
+            or not isinstance(limitations, list)
+            or any(not isinstance(item, str) for item in limitations)
+            or not isinstance(payload.get("source_document_namespace"), str)
+            or not payload.get("source_document_namespace")
+            or not isinstance(payload.get("source_document_id"), str)
+            or not payload.get("source_document_id")
+            or not isinstance(payload.get("title"), str)
+            or not payload.get("title")
+        ):
+            raise ValueError("research content material audit facts are invalid")
+        _reject_sensitive_research_content_attributes(attributes)
+        material = (cast(str, record["id"]), payload)
+        materials.append(material)
+        publication_date = attributes.get("publication_date")
+        normalized_publication_date: date | None = None
+        if isinstance(publication_date, str):
+            try:
+                parsed_publication_date = date.fromisoformat(publication_date)
+            except ValueError:
+                pass
+            else:
+                if parsed_publication_date.isoformat() == publication_date:
+                    normalized_publication_date = parsed_publication_date
+        if published is None and (
+            "publication_date" in attributes
+            and (
+                normalized_publication_date is None
+                or normalized_publication_date > retrieved.date()
+            )
+            or "publication_date" not in attributes
+            and "publication_time_unknown" not in limitations
+        ):
+            raise ValueError("research content material time is invalid")
+        window_applicable = (
+            published is not None
+            and from_date <= published.date() <= to_date
+            or published is None
+            and "publication_date" in attributes
+            and normalized_publication_date is not None
+            and normalized_publication_date <= retrieved.date()
+            and from_date <= normalized_publication_date <= to_date
+            or published is None
+            and "publication_date" not in attributes
+            and "publication_time_unknown" in limitations
+            and from_date <= retrieved.date() <= to_date
+        )
+        if window_applicable:
+            window_applicable_materials.append(material)
+
+    material_claims = [
+        item for item in claims if item.get("kind") == "research_content_material_group"
+    ]
+    if not materials:
+        if material_claims:
+            raise ValueError("research content material group lacks observations")
+        return
+    assert scope is not None
+    outside_window_ids = {observation_id for observation_id, _ in materials}.difference(
+        observation_id for observation_id, _ in window_applicable_materials
+    )
+    if any(
+        adoption.get("observation_id") in outside_window_ids
+        and adoption.get("decision") == "adopted"
+        for claim in claims
+        for adoption in cast(
+            list[dict[str, object]], claim.get("evidence_adoptions", [])
+        )
+    ):
+        raise ValueError("outside-window research content material cannot be adopted")
+    grouped: dict[tuple[str, str, str], list[str]] = {}
+    for observation_id, payload in window_applicable_materials:
+        key = (
+            cast(str, payload["material_type"]),
+            cast(str, payload["source_document_namespace"]),
+            cast(str, payload["source_document_id"]),
+        )
+        grouped.setdefault(key, []).append(observation_id)
+    expected_groups: list[tuple[tuple[str, str, str], list[str]]] = []
+    counts: dict[str, int] = {}
+    limit = cast(int, scope["limit"])
+    for key, members in grouped.items():
+        if counts.get(key[0], 0) >= limit:
+            continue
+        counts[key[0]] = counts.get(key[0], 0) + 1
+        expected_groups.append((key, members))
+    if len(material_claims) != len(expected_groups):
+        raise ValueError("research content material group closure is invalid")
+    for claim, (key, member_ids) in zip(material_claims, expected_groups, strict=True):
+        payload = _record_payload(claim)
+        if (
+            claim.get("evidence_use") != "research_content_material"
+            or claim.get("observation_ids") != member_ids
+            or set(payload)
+            != {
+                "material_type",
+                "source_document_namespace",
+                "source_document_id",
+                "member_evidence_ids",
+                "member_count",
+            }
+            or payload.get("material_type") != key[0]
+            or payload.get("source_document_namespace") != key[1]
+            or payload.get("source_document_id") != key[2]
+            or payload.get("member_evidence_ids") != member_ids
+            or payload.get("member_count") != len(member_ids)
+        ):
+            raise ValueError("research content material group is invalid")
+    subjects = {
+        json.dumps(item[1].get("subject"), sort_keys=True) for item in materials
+    }
+    if len(subjects) != 1:
+        raise ValueError("research content material subjects are inconsistent")
+    subject = materials[0][1].get("subject")
+    identity_claims = [
+        item
+        for item in claims
+        if item.get("kind") == "research_content_subject_identity"
+    ]
+    if subject is None:
+        if identity_claims:
+            raise ValueError("research content subject identity is unexpected")
+    elif len(identity_claims) != 1 or _record_payload(identity_claims[0]) != subject:
+        raise ValueError("research content subject identity is inconsistent")
+    else:
+        identity_claim = identity_claims[0]
+        records_by_id = {str(item["id"]): item for item in observations}
+        subject_mapping = cast(dict[str, object], subject)
+        security = _nested_mapping(subject_mapping, "security")
+        issuer = _nested_mapping(subject_mapping, "issuer")
+        supporting_ids: set[str] = {
+            cast(str, adoption["observation_id"])
+            for adoption in cast(
+                list[dict[str, object]], identity_claim["evidence_adoptions"]
+            )
+            if isinstance(adoption.get("observation_id"), str)
+            and adoption.get("decision") == "adopted"
+            and adoption.get("role") == "supporting"
+        }
+        identity_proved = False
+        for observation_id in supporting_ids:
+            identity_record = records_by_id.get(observation_id)
+            if identity_record is None:
+                continue
+            provider_payload = _record_payload(identity_record)
+            observed_identity = provider_payload.get("observation")
+            if not isinstance(observed_identity, dict):
+                continue
+            relationship_verified = observed_identity.get(
+                "issuer_relationship_verified"
+            )
+            expected_relationship = issuer.get("security_relationship")
+            if (
+                observed_identity.get("exchange") == security.get("exchange")
+                and observed_identity.get("code") == security.get("code")
+                and observed_identity.get("security_type") == security.get("type")
+                and observed_identity.get("name") == subject_mapping.get("name")
+                and observed_identity.get("issuer_identifier")
+                == issuer.get("identifier")
+                and (
+                    expected_relationship == "verified"
+                    and relationship_verified is True
+                    or expected_relationship == "unverified"
+                    and relationship_verified is False
+                )
+            ):
+                identity_proved = True
+                break
+        if not identity_proved:
+            raise ValueError(
+                "research content subject identity lacks owned supporting facts"
+            )
+
+
+def _research_content_identity_obligation(
+    result: Mapping[str, object],
+    record: Mapping[str, object],
+) -> OperationObligation | None:
+    plan = cast(dict[str, object], result["plan"])
+    contracts = cast(list[dict[str, object]], plan["operation_obligations"])
+    matches = [
+        item
+        for item in contracts
+        if item.get("capability_id") == record.get("capability_id")
+        and item.get("operation_id") == record.get("operation_id")
+    ]
+    if len(matches) != 1:
+        return None
+    contract = matches[0]
+    policies = cast(list[dict[str, object]], contract["evidence_uses"])
+    return OperationObligation(
+        capability_id=cast(str, contract["capability_id"]),
+        operation_id=cast(str, contract["operation_id"]),
+        source_role=cast(str, contract["source_role"]),
+        experimental=cast(bool, contract["experimental"]),
+        exchange=cast(str | None, contract["exchange"]),
+        evidence_uses=tuple(
+            EvidenceUsePolicy(
+                cast(str, policy["use"]),
+                cast(EvidenceRole, policy["role"]),
+            )
+            for policy in policies
+        ),
+    )
+
+
+def _reject_sensitive_research_content_attributes(value: Mapping[str, object]) -> None:
+    forbidden = {
+        "authorization",
+        "cookie",
+        "credential",
+        "raw_payload",
+        "secret",
+        "token",
+    }
+
+    def visit(item: object) -> None:
+        if isinstance(item, Mapping):
+            for key, nested in item.items():
+                if any(marker in key.casefold() for marker in forbidden):
+                    raise ValueError(
+                        "research content attributes expose sensitive data"
+                    )
+                visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+
+    visit(value)
 
 
 def _validate_intraday_snapshot_domain_facts(

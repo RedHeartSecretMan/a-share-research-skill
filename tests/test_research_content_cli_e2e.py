@@ -69,14 +69,16 @@ class ResearchContentCliE2ETests(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
         self.assertEqual(len(completed.stdout.strip().splitlines()), 1)
         self.assertNotIn(secret, completed.stdout)
-        self.assertEqual(result["task_type"], "research_content")
+        self.assertEqual(result["plan"]["task_type"], "research_content")
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(
-            result["brief"]["material_type_counts"], {"research_report": 1}
-        )
-        self.assertEqual(
-            result["materials"][0]["source_operation"], "iwencai_content_search@1"
-        )
+        materials = [
+            item
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
+        self.assertEqual(len(materials), 1)
+        self.assertEqual(materials[0]["operation_id"], "iwencai_content_search@1")
+        self.assertEqual(materials[0]["payload"]["material_type"], "research_report")
 
     def test_bluefocus_disclosures_and_news_cli_uses_default_registry(self) -> None:
         completed, result = self.run_request(
@@ -87,14 +89,39 @@ class ResearchContentCliE2ETests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stderr, "")
         self.assertEqual(len(completed.stdout.strip().splitlines()), 1)
-        self.assertEqual(result["task_type"], "research_content")
+        self.assertEqual(result["plan"]["task_type"], "research_content")
         self.assertEqual(result["status"], "limited")
+        materials = [
+            item
+            for item in result["observations"]
+            if item["payload"].get("kind") == "research_content_material"
+        ]
         self.assertEqual(
-            result["brief"]["material_type_counts"],
+            {
+                material_type: sum(
+                    item["payload"]["material_type"] == material_type
+                    for item in materials
+                )
+                for material_type in {"stock_news", "announcement"}
+            },
+            {"stock_news": 3, "announcement": 6},
+        )
+        groups = [
+            item
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
+        ]
+        self.assertEqual(
+            {
+                material_type: sum(
+                    item["payload"]["material_type"] == material_type for item in groups
+                )
+                for material_type in {"stock_news", "announcement"}
+            },
             {"stock_news": 3, "announcement": 3},
         )
         self.assertEqual(
-            result["subjects"][0]["security"],
+            materials[0]["payload"]["subject"]["security"],
             {"exchange": "SZSE", "code": "300058", "type": "A_SHARE"},
         )
         self.assertEqual(result["source_errors"], [])

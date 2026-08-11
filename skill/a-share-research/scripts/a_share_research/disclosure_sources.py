@@ -14,6 +14,7 @@ from .content_contract import (
     ContentQuery,
     SourceBatch,
     SourceFailure,
+    undeclared_raw_fields,
 )
 from .identity_sources import HttpResponse, TransportError
 from .source_throttle import (
@@ -178,6 +179,22 @@ class EastmoneyStockNewsOperation:
 
     operation_id = "eastmoney_stock_news@1"
     supported_material_types = frozenset({"stock_news"})
+    raw_fields = (
+        "code",
+        "msg",
+        "bizCode",
+        "bizMsg",
+        "hitsTotal",
+        "searchId",
+        "extra",
+        "result.cmsArticleWebOld[]",
+        "result.cmsArticleWebOld[].code",
+        "result.cmsArticleWebOld[].title",
+        "result.cmsArticleWebOld[].date",
+        "result.cmsArticleWebOld[].content",
+        "result.cmsArticleWebOld[].mediaName",
+        "result.cmsArticleWebOld[].url",
+    )
     endpoint = "https://search-api-web.eastmoney.com/search/jsonp"
     callback = "jQuery_news"
 
@@ -339,6 +356,11 @@ class EastmoneyStockNewsOperation:
             raise _OperationError(
                 "upstream_business_error", "The stock-news business status failed."
             )
+        if undeclared_raw_fields(payload, self.raw_fields):
+            raise _OperationError(
+                "unknown_schema",
+                "The stock-news response contains undeclared provider fields.",
+            )
         hits_total = payload.get("hitsTotal")
         result = payload.get("result")
         if (
@@ -421,6 +443,32 @@ class CninfoAnnouncementOperation:
 
     operation_id = "cninfo_announcement@1"
     supported_material_types = frozenset({"announcement"})
+    raw_fields = (
+        "stockList[]",
+        "stockList[].code",
+        "stockList[].zwjc",
+        "stockList[].orgId",
+        "stockList[].category",
+        "announcements[]",
+        "announcements[].announcementId",
+        "announcements[].announcementTitle",
+        "announcements[].announcementTime",
+        "announcements[].adjunctUrl",
+        "announcements[].adjunctSize",
+        "announcements[].adjunctType",
+        "announcements[].announcementType",
+        "announcements[].announcementTypeName",
+        "announcements[].orgId",
+        "announcements[].secCode",
+        "announcements[].secName",
+        "hasMore",
+        "totalAnnouncement",
+        "totalRecordNum",
+        "totalSecurities",
+        "totalpages",
+        "categoryList",
+        "classifiedAnnouncements",
+    )
     mapping_endpoint = "https://www.cninfo.com.cn/new/data/szse_stock.json"
     endpoint = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 
@@ -551,6 +599,11 @@ class CninfoAnnouncementOperation:
             raise _OperationError(
                 "unknown_schema", "The CNINFO security route schema is unknown."
             )
+        if undeclared_raw_fields(payload, self.raw_fields):
+            raise _OperationError(
+                "unknown_schema",
+                "The CNINFO security route contains undeclared provider fields.",
+            )
         matches = []
         for row in payload["stockList"]:
             if not isinstance(row, dict):
@@ -613,6 +666,11 @@ class CninfoAnnouncementOperation:
         if not isinstance(payload, dict):
             raise _OperationError(
                 "unknown_schema", "The CNINFO disclosure schema is unknown."
+            )
+        if undeclared_raw_fields(payload, self.raw_fields):
+            raise _OperationError(
+                "unknown_schema",
+                "The CNINFO disclosure contains undeclared provider fields.",
             )
         rows = payload.get("announcements")
         total = payload.get("totalAnnouncement")
@@ -728,6 +786,20 @@ class SzseAnnouncementOperation:
 
     operation_id = "szse_announcement@1"
     supported_material_types = frozenset({"announcement"})
+    raw_fields = (
+        "announceCount",
+        "data[]",
+        "data[].annId",
+        "data[].id",
+        "data[].secCode[]",
+        "data[].secName[]",
+        "data[].title",
+        "data[].publishTime",
+        "data[].attachPath",
+        "data[].attachFormat",
+        "data[].attachSize",
+        "data[].content",
+    )
     endpoint = "https://www.szse.cn/api/disc/announcement/annList"
 
     def __init__(
@@ -838,6 +910,11 @@ class SzseAnnouncementOperation:
         if not isinstance(payload, dict):
             raise _OperationError(
                 "unknown_schema", "The SZSE disclosure schema is unknown."
+            )
+        if undeclared_raw_fields(payload, self.raw_fields):
+            raise _OperationError(
+                "unknown_schema",
+                "The SZSE disclosure contains undeclared provider fields.",
             )
         total = payload.get("announceCount")
         rows = payload.get("data")

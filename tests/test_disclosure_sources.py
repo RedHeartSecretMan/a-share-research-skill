@@ -139,6 +139,31 @@ def query(
 
 
 class EastmoneyStockNewsOperationTests(unittest.TestCase):
+    def test_unknown_provider_field_fails_closed_before_observation_ownership(
+        self,
+    ) -> None:
+        body = (
+            Path(FIXTURES, "eastmoney_news_page_1.jsonp")
+            .read_text()
+            .replace(
+                '"code":0,',
+                '"code":0,"unexpected_provider_field":"must-not-be-dropped",',
+                1,
+            )
+        )
+
+        batch = EastmoneyStockNewsOperation(
+            FixedTransport(get_responses=[inline_response(body, "text/javascript")]),
+            page_size=2,
+            request_gate=no_wait_gate(),
+        ).collect(query(material_type="stock_news", limit=1))
+
+        self.assertFalse(batch.complete)
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(
+            [error.code for error in batch.source_errors], ["unknown_schema"]
+        )
+
     def test_news_request_uses_injected_gate_and_keeps_diagnostic(self) -> None:
         transport = FixedTransport(
             get_responses=[response("eastmoney_news_page_1.jsonp", "text/javascript")]
@@ -299,6 +324,28 @@ class EastmoneyStockNewsOperationTests(unittest.TestCase):
 
 
 class CninfoAnnouncementOperationTests(unittest.TestCase):
+    def test_unknown_provider_field_fails_closed_before_observation_ownership(
+        self,
+    ) -> None:
+        payload = json.loads(
+            Path(FIXTURES, "cninfo_announcements_page_1.json").read_text()
+        )
+        payload["unexpected_provider_field"] = "must-not-be-silently-dropped"
+        transport = FixedTransport(
+            get_responses=[response("cninfo_stock_map.json", "application/json")],
+            post_responses=[inline_response(json.dumps(payload))],
+        )
+
+        batch = CninfoAnnouncementOperation(transport, page_size=2).collect(
+            query(material_type="announcement", limit=1)
+        )
+
+        self.assertFalse(batch.complete)
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(
+            [error.code for error in batch.source_errors], ["unknown_schema"]
+        )
+
     def test_announcements_resolve_official_route_and_paginate_to_limit(
         self,
     ) -> None:
@@ -428,6 +475,27 @@ class CninfoAnnouncementOperationTests(unittest.TestCase):
 
 
 class SzseAnnouncementOperationTests(unittest.TestCase):
+    def test_unknown_provider_field_fails_closed_before_observation_ownership(
+        self,
+    ) -> None:
+        payload = json.loads(
+            Path(FIXTURES, "szse_announcements_page_1.json").read_text()
+        )
+        payload["unexpected_provider_field"] = "must-not-be-silently-dropped"
+        transport = FixedTransport(
+            post_responses=[inline_response(json.dumps(payload))]
+        )
+
+        batch = SzseAnnouncementOperation(transport, page_size=2).collect(
+            query(material_type="announcement", limit=1)
+        )
+
+        self.assertFalse(batch.complete)
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(
+            [error.code for error in batch.source_errors], ["unknown_schema"]
+        )
+
     def test_announcements_normalize_ann_id_and_paginate_to_limit(self) -> None:
         transport = FixedTransport(
             post_responses=[

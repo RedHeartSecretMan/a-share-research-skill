@@ -8,7 +8,6 @@ from .communication_sources import (
     ClsMarketFlashOperation,
     CninfoInvestorQaOperation,
     EastmoneyMarketFlashOperation,
-    FallbackMarketFlashOperation,
     MootdxF10Operation,
 )
 from .content_contract import ContentHttpTransport, ContentSourceOperation
@@ -34,14 +33,6 @@ def build_default_content_operations(
 ) -> tuple[ContentSourceOperation, ...]:
     """Build request-scoped operations without resolving credential values here."""
 
-    primary_market_flash = ClsMarketFlashOperation(transport)
-    market_flash: ContentSourceOperation = primary_market_flash
-    if allow_fallback:
-        market_flash = FallbackMarketFlashOperation(
-            primary_market_flash,
-            EastmoneyMarketFlashOperation(transport),
-        )
-
     operations: list[ContentSourceOperation] = [
         EastmoneyReportOperation(transport),
         ThsConsensusMaterialOperation(transport, research_now=research_now),
@@ -49,10 +40,12 @@ def build_default_content_operations(
         CninfoAnnouncementOperation(transport),
         SseAnnouncementOperation(transport),
         SzseAnnouncementOperation(transport),
-        market_flash,
+        ClsMarketFlashOperation(transport),
         CninfoInvestorQaOperation(transport),
         MootdxF10Operation(),
     ]
+    if allow_fallback:
+        operations.append(EastmoneyMarketFlashOperation(transport))
     if allow_credentials:
         operations.append(
             IwencaiContentSearchOperation(
