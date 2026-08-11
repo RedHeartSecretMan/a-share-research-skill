@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
+from typing import Any, cast
 
 from .close_sources import (
     CloseObservation,
@@ -12,6 +14,144 @@ from .close_sources import (
     TencentDailyLineOperation,
 )
 from .identity_sources import CHINA_STANDARD_TIME, HttpTransport, SourceOperationError
+from .research_result import (
+    FieldDisposition,
+    OperationExecution,
+    OperationOutcome,
+    ResearchStatus,
+)
+
+
+@dataclass(frozen=True)
+class SelectedCloseMaterial:
+    security: str
+    trading_date: str
+    value: str
+    evidence_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CloseResearchMaterial:
+    status: ResearchStatus
+    selected_close: SelectedCloseMaterial | None
+    conflicts: tuple[dict[str, object], ...]
+    limitations: tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True)
+class CloseResearchExecution:
+    """Selected close material paired with source-owned execution outcomes."""
+
+    outcomes: tuple[OperationOutcome, ...]
+    material: CloseResearchMaterial
+    result: dict[str, object]
+
+    def validated_material(self) -> CloseResearchMaterial:
+        selected = self.material.selected_close
+        if selected is None:
+            if self.material.status != "blocked":
+                raise ValueError("close material status contradicts selection")
+            return self.material
+        if self.material.status == "blocked":
+            raise ValueError("close material status contradicts selection")
+        evidence = {
+            str(payload.get("id")): payload
+            for outcome in self.outcomes
+            for payload in outcome.observations
+            if isinstance(payload.get("id"), str)
+        }
+        selected_evidence = [evidence.get(key) for key in selected.evidence_keys]
+        if len(selected_evidence) != 2 or any(
+            item is None for item in selected_evidence
+        ):
+            raise ValueError("close material evidence is not owned by its outcomes")
+        for payload in selected_evidence:
+            assert payload is not None
+            subject = payload.get("subject")
+            observed_value = payload.get("observed_value")
+            observation = payload.get("observation")
+            if (
+                not isinstance(subject, dict)
+                or subject.get("security") != selected.security
+                or not isinstance(observed_value, dict)
+                or Decimal(str(observed_value.get("value"))) != Decimal(selected.value)
+                or not isinstance(observation, dict)
+                or observation.get("trading_date") != selected.trading_date
+            ):
+                raise ValueError("close material contradicts owned close observations")
+        return self.material
+
+
+def _close_dispositions(operation_id: str) -> tuple[FieldDisposition, ...]:
+    operation_contracts = {
+        SseDailyLineOperation.operation_id: SseDailyLineOperation.field_dispositions,
+        SzseDailyLineOperation.operation_id: SzseDailyLineOperation.field_dispositions,
+        TencentDailyLineOperation.operation_id: (
+            TencentDailyLineOperation.field_dispositions
+        ),
+    }
+    contract = operation_contracts[operation_id]
+    retained_destinations = {
+        "date": ("normalized", "observations.payload.observation.trading_date"),
+        "row[0]": ("normalized", "observations.payload.observation.trading_date"),
+        "day[0]": ("normalized", "observations.payload.observation.trading_date"),
+        "close": ("normalized", "observations.payload.observed_value.value"),
+        "row[2]": ("normalized", "observations.payload.observed_value.value"),
+        "day[2]": ("normalized", "observations.payload.observed_value.value"),
+        "qt[2]": ("cross_check_only", "observations.payload.subject.security"),
+        "qt[30]": ("lineage_only", "observations.payload.evidence_time"),
+        "qt[31]": ("normalized", "observations.payload.observation.price_type"),
+        "qt[33]": (
+            "normalized",
+            "observations.payload.observation.trading_status",
+        ),
+    }
+    return tuple(
+        FieldDisposition(
+            disposition.field,
+            cast(Any, retained_destinations[disposition.field][0]),
+            retained_destinations[disposition.field][1],
+        )
+        if disposition.field in retained_destinations
+        else FieldDisposition(
+            disposition.field,
+            "excluded",
+            None,
+            "The raw field is not retained in the close-only observation.",
+        )
+        for disposition in contract
+    )
+
+
+def _close_outcome(
+    operation_id: str,
+    *,
+    observations: list[CloseObservation] | None = None,
+    error: SourceOperationError | None = None,
+    skipped: str | None = None,
+) -> OperationOutcome:
+    if sum(item is not None for item in (observations, error, skipped)) != 1:
+        raise ValueError("close outcome requires exactly one execution fact")
+    if observations is not None:
+        execution = OperationExecution("succeeded", query_complete=True)
+        payloads = tuple(item.to_evidence() for item in observations)
+        errors: tuple[dict[str, str], ...] = ()
+    elif error is not None:
+        execution = OperationExecution("failed")
+        payloads = ()
+        errors = (_source_error(error),)
+    else:
+        execution = OperationExecution(cast(Any, skipped))
+        payloads = ()
+        errors = ()
+    return OperationOutcome(
+        capability_id="valuation_close",
+        operation_id=operation_id,
+        execution=execution,
+        observations=payloads,
+        source_errors=errors,
+        field_dispositions=_close_dispositions(operation_id),
+    )
 
 
 def _source_error(error: SourceOperationError) -> dict[str, str]:
@@ -30,6 +170,17 @@ def build_close_result(
 ) -> dict[str, object]:
     """Return a common close only when source identity, date, basis and value agree."""
 
+    return execute_close_research(security, as_of, transport, now).result
+
+
+def execute_close_research(
+    security: str,
+    as_of: str,
+    transport: HttpTransport,
+    now: datetime | None = None,
+) -> CloseResearchExecution:
+    """Execute both sources before domain selection, preserving every fetched row."""
+
     research_now = now or datetime.now(CHINA_STANDARD_TIME)
     research_date = date.fromisoformat(as_of)
     research = {
@@ -39,7 +190,7 @@ def build_close_result(
         "retrieved_at": research_now.isoformat(),
     }
     if research_date > research_now.date():
-        return {
+        result: dict[str, object] = {
             "schema_version": "1.0",
             "status": "blocked",
             "research": research,
@@ -57,17 +208,50 @@ def build_close_result(
                 }
             ],
         }
+        skipped_outcomes = tuple(
+            _close_outcome(operation_id, skipped="skipped_research_dependency")
+            for operation_id in (
+                "sse_daily_line@1",
+                "szse_daily_line@1",
+                "tencent_daily_line@1",
+            )
+        )
+        return CloseResearchExecution(
+            outcomes=skipped_outcomes,
+            material=CloseResearchMaterial(
+                status="blocked",
+                selected_close=None,
+                conflicts=(),
+                limitations=tuple(cast(list[dict[str, object]], result["limitations"])),
+            ),
+            result=result,
+        )
     official_operation = (
         SseDailyLineOperation()
         if security.startswith("SSE:")
         else SzseDailyLineOperation()
     )
+    sibling_operation_id = (
+        "szse_daily_line@1"
+        if official_operation.operation_id == "sse_daily_line@1"
+        else "sse_daily_line@1"
+    )
+    outcomes: list[OperationOutcome] = [
+        _close_outcome(sibling_operation_id, skipped="skipped_research_dependency")
+    ]
     source_errors = []
     try:
         official_observations = official_operation.observe(security, transport)
     except SourceOperationError as error:
         official_observations = []
         source_errors.append(_source_error(error))
+        outcomes.append(_close_outcome(official_operation.operation_id, error=error))
+    else:
+        outcomes.append(
+            _close_outcome(
+                official_operation.operation_id, observations=official_observations
+            )
+        )
     try:
         tencent_observations = TencentDailyLineOperation().observe(
             security, research_date, transport
@@ -75,6 +259,11 @@ def build_close_result(
     except SourceOperationError as error:
         tencent_observations = []
         source_errors.append(_source_error(error))
+        outcomes.append(_close_outcome("tencent_daily_line@1", error=error))
+    else:
+        outcomes.append(
+            _close_outcome("tencent_daily_line@1", observations=tencent_observations)
+        )
     research_boundary = (
         datetime.combine(
             research_date,
@@ -243,16 +432,39 @@ def build_close_result(
                 ),
             }
         ]
-    return {
-        "schema_version": "1.0",
-        "status": status,
-        "research": research,
-        "latest_completed_session": latest_session,
-        "close": close,
-        "evidence": evidence,
-        "session_evidence": session_evidence,
-        "rejected_observations": rejected_observations,
-        "conflicts": conflicts,
-        "source_errors": source_errors,
-        "limitations": limitations,
-    }
+    result = cast(
+        dict[str, object],
+        {
+            "schema_version": "1.0",
+            "status": status,
+            "research": research,
+            "latest_completed_session": latest_session,
+            "close": close,
+            "evidence": evidence,
+            "session_evidence": session_evidence,
+            "rejected_observations": rejected_observations,
+            "conflicts": conflicts,
+            "source_errors": source_errors,
+            "limitations": limitations,
+        },
+    )
+    selected_close = (
+        SelectedCloseMaterial(
+            security=security,
+            trading_date=official.trading_date.isoformat(),
+            value=official.value,
+            evidence_keys=(official.evidence_id, tencent.evidence_id),
+        )
+        if matching and official is not None and tencent is not None
+        else None
+    )
+    return CloseResearchExecution(
+        outcomes=tuple(outcomes),
+        material=CloseResearchMaterial(
+            status=cast(ResearchStatus, status),
+            selected_close=selected_close,
+            conflicts=tuple(cast(list[dict[str, object]], conflicts)),
+            limitations=tuple(cast(list[dict[str, object]], limitations)),
+        ),
+        result=result,
+    )

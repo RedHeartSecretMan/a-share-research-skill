@@ -136,51 +136,35 @@ class ResearchRuntime:
                 request,
                 build_default_identity_operations(self._identity_transport),
             ).to_dict()
-        return self._dispatch_validated(request, allow_workflow=False)
+        result = self._dispatch_validated(request, allow_workflow=False)
+        return result.to_dict() if isinstance(result, UnifiedResearchResult) else result
 
     def _dispatch_validated(
         self,
         request: dict[str, Any],
         *,
         allow_workflow: bool,
-    ) -> dict[str, Any]:
+    ) -> UnifiedResearchResult | dict[str, Any]:
         """Dispatch an envelope that has already passed common validation."""
 
         task_type = request["task_type"]
+        result: UnifiedResearchResult | dict[str, Any]
         if task_type == "research_workflow":
             if not allow_workflow:
                 raise ValueError("nested research_workflow tasks are not allowed")
             result = build_research_workflow_result(request, self._run_leaf_task)
         elif task_type == "market_trend":
-            if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
-                    request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "market_trend currently requires experimental source operations"
-                    ),
-                )
-            else:
-                result = build_market_trend_result(
-                    request,
-                    self._identity_transport,
-                    self._research_now,
-                )
+            result = build_market_trend_result(
+                request,
+                self._identity_transport,
+                self._research_now,
+            )
         elif task_type == "etf_market":
-            if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
-                    request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "etf_market currently requires experimental source operations"
-                    ),
-                )
-            else:
-                result = build_etf_market_result(
-                    request,
-                    self._identity_transport,
-                    self._research_now,
-                )
+            result = build_etf_market_result(
+                request,
+                self._identity_transport,
+                self._research_now,
+            )
         elif task_type == "etf_options":
             if not request["source_policy"]["allow_experimental"]:
                 result = _blocked_result(
@@ -202,37 +186,17 @@ class ResearchRuntime:
                     )
                 result = build_etf_options_result(request, etf_option_operations)
         elif task_type == "security_valuation":
-            if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
-                    request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "security_valuation currently requires experimental "
-                        "source operations"
-                    ),
-                )
-            else:
-                result = build_security_valuation_result(
-                    request,
-                    self._identity_transport,
-                    self._research_now,
-                )
+            result = build_security_valuation_result(
+                request,
+                self._identity_transport,
+                self._research_now,
+            )
         elif task_type == "valuation_compare":
-            if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
-                    request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "valuation_compare currently requires experimental "
-                        "source operations"
-                    ),
-                )
-            else:
-                result = build_valuation_comparison_result(
-                    request,
-                    self._identity_transport,
-                    self._research_now,
-                )
+            result = build_valuation_comparison_result(
+                request,
+                self._identity_transport,
+                self._research_now,
+            )
         elif task_type == "research_content":
             if not request["source_policy"]["allow_experimental"]:
                 result = _blocked_result(
@@ -412,6 +376,8 @@ class ResearchRuntime:
                 code="unsupported_task_type",
                 message=f"Research task type is not supported: {task_type}",
             )
+        if isinstance(result, UnifiedResearchResult):
+            return result
         return _complete_result(result, task_type)
 
     def _dependency_available(self, dependency: str, version: str) -> bool:

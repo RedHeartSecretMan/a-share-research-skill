@@ -17,6 +17,7 @@ from .identity_sources import (
     SourceOperationError,
     TransportError,
 )
+from .research_result import FieldDisposition
 
 REQUIRED_FINANCIAL_ITEMS = {
     "income": {"营业收入", "归属于母公司所有者的净利润"},
@@ -147,6 +148,49 @@ class StockInfoObservation:
 
 class EastmoneyStockInfoOperation:
     operation_id = "eastmoney_stock_info@1"
+    field_dispositions = (
+        FieldDisposition(
+            "f57", "cross_check_only", "observations.payload.subject.security"
+        ),
+        FieldDisposition(
+            "f58",
+            "normalized",
+            "observations.payload.observed_value.value.name",
+        ),
+        FieldDisposition(
+            "f84",
+            "normalized",
+            "observations.payload.observed_value.value.effective_total_shares",
+        ),
+        FieldDisposition(
+            "f85",
+            "excluded",
+            None,
+            "The returned free-float share count is outside the approved valuation operands.",
+        ),
+        FieldDisposition(
+            "f116",
+            "cross_check_only",
+            "observations.payload.observed_value.value.provider_market_cap",
+        ),
+        FieldDisposition(
+            "f117",
+            "excluded",
+            None,
+            "The returned free-float market capitalization is outside the approved valuation operands.",
+        ),
+        FieldDisposition(
+            "f189",
+            "excluded",
+            None,
+            "The returned metadata field is not used or retained.",
+        ),
+        FieldDisposition(
+            "f43",
+            "cross_check_only",
+            "observations.payload.observed_value.value.provider_price",
+        ),
+    )
     endpoints = (
         "https://push2delay.eastmoney.com/api/qt/stock/get",
         "https://push2.eastmoney.com/api/qt/stock/get",

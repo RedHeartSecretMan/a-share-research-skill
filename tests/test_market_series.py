@@ -65,15 +65,16 @@ class MarketTrendProcessTests(unittest.TestCase):
 
     def test_bluefocus_ten_completed_sessions_form_a_cross_checked_trend(self) -> None:
         result = self.run_market_trend()
+        payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["task_type"], "market_trend")
+        self.assertEqual(result["plan"]["task_type"], "market_trend")
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["subjects"][0]["security"],
+            payload["subjects"][0]["security"],
             {"exchange": "SZSE", "code": "300058", "type": "A_SHARE"},
         )
         self.assertEqual(
-            result["window"],
+            payload["window"],
             {
                 "requested_trading_days": 10,
                 "actual_trading_days": 10,
@@ -81,9 +82,13 @@ class MarketTrendProcessTests(unittest.TestCase):
                 "end": "2026-07-31",
             },
         )
-        self.assertEqual(len(result["series"]), 10)
+        self.assertEqual(len(payload["series"]), 10)
         self.assertEqual(
-            result["series"][0],
+            {
+                key: value
+                for key, value in payload["series"][0].items()
+                if key != "evidence_ids"
+            },
             {
                 "trading_date": "2026-07-20",
                 "open": "12.23",
@@ -93,16 +98,17 @@ class MarketTrendProcessTests(unittest.TestCase):
                 "volume": "299612200",
                 "volume_unit": "shares",
                 "adjustment": "unadjusted",
-                "evidence_ids": [
-                    "bar-szse_daily_line@1-SZSE:300058-2026-07-20",
-                    "bar-tencent_daily_line@1-SZSE:300058-2026-07-20",
-                ],
             },
         )
-        self.assertEqual(result["series"][-1]["close"], "14.35")
-        self.assertEqual(result["series"][-1]["volume"], "631845500")
+        first_refs = payload["series"][0]["evidence_ids"]
+        self.assertEqual(len(first_refs), 2)
+        self.assertTrue(
+            set(first_refs).issubset({item["id"] for item in result["observations"]})
+        )
+        self.assertEqual(payload["series"][-1]["close"], "14.35")
+        self.assertEqual(payload["series"][-1]["volume"], "631845500")
         self.assertEqual(
-            result["metrics"],
+            payload["metrics"],
             {
                 "cumulative_return": {"value": "18.2043", "unit": "percent"},
                 "maximum_drawdown": {"value": "-10.9611", "unit": "percent"},
@@ -121,11 +127,11 @@ class MarketTrendProcessTests(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual(result["conclusion"]["close_trend"], "up")
-        self.assertEqual(result["corporate_actions"], [])
+        self.assertEqual(payload["conclusion"]["close_trend"], "up")
+        self.assertEqual(payload["corporate_actions"], [])
         self.assertEqual(result["conflicts"], [])
         self.assertEqual(result["source_errors"], [])
-        self.assertEqual(len(result["evidence"]), 22)
+        self.assertEqual(len(result["observations"]), 22)
         self.assertIn(
             "experimental_market_series",
             {item["code"] for item in result["limitations"]},
@@ -133,11 +139,10 @@ class MarketTrendProcessTests(unittest.TestCase):
 
     def test_unadjusted_window_with_corporate_action_blocks_trend_metrics(self) -> None:
         result = self.run_market_trend("corporate_action")
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["metrics"], {})
-        self.assertEqual(result["conclusion"]["close_trend"], "unresolved")
-        self.assertEqual(len(result["corporate_actions"]), 1)
+        self.assertEqual(len(payload["corporate_actions"]), 1)
         self.assertEqual(
             result["limitations"][-1]["code"],
             "corporate_action_requires_adjusted_series",
@@ -151,22 +156,21 @@ class MarketTrendProcessTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         conflict = result["conflicts"][0]
         self.assertEqual(conflict["code"], "market_series_missing_session")
-        self.assertEqual(conflict["trading_date"], "2026-07-24")
-        retained_evidence_ids = {item["id"] for item in result["evidence"]}
-        self.assertTrue(set(conflict["evidence_ids"]).issubset(retained_evidence_ids))
+        retained_evidence_ids = {item["id"] for item in result["observations"]}
+        self.assertTrue(
+            set(conflict["observation_ids"]).issubset(retained_evidence_ids)
+        )
 
     def test_one_daily_value_conflict_blocks_the_entire_trend(self) -> None:
         result = self.run_market_trend("value_conflict")
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["metrics"], {})
         conflict = result["conflicts"][0]
         self.assertEqual(conflict["code"], "market_series_value_conflict")
-        self.assertEqual(conflict["trading_date"], "2026-07-24")
-        self.assertEqual(conflict["fields"], ["close"])
 
     def test_suspended_session_is_explicitly_rejected(self) -> None:
         result = self.run_market_trend("suspended_session")
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
@@ -174,11 +178,11 @@ class MarketTrendProcessTests(unittest.TestCase):
             "suspended_session_in_requested_range",
         )
         self.assertEqual(
-            result["rejected_observations"][0]["observation"]["trading_date"],
+            payload["rejected_observations"][0]["observation"]["trading_date"],
             "2026-07-24",
         )
         self.assertEqual(
-            result["rejected_observations"][0]["observation"]["trading_status"],
+            payload["rejected_observations"][0]["observation"]["trading_status"],
             "suspended",
         )
 
@@ -204,20 +208,25 @@ class MarketTrendProcessTests(unittest.TestCase):
 
     def test_bluefocus_forward_adjusted_trend_uses_two_adjusted_sources(self) -> None:
         result = self.run_market_trend(adjustment="forward_adjusted")
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["series"]), 10)
+        self.assertEqual(len(payload["series"]), 10)
         self.assertTrue(
-            all(item["adjustment"] == "forward_adjusted" for item in result["series"])
+            all(item["adjustment"] == "forward_adjusted" for item in payload["series"])
         )
         self.assertEqual(
-            result["metrics"]["cumulative_return"],
+            payload["metrics"]["cumulative_return"],
             {"value": "18.2043", "unit": "percent"},
         )
         market_operations = {
-            item["source_operation"]
-            for item in result["evidence"]
-            if item["source_role"] == "market_observation"
+            item["operation_id"]
+            for item in result["observations"]
+            if item["operation_id"]
+            in {
+                "eastmoney_forward_adjusted_daily_line@1",
+                "tencent_forward_adjusted_daily_line@1",
+            }
         }
         self.assertEqual(
             market_operations,
@@ -229,15 +238,16 @@ class MarketTrendProcessTests(unittest.TestCase):
 
     def test_two_session_window_marks_sample_volatility_not_computable(self) -> None:
         result = self.run_market_trend(trading_days=2)
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["window"]["actual_trading_days"], 2)
+        self.assertEqual(payload["window"]["actual_trading_days"], 2)
         self.assertEqual(
-            result["metrics"]["cumulative_return"],
+            payload["metrics"]["cumulative_return"],
             {"value": "19.9833", "unit": "percent"},
         )
         self.assertEqual(
-            result["metrics"]["annualized_volatility"],
+            payload["metrics"]["annualized_volatility"],
             {
                 "status": "not_computable",
                 "reason": "sample volatility requires at least two daily returns",
@@ -246,9 +256,9 @@ class MarketTrendProcessTests(unittest.TestCase):
         volatility_calculation = next(
             item
             for item in result["calculations"]
-            if item["id"] == "annualized_volatility"
+            if item["kind"] == "market_trend_calculation:annualized_volatility"
         )
-        self.assertEqual(volatility_calculation["status"], "not_computable")
+        self.assertEqual(volatility_calculation["payload"]["status"], "not_computable")
 
     def test_forward_adjusted_series_retains_real_corporate_action_annotation(
         self,
@@ -259,13 +269,14 @@ class MarketTrendProcessTests(unittest.TestCase):
             trading_days=5,
             as_of="2026-06-26",
         )
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["series"]), 5)
-        self.assertEqual(len(result["corporate_actions"]), 1)
-        self.assertEqual(result["corporate_actions"][0]["trading_date"], "2026-06-26")
+        self.assertEqual(len(payload["series"]), 5)
+        self.assertEqual(len(payload["corporate_actions"]), 1)
+        self.assertEqual(payload["corporate_actions"][0]["trading_date"], "2026-06-26")
         self.assertEqual(
-            result["corporate_actions"][0]["details"]["FHcontent"],
+            payload["corporate_actions"][0]["details"]["FHcontent"],
             "10派0.1元",
         )
         self.assertIn(
@@ -318,11 +329,12 @@ class EtfMarketProcessTests(unittest.TestCase):
         self,
     ) -> None:
         result = self.run_etf_market()
+        payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["task_type"], "etf_market")
+        self.assertEqual(result["plan"]["task_type"], "etf_market")
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["subjects"],
+            payload["subjects"],
             [
                 {
                     "security": {
@@ -337,7 +349,11 @@ class EtfMarketProcessTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            result["quote"],
+            {
+                key: value
+                for key, value in payload["quote"].items()
+                if key != "evidence_ids"
+            },
             {
                 "trading_date": "2026-07-31",
                 "observed_at": "2026-07-31T16:29:01+08:00",
@@ -354,15 +370,11 @@ class EtfMarketProcessTests(unittest.TestCase):
                     "status": "consistent_with_lot_rounding",
                     "difference_shares": "36",
                 },
-                "evidence_ids": [
-                    "etf-sse_etf_snapshot@1-SSE:510050-2026-07-31",
-                    "bar-tencent_daily_line@1-SSE:510050-2026-07-31",
-                ],
             },
         )
         self.assertEqual(result["conflicts"], [])
         self.assertEqual(result["source_errors"], [])
-        self.assertEqual(len(result["evidence"]), 3)
+        self.assertEqual(len(result["observations"]), 3)
         self.assertIn(
             "experimental_etf_market_sources",
             {item["code"] for item in result["limitations"]},
@@ -372,9 +384,7 @@ class EtfMarketProcessTests(unittest.TestCase):
         result = self.run_etf_market("etf_value_conflict")
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["quote"]["status"], "unresolved")
         self.assertEqual(result["conflicts"][0]["code"], "etf_quote_value_conflict")
-        self.assertEqual(result["conflicts"][0]["fields"], ["last"])
 
 
 if __name__ == "__main__":

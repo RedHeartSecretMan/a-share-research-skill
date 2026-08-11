@@ -15,12 +15,40 @@ from .identity_sources import (
     SourceOperationError,
     TransportError,
 )
+from .research_result import FieldDisposition
+
+
+def _retained(field: str, destination: str) -> FieldDisposition:
+    return FieldDisposition(field, "normalized", destination)
+
+
+def _excluded(field: str, reason: str) -> FieldDisposition:
+    return FieldDisposition(field, "excluded", None, reason)
 
 
 class TencentForwardAdjustedDailyLineOperation:
     operation_id = "tencent_forward_adjusted_daily_line@1"
     endpoint = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     corporate_action_fields = {"FHcontent", "cqr", "djr", "fh_sh", "nd"}
+    field_dispositions = (
+        _retained("qfqday[0]", "observations.payload.observation.trading_date"),
+        _retained("qfqday[1]", "observations.payload.observed_value.value.open"),
+        _retained("qfqday[2]", "observations.payload.observed_value.value.close"),
+        _retained("qfqday[3]", "observations.payload.observed_value.value.high"),
+        _retained("qfqday[4]", "observations.payload.observed_value.value.low"),
+        _retained("qfqday[5]", "observations.payload.observed_value.value.volume"),
+        FieldDisposition(
+            "qfqday[6]",
+            "lineage_only",
+            "observations.payload.observation.corporate_action",
+        ),
+        FieldDisposition(
+            "qt[2]", "cross_check_only", "observations.payload.subject.security"
+        ),
+        FieldDisposition(
+            "qt[30]", "lineage_only", "observations.payload.evidence_time"
+        ),
+    )
 
     def observe(
         self, security: str, as_of: date, transport: HttpTransport
@@ -145,6 +173,28 @@ class TencentForwardAdjustedDailyLineOperation:
 class EastmoneyForwardAdjustedDailyLineOperation:
     operation_id = "eastmoney_forward_adjusted_daily_line@1"
     endpoint = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    field_dispositions = (
+        *(
+            _excluded(
+                f"f{index}",
+                "The requested metadata field is not used or retained by this operation.",
+            )
+            for index in range(1, 7)
+        ),
+        _retained("f51", "observations.payload.observation.trading_date"),
+        _retained("f52", "observations.payload.observed_value.value.open"),
+        _retained("f53", "observations.payload.observed_value.value.close"),
+        _retained("f54", "observations.payload.observed_value.value.high"),
+        _retained("f55", "observations.payload.observed_value.value.low"),
+        _retained("f56", "observations.payload.observed_value.value.volume"),
+        *(
+            _excluded(
+                f"f{index}",
+                "The returned kline column is not used or retained by this operation.",
+            )
+            for index in range(57, 62)
+        ),
+    )
 
     def observe(
         self, security: str, as_of: date, transport: HttpTransport

@@ -8,6 +8,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import datetime
+from decimal import (
+    ROUND_HALF_EVEN,
+    ROUND_HALF_UP,
+    Decimal,
+    InvalidOperation,
+    localcontext,
+)
 from hashlib import sha256
 from typing import Literal, Mapping, Sequence, cast
 
@@ -34,11 +41,7 @@ OperationExecutionState = Literal[
     "failed",
     "succeeded",
 ]
-EvidenceUse = Literal[
-    "security_identity",
-    "attribution_lineage",
-    "issuer_relationship",
-]
+EvidenceUse = str
 EvidenceRole = Literal[
     "supporting",
     "corroborating",
@@ -73,7 +76,7 @@ _EXECUTION_STATES = frozenset(
         "succeeded",
     }
 )
-_EVIDENCE_USES = frozenset(
+_IDENTITY_EVIDENCE_USES = frozenset(
     {"security_identity", "attribution_lineage", "issuer_relationship"}
 )
 _EVIDENCE_ROLES = frozenset(
@@ -262,7 +265,7 @@ class EvidenceUsePolicy:
     role: EvidenceRole
 
     def __post_init__(self) -> None:
-        if self.use not in _EVIDENCE_USES or self.role not in _EVIDENCE_ROLES:
+        if not self.use.strip() or self.role not in _EVIDENCE_ROLES:
             raise ValueError("operation evidence-use policy is unsupported")
 
     def to_dict(self) -> dict[str, object]:
@@ -288,8 +291,8 @@ class OperationObligation:
         if self.exchange not in {None, "SSE", "SZSE"}:
             raise ValueError("operation obligation exchange scope is invalid")
         uses = [item.use for item in self.evidence_uses]
-        if set(uses) != _EVIDENCE_USES or len(uses) != len(set(uses)):
-            raise ValueError("operation obligation must decide every evidence use")
+        if not uses or len(uses) != len(set(uses)):
+            raise ValueError("operation obligation evidence uses must be unique")
 
     def evidence_role(self, use: EvidenceUse) -> EvidenceRole:
         return next(item.role for item in self.evidence_uses if item.use == use)
@@ -315,7 +318,7 @@ class ResearchDependency:
     core: bool
 
     def __post_init__(self) -> None:
-        if not self.consumer_id.strip() or self.evidence_use not in _EVIDENCE_USES:
+        if not self.consumer_id.strip() or not self.evidence_use.strip():
             raise ValueError("research dependency is invalid")
         if self.minimum_supporting_observations < 1:
             raise ValueError("research dependency requires positive support")
@@ -350,6 +353,86 @@ class IdentityResearchPlan:
             raise ValueError("identity plan requires operation obligations")
         if self.exchange_hint not in {None, "SSE", "SZSE"}:
             raise ValueError("identity plan exchange hint is invalid")
+        for obligation in self.obligations:
+            if {
+                item.use for item in obligation.evidence_uses
+            } != _IDENTITY_EVIDENCE_USES:
+                raise ValueError("identity obligation must decide every evidence use")
+
+
+@dataclass(frozen=True)
+class DirectTaskPlan:
+    """Versioned obligations and dependencies for one migrated narrow task."""
+
+    task_type: str
+    as_of: str
+    obligations: tuple[OperationObligation, ...]
+    dependencies: tuple[ResearchDependency, ...]
+    version: str = "1.0"
+
+    def __post_init__(self) -> None:
+        if not self.task_type.strip() or not self.as_of.strip():
+            raise ValueError("direct task plan identity is invalid")
+        owners = {(item.capability_id, item.operation_id) for item in self.obligations}
+        if not owners or len(owners) != len(self.obligations):
+            raise ValueError(
+                "direct task plan obligations must be non-empty and unique"
+            )
+        dependency_keys = [
+            (item.consumer_id, item.evidence_use) for item in self.dependencies
+        ]
+        if not dependency_keys or len(dependency_keys) != len(set(dependency_keys)):
+            raise ValueError(
+                "direct task plan dependencies must be non-empty and unique"
+            )
+        declared_uses = {
+            policy.use
+            for obligation in self.obligations
+            for policy in obligation.evidence_uses
+        }
+        if any(item.evidence_use not in declared_uses for item in self.dependencies):
+            raise ValueError("direct task dependency use must be declared by the plan")
+
+
+@dataclass(frozen=True)
+class DirectTaskClaim:
+    kind: str
+    evidence_use: str
+    observation_keys: tuple[str, ...]
+    payload: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class DirectTaskCalculation:
+    kind: str
+    evidence_use: str
+    observation_keys: tuple[str, ...]
+    payload: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class DirectTaskConflict:
+    code: str
+    message: str
+    observation_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DirectTaskLimitation:
+    code: str
+    message: str
+    reference_keys: tuple[str, ...] = ()
+
+
+def _validate_inner_source_operation(value: object, owner: str) -> None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if key == "source_operation" and nested != owner:
+                raise ValueError("inner source operation contradicts outer ownership")
+            _validate_inner_source_operation(nested, owner)
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            _validate_inner_source_operation(nested, owner)
 
 
 @dataclass(frozen=True)
@@ -407,9 +490,11 @@ class OperationOutcome:
         for observation in observations:
             if observation.get("source_operation") != self.operation_id:
                 raise ValueError("operation cannot own a sibling observation")
+            _validate_inner_source_operation(observation, self.operation_id)
         for error in source_errors:
             if error.get("source_operation") != self.operation_id:
                 raise ValueError("operation cannot own a sibling source error")
+            _validate_inner_source_operation(error, self.operation_id)
 
     def to_coverage_dict(
         self,
@@ -537,6 +622,9 @@ class UnifiedResearchResult:
         ):
             raise ValueError("research anchor is invalid")
         plan = cast(dict[str, object], result["plan"])
+        if plan.get("task_type") != "security_identity":
+            self._validate_direct_task_ownership(result)
+            return
         _require_exact_keys(
             plan,
             {
@@ -584,7 +672,7 @@ class UnifiedResearchResult:
                 )
                 use = evidence_use.get("use")
                 role = evidence_use.get("role")
-                if use not in _EVIDENCE_USES or role not in _EVIDENCE_ROLES:
+                if use not in _IDENTITY_EVIDENCE_USES or role not in _EVIDENCE_ROLES:
                     raise ValueError("operation evidence use is unsupported")
                 declared_uses.add(cast(str, use))
                 typed_evidence_uses.append(
@@ -601,7 +689,7 @@ class UnifiedResearchResult:
                 not isinstance(obligation.get("source_role"), str)
                 or not isinstance(obligation.get("experimental"), bool)
                 or obligation.get("exchange") not in {None, "SSE", "SZSE"}
-                or declared_uses != _EVIDENCE_USES
+                or declared_uses != _IDENTITY_EVIDENCE_USES
                 or len(declared_uses) != len(evidence_uses)
             ):
                 raise ValueError("operation obligation contract is invalid")
@@ -649,7 +737,7 @@ class UnifiedResearchResult:
             if (
                 not isinstance(consumer_id, str)
                 or not consumer_id
-                or dependency.get("evidence_use") not in _EVIDENCE_USES
+                or dependency.get("evidence_use") not in _IDENTITY_EVIDENCE_USES
                 or not isinstance(minimum, int)
                 or isinstance(minimum, bool)
                 or minimum < 1
@@ -1014,7 +1102,7 @@ class UnifiedResearchResult:
                 if (
                     not isinstance(observation_id, str)
                     or observation_id not in claim_observation_ids
-                    or use not in _EVIDENCE_USES
+                    or use not in _IDENTITY_EVIDENCE_USES
                 ):
                     raise ValueError("claim evidence adoption reference is invalid")
                 if cast(str, use) in adoption_uses_by_observation[observation_id]:
@@ -1034,7 +1122,8 @@ class UnifiedResearchResult:
                 else:
                     raise ValueError("claim evidence adoption decision is unsupported")
             if any(
-                uses != _EVIDENCE_USES for uses in adoption_uses_by_observation.values()
+                uses != _IDENTITY_EVIDENCE_USES
+                for uses in adoption_uses_by_observation.values()
             ):
                 raise ValueError("claim evidence adoption is incomplete")
             expected_adoptions = {
@@ -1176,6 +1265,1565 @@ class UnifiedResearchResult:
                     for item in references
                 ):
                     raise ValueError("brief contains an unknown result reference")
+
+    def _validate_direct_task_ownership(self, result: Mapping[str, object]) -> None:
+        """Re-derive the public closure for a migrated narrow task."""
+
+        plan = cast(dict[str, object], result["plan"])
+        _require_exact_keys(
+            plan,
+            {
+                "id",
+                "version",
+                "task_type",
+                "capabilities",
+                "operation_obligations",
+                "research_dependencies",
+            },
+            path="research plan",
+        )
+        task_type = plan.get("task_type")
+        obligations_value = plan.get("operation_obligations")
+        if (
+            not isinstance(task_type, str)
+            or not task_type
+            or not isinstance(obligations_value, list)
+            or not obligations_value
+        ):
+            raise ValueError("direct task plan is invalid")
+        obligations: dict[tuple[str, str], dict[str, object]] = {}
+        roles: dict[tuple[str, str, str], str] = {}
+        for obligation in obligations_value:
+            if not isinstance(obligation, dict):
+                raise ValueError("operation obligation must be an object")
+            _require_exact_keys(
+                obligation,
+                {
+                    "capability_id",
+                    "operation_id",
+                    "source_role",
+                    "experimental",
+                    "exchange",
+                    "evidence_uses",
+                },
+                path="operation obligation",
+            )
+            capability_id = obligation.get("capability_id")
+            operation_id = obligation.get("operation_id")
+            policies = obligation.get("evidence_uses")
+            if (
+                not isinstance(capability_id, str)
+                or not capability_id
+                or not isinstance(operation_id, str)
+                or not operation_id
+                or not isinstance(obligation.get("source_role"), str)
+                or not isinstance(obligation.get("experimental"), bool)
+                or obligation.get("exchange") not in {None, "SSE", "SZSE"}
+                or not isinstance(policies, list)
+                or not policies
+            ):
+                raise ValueError("operation obligation contract is invalid")
+            owner = (capability_id, operation_id)
+            if owner in obligations:
+                raise ValueError("operation obligations must be unique")
+            obligations[owner] = obligation
+            seen_uses: set[str] = set()
+            for policy in policies:
+                if not isinstance(policy, dict):
+                    raise ValueError("evidence-use policy must be an object")
+                _require_exact_keys(policy, {"use", "role"}, path="evidence-use policy")
+                use = policy.get("use")
+                role = policy.get("role")
+                if (
+                    not isinstance(use, str)
+                    or not use
+                    or use in seen_uses
+                    or role not in _EVIDENCE_ROLES
+                ):
+                    raise ValueError("evidence-use policy is invalid")
+                seen_uses.add(use)
+                roles[(*owner, use)] = cast(str, role)
+
+        planned_capabilities = {item[0] for item in obligations}
+        capabilities = plan.get("capabilities")
+        if (
+            not isinstance(capabilities, list)
+            or set(capabilities) != planned_capabilities
+            or len(capabilities) != len(set(capabilities))
+        ):
+            raise ValueError("plan capabilities contradict obligations")
+        registry = cast(dict[str, object], result["capability_registry"])
+        coverage = cast(dict[str, object], result["coverage"])
+        if (
+            set(registry) != planned_capabilities
+            or set(coverage) != planned_capabilities
+        ):
+            raise ValueError("capability aggregates contradict the plan")
+
+        registered: set[tuple[str, str]] = set()
+        for capability_id, registration in registry.items():
+            if not isinstance(registration, dict):
+                raise ValueError("capability registration must be an object")
+            _require_exact_keys(
+                registration,
+                {"id", "version", "granularity", "operations"},
+                path="capability registration",
+            )
+            operations = registration.get("operations")
+            if (
+                registration.get("id") != capability_id
+                or registration.get("version") != plan.get("version")
+                or not isinstance(registration.get("granularity"), str)
+                or not isinstance(operations, list)
+            ):
+                raise ValueError("capability registration is invalid")
+            for operation in operations:
+                if not isinstance(operation, dict):
+                    raise ValueError("operation registration must be an object")
+                _require_exact_keys(
+                    operation,
+                    {"id", "source_role", "experimental"},
+                    path="operation registration",
+                )
+                operation_id = operation.get("id")
+                if not isinstance(operation_id, str):
+                    raise ValueError("operation registration identity is invalid")
+                owner = (capability_id, operation_id)
+                obligation = obligations.get(owner)
+                if (
+                    obligation is None
+                    or operation.get("source_role") != obligation.get("source_role")
+                    or operation.get("experimental")
+                    is not obligation.get("experimental")
+                ):
+                    raise ValueError(
+                        "operation registration contradicts its obligation"
+                    )
+                registered.add((capability_id, operation_id))
+        if registered != set(obligations):
+            raise ValueError("registry does not close over planned operations")
+
+        observations = cast(list[dict[str, object]], result["observations"])
+        source_errors = cast(list[dict[str, object]], result["source_errors"])
+        observation_owners: dict[str, tuple[str, str]] = {}
+        for observation in observations:
+            _require_exact_keys(
+                observation,
+                {"id", "capability_id", "operation_id", "payload"},
+                path="observation",
+            )
+            observation_id = observation.get("id")
+            observation_capability = observation.get("capability_id")
+            observation_operation = observation.get("operation_id")
+            if (
+                not isinstance(observation_id, str)
+                or not isinstance(observation_capability, str)
+                or not isinstance(observation_operation, str)
+                or observation_id in observation_owners
+            ):
+                raise ValueError("observation ownership is invalid")
+            observation_owner = (observation_capability, observation_operation)
+            if observation_owner not in obligations:
+                raise ValueError("observation ownership is invalid")
+            _validate_inner_source_operation(
+                observation["payload"], observation_operation
+            )
+            payload = {
+                "capability_id": observation_owner[0],
+                "operation_id": observation_owner[1],
+                "payload": observation["payload"],
+            }
+            if observation_id != stable_result_id("observation", payload):
+                raise ValueError("observation ID contradicts its canonical payload")
+            observation_owners[observation_id] = observation_owner
+        source_error_owners: dict[str, tuple[str, str]] = {}
+        for error in source_errors:
+            _require_exact_keys(
+                error,
+                {"id", "capability_id", "operation_id", "code", "message"},
+                path="source error",
+            )
+            error_id = error.get("id")
+            error_capability = error.get("capability_id")
+            error_operation = error.get("operation_id")
+            if (
+                not isinstance(error_id, str)
+                or not isinstance(error_capability, str)
+                or not isinstance(error_operation, str)
+                or error_id in source_error_owners
+            ):
+                raise ValueError("source-error ownership is invalid")
+            error_owner = (error_capability, error_operation)
+            if error_owner not in obligations:
+                raise ValueError("source-error ownership is invalid")
+            payload = {
+                "capability_id": error_owner[0],
+                "operation_id": error_owner[1],
+                "code": error.get("code"),
+                "message": error.get("message"),
+            }
+            if error_id != stable_result_id("source-error", payload):
+                raise ValueError("source-error ID contradicts its canonical payload")
+            source_error_owners[error_id] = error_owner
+
+        covered_observations: set[str] = set()
+        covered_errors: set[str] = set()
+        covered_operations: set[tuple[str, str]] = set()
+        derived_states: list[CoverageState] = []
+        disposition_contracts: list[dict[str, object]] = []
+        for capability_id, aggregate in coverage.items():
+            if not isinstance(aggregate, dict):
+                raise ValueError("capability coverage must be an object")
+            _require_exact_keys(aggregate, {"state", "operations"}, path="coverage")
+            operations = aggregate.get("operations")
+            if not isinstance(operations, dict):
+                raise ValueError("operation coverage must be an object")
+            capability_states: list[CoverageState] = []
+            for operation_id, operation in operations.items():
+                if not isinstance(operation, dict):
+                    raise ValueError("operation coverage must be an object")
+                _require_exact_keys(
+                    operation,
+                    {
+                        "capability_id",
+                        "operation_id",
+                        "execution_state",
+                        "state",
+                        "query_complete",
+                        "observation_ids",
+                        "source_error_ids",
+                        "field_dispositions",
+                        "diagnostics",
+                    },
+                    path="operation coverage",
+                )
+                owner = (capability_id, operation_id)
+                observation_ids = operation.get("observation_ids")
+                error_ids = operation.get("source_error_ids")
+                dispositions = operation.get("field_dispositions")
+                if (
+                    owner not in obligations
+                    or operation.get("capability_id") != capability_id
+                    or operation.get("operation_id") != operation_id
+                    or not isinstance(observation_ids, list)
+                    or not isinstance(error_ids, list)
+                    or not isinstance(dispositions, list)
+                    or not dispositions
+                    or any(
+                        observation_owners.get(item) != owner
+                        for item in observation_ids
+                    )
+                    or any(source_error_owners.get(item) != owner for item in error_ids)
+                ):
+                    raise ValueError(
+                        "operation ownership or field disposition is invalid"
+                    )
+                seen_fields: set[str] = set()
+                for disposition in dispositions:
+                    if not isinstance(disposition, dict):
+                        raise ValueError("field disposition must be an object")
+                    expected = {"field", "disposition", "destination"}
+                    if disposition.get("disposition") == "excluded":
+                        expected.add("reason")
+                    _require_exact_keys(disposition, expected, path="field disposition")
+                    field_name = disposition.get("field")
+                    if not isinstance(field_name, str) or field_name in seen_fields:
+                        raise ValueError("field disposition contract is invalid")
+                    seen_fields.add(field_name)
+                    FieldDisposition(
+                        field_name,
+                        cast(Disposition, disposition.get("disposition")),
+                        cast(str | None, disposition.get("destination")),
+                        cast(str | None, disposition.get("reason")),
+                    )
+                execution = OperationExecution(
+                    cast(OperationExecutionState, operation.get("execution_state")),
+                    query_complete=cast(bool | None, operation.get("query_complete")),
+                )
+                state = _derive_operation_coverage(
+                    execution,
+                    tuple({} for _ in observation_ids),
+                    tuple({} for _ in error_ids),
+                )
+                if operation.get("state") != state:
+                    raise ValueError("operation coverage contradicts execution facts")
+                covered_observations.update(cast(list[str], observation_ids))
+                covered_errors.update(cast(list[str], error_ids))
+                covered_operations.add(owner)
+                capability_states.append(state)
+                derived_states.append(state)
+                disposition_contracts.append(
+                    {
+                        "capability_id": capability_id,
+                        "operation_id": operation_id,
+                        "fields": dispositions,
+                    }
+                )
+            if aggregate.get("state") != _aggregate_capability_coverage(
+                capability_states
+            ):
+                raise ValueError("capability coverage contradicts operations")
+        if (
+            covered_operations != set(obligations)
+            or covered_observations != set(observation_owners)
+            or covered_errors != set(source_error_owners)
+        ):
+            raise ValueError("operation ownership is incomplete")
+        expected_plan_id = stable_result_id(
+            "plan",
+            {
+                "version": plan.get("version"),
+                "task_type": task_type,
+                "operation_obligations": obligations_value,
+                "research_dependencies": plan.get("research_dependencies"),
+                "field_dispositions": disposition_contracts,
+            },
+        )
+        if plan.get("id") != expected_plan_id:
+            raise ValueError("plan ID contradicts its operation contracts")
+
+        ids_by_field: dict[str, set[str]] = {
+            "observation_ids": set(observation_owners),
+            "claim_ids": set(),
+            "calculation_ids": set(),
+            "conflict_ids": set(),
+            "limitation_ids": set(),
+            "source_error_ids": set(source_error_owners),
+        }
+        claims = cast(list[dict[str, object]], result["claims"])
+        calculations = cast(list[dict[str, object]], result["calculations"])
+        conflicts = cast(list[dict[str, object]], result["conflicts"])
+        limitations = cast(list[dict[str, object]], result["limitations"])
+        consumer_support: dict[tuple[str, str], int] = {}
+
+        def validate_references(value: object) -> None:
+            if isinstance(value, Mapping):
+                for key, nested in value.items():
+                    if key == "evidence_id":
+                        if (
+                            not isinstance(nested, str)
+                            or nested not in observation_owners
+                        ):
+                            raise ValueError(
+                                "payload contains an unknown observation reference"
+                            )
+                    elif key.endswith("evidence_ids"):
+                        if not isinstance(nested, list) or any(
+                            not isinstance(item, str) or item not in observation_owners
+                            for item in nested
+                        ):
+                            raise ValueError(
+                                "payload contains an unknown observation reference"
+                            )
+                    elif key in {"conflict_ids", "limitation_ids", "source_error_ids"}:
+                        if not isinstance(nested, list) or any(
+                            not isinstance(item, str) or item not in ids_by_field[key]
+                            for item in nested
+                        ):
+                            raise ValueError(
+                                "payload contains an unknown owned reference"
+                            )
+                    else:
+                        validate_references(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    validate_references(nested)
+
+        for claim in claims:
+            _require_exact_keys(
+                claim,
+                {
+                    "id",
+                    "kind",
+                    "evidence_use",
+                    "observation_ids",
+                    "evidence_adoptions",
+                    "payload",
+                },
+                path="claim",
+            )
+            claim_id = claim.get("id")
+            kind = claim.get("kind")
+            evidence_use = claim.get("evidence_use")
+            observation_ids = claim.get("observation_ids")
+            adoptions = claim.get("evidence_adoptions")
+            if (
+                not isinstance(claim_id, str)
+                or not isinstance(kind, str)
+                or not isinstance(evidence_use, str)
+                or not isinstance(observation_ids, list)
+                or any(item not in observation_owners for item in observation_ids)
+                or not isinstance(adoptions, list)
+            ):
+                raise ValueError("claim is invalid")
+            if claim_id != stable_result_id(
+                "claim", {k: v for k, v in claim.items() if k != "id"}
+            ):
+                raise ValueError("claim ID contradicts its canonical payload")
+            supporting = 0
+            adopted_ids: set[str] = set()
+            for adoption in adoptions:
+                if not isinstance(adoption, dict):
+                    raise ValueError("claim adoption must be an object")
+                _require_exact_keys(
+                    adoption,
+                    {"observation_id", "use", "decision", "role", "reason"},
+                    path="claim adoption",
+                )
+                observation_id = adoption.get("observation_id")
+                adoption_owner = observation_owners.get(cast(str, observation_id))
+                expected_role = (
+                    roles.get((*adoption_owner, evidence_use))
+                    if adoption_owner
+                    else None
+                )
+                if expected_role == "conditional_supporting":
+                    expected_role = "supporting"
+                if (
+                    observation_id not in observation_ids
+                    or observation_id in adopted_ids
+                    or adoption.get("use") != evidence_use
+                    or adoption.get("decision") != "adopted"
+                    or adoption.get("role") != expected_role
+                    or adoption.get("reason") is not None
+                ):
+                    raise ValueError("claim adoption contradicts the plan")
+                adopted_ids.add(cast(str, observation_id))
+                supporting += adoption.get("role") == "supporting"
+            if adopted_ids != set(cast(list[str], observation_ids)):
+                raise ValueError("claim adoption is incomplete")
+            ids_by_field["claim_ids"].add(claim_id)
+            consumer_support[(kind, evidence_use)] = max(
+                consumer_support.get((kind, evidence_use), 0), supporting
+            )
+        if len(ids_by_field["claim_ids"]) != len(claims):
+            raise ValueError("claim IDs must be unique")
+
+        for calculation in calculations:
+            _require_exact_keys(
+                calculation,
+                {"id", "kind", "evidence_use", "input_ids", "payload"},
+                path="calculation",
+            )
+            calculation_id = calculation.get("id")
+            kind = calculation.get("kind")
+            evidence_use = calculation.get("evidence_use")
+            input_ids = calculation.get("input_ids")
+            if (
+                not isinstance(calculation_id, str)
+                or not isinstance(kind, str)
+                or not isinstance(evidence_use, str)
+                or not isinstance(input_ids, list)
+                or any(item not in observation_owners for item in input_ids)
+                or calculation_id
+                != stable_result_id(
+                    "calculation", {k: v for k, v in calculation.items() if k != "id"}
+                )
+            ):
+                raise ValueError("calculation is invalid")
+            ids_by_field["calculation_ids"].add(calculation_id)
+            supporting = sum(
+                roles.get((*observation_owners[item], evidence_use))
+                in {"supporting", "conditional_supporting"}
+                for item in cast(list[str], input_ids)
+            )
+            consumer_support[(kind, evidence_use)] = max(
+                consumer_support.get((kind, evidence_use), 0), supporting
+            )
+        if len(ids_by_field["calculation_ids"]) != len(calculations):
+            raise ValueError("calculation IDs must be unique")
+
+        for records, field, kind, reference_field in (
+            (conflicts, "conflict_ids", "conflict", "observation_ids"),
+            (limitations, "limitation_ids", "limitation", "references"),
+        ):
+            expected = {"id", "code", "message", reference_field}
+            for record in records:
+                _require_exact_keys(record, expected, path=kind)
+                record_id = record.get("id")
+                references = record.get(reference_field)
+                if (
+                    not isinstance(record_id, str)
+                    or not isinstance(references, list)
+                    or any(item not in observation_owners for item in references)
+                    or record_id
+                    != stable_result_id(
+                        kind, {k: v for k, v in record.items() if k != "id"}
+                    )
+                ):
+                    raise ValueError(f"{kind} is invalid")
+                ids_by_field[field].add(record_id)
+            if len(ids_by_field[field]) != len(records):
+                raise ValueError(f"{kind} IDs must be unique")
+
+        for consumer in (*claims, *calculations):
+            validate_references(consumer.get("payload"))
+        dependencies = plan.get("research_dependencies")
+        if not isinstance(dependencies, list) or not dependencies:
+            raise ValueError("direct task requires dependencies")
+        dependency_keys: set[tuple[str, str]] = set()
+        unmet_core = False
+        unmet_noncore = False
+        declared_uses = {item[2] for item in roles}
+        for dependency in dependencies:
+            if not isinstance(dependency, dict):
+                raise ValueError("dependency must be an object")
+            _require_exact_keys(
+                dependency,
+                {
+                    "consumer_id",
+                    "evidence_use",
+                    "minimum_supporting_observations",
+                    "core",
+                },
+                path="dependency",
+            )
+            consumer_id = dependency.get("consumer_id")
+            evidence_use = dependency.get("evidence_use")
+            minimum = dependency.get("minimum_supporting_observations")
+            key = (cast(str, consumer_id), cast(str, evidence_use))
+            if (
+                not isinstance(consumer_id, str)
+                or not isinstance(evidence_use, str)
+                or evidence_use not in declared_uses
+                or key in dependency_keys
+                or not isinstance(minimum, int)
+                or isinstance(minimum, bool)
+                or minimum < 1
+                or not isinstance(dependency.get("core"), bool)
+            ):
+                raise ValueError("dependency is invalid")
+            dependency_keys.add(key)
+            satisfied = consumer_support.get(key, 0) >= minimum
+            if not satisfied and dependency["core"]:
+                unmet_core = True
+            elif not satisfied:
+                unmet_noncore = True
+        derived_status: ResearchStatus = (
+            "blocked"
+            if unmet_core
+            else "limited"
+            if (
+                unmet_noncore
+                or source_errors
+                or conflicts
+                or limitations
+                or any(
+                    item.get("experimental") is True for item in obligations.values()
+                )
+                or any(
+                    state not in {"complete", "observed_empty"}
+                    for state in derived_states
+                )
+            )
+            else "supported"
+        )
+        if result.get("status") != derived_status:
+            raise ValueError("research result contradicts its derived result status")
+
+        briefs = cast(list[dict[str, object]], result["briefs"])
+        task_views = cast(dict[str, object], result["task_views"])
+        if len(briefs) != 1 or set(task_views) != {task_type}:
+            raise ValueError("direct task requires one brief and one task view")
+        view = cast(dict[str, object], task_views[task_type])
+        brief = briefs[0]
+        for container, path in ((view, "task view"), (brief, "brief")):
+            expected = {
+                "status",
+                "observation_ids",
+                "claim_ids",
+                "calculation_ids",
+                "conflict_ids",
+                "limitation_ids",
+                "source_error_ids",
+            }
+            expected.add("brief_id" if path == "task view" else "id")
+            if path == "brief":
+                expected.add("summary")
+            _require_exact_keys(container, expected, path=path)
+            if container.get("status") != derived_status:
+                raise ValueError(f"{path} status contradicts result status")
+            for field, known in ids_by_field.items():
+                references = container.get(field)
+                if (
+                    not isinstance(references, list)
+                    or set(references) != known
+                    or len(references) != len(known)
+                ):
+                    raise ValueError(f"{path} does not close over owned records")
+        brief_id = brief.get("id")
+        if view.get("brief_id") != brief_id or brief_id != stable_result_id(
+            "brief", {key: value for key, value in brief.items() if key != "id"}
+        ):
+            raise ValueError("brief reference is invalid")
+        _validate_direct_domain_facts(result, task_type)
+
+
+def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) -> None:
+    if task_type == "market_trend":
+        _validate_market_domain_facts(result)
+    elif task_type == "etf_market":
+        _validate_etf_domain_facts(result)
+    elif task_type == "security_valuation":
+        _validate_valuation_domain_facts(result)
+    elif task_type == "valuation_compare":
+        _validate_comparison_domain_facts(result)
+
+
+def _owned_observations(
+    result: Mapping[str, object], *, operation_suffix: str | None = None
+) -> list[dict[str, object]]:
+    observations = cast(list[dict[str, object]], result["observations"])
+    if operation_suffix is None:
+        return observations
+    return [
+        item
+        for item in observations
+        if str(item["operation_id"]).rsplit("::", 1)[-1] == operation_suffix
+    ]
+
+
+def _record_payload(record: Mapping[str, object]) -> dict[str, object]:
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError("domain observation payload must be an object")
+    return payload
+
+
+def _nested_mapping(value: object, *path: str) -> dict[str, object]:
+    current = value
+    for component in path:
+        if not isinstance(current, dict) or component not in current:
+            raise ValueError("domain fact path is missing")
+        current = current[component]
+    if not isinstance(current, dict):
+        raise ValueError("domain fact must be an object")
+    return current
+
+
+def _decimal_fact(value: object) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, (str, int, Decimal)):
+        raise ValueError("domain decimal fact is invalid")
+    try:
+        result = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError("domain decimal fact is invalid") from error
+    if not result.is_finite():
+        raise ValueError("domain decimal fact is invalid")
+    return result
+
+
+def _percent_fact(value: Decimal) -> dict[str, str]:
+    return {
+        "value": format(
+            (value * Decimal(100)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP),
+            "f",
+        ),
+        "unit": "percent",
+    }
+
+
+def _metric_fact(value: Decimal, unit: str, places: int = 4) -> dict[str, str]:
+    return {
+        "status": "calculated",
+        "value": format(
+            value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_EVEN),
+            "f",
+        ),
+        "unit": unit,
+    }
+
+
+def _claim_by_kind(result: Mapping[str, object], kind: str) -> dict[str, object] | None:
+    return next(
+        (
+            item
+            for item in cast(list[dict[str, object]], result["claims"])
+            if item.get("kind") == kind
+        ),
+        None,
+    )
+
+
+def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
+    claim = _claim_by_kind(result, "market_trend_summary")
+    if claim is None:
+        return
+    payload = _nested_mapping(claim, "payload")
+    series = payload.get("series")
+    metrics = payload.get("metrics")
+    if not isinstance(series, list) or len(series) < 2 or not isinstance(metrics, dict):
+        raise ValueError("market domain facts are incomplete")
+    observations_by_id = {str(item["id"]): item for item in _owned_observations(result)}
+    closes: list[Decimal] = []
+    volumes: list[Decimal] = []
+    dates: list[str] = []
+    for row in series:
+        if not isinstance(row, dict):
+            raise ValueError("market domain facts contain an invalid series row")
+        evidence_ids = row.get("evidence_ids")
+        if not isinstance(evidence_ids, list) or len(evidence_ids) != 2:
+            raise ValueError("market domain facts lack cross-checked row evidence")
+        evidence = [observations_by_id.get(str(item)) for item in evidence_ids]
+        if any(item is None for item in evidence):
+            raise ValueError("market domain facts reference unknown row evidence")
+        for record in evidence:
+            assert record is not None
+            observation_payload = _record_payload(record)
+            values = _nested_mapping(observation_payload, "observed_value", "value")
+            observation = _nested_mapping(observation_payload, "observation")
+            if (
+                observation.get("trading_date") != row.get("trading_date")
+                or observation.get("adjustment") != row.get("adjustment")
+                or any(
+                    _decimal_fact(values.get(field)) != _decimal_fact(row.get(field))
+                    for field in ("open", "high", "low", "close", "volume")
+                )
+            ):
+                raise ValueError("market domain facts contradict owned observations")
+        dates.append(str(row["trading_date"]))
+        closes.append(_decimal_fact(row["close"]))
+        volumes.append(_decimal_fact(row["volume"]))
+    if dates != sorted(dates) or len(dates) != len(set(dates)):
+        raise ValueError("market domain facts contain invalid selected sessions")
+    returns = [
+        closes[index] / closes[index - 1] - Decimal(1)
+        for index in range(1, len(closes))
+    ]
+    peak = closes[0]
+    drawdown = Decimal(0)
+    for close in closes:
+        peak = max(peak, close)
+        drawdown = min(drawdown, close / peak - Decimal(1))
+    annualized_volatility: dict[str, object]
+    if len(returns) >= 2:
+        mean = sum(returns, Decimal(0)) / Decimal(len(returns))
+        variance = sum(((item - mean) ** 2 for item in returns), Decimal(0)) / Decimal(
+            len(returns) - 1
+        )
+        annualized_volatility = {
+            **_percent_fact(variance.sqrt() * Decimal(252).sqrt()),
+            "basis": "sample_stddev_of_daily_simple_returns_sqrt_252",
+        }
+    else:
+        annualized_volatility = {
+            "status": "not_computable",
+            "reason": "sample volatility requires at least two daily returns",
+        }
+    comparison_sessions = len(volumes) // 2
+    first_volume = sum(volumes[:comparison_sessions], Decimal(0)) / Decimal(
+        comparison_sessions
+    )
+    last_volume = sum(volumes[-comparison_sessions:], Decimal(0)) / Decimal(
+        comparison_sessions
+    )
+    expected_metrics: dict[str, object] = {
+        "cumulative_return": _percent_fact(closes[-1] / closes[0] - Decimal(1)),
+        "maximum_drawdown": _percent_fact(drawdown),
+        "annualized_volatility": annualized_volatility,
+        "up_sessions": sum(item > 0 for item in returns),
+        "down_sessions": sum(item < 0 for item in returns),
+        "unchanged_sessions": sum(item == 0 for item in returns),
+        "volume_change": {
+            **_percent_fact(last_volume / first_volume - Decimal(1)),
+            "basis": (
+                f"last_{comparison_sessions}_session_average_vs_"
+                f"first_{comparison_sessions}_session_average"
+            ),
+        },
+    }
+    if metrics != expected_metrics:
+        raise ValueError("market domain facts contain forged metrics")
+    expected_formulas = {
+        "cumulative_return": "(last_close / first_close - 1) * 100",
+        "maximum_drawdown": "min(close / running_peak_close - 1) * 100",
+        "annualized_volatility": (
+            "sample_stddev(daily_simple_returns) * sqrt(252) * 100"
+        ),
+        "volume_change": (
+            "(last_half_average_volume / first_half_average_volume - 1) * 100"
+        ),
+    }
+    calculations = cast(list[dict[str, object]], result["calculations"])
+    if len(calculations) != 4:
+        raise ValueError("market domain facts lack sealed calculations")
+    for calculation in calculations:
+        kind = str(calculation.get("kind", "")).removeprefix(
+            "market_trend_calculation:"
+        )
+        calculation_payload = _nested_mapping(calculation, "payload")
+        if calculation_payload.get("id") != kind or calculation_payload.get(
+            "formula"
+        ) != expected_formulas.get(kind):
+            raise ValueError("market domain facts contain a forged calculation")
+        inputs = [
+            observations_by_id.get(str(item))
+            for item in cast(list[object], calculation.get("input_ids", []))
+        ]
+        if not inputs or any(item is None for item in inputs):
+            raise ValueError("market domain facts lack owned calculation inputs")
+        input_values = [
+            _nested_mapping(
+                _record_payload(cast(dict[str, object], item)),
+                "observed_value",
+                "value",
+            )
+            for item in inputs
+        ]
+        operands = calculation_payload.get("operands")
+        if not isinstance(operands, dict):
+            raise ValueError("market domain facts lack calculation operands")
+        if kind == "cumulative_return":
+            expected_operands: dict[str, object] = {
+                "first_close": input_values[0]["close"],
+                "last_close": input_values[-1]["close"],
+            }
+        elif kind in {"maximum_drawdown", "annualized_volatility"}:
+            expected_operands = {"closes": [item["close"] for item in input_values]}
+        else:
+            expected_operands = {
+                "volumes_shares": [item["volume"] for item in input_values]
+            }
+        if operands != expected_operands:
+            raise ValueError("market domain facts contradict calculation inputs")
+    corporate_actions = payload.get("corporate_actions")
+    if not isinstance(corporate_actions, list):
+        raise ValueError("market domain facts contain invalid corporate actions")
+    for action in corporate_actions:
+        if not isinstance(action, dict):
+            raise ValueError("market domain facts contain invalid corporate actions")
+        record = observations_by_id.get(str(action.get("evidence_id")))
+        if record is None or _nested_mapping(
+            _record_payload(record), "observation"
+        ).get("corporate_action") != action.get("details"):
+            raise ValueError("market domain facts forge a corporate action")
+
+
+def _validate_etf_domain_facts(result: Mapping[str, object]) -> None:
+    claim = _claim_by_kind(result, "etf_market_quote")
+    if claim is None:
+        return
+    payload = _nested_mapping(claim, "payload")
+    quote = payload.get("quote")
+    subjects = payload.get("subjects")
+    if not isinstance(quote, dict) or not isinstance(subjects, list) or not subjects:
+        raise ValueError("ETF domain facts are incomplete")
+    snapshot_records = _owned_observations(
+        result, operation_suffix="sse_etf_snapshot@1"
+    )
+    tencent_records = _owned_observations(
+        result, operation_suffix="tencent_daily_line@1"
+    )
+    identity_records = _owned_observations(result, operation_suffix="sse_etf_list@1")
+    if len(snapshot_records) != 1 or not tencent_records or len(identity_records) != 1:
+        raise ValueError("ETF domain facts lack owned observations")
+    snapshot_payload = _record_payload(snapshot_records[0])
+    snapshot_values = _nested_mapping(snapshot_payload, "observed_value", "value")
+    snapshot_observation = _nested_mapping(snapshot_payload, "observation")
+    tencent = next(
+        (
+            item
+            for item in tencent_records
+            if _nested_mapping(_record_payload(item), "observation").get("trading_date")
+            == snapshot_observation.get("trading_date")
+        ),
+        None,
+    )
+    if tencent is None:
+        raise ValueError("ETF domain facts lack same-session cross-check evidence")
+    tencent_values = _nested_mapping(
+        _record_payload(tencent), "observed_value", "value"
+    )
+    scalar_fields = {
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "last": "last",
+        "previous_close": "previous_close",
+    }
+    if any(
+        _decimal_fact(quote.get(public)) != _decimal_fact(snapshot_values.get(source))
+        for public, source in scalar_fields.items()
+    ) or quote.get("trading_date") != snapshot_observation.get("trading_date"):
+        raise ValueError("ETF domain facts contradict the owned snapshot")
+    for public, source, unit in (
+        ("change_rate", "change_rate", "percent"),
+        ("volume", "volume", "shares"),
+        ("amount", "amount", "CNY"),
+    ):
+        public_value = quote.get(public)
+        if (
+            not isinstance(public_value, dict)
+            or public_value.get("unit") != unit
+            or _decimal_fact(public_value.get("value"))
+            != _decimal_fact(snapshot_values.get(source))
+        ):
+            raise ValueError("ETF domain facts contradict the owned snapshot")
+    identity_values = _nested_mapping(
+        _record_payload(identity_records[0]), "observed_value", "value"
+    )
+    subject = subjects[0]
+    if not isinstance(subject, dict) or any(
+        subject.get(field) != identity_values.get(source)
+        for field, source in (
+            ("name", "name"),
+            ("fund_manager", "fund_manager"),
+            ("listing_date", "listing_date"),
+        )
+    ):
+        raise ValueError("ETF domain facts contradict the owned identity")
+    difference = abs(
+        _decimal_fact(snapshot_values["volume"])
+        - _decimal_fact(tencent_values["volume"])
+    )
+    cross_check = {
+        "status": "consistent_with_lot_rounding" if difference <= 100 else "conflict",
+        "difference_shares": format(difference, "f"),
+    }
+    if quote.get("volume_cross_check") != cross_check:
+        raise ValueError("ETF domain facts forge the volume cross-check")
+    calculations = cast(list[dict[str, object]], result["calculations"])
+    if len(calculations) != 1 or calculations[0].get("payload") != cross_check:
+        raise ValueError("ETF domain facts forge the cross-check calculation")
+
+
+def _valuation_owned_facts(
+    observations: Sequence[dict[str, object]],
+    calculations: Sequence[dict[str, object]],
+) -> tuple[str, str, str, dict[str, dict[str, object]], dict[str, object]]:
+    def operation_records(suffix: str) -> list[dict[str, object]]:
+        return [
+            item
+            for item in observations
+            if str(item["operation_id"]).rsplit("::", 1)[-1] == suffix
+        ]
+
+    stock_records = operation_records("eastmoney_stock_info@1")
+    official_close_records = [
+        *operation_records("sse_daily_line@1"),
+        *operation_records("szse_daily_line@1"),
+    ]
+    if len(stock_records) != 1 or len(official_close_records) != 1:
+        raise ValueError("valuation domain facts lack price or share observations")
+    stock_payload = _record_payload(stock_records[0])
+    stock_values = _nested_mapping(stock_payload, "observed_value", "value")
+    close_payload = _record_payload(official_close_records[0])
+    close_observed = _nested_mapping(close_payload, "observed_value")
+    close_observation = _nested_mapping(close_payload, "observation")
+    subject = _nested_mapping(stock_payload, "subject")
+    security = str(subject.get("security"))
+    name = str(stock_values.get("name"))
+    trading_date = str(close_observation.get("trading_date"))
+    price = _decimal_fact(close_observed.get("value"))
+    shares = _decimal_fact(stock_values.get("effective_total_shares"))
+    market_cap = price * shares
+    expected_metrics: dict[str, dict[str, object]] = {
+        "market_capitalization": cast(
+            dict[str, object], _metric_fact(market_cap, "CNY", 3)
+        )
+    }
+    anchors: dict[str, object] = {
+        "price": format(price, "f"),
+        "shares": format(shares, "f"),
+        "market_cap": format(market_cap, "f"),
+    }
+    statements = operation_records("sina_financial_statements@1")
+    income_by_period: dict[str, Decimal] = {}
+    equity_by_period: dict[str, Decimal] = {}
+    for record in statements:
+        statement_payload = _record_payload(record)
+        report = _nested_mapping(statement_payload, "report")
+        values = _nested_mapping(statement_payload, "observed_value", "value")
+        period = report.get("period")
+        if not isinstance(period, str):
+            continue
+        if "归属于母公司所有者的净利润" in values:
+            income_by_period[period] = _decimal_fact(
+                values["归属于母公司所有者的净利润"]
+            )
+        if "归属于母公司股东权益合计" in values:
+            equity_by_period[period] = _decimal_fact(values["归属于母公司股东权益合计"])
+    if len(income_by_period) >= 3:
+        latest = max(income_by_period)
+        previous_annual = max(
+            period
+            for period in income_by_period
+            if period < latest and period.endswith("12-31")
+        )
+        previous_same_period = f"{int(latest[:4]) - 1}{latest[4:]}"
+        if previous_same_period in income_by_period:
+            ttm_profit = (
+                income_by_period[previous_annual]
+                + income_by_period[latest]
+                - income_by_period[previous_same_period]
+            )
+            anchors["ttm_profit"] = format(ttm_profit, "f")
+            if ttm_profit > 0:
+                expected_metrics["pe_ttm"] = cast(
+                    dict[str, object], _metric_fact(market_cap / ttm_profit, "ratio")
+                )
+    if equity_by_period:
+        mrq_equity = equity_by_period[max(equity_by_period)]
+        anchors["mrq_equity"] = format(mrq_equity, "f")
+        if mrq_equity > 0:
+            expected_metrics["pb_mrq"] = cast(
+                dict[str, object], _metric_fact(market_cap / mrq_equity, "ratio")
+            )
+    forecasts = operation_records("ths_consensus_eps@1")
+    if forecasts:
+        forecast_value = _nested_mapping(
+            _record_payload(forecasts[0]), "observed_value"
+        ).get("value")
+        if isinstance(forecast_value, list) and len(forecast_value) >= 2:
+            first, second = forecast_value[:2]
+            if isinstance(first, dict) and isinstance(second, dict):
+                first_eps = _decimal_fact(first.get("mean"))
+                next_eps = _decimal_fact(second.get("mean"))
+                if first_eps > 0:
+                    forward_pe = price / first_eps
+                    growth = next_eps / first_eps - Decimal(1)
+                    anchors.update(
+                        {
+                            "forecast_year": first.get("year"),
+                            "forecast_eps": format(first_eps, "f"),
+                            "next_year": second.get("year"),
+                            "next_eps": format(next_eps, "f"),
+                            "forward_pe": format(forward_pe, "f"),
+                            "growth": format(growth, "f"),
+                        }
+                    )
+                    expected_metrics["forward_pe"] = {
+                        **_metric_fact(forward_pe, "ratio"),
+                        "forecast_year": first.get("year"),
+                    }
+                    expected_metrics["forecast_eps_growth"] = {
+                        **_metric_fact(growth * Decimal(100), "percent"),
+                        "from_year": first.get("year"),
+                        "to_year": second.get("year"),
+                    }
+                    if growth > 0:
+                        expected_metrics["peg"] = {
+                            **_metric_fact(
+                                forward_pe / (growth * Decimal(100)), "ratio"
+                            ),
+                            "growth_basis": (
+                                "next_year_consensus_eps_vs_first_forecast_year"
+                            ),
+                        }
+    calculations_by_kind = {
+        str(item.get("kind", "")).rsplit("::", 1)[-1]: item for item in calculations
+    }
+    expected_formulas = {
+        "market_capitalization": "completed_unadjusted_close * effective_total_shares",
+        "pe_ttm": "market_capitalization / ttm_attributable_profit",
+        "pb_mrq": "market_capitalization / mrq_attributable_equity",
+        "forward_pe": "completed_unadjusted_close / first_forecast_year_consensus_eps",
+        "forecast_eps_growth": "next_year_eps / first_forecast_year_eps - 1",
+        "peg": "forward_pe / (forecast_eps_growth_percent)",
+        "pe_digestion_years": (
+            "ln(forward_pe / target_pe) / ln(1 + forecast_eps_growth)"
+        ),
+    }
+    expected_operands: dict[str, dict[str, object]] = {
+        "market_capitalization": {
+            "price": anchors["price"],
+            "shares": anchors["shares"],
+        }
+    }
+    if "ttm_profit" in anchors and _decimal_fact(anchors["ttm_profit"]) > 0:
+        expected_operands["pe_ttm"] = {
+            "market_capitalization": anchors["market_cap"],
+            "ttm_attributable_profit": anchors["ttm_profit"],
+        }
+    if "mrq_equity" in anchors and _decimal_fact(anchors["mrq_equity"]) > 0:
+        expected_operands["pb_mrq"] = {
+            "market_capitalization": anchors["market_cap"],
+            "mrq_attributable_equity": anchors["mrq_equity"],
+        }
+    if "forecast_eps" in anchors:
+        expected_operands["forward_pe"] = {
+            "price": anchors["price"],
+            "forecast_year": anchors["forecast_year"],
+            "consensus_eps": anchors["forecast_eps"],
+        }
+        expected_operands["forecast_eps_growth"] = {
+            "first_year": anchors["forecast_year"],
+            "first_year_eps": anchors["forecast_eps"],
+            "next_year": anchors["next_year"],
+            "next_year_eps": anchors["next_eps"],
+        }
+    if "growth" in anchors and _decimal_fact(anchors["growth"]) > 0:
+        expected_operands["peg"] = {
+            "forward_pe": anchors["forward_pe"],
+            "forecast_eps_growth_percent": format(
+                _decimal_fact(anchors["growth"]) * Decimal(100), "f"
+            ),
+        }
+        digestion = calculations_by_kind.get("pe_digestion_years")
+        if digestion is not None:
+            digestion_payload = _nested_mapping(digestion, "payload")
+            operands = digestion_payload.get("operands")
+            if isinstance(operands, dict):
+                target_pe = _decimal_fact(operands.get("target_pe"))
+                forward_pe = _decimal_fact(anchors["forward_pe"])
+                if forward_pe <= target_pe:
+                    years = Decimal(0)
+                else:
+                    with localcontext() as context:
+                        context.prec = 28
+                        years = (forward_pe / target_pe).ln() / (
+                            Decimal(1) + _decimal_fact(anchors["growth"])
+                        ).ln()
+                expected_metrics["pe_digestion_years"] = {
+                    **_metric_fact(years, "years"),
+                    "target_pe": format(target_pe, "f"),
+                    "target_role": "user_parameter_not_factual_valuation_anchor",
+                }
+                expected_operands["pe_digestion_years"] = {
+                    "forward_pe": anchors["forward_pe"],
+                    "forecast_eps_growth": anchors["growth"],
+                    "target_pe": format(target_pe, "f"),
+                }
+    for kind, calculation in calculations_by_kind.items():
+        calculation_payload = _nested_mapping(calculation, "payload")
+        if calculation_payload.get("formula") != expected_formulas.get(
+            kind
+        ) or calculation_payload.get("operands") != expected_operands.get(kind):
+            raise ValueError("valuation domain facts contradict owned operands")
+    if set(calculations_by_kind) != set(expected_operands):
+        raise ValueError("valuation domain facts omit an available calculation")
+    return security, name, trading_date, expected_metrics, anchors
+
+
+def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
+    claim = _claim_by_kind(result, "security_valuation_metrics")
+    if claim is None:
+        return
+    observations = _owned_observations(result)
+    calculations = cast(list[dict[str, object]], result["calculations"])
+    security, name, trading_date, expected_metrics, anchors = _valuation_owned_facts(
+        observations, calculations
+    )
+    payload = _nested_mapping(claim, "payload")
+    subjects = payload.get("subjects")
+    basis = payload.get("valuation_basis")
+    metrics = payload.get("metrics")
+    if (
+        not isinstance(subjects, list)
+        or not subjects
+        or not isinstance(subjects[0], dict)
+        or subjects[0].get("name") != name
+        or not isinstance(subjects[0].get("security"), dict)
+        or f"{subjects[0]['security'].get('exchange')}:{subjects[0]['security'].get('code')}"
+        != security
+        or not isinstance(basis, dict)
+        or basis.get("trading_date") != trading_date
+        or _decimal_fact(_nested_mapping(basis, "price").get("value"))
+        != _decimal_fact(anchors["price"])
+        or _decimal_fact(_nested_mapping(basis, "effective_total_shares").get("value"))
+        != _decimal_fact(anchors["shares"])
+        or not isinstance(metrics, dict)
+    ):
+        raise ValueError("valuation domain facts contradict owned observations")
+    for metric, expected in expected_metrics.items():
+        if metrics.get(metric) != expected:
+            raise ValueError("valuation domain facts contain a forged metric")
+
+
+def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
+    claim = _claim_by_kind(result, "valuation_compare_members")
+    if claim is None:
+        return
+    payload = _nested_mapping(claim, "payload")
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("comparison domain facts are incomplete")
+    observations = _owned_observations(result)
+    calculations = cast(list[dict[str, object]], result["calculations"])
+    source_errors = cast(list[dict[str, object]], result["source_errors"])
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("member_id"), str):
+            raise ValueError("comparison domain facts contain an invalid member")
+        member_id = str(row["member_id"])
+        member_observations = [
+            item
+            for item in observations
+            if str(item["operation_id"]).startswith(f"{member_id}::")
+        ]
+        member_calculations = [
+            item
+            for item in calculations
+            if str(item.get("kind", "")).startswith(f"{member_id}::")
+        ]
+        member_errors = [
+            item
+            for item in source_errors
+            if str(item["operation_id"]).startswith(f"{member_id}::")
+        ]
+        evidence_ids = [str(item["id"]) for item in member_observations]
+        if row.get("evidence_ids") != evidence_ids:
+            raise ValueError(
+                "comparison domain facts do not close over member evidence"
+            )
+        if member_calculations:
+            security, name, trading_date, expected_metrics, _ = _valuation_owned_facts(
+                member_observations, member_calculations
+            )
+            if (
+                row.get("status") != "limited"
+                or row.get("security") != security
+                or row.get("name") != name
+                or row.get("trading_date") != trading_date
+                or not isinstance(row.get("metrics"), dict)
+                or any(
+                    cast(dict[str, object], row["metrics"]).get(metric) != expected
+                    for metric, expected in expected_metrics.items()
+                )
+            ):
+                raise ValueError("comparison domain facts contradict member outcomes")
+        elif not member_errors or row.get("status") != "blocked":
+            raise ValueError("comparison domain facts forge member status")
+
+
+def fold_direct_task_research_result(
+    plan: DirectTaskPlan,
+    outcomes: Sequence[OperationOutcome],
+    *,
+    claims: Sequence[DirectTaskClaim] = (),
+    calculations: Sequence[DirectTaskCalculation] = (),
+    conflicts: Sequence[DirectTaskConflict] = (),
+    limitations: Sequence[DirectTaskLimitation] = (),
+    summary: str,
+) -> UnifiedResearchResult:
+    """Fold operation-owned outcomes and typed domain material exactly once."""
+
+    obligations = {
+        (item.capability_id, item.operation_id): item for item in plan.obligations
+    }
+    outcomes_by_owner = {
+        (item.capability_id, item.operation_id): item for item in outcomes
+    }
+    if len(outcomes_by_owner) != len(tuple(outcomes)):
+        raise ValueError("direct task outcomes must be unique")
+    if set(outcomes_by_owner) != set(obligations):
+        raise ValueError("direct task outcomes do not satisfy plan obligations")
+
+    observation_records: list[dict[str, object]] = []
+    observation_ids_by_owner: dict[tuple[str, str], list[str]] = {}
+    observation_id_by_key: dict[str, str] = {}
+    for obligation in plan.obligations:
+        owner = (obligation.capability_id, obligation.operation_id)
+        outcome = outcomes_by_owner[owner]
+        for index, payload in enumerate(outcome.observations):
+            record_payload: dict[str, object] = {
+                "capability_id": outcome.capability_id,
+                "operation_id": outcome.operation_id,
+                "payload": dict(payload),
+            }
+            observation_id = stable_result_id("observation", record_payload)
+            observation_records.append({"id": observation_id, **record_payload})
+            observation_ids_by_owner.setdefault(owner, []).append(observation_id)
+            local_key = payload.get("id")
+            key = (
+                local_key
+                if isinstance(local_key, str) and local_key
+                else f"{outcome.operation_id}:{index}"
+            )
+            if key in observation_id_by_key:
+                raise ValueError("direct task observation keys must be unique")
+            observation_id_by_key[key] = observation_id
+
+    source_errors: list[dict[str, object]] = []
+    source_error_ids_by_owner: dict[tuple[str, str], list[str]] = {}
+    operation_coverage: dict[tuple[str, str], dict[str, object]] = {}
+    for obligation in plan.obligations:
+        owner = (obligation.capability_id, obligation.operation_id)
+        outcome = outcomes_by_owner[owner]
+        for error in outcome.source_errors:
+            error_payload = {
+                "capability_id": outcome.capability_id,
+                "operation_id": outcome.operation_id,
+                "code": error["code"],
+                "message": error["message"],
+            }
+            error_id = stable_result_id("source-error", error_payload)
+            source_errors.append({"id": error_id, **error_payload})
+            source_error_ids_by_owner.setdefault(owner, []).append(error_id)
+        operation_coverage[owner] = outcome.to_coverage_dict(
+            observation_ids=observation_ids_by_owner.get(owner, ()),
+            source_error_ids=source_error_ids_by_owner.get(owner, ()),
+        )
+
+    def resolve_keys(keys: Sequence[str]) -> list[str]:
+        references: list[str] = []
+        for key in keys:
+            reference = observation_id_by_key.get(key)
+            if reference is None:
+                raise ValueError(f"direct task references unknown observation: {key}")
+            if reference not in references:
+                references.append(reference)
+        return references
+
+    def resolve_payload_references(value: object) -> object:
+        if isinstance(value, Mapping):
+            resolved: dict[str, object] = {}
+            for key, nested in value.items():
+                if key == "evidence_id":
+                    if not isinstance(nested, str):
+                        raise ValueError("evidence_id must be an observation reference")
+                    resolved[key] = resolve_keys((nested,))[0]
+                elif key.endswith("evidence_ids"):
+                    if not isinstance(nested, (list, tuple)) or any(
+                        not isinstance(item, str) for item in nested
+                    ):
+                        raise ValueError(f"{key} must contain observation references")
+                    resolved[key] = resolve_keys(cast(Sequence[str], nested))
+                else:
+                    resolved[key] = resolve_payload_references(nested)
+            return resolved
+        if isinstance(value, (list, tuple)):
+            return [resolve_payload_references(item) for item in value]
+        return value
+
+    records_by_id = {str(item["id"]): item for item in observation_records}
+    claim_records: list[dict[str, object]] = []
+    consumer_support: dict[tuple[str, str], int] = {}
+    for claim in claims:
+        observation_ids = resolve_keys(claim.observation_keys)
+        adoptions: list[dict[str, object]] = []
+        supporting = 0
+        for observation_id in observation_ids:
+            record = records_by_id[observation_id]
+            owner = (str(record["capability_id"]), str(record["operation_id"]))
+            role = obligations[owner].evidence_role(claim.evidence_use)
+            if role == "not_applicable":
+                raise ValueError("claim cannot adopt an inapplicable observation")
+            adoption_role = "supporting" if role == "conditional_supporting" else role
+            supporting += adoption_role == "supporting"
+            adoptions.append(
+                {
+                    "observation_id": observation_id,
+                    "use": claim.evidence_use,
+                    "decision": "adopted",
+                    "role": adoption_role,
+                    "reason": None,
+                }
+            )
+        claim_payload: dict[str, object] = {
+            "kind": claim.kind,
+            "evidence_use": claim.evidence_use,
+            "observation_ids": observation_ids,
+            "evidence_adoptions": adoptions,
+            "payload": _json_object(
+                cast(Mapping[str, object], resolve_payload_references(claim.payload)),
+                path="direct task claim payload",
+            ),
+        }
+        claim_records.append(
+            {"id": stable_result_id("claim", claim_payload), **claim_payload}
+        )
+        support_key = (claim.kind, claim.evidence_use)
+        consumer_support[support_key] = max(
+            consumer_support.get(support_key, 0), supporting
+        )
+
+    calculation_records: list[dict[str, object]] = []
+    for calculation in calculations:
+        input_ids = resolve_keys(calculation.observation_keys)
+        calculation_payload: dict[str, object] = {
+            "kind": calculation.kind,
+            "evidence_use": calculation.evidence_use,
+            "input_ids": input_ids,
+            "payload": _json_object(
+                cast(
+                    Mapping[str, object],
+                    resolve_payload_references(calculation.payload),
+                ),
+                path="direct task calculation payload",
+            ),
+        }
+        calculation_records.append(
+            {
+                "id": stable_result_id("calculation", calculation_payload),
+                **calculation_payload,
+            }
+        )
+        supporting = sum(
+            obligations[
+                (
+                    str(records_by_id[item]["capability_id"]),
+                    str(records_by_id[item]["operation_id"]),
+                )
+            ].evidence_role(calculation.evidence_use)
+            in {"supporting", "conditional_supporting"}
+            for item in input_ids
+        )
+        calculation_support_key = (calculation.kind, calculation.evidence_use)
+        consumer_support[calculation_support_key] = max(
+            consumer_support.get(calculation_support_key, 0), supporting
+        )
+
+    conflict_records: list[dict[str, object]] = []
+    seen_conflicts: set[str] = set()
+    for conflict in conflicts:
+        payload = {
+            "code": conflict.code,
+            "message": conflict.message,
+            "observation_ids": resolve_keys(conflict.observation_keys),
+        }
+        record_id = stable_result_id("conflict", payload)
+        if record_id not in seen_conflicts:
+            seen_conflicts.add(record_id)
+            conflict_records.append({"id": record_id, **payload})
+    limitation_records: list[dict[str, object]] = []
+    seen_limitations: set[str] = set()
+    for limitation in limitations:
+        payload = {
+            "code": limitation.code,
+            "message": limitation.message,
+            "references": resolve_keys(limitation.reference_keys),
+        }
+        record_id = stable_result_id("limitation", payload)
+        if record_id not in seen_limitations:
+            seen_limitations.add(record_id)
+            limitation_records.append({"id": record_id, **payload})
+
+    unmet_core = any(
+        item.core
+        and consumer_support.get((item.consumer_id, item.evidence_use), 0)
+        < item.minimum_supporting_observations
+        for item in plan.dependencies
+    )
+    unmet_noncore = any(
+        not item.core
+        and consumer_support.get((item.consumer_id, item.evidence_use), 0)
+        < item.minimum_supporting_observations
+        for item in plan.dependencies
+    )
+    status: ResearchStatus = (
+        "blocked"
+        if unmet_core
+        else "limited"
+        if (
+            unmet_noncore
+            or source_errors
+            or conflict_records
+            or limitation_records
+            or any(item.experimental for item in plan.obligations)
+            or any(
+                item.coverage not in {"complete", "observed_empty"} for item in outcomes
+            )
+        )
+        else "supported"
+    )
+
+    capability_ids = list(
+        dict.fromkeys(item.capability_id for item in plan.obligations)
+    )
+    coverage: dict[str, object] = {}
+    registry: dict[str, object] = {}
+    for capability_id in capability_ids:
+        capability_obligations = tuple(
+            item for item in plan.obligations if item.capability_id == capability_id
+        )
+        capability_outcomes = tuple(
+            outcomes_by_owner[(item.capability_id, item.operation_id)]
+            for item in capability_obligations
+        )
+        coverage[capability_id] = {
+            "state": _aggregate_capability_coverage(
+                tuple(item.coverage for item in capability_outcomes)
+            ),
+            "operations": {
+                item.operation_id: operation_coverage[
+                    (item.capability_id, item.operation_id)
+                ]
+                for item in capability_obligations
+            },
+        }
+        registry[capability_id] = {
+            "id": capability_id,
+            "version": plan.version,
+            "granularity": f"one_{plan.task_type}_result",
+            "operations": [
+                {
+                    "id": item.operation_id,
+                    "source_role": item.source_role,
+                    "experimental": item.experimental,
+                }
+                for item in capability_obligations
+            ],
+        }
+
+    observation_ids = [str(item["id"]) for item in observation_records]
+    claim_ids = [str(item["id"]) for item in claim_records]
+    calculation_ids = [str(item["id"]) for item in calculation_records]
+    conflict_ids = [str(item["id"]) for item in conflict_records]
+    limitation_ids = [str(item["id"]) for item in limitation_records]
+    source_error_ids = [str(item["id"]) for item in source_errors]
+    brief_payload: dict[str, object] = {
+        "status": status,
+        "summary": summary,
+        "observation_ids": observation_ids,
+        "claim_ids": claim_ids,
+        "calculation_ids": calculation_ids,
+        "conflict_ids": conflict_ids,
+        "limitation_ids": limitation_ids,
+        "source_error_ids": source_error_ids,
+    }
+    brief_id = stable_result_id("brief", brief_payload)
+    obligation_payloads = [item.to_dict() for item in plan.obligations]
+    dependency_payloads = [item.to_dict() for item in plan.dependencies]
+    plan_id = stable_result_id(
+        "plan",
+        {
+            "version": plan.version,
+            "task_type": plan.task_type,
+            "operation_obligations": obligation_payloads,
+            "research_dependencies": dependency_payloads,
+            "field_dispositions": [
+                {
+                    "capability_id": outcome.capability_id,
+                    "operation_id": outcome.operation_id,
+                    "fields": [item.to_dict() for item in outcome.field_dispositions],
+                }
+                for outcome in outcomes
+            ],
+        },
+    )
+    return UnifiedResearchResult(
+        status=status,
+        research_anchor={"as_of": plan.as_of, "timezone": "Asia/Shanghai"},
+        plan={
+            "id": plan_id,
+            "version": plan.version,
+            "task_type": plan.task_type,
+            "capabilities": capability_ids,
+            "operation_obligations": obligation_payloads,
+            "research_dependencies": dependency_payloads,
+        },
+        capability_registry=registry,
+        coverage=coverage,
+        observations=tuple(observation_records),
+        claims=tuple(claim_records),
+        calculations=tuple(calculation_records),
+        conflicts=tuple(conflict_records),
+        limitations=tuple(limitation_records),
+        source_errors=tuple(source_errors),
+        task_views={
+            plan.task_type: {
+                "status": status,
+                "observation_ids": observation_ids,
+                "claim_ids": claim_ids,
+                "calculation_ids": calculation_ids,
+                "conflict_ids": conflict_ids,
+                "limitation_ids": limitation_ids,
+                "source_error_ids": source_error_ids,
+                "brief_id": brief_id,
+            }
+        },
+        briefs=({"id": brief_id, **brief_payload},),
+    )
 
 
 _IDENTITY_RESEARCH_DEPENDENCIES = (
@@ -1870,6 +3518,11 @@ def _aggregate_capability_coverage(
 __all__ = [
     "EvidenceUsePolicy",
     "CoverageState",
+    "DirectTaskCalculation",
+    "DirectTaskClaim",
+    "DirectTaskConflict",
+    "DirectTaskLimitation",
+    "DirectTaskPlan",
     "Disposition",
     "FieldDisposition",
     "IdentityResearchPlan",
@@ -1881,5 +3534,6 @@ __all__ = [
     "UnifiedResearchResult",
     "compile_identity_research_plan",
     "fold_identity_research_result",
+    "fold_direct_task_research_result",
     "stable_result_id",
 ]

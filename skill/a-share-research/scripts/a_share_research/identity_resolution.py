@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Mapping
+
 from .identity_sources import (
     CninfoSecurityDictionaryOperation,
     HttpTransport,
@@ -17,10 +20,45 @@ from .research_result import (
     OperationExecution,
     OperationExecutionState,
     OperationOutcome,
+    ResearchStatus,
     UnifiedResearchResult,
     compile_identity_research_plan,
     fold_identity_research_result,
+    stable_result_id,
 )
+
+
+@dataclass(frozen=True)
+class CanonicalIdentityMaterial:
+    exchange: str
+    code: str
+    security_type: str
+    name: str
+    issuer_name: str | None
+    issuer_identifier: str | None
+    issuer_relationship: str
+
+
+@dataclass(frozen=True)
+class IdentityLimitationMaterial:
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class IdentityResearchMaterial:
+    status: ResearchStatus
+    canonical_identity: CanonicalIdentityMaterial | None
+    limitations: tuple[IdentityLimitationMaterial, ...]
+    observation_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class IdentityResearchExecution:
+    plan: IdentityResearchPlan
+    outcomes: tuple[OperationOutcome, ...]
+    material: IdentityResearchMaterial
+    result: UnifiedResearchResult
 
 
 def build_security_identity_research_result(
@@ -28,6 +66,15 @@ def build_security_identity_research_result(
     operations: tuple[IdentityOperationAdapter, ...],
 ) -> UnifiedResearchResult:
     """Execute the versioned identity plan and return its direct unified result."""
+
+    return execute_security_identity_research(request, operations).result
+
+
+def execute_security_identity_research(
+    request: dict[str, object],
+    operations: tuple[IdentityOperationAdapter, ...],
+) -> IdentityResearchExecution:
+    """Execute identity while retaining the outcomes at their ownership boundary."""
 
     subjects = request["subjects"]
     if not isinstance(subjects, list) or len(subjects) != 1:
@@ -70,7 +117,7 @@ def build_security_identity_research_result(
             )
             for operation in operations
         )
-        return fold_identity_research_result(plan, outcomes)
+        return _complete_identity_execution(plan, outcomes)
 
     operation_request = IdentityOperationRequest(
         query=clue,
@@ -86,7 +133,111 @@ def build_security_identity_research_result(
         operations=operations,
         outcomes=outcomes,
     )
-    return fold_identity_research_result(plan, outcomes)
+    return _complete_identity_execution(plan, outcomes)
+
+
+def _complete_identity_execution(
+    plan: IdentityResearchPlan,
+    outcomes: tuple[OperationOutcome, ...],
+) -> IdentityResearchExecution:
+    result = fold_identity_research_result(plan, outcomes)
+    return IdentityResearchExecution(
+        plan=plan,
+        outcomes=outcomes,
+        material=_identity_research_material(result, outcomes),
+        result=result,
+    )
+
+
+def _identity_research_material(
+    result: UnifiedResearchResult,
+    outcomes: tuple[OperationOutcome, ...],
+) -> IdentityResearchMaterial:
+    identity_claims = tuple(
+        item for item in result.claims if item.get("kind") == "security_identity"
+    )
+    canonical_identity: CanonicalIdentityMaterial | None = None
+    if len(identity_claims) == 1:
+        payload = _required_mapping(
+            identity_claims[0].get("payload"), "identity payload"
+        )
+        security = _required_mapping(payload.get("security"), "identity security")
+        issuer = _required_mapping(payload.get("issuer"), "identity issuer")
+        issuer_identifier = issuer.get("identifier")
+        if issuer_identifier is not None and not isinstance(issuer_identifier, str):
+            raise ValueError("identity issuer identifier must be text or null")
+        canonical_identity = CanonicalIdentityMaterial(
+            exchange=_required_text(security.get("exchange"), "identity exchange"),
+            code=_required_text(security.get("code"), "identity code"),
+            security_type=_required_text(security.get("type"), "identity type"),
+            name=_required_text(payload.get("name"), "identity name"),
+            issuer_name=_optional_text(issuer.get("name"), "identity issuer name"),
+            issuer_identifier=issuer_identifier,
+            issuer_relationship=_required_text(
+                issuer.get("security_relationship"),
+                "identity issuer relationship",
+            ),
+        )
+    elif identity_claims:
+        raise ValueError("identity execution produced multiple canonical claims")
+    limitations = tuple(
+        IdentityLimitationMaterial(
+            code=_required_text(item.get("code"), "identity limitation code"),
+            message=_required_text(item.get("message"), "identity limitation message"),
+        )
+        for item in result.limitations
+    )
+    adopted_observation_ids: set[str] = set()
+    for claim in identity_claims:
+        claim_observation_ids = claim.get("observation_ids")
+        if not isinstance(claim_observation_ids, list):
+            raise ValueError("identity claim observation IDs must be an array")
+        adopted_observation_ids.update(
+            item for item in claim_observation_ids if isinstance(item, str)
+        )
+    observation_keys = tuple(
+        str(local_key)
+        for outcome in outcomes
+        for index, payload in enumerate(outcome.observations)
+        for local_key in (
+            payload.get("id")
+            if isinstance(payload.get("id"), str) and payload.get("id")
+            else f"{outcome.operation_id}:{index}",
+        )
+        if stable_result_id(
+            "observation",
+            {
+                "capability_id": outcome.capability_id,
+                "operation_id": outcome.operation_id,
+                "payload": dict(payload),
+            },
+        )
+        in adopted_observation_ids
+    )
+    return IdentityResearchMaterial(
+        status=result.status,
+        canonical_identity=canonical_identity,
+        limitations=limitations,
+        observation_keys=observation_keys,
+    )
+
+
+def _required_mapping(value: object, path: str) -> Mapping[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    return value
+
+
+def _required_text(value: object, path: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{path} must be non-empty text")
+    return value
+
+
+def _optional_text(value: object, path: str) -> str | None:
+    if value is not None and (not isinstance(value, str) or not value):
+        raise ValueError(f"{path} must be non-empty text or null")
+    return value
 
 
 def _discover_official_identity_from_dictionary(

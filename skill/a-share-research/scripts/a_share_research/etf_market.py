@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 from .close_sources import DailyBarObservation, TencentDailyLineOperation
@@ -16,6 +16,21 @@ from .identity_sources import (
     HttpTransport,
     SourceOperationError,
     TransportError,
+)
+from .research_result import (
+    DirectTaskCalculation,
+    DirectTaskClaim,
+    DirectTaskConflict,
+    DirectTaskLimitation,
+    DirectTaskPlan,
+    EvidenceUsePolicy,
+    FieldDisposition,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+    ResearchDependency,
+    UnifiedResearchResult,
+    fold_direct_task_research_result,
 )
 
 
@@ -140,6 +155,15 @@ class SseEtfListOperation:
     operation_id = "sse_etf_list@1"
     endpoint = "https://query.sse.com.cn/commonSoaQuery.do"
     subclasses = "01,02,03,04,06,08,09,31,32,33,34,35,36,37,38"
+    raw_fields = (
+        "fundCode",
+        "fundAbbr",
+        "secNameFull",
+        "companyName",
+        "listingDate",
+        "fundType",
+        "subClass",
+    )
 
     def observe(self, code: str, transport: HttpTransport) -> EtfIdentityObservation:
         url = f"{self.endpoint}?{
@@ -233,6 +257,7 @@ class SseEtfSnapshotOperation:
         "name,cpxxextendname,open,high,low,last,prev_close,chg_rate,"
         "volume,amount,tradephase"
     )
+    raw_fields = (*tuple(select.split(",")), "code", "date", "time")
 
     def observe(self, code: str, transport: HttpTransport) -> EtfSnapshotObservation:
         url = f"{self.endpoint}/{code}?{urlencode({'select': self.select})}"
@@ -311,9 +336,146 @@ class SseEtfSnapshotOperation:
         )
 
 
+_ETF_OPERATION_CONTRACTS: dict[str, tuple[str, str, tuple[FieldDisposition, ...]]] = {
+    "sse_etf_list@1": (
+        "authoritative_disclosure",
+        "supporting",
+        (
+            FieldDisposition(
+                "fundCode", "normalized", "observations.payload.subject.security"
+            ),
+            FieldDisposition(
+                "fundAbbr",
+                "excluded",
+                None,
+                "The returned abbreviation is not used or retained.",
+            ),
+            FieldDisposition(
+                "secNameFull",
+                "normalized",
+                "observations.payload.observed_value.value.name",
+            ),
+            FieldDisposition(
+                "companyName",
+                "normalized",
+                "observations.payload.observed_value.value.fund_manager",
+            ),
+            FieldDisposition(
+                "listingDate",
+                "normalized",
+                "observations.payload.observed_value.value.listing_date",
+            ),
+            FieldDisposition(
+                "fundType",
+                "excluded",
+                None,
+                "The ETF type code is used for qualification but is not retained.",
+            ),
+            FieldDisposition(
+                "subClass",
+                "excluded",
+                None,
+                "The ETF subclass is used for qualification but is not retained.",
+            ),
+        ),
+    ),
+    "sse_etf_snapshot@1": (
+        "market_observation",
+        "supporting",
+        (
+            FieldDisposition(
+                "name",
+                "excluded",
+                None,
+                "The short name is schema-validated but not retained.",
+            ),
+            FieldDisposition(
+                "cpxxextendname",
+                "excluded",
+                None,
+                "The extended name is used for identity comparison but is not retained in the observation.",
+            ),
+            *(
+                FieldDisposition(
+                    field,
+                    "normalized",
+                    f"observations.payload.observed_value.value.{destination}",
+                )
+                for field, destination in (
+                    ("open", "open"),
+                    ("high", "high"),
+                    ("low", "low"),
+                    ("last", "last"),
+                    ("prev_close", "previous_close"),
+                    ("chg_rate", "change_rate"),
+                    ("volume", "volume"),
+                    ("amount", "amount"),
+                )
+            ),
+            FieldDisposition(
+                "tradephase",
+                "normalized",
+                "observations.payload.observation.trade_phase",
+            ),
+            FieldDisposition(
+                "code", "cross_check_only", "observations.payload.subject.security"
+            ),
+            FieldDisposition(
+                "date",
+                "normalized",
+                "observations.payload.observation.trading_date",
+            ),
+            FieldDisposition(
+                "time", "lineage_only", "observations.payload.evidence_time"
+            ),
+        ),
+    ),
+    "tencent_daily_line@1": (
+        "market_observation",
+        "corroborating",
+        TencentDailyLineOperation.field_dispositions,
+    ),
+}
+
+
+def _etf_outcome(
+    operation_id: str,
+    *,
+    observations: tuple[dict[str, Any], ...] = (),
+    error: SourceOperationError | None = None,
+    skipped: str | None = None,
+) -> OperationOutcome:
+    if (bool(observations) + (error is not None) + (skipped is not None)) != 1:
+        raise ValueError("ETF outcome requires exactly one execution fact")
+    if error is not None:
+        execution = OperationExecution("failed")
+        errors: tuple[dict[str, str], ...] = (_source_error(error),)
+    elif skipped is not None:
+        execution = OperationExecution(cast(Any, skipped))
+        errors = ()
+    else:
+        execution = OperationExecution("succeeded", query_complete=True)
+        errors = ()
+    return OperationOutcome(
+        capability_id="etf_market_quote",
+        operation_id=operation_id,
+        execution=execution,
+        observations=observations,
+        source_errors=errors,
+        field_dispositions=_ETF_OPERATION_CONTRACTS[operation_id][2],
+    )
+
+
+def _etf_skipped_outcomes(state: str) -> tuple[OperationOutcome, ...]:
+    return tuple(
+        _etf_outcome(operation_id, skipped=state)
+        for operation_id in _ETF_OPERATION_CONTRACTS
+    )
+
+
 def build_etf_market_result(
     request: dict[str, Any], transport: HttpTransport, now: datetime | None = None
-) -> dict[str, Any]:
+) -> UnifiedResearchResult:
     research_now = now or datetime.now(CHINA_STANDARD_TIME)
     research_date = date.fromisoformat(request["as_of"])
     subjects = request["subjects"]
@@ -327,11 +489,21 @@ def build_etf_market_result(
         or not clue.isdigit()
     ):
         raise ValueError("etf_market subject requires one six-digit ETF code clue")
+    if not request["source_policy"]["allow_experimental"]:
+        return _blocked(
+            request,
+            "source_policy_not_satisfied",
+            "etf_market currently requires experimental source operations",
+            outcomes=_etf_skipped_outcomes("skipped_policy"),
+        )
     if research_date > research_now.date():
         return _blocked(
-            request, "future_research_date", "The research date is in the future."
+            request,
+            "future_research_date",
+            "The research date is in the future.",
+            outcomes=_etf_skipped_outcomes("skipped_research_dependency"),
         )
-    source_errors: list[dict[str, str]] = []
+    outcomes: list[OperationOutcome] = []
     try:
         identity = SseEtfListOperation().observe(clue, transport)
     except SourceOperationError as error:
@@ -339,8 +511,19 @@ def build_etf_market_result(
             request,
             "etf_identity_not_resolved",
             "The ETF identity could not be established.",
-            source_errors=[_source_error(error)],
+            outcomes=(
+                _etf_outcome("sse_etf_list@1", error=error),
+                _etf_outcome(
+                    "sse_etf_snapshot@1", skipped="skipped_research_dependency"
+                ),
+                _etf_outcome(
+                    "tencent_daily_line@1", skipped="skipped_research_dependency"
+                ),
+            ),
         )
+    outcomes.append(
+        _etf_outcome("sse_etf_list@1", observations=(identity.to_evidence(),))
+    )
     subject = {
         "security": {"exchange": "SSE", "code": clue, "type": "ETF"},
         "name": identity.name,
@@ -351,22 +534,35 @@ def build_etf_market_result(
         snapshot = SseEtfSnapshotOperation().observe(clue, transport)
     except SourceOperationError as error:
         snapshot = None
-        source_errors.append(_source_error(error))
+        outcomes.append(_etf_outcome("sse_etf_snapshot@1", error=error))
+    else:
+        assert snapshot is not None
+        outcomes.append(
+            _etf_outcome("sse_etf_snapshot@1", observations=(snapshot.to_evidence(),))
+        )
     try:
         fallback_observations = TencentDailyLineOperation().observe(
             f"SSE:{clue}", research_date, transport
         )
     except SourceOperationError as error:
         fallback_observations = []
-        source_errors.append(_source_error(error))
+        outcomes.append(_etf_outcome("tencent_daily_line@1", error=error))
+    else:
+        outcomes.append(
+            _etf_outcome(
+                "tencent_daily_line@1",
+                observations=tuple(
+                    item.to_bar_evidence() for item in fallback_observations
+                ),
+            )
+        )
     if snapshot is None or snapshot.observed_at.date() > research_date:
         return _blocked(
             request,
             "etf_quote_not_cross_checked",
             "The ETF quote is unavailable or outside the research boundary.",
             subject=subject,
-            evidence=[identity.to_evidence()],
-            source_errors=source_errors,
+            outcomes=tuple(outcomes),
         )
     fallback = max(
         (
@@ -377,21 +573,19 @@ def build_etf_market_result(
         key=lambda item: item.evidence_time,
         default=None,
     )
-    evidence = [identity.to_evidence(), snapshot.to_evidence()]
-    if fallback is not None:
-        evidence.append(fallback.to_bar_evidence())
     conflicts = _quote_conflicts(snapshot, fallback)
-    if source_errors or fallback is None or conflicts:
-        result = _blocked(
+    if any(item.source_errors for item in outcomes) or fallback is None or conflicts:
+        return _direct_etf_result(
             request,
-            "etf_quote_not_cross_checked",
-            "The ETF quote does not agree across both market sources.",
-            subject=subject,
-            evidence=evidence,
-            source_errors=source_errors,
+            outcomes=tuple(outcomes),
+            conflicts=conflicts,
+            limitations=[
+                {
+                    "code": "etf_quote_not_cross_checked",
+                    "message": "The ETF quote does not agree across both market sources.",
+                }
+            ],
         )
-        result["conflicts"] = conflicts
-        return result
     assert fallback is not None
     volume_difference = abs(
         Decimal(snapshot.volume_shares) - Decimal(fallback.volume_shares)
@@ -402,38 +596,49 @@ def build_etf_market_result(
         or snapshot.observed_at.time() >= time(15, 0)
         else "intraday"
     )
-    return {
-        "schema_version": request["schema_version"],
-        "status": "limited",
-        "subjects": [subject],
-        "research": {
-            "as_of": request["as_of"],
-            "timezone": "Asia/Shanghai",
-            "retrieved_at": research_now.isoformat(),
+    quote: dict[str, Any] = {
+        "trading_date": snapshot.observed_at.date().isoformat(),
+        "observed_at": snapshot.observed_at.isoformat(),
+        "market_state": market_state,
+        "open": snapshot.open_value,
+        "high": snapshot.high_value,
+        "low": snapshot.low_value,
+        "last": snapshot.last_value,
+        "previous_close": snapshot.previous_close,
+        "change_rate": {"value": snapshot.change_rate, "unit": "percent"},
+        "volume": {"value": snapshot.volume_shares, "unit": "shares"},
+        "amount": {"value": snapshot.amount_cny, "unit": "CNY"},
+        "volume_cross_check": {
+            "status": "consistent_with_lot_rounding",
+            "difference_shares": format(volume_difference, "f"),
         },
-        "quote": {
-            "trading_date": snapshot.observed_at.date().isoformat(),
-            "observed_at": snapshot.observed_at.isoformat(),
-            "market_state": market_state,
-            "open": snapshot.open_value,
-            "high": snapshot.high_value,
-            "low": snapshot.low_value,
-            "last": snapshot.last_value,
-            "previous_close": snapshot.previous_close,
-            "change_rate": {"value": snapshot.change_rate, "unit": "percent"},
-            "volume": {"value": snapshot.volume_shares, "unit": "shares"},
-            "amount": {"value": snapshot.amount_cny, "unit": "CNY"},
-            "volume_cross_check": {
-                "status": "consistent_with_lot_rounding",
-                "difference_shares": format(volume_difference, "f"),
-            },
-            "evidence_ids": [snapshot.evidence_id, fallback.bar_evidence_id],
-        },
-        "evidence": evidence,
-        "conflicts": [],
-        "source_errors": [],
-        "degradations": [],
-        "limitations": [
+        "evidence_ids": [snapshot.evidence_id, fallback.bar_evidence_id],
+    }
+    quote_keys = (snapshot.evidence_id, fallback.bar_evidence_id)
+    return _direct_etf_result(
+        request,
+        outcomes=tuple(outcomes),
+        claims=[
+            DirectTaskClaim(
+                kind="etf_market_quote",
+                evidence_use="etf_market",
+                observation_keys=quote_keys,
+                payload={
+                    "subjects": [subject],
+                    "research": {"retrieved_at": research_now.isoformat()},
+                    "quote": quote,
+                },
+            )
+        ],
+        calculations=[
+            DirectTaskCalculation(
+                kind="etf_volume_cross_check",
+                evidence_use="etf_market",
+                observation_keys=quote_keys,
+                payload=cast(dict[str, object], quote["volume_cross_check"]),
+            )
+        ],
+        limitations=[
             {
                 "code": "experimental_etf_market_sources",
                 "message": (
@@ -442,7 +647,7 @@ def build_etf_market_result(
                 ),
             }
         ],
-    }
+    )
 
 
 def _quote_conflicts(
@@ -585,17 +790,120 @@ def _blocked(
     message: str,
     *,
     subject: dict[str, Any] | None = None,
-    evidence: list[dict[str, Any]] | None = None,
-    source_errors: list[dict[str, str]] | None = None,
-) -> dict[str, Any]:
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked",
-        "subjects": [subject] if subject is not None else request["subjects"],
-        "quote": {"status": "unresolved"},
-        "evidence": evidence or [],
-        "conflicts": [],
-        "source_errors": source_errors or [],
-        "degradations": [],
-        "limitations": [{"code": code, "message": message}],
+    outcomes: tuple[OperationOutcome, ...] = (),
+) -> UnifiedResearchResult:
+    return _direct_etf_result(
+        request,
+        outcomes=outcomes,
+        limitations=[{"code": code, "message": message}],
+        claims=(
+            [
+                DirectTaskClaim(
+                    kind="etf_identity",
+                    evidence_use="etf_market",
+                    observation_keys=tuple(
+                        str(observation["id"])
+                        for outcome in outcomes
+                        for observation in outcome.observations
+                        if outcome.operation_id == "sse_etf_list@1"
+                        and isinstance(observation.get("id"), str)
+                    ),
+                    payload={"subjects": [subject]},
+                )
+            ]
+            if subject is not None
+            else []
+        ),
+    )
+
+
+def _direct_etf_result(
+    request: dict[str, Any],
+    *,
+    outcomes: tuple[OperationOutcome, ...],
+    claims: list[DirectTaskClaim] | None = None,
+    calculations: list[DirectTaskCalculation] | None = None,
+    conflicts: list[dict[str, Any]] | None = None,
+    limitations: list[dict[str, Any]] | None = None,
+) -> UnifiedResearchResult:
+    outcomes_by_operation = {item.operation_id: item for item in outcomes}
+    if len(outcomes_by_operation) != len(outcomes):
+        raise ValueError("ETF outcomes must have unique operation owners")
+    missing_state = (
+        "skipped_policy"
+        if not request["source_policy"]["allow_experimental"]
+        else "skipped_research_dependency"
+    )
+    for operation_id in _ETF_OPERATION_CONTRACTS:
+        if operation_id not in outcomes_by_operation:
+            outcomes_by_operation[operation_id] = _etf_outcome(
+                operation_id, skipped=missing_state
+            )
+    ordered_outcomes = tuple(
+        outcomes_by_operation[operation_id] for operation_id in _ETF_OPERATION_CONTRACTS
+    )
+    obligations = tuple(
+        OperationObligation(
+            capability_id="etf_market_quote",
+            operation_id=operation_id,
+            source_role=source_role,
+            experimental=True,
+            exchange="SSE",
+            evidence_uses=(EvidenceUsePolicy("etf_market", cast(Any, evidence_role)),),
+        )
+        for operation_id, (
+            source_role,
+            evidence_role,
+            _dispositions,
+        ) in _ETF_OPERATION_CONTRACTS.items()
+    )
+    known_keys = {
+        str(observation["id"])
+        for outcome in ordered_outcomes
+        for observation in outcome.observations
+        if isinstance(observation.get("id"), str)
     }
+    direct_conflicts = tuple(
+        DirectTaskConflict(
+            code=str(item.get("code", "etf_market_conflict")),
+            message=str(item.get("message", "ETF market observations conflict.")),
+            observation_keys=tuple(
+                key
+                for key in item.get("evidence_ids", [])
+                if isinstance(key, str) and key in known_keys
+            ),
+        )
+        for item in conflicts or ()
+    )
+    direct_limitations = tuple(
+        DirectTaskLimitation(
+            code=str(item.get("code", "etf_market_limited")),
+            message=str(item.get("message", "ETF market research is limited.")),
+        )
+        for item in limitations or ()
+    )
+    return fold_direct_task_research_result(
+        DirectTaskPlan(
+            task_type="etf_market",
+            as_of=str(request["as_of"]),
+            obligations=obligations,
+            dependencies=(
+                ResearchDependency(
+                    consumer_id="etf_market_quote",
+                    evidence_use="etf_market",
+                    minimum_supporting_observations=1,
+                    core=True,
+                ),
+            ),
+        ),
+        ordered_outcomes,
+        claims=tuple(claims or ()),
+        calculations=tuple(calculations or ()),
+        conflicts=direct_conflicts,
+        limitations=direct_limitations,
+        summary=(
+            "A cross-checked ETF market quote was retained."
+            if any(item.kind == "etf_market_quote" for item in claims or ())
+            else "The requested ETF market quote could not be established safely."
+        ),
+    )

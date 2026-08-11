@@ -7,10 +7,31 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
 from typing import Any, cast
 
-from .close_observation import build_close_result
+from .close_observation import execute_close_research
 from .decimal_math import decimal_ratio, exact_difference, exact_product, exact_sum
-from .identity_resolution import resolve_security_identity
-from .identity_sources import CHINA_STANDARD_TIME, HttpTransport, SourceOperationError
+from .identity_resolution import execute_security_identity_research
+from .identity_sources import (
+    CHINA_STANDARD_TIME,
+    HttpTransport,
+    SourceOperationError,
+    build_default_identity_operations,
+)
+from .research_result import (
+    DirectTaskCalculation,
+    DirectTaskClaim,
+    DirectTaskConflict,
+    DirectTaskLimitation,
+    DirectTaskPlan,
+    EvidenceUsePolicy,
+    FieldDisposition,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+    ResearchDependency,
+    ResearchStatus,
+    UnifiedResearchResult,
+    fold_direct_task_research_result,
+)
 from .valuation_sources import (
     ConsensusEpsObservation,
     ConsensusEpsSnapshot,
@@ -55,15 +76,80 @@ class SelectedReportedFinancials:
     period_method: str
 
 
+@dataclass(frozen=True)
+class ValuationMemberMaterial:
+    status: ResearchStatus
+    security: str | None
+    name: str | None
+    trading_date: str | None
+    metrics: dict[str, Any]
+    limitation_codes: tuple[str, ...]
+    observation_keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SecurityValuationExecution:
+    """Operation-owned valuation execution for direct comparison composition."""
+
+    result: UnifiedResearchResult
+    outcomes: tuple[OperationOutcome, ...]
+    claims: tuple[DirectTaskClaim, ...]
+    calculations: tuple[DirectTaskCalculation, ...]
+    conflicts: tuple[dict[str, Any], ...]
+    limitations: tuple[dict[str, Any], ...]
+    material: ValuationMemberMaterial
+
+    def validated_material(self) -> ValuationMemberMaterial:
+        expected_keys = _valuation_observation_keys(self.outcomes)
+        if self.material.observation_keys != expected_keys:
+            raise ValueError("valuation material does not close over owned outcomes")
+        owned_keys = set(expected_keys)
+        for calculation in self.calculations:
+            if not calculation.observation_keys or not set(
+                calculation.observation_keys
+            ).issubset(owned_keys):
+                raise ValueError(
+                    "valuation material calculation dependencies are not owned"
+                )
+        calculated_metrics = {
+            item.kind for item in self.calculations if "status" not in item.payload
+        }
+        if any(
+            isinstance(self.material.metrics.get(metric), dict)
+            and self.material.metrics[metric].get("status") == "calculated"
+            and metric not in calculated_metrics
+            for metric in COMPARISON_METRIC_ORDER
+        ):
+            raise ValueError("valuation material metric lacks its calculation")
+        return self.material
+
+
 def build_security_valuation_result(
     request: dict[str, Any],
     transport: HttpTransport,
     now: datetime | None = None,
     stock_info_operation: EastmoneyStockInfoOperation | None = None,
-) -> dict[str, Any]:
+) -> UnifiedResearchResult:
+    return _execute_security_valuation(
+        request, transport, now, stock_info_operation
+    ).result
+
+
+def _execute_security_valuation(
+    request: dict[str, Any],
+    transport: HttpTransport,
+    now: datetime | None = None,
+    stock_info_operation: EastmoneyStockInfoOperation | None = None,
+) -> SecurityValuationExecution:
     research_now = now or datetime.now(CHINA_STANDARD_TIME)
     research_date = date.fromisoformat(request["as_of"])
     target_pe = _target_pe(request["parameters"])
+    if not request["source_policy"]["allow_experimental"]:
+        return _blocked_execution(
+            request,
+            "source_policy_not_satisfied",
+            "security_valuation currently requires experimental source operations",
+        )
     request_subjects = request["subjects"]
     request_subject = (
         request_subjects[0]
@@ -72,7 +158,7 @@ def build_security_valuation_result(
     )
     security_class_count = request_subject.get("issuer_security_class_count")
     if security_class_count is None:
-        return _blocked(
+        return _blocked_execution(
             request,
             "issuer_security_class_scope_not_established",
             (
@@ -88,7 +174,7 @@ def build_security_valuation_result(
     ):
         raise ValueError("issuer_security_class_count must be a positive integer")
     if security_class_count > 1:
-        return _blocked(
+        return _blocked_execution(
             request,
             "multi_class_issuer_not_supported",
             (
@@ -97,37 +183,49 @@ def build_security_valuation_result(
             ),
         )
     clue = _subject_clue(request)
-    identity = cast(
-        dict[str, Any],
-        resolve_security_identity(clue, request["as_of"], transport),
+    identity_execution = execute_security_identity_research(
+        {
+            "schema_version": "1.0",
+            "task_type": "security_identity",
+            "subjects": [{"clue": clue}],
+            "as_of": request["as_of"],
+            "window": None,
+            "parameters": {},
+            "source_policy": request["source_policy"],
+        },
+        build_default_identity_operations(transport),
     )
-    candidates = identity.get("candidates", [])
-    if identity["status"] == "blocked" or len(candidates) != 1:
-        return _blocked(
+    identity_material = identity_execution.material
+    canonical_identity = identity_material.canonical_identity
+    identity_limitations: list[dict[str, Any]] = [
+        {"code": item.code, "message": item.message}
+        for item in identity_material.limitations
+    ]
+    if identity_material.status == "blocked" or canonical_identity is None:
+        return _blocked_execution(
             request,
             "security_identity_not_resolved",
             "The valuation subject does not resolve to one A-share security.",
-            evidence=identity.get("evidence", []),
-            source_errors=identity.get("source_errors", []),
-            conflicts=identity.get("conflicts", []),
-            limitations=identity.get("limitations", []),
+            outcomes=identity_execution.outcomes,
+            limitations=identity_limitations,
         )
-    candidate = candidates[0]
-    security_value = candidate["security"]
-    security = f"{security_value['exchange']}:{security_value['code']}"
+    security = f"{canonical_identity.exchange}:{canonical_identity.code}"
     subject = {
         "security": {
-            "exchange": security_value["exchange"],
-            "code": security_value["code"],
-            "type": security_value["type"],
+            "exchange": canonical_identity.exchange,
+            "code": canonical_identity.code,
+            "type": canonical_identity.security_type,
         },
-        "name": candidate["name"],
-        "issuer": candidate["issuer"],
+        "name": canonical_identity.name,
+        "issuer": {
+            "name": canonical_identity.issuer_name,
+            "identifier": canonical_identity.issuer_identifier,
+            "security_relationship": canonical_identity.issuer_relationship,
+        },
     }
-    evidence = list(identity.get("evidence", []))
-    source_errors = list(identity.get("source_errors", []))
-    conflicts = list(identity.get("conflicts", []))
-    limitations = list(identity.get("limitations", []))
+    outcomes = list(identity_execution.outcomes)
+    conflicts: list[Any] = []
+    limitations = identity_limitations
     limitations.append(
         {
             "code": "issuer_security_class_count_is_task_declaration",
@@ -138,7 +236,7 @@ def build_security_valuation_result(
         }
     )
     if research_date != research_now.date():
-        return _blocked(
+        return _blocked_execution(
             request,
             "automatic_valuation_requires_current_research_date",
             (
@@ -146,29 +244,26 @@ def build_security_valuation_result(
                 "be used for a historical research boundary."
             ),
             subjects=[subject],
-            evidence=evidence,
-            source_errors=source_errors,
+            outcomes=tuple(outcomes),
             conflicts=conflicts,
             limitations=limitations,
         )
 
-    close_result = cast(
-        dict[str, Any],
-        build_close_result(security, request["as_of"], transport, research_now),
+    close_execution = execute_close_research(
+        security, request["as_of"], transport, research_now
     )
-    evidence.extend(close_result["evidence"])
-    evidence.extend(close_result["session_evidence"])
-    source_errors.extend(close_result["source_errors"])
-    conflicts.extend(close_result["conflicts"])
-    limitations.extend(close_result["limitations"])
-    if close_result["status"] == "blocked":
-        return _blocked(
+    close_material = close_execution.validated_material()
+    outcomes.extend(close_execution.outcomes)
+    conflicts.extend(close_material.conflicts)
+    limitations.extend(close_material.limitations)
+    selected_close = close_material.selected_close
+    if close_material.status == "blocked" or selected_close is None:
+        return _blocked_execution(
             request,
             "valuation_price_not_established",
             "A cross-checked completed-session valuation price is unavailable.",
             subjects=[subject],
-            evidence=evidence,
-            source_errors=source_errors,
+            outcomes=tuple(outcomes),
             conflicts=conflicts,
             limitations=limitations,
             metrics=_price_unavailable_metrics(),
@@ -179,14 +274,15 @@ def build_security_valuation_result(
             security, transport
         )
     except SourceOperationError as error:
-        source_errors.append(_source_error(error))
-        return _blocked(
+        outcomes.append(
+            _valuation_outcome("eastmoney_stock_info@1", error=_source_error(error))
+        )
+        return _blocked_execution(
             request,
             "automatic_valuation_evidence_incomplete",
             "A critical effective-share observation is unavailable.",
             subjects=[subject],
-            evidence=evidence,
-            source_errors=source_errors,
+            outcomes=tuple(outcomes),
             conflicts=conflicts,
             limitations=limitations,
             metrics={
@@ -201,8 +297,15 @@ def build_security_valuation_result(
                 for metric in COMPARISON_METRIC_ORDER
             },
         )
+    outcomes.append(
+        _valuation_outcome(
+            "eastmoney_stock_info@1",
+            observations=(stock_info.to_evidence(),),
+            diagnostics={"attempts": list(stock_info.degradations)},
+        )
+    )
 
-    if stock_info.name != candidate["name"]:
+    if stock_info.name != canonical_identity.name:
         conflicts.append(
             {
                 "code": "stock_information_identity_conflict",
@@ -210,14 +313,13 @@ def build_security_valuation_result(
                 "evidence_ids": [stock_info.evidence_id],
             }
         )
-        return _blocked(
+        return _blocked_execution(
             request,
             "automatic_valuation_evidence_conflict",
             "A critical valuation observation identifies another security.",
             subjects=[subject],
-            evidence=[*evidence, stock_info.to_evidence()],
+            outcomes=tuple(outcomes),
             conflicts=conflicts,
-            source_errors=source_errors,
             limitations=limitations,
         )
 
@@ -227,29 +329,46 @@ def build_security_valuation_result(
         statements = SinaFinancialStatementsOperation().observe(
             security, research_date, transport
         )
-        selected = _select_reported_financials(statements)
     except SourceOperationError as error:
-        source_errors.append(_source_error(error))
+        outcomes.append(
+            _valuation_outcome(
+                "sina_financial_statements@1", error=_source_error(error)
+            )
+        )
         limitations.append(
             {
                 "code": "reported_financial_statements_unavailable",
                 "message": "Reported PE and PB inputs are unavailable or inapplicable.",
             }
         )
-    except (InvalidOperation, KeyError, ValueError) as error:
-        source_errors.append(
-            {
+    else:
+        outcomes.append(
+            _valuation_outcome(
+                "sina_financial_statements@1",
+                observations=tuple(_statement_evidence(statements)),
+            )
+        )
+        try:
+            selected = _select_reported_financials(statements)
+        except (InvalidOperation, KeyError, ValueError) as error:
+            selection_error = {
                 "source_operation": "reported_financial_selection@1",
                 "code": "reported_financial_periods_incompatible",
                 "message": str(error),
             }
-        )
-        limitations.append(
-            {
-                "code": "reported_financial_statements_unavailable",
-                "message": "Reported PE and PB inputs are unavailable or inapplicable.",
-            }
-        )
+            outcomes.append(
+                _valuation_outcome(
+                    "reported_financial_selection@1", error=selection_error
+                )
+            )
+            limitations.append(
+                {
+                    "code": "reported_financial_statements_unavailable",
+                    "message": (
+                        "Reported PE and PB inputs are unavailable or inapplicable."
+                    ),
+                }
+            )
 
     consensus: ConsensusEpsSnapshot | None = None
     forecasts: list[ConsensusEpsObservation] = []
@@ -258,14 +377,10 @@ def build_security_valuation_result(
         forecasts = [
             item for item in consensus.forecasts if item.year >= research_date.year
         ]
-        if len(forecasts) < 2:
-            raise ValueError("at least two forecast years are required")
-        if forecasts[0].institutions < 3 or forecasts[1].institutions < 3:
-            raise ValueError(
-                "at least three institutions are required per forecast year"
-            )
     except SourceOperationError as error:
-        source_errors.append(_source_error(error))
+        outcomes.append(
+            _valuation_outcome("ths_consensus_eps@1", error=_source_error(error))
+        )
         consensus = None
         forecasts = []
         limitations.append(
@@ -274,41 +389,55 @@ def build_security_valuation_result(
                 "message": "Forward valuation metrics cannot be calculated.",
             }
         )
-    except ValueError as error:
-        source_errors.append(
-            {
+    else:
+        outcomes.append(
+            _valuation_outcome(
+                "ths_consensus_eps@1", observations=(consensus.to_evidence(),)
+            )
+        )
+        try:
+            if len(forecasts) < 2:
+                raise ValueError("at least two forecast years are required")
+            if forecasts[0].institutions < 3 or forecasts[1].institutions < 3:
+                raise ValueError(
+                    "at least three institutions are required per forecast year"
+                )
+        except ValueError as error:
+            selection_error = {
                 "source_operation": "consensus_forecast_selection@1",
                 "code": "consensus_forecast_inapplicable",
                 "message": str(error),
             }
-        )
-        forecasts = []
-        limitations.append(
-            {
-                "code": "consensus_eps_forecast_unavailable",
-                "message": "Forward valuation metrics cannot be calculated.",
-            }
-        )
+            outcomes.append(
+                _valuation_outcome(
+                    "consensus_forecast_selection@1", error=selection_error
+                )
+            )
+            forecasts = []
+            limitations.append(
+                {
+                    "code": "consensus_eps_forecast_unavailable",
+                    "message": "Forward valuation metrics cannot be calculated.",
+                }
+            )
 
     try:
-        price = Decimal(close_result["close"]["value"])
+        price = Decimal(selected_close.value)
         shares = Decimal(stock_info.total_shares)
         market_cap = exact_product(price, shares)
         provider_market_cap = Decimal(stock_info.provider_market_cap)
         provider_price = Decimal(stock_info.provider_price)
     except (InvalidOperation, KeyError, ValueError) as error:
-        return _blocked(
+        return _blocked_execution(
             request,
             "valuation_inputs_not_calculable",
             str(error),
             subjects=[subject],
-            evidence=[*evidence, stock_info.to_evidence()],
+            outcomes=tuple(outcomes),
             conflicts=conflicts,
-            source_errors=source_errors,
             limitations=limitations,
         )
 
-    evidence.append(stock_info.to_evidence())
     provider_market_cap_difference = exact_difference(market_cap, provider_market_cap)
     if provider_price == price and abs(provider_market_cap_difference) > Decimal(
         "0.01"
@@ -340,7 +469,6 @@ def build_security_valuation_result(
     ttm_profit: Decimal | None = None
     mrq_equity: Decimal | None = None
     if statements:
-        evidence.extend(_statement_evidence(statements))
         limitations.extend(
             [
                 {
@@ -412,7 +540,6 @@ def build_security_valuation_result(
     next_eps: Decimal | None = None
     forecast_growth: Decimal | None = None
     if consensus is not None and forecasts:
-        evidence.append(consensus.to_evidence())
         forecast_output = {
             "consensus_eps": [
                 {
@@ -528,45 +655,25 @@ def build_security_valuation_result(
                 "code": "automatic_valuation_critical_inputs_unavailable",
                 "message": (
                     "At least one requested automatic-valuation input has no "
-                    "qualified fallback, so the valuation is blocked."
+                    "qualified fallback; only metrics independent of that input "
+                    "are retained."
                 ),
                 "inputs": critical_input_gaps,
             }
         )
-    if (
-        selected is not None
-        and forecasts
-        and ttm_profit is not None
-        and mrq_equity is not None
-        and forecast_eps is not None
-        and next_eps is not None
-    ):
-        calculations = _calculations(
-            price,
-            shares,
-            market_cap,
-            ttm_profit,
-            mrq_equity,
-            forecasts[0].year,
-            forecast_eps,
-            forecasts[1].year,
-            next_eps,
-            target_pe,
-        )
-    else:
-        calculations = [
-            {
-                "id": "market_capitalization",
-                "formula": "completed_unadjusted_close * effective_total_shares",
-                "operands": {
-                    "price": format(price, "f"),
-                    "shares": format(shares, "f"),
-                },
-            }
-        ]
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked" if critical_input_gaps else "limited",
+    calculations = _calculations(
+        price,
+        shares,
+        market_cap,
+        ttm_profit,
+        mrq_equity,
+        forecasts[0].year if forecasts else None,
+        forecast_eps,
+        forecasts[1].year if len(forecasts) > 1 else None,
+        next_eps,
+        target_pe,
+    )
+    valuation_payload: dict[str, object] = {
         "subjects": [subject],
         "research": {
             "as_of": request["as_of"],
@@ -575,9 +682,9 @@ def build_security_valuation_result(
             "question": "automatic_security_valuation",
         },
         "valuation_basis": {
-            "trading_date": close_result["close"]["trading_date"],
+            "trading_date": selected_close.trading_date,
             "price": {
-                "value": close_result["close"]["value"],
+                "value": selected_close.value,
                 "unit": "CNY/share",
             },
             "effective_total_shares": {
@@ -594,20 +701,47 @@ def build_security_valuation_result(
         "reported_financials": reported_financials,
         "forecast": forecast_output,
         "metrics": metrics,
-        "calculations": calculations,
-        "evidence": evidence,
-        "conflicts": conflicts,
-        "source_errors": source_errors,
         "degradations": list(stock_info.degradations),
-        "limitations": _deduplicate_limitations(limitations),
     }
+    owned_evidence = [
+        dict(observation)
+        for outcome in outcomes
+        for observation in outcome.observations
+    ]
+    all_keys = _valuation_observation_keys(tuple(outcomes))
+    direct_calculations = [
+        DirectTaskCalculation(
+            kind=str(item["id"]),
+            evidence_use="security_valuation",
+            observation_keys=_valuation_calculation_keys(
+                str(item["id"]), owned_evidence
+            ),
+            payload={key: value for key, value in item.items() if key != "id"},
+        )
+        for item in calculations
+    ]
+    return _direct_valuation_execution(
+        request,
+        outcomes=tuple(outcomes),
+        conflicts=conflicts,
+        limitations=_deduplicate_limitations(limitations),
+        claims=[
+            DirectTaskClaim(
+                kind="security_valuation_metrics",
+                evidence_use="security_valuation",
+                observation_keys=all_keys,
+                payload=valuation_payload,
+            )
+        ],
+        calculations=direct_calculations,
+    )
 
 
 def build_valuation_comparison_result(
     request: dict[str, Any],
     transport: HttpTransport,
     now: datetime | None = None,
-) -> dict[str, Any]:
+) -> UnifiedResearchResult:
     """Compare two to ten securities on one explicit valuation basis."""
 
     subjects = request["subjects"]
@@ -622,76 +756,95 @@ def build_valuation_comparison_result(
     if len(set(normalized_clues)) != len(normalized_clues):
         raise ValueError("valuation_compare subjects must be unique")
 
-    rows = []
-    evidence: list[Any] = []
+    if not request["source_policy"]["allow_experimental"]:
+        return _direct_valuation_execution(
+            request,
+            task_type="valuation_compare",
+            outcomes=tuple(
+                _valuation_outcome(operation_id, skipped="skipped_policy")
+                for operation_id in _VALUATION_REQUIRED_OPERATIONS
+            ),
+            conflicts=[],
+            limitations=[
+                {
+                    "code": "source_policy_not_satisfied",
+                    "message": (
+                        "valuation_compare currently requires experimental source "
+                        "operations"
+                    ),
+                }
+            ],
+            claims=[],
+        ).result
+
+    rows: list[dict[str, Any]] = []
+    comparison_outcomes: list[OperationOutcome] = []
+    comparison_calculations: list[DirectTaskCalculation] = []
     conflicts: list[Any] = []
-    source_errors: list[Any] = []
-    degradations: list[Any] = []
     limitations: list[dict[str, Any]] = []
     stock_info_operation = EastmoneyStockInfoOperation()
-    for subject in subjects:
+    for index, subject in enumerate(subjects):
         single_request = {
             **request,
             "task_type": "security_valuation",
             "subjects": [subject],
         }
-        result = build_security_valuation_result(
+        execution = _execute_security_valuation(
             single_request,
             transport,
             now,
             stock_info_operation,
         )
-        result_subjects = result.get("subjects", [])
-        resolved_subject = (
-            result_subjects[0]
-            if isinstance(result_subjects, list)
-            and result_subjects
-            and isinstance(result_subjects[0], dict)
-            else None
+        member_id = f"member-{index}"
+        scoped_outcomes, key_map = _scope_valuation_member(
+            execution.outcomes, member_id
         )
-        security = (
-            f"{resolved_subject['security']['exchange']}:"
-            f"{resolved_subject['security']['code']}"
-            if resolved_subject is not None
-            and isinstance(resolved_subject.get("security"), dict)
-            else None
-        )
-        result_metrics = result.get("metrics", {})
+        comparison_outcomes.extend(scoped_outcomes)
+        member_material = execution.validated_material()
         metrics = {
-            metric: result_metrics.get(
+            metric: member_material.metrics.get(
                 metric,
                 {"status": "not_calculable", "reason": "metric_unavailable"},
             )
             for metric in COMPARISON_METRIC_ORDER
         }
-        valuation_basis = result.get("valuation_basis", {})
+        member_keys = tuple(
+            key_map[key] for key in member_material.observation_keys if key in key_map
+        )
         rows.append(
             {
-                "security": security,
-                "name": (
-                    resolved_subject.get("name")
-                    if resolved_subject is not None
-                    else subject.get("clue")
-                ),
-                "status": result["status"],
-                "trading_date": (
-                    valuation_basis.get("trading_date")
-                    if isinstance(valuation_basis, dict)
-                    else None
-                ),
+                "member_id": member_id,
+                "security": member_material.security,
+                "name": member_material.name or subject.get("clue"),
+                "status": member_material.status,
+                "trading_date": member_material.trading_date,
                 "metrics": metrics,
-                "limitation_codes": [
-                    item.get("code")
-                    for item in result.get("limitations", [])
-                    if isinstance(item, dict)
-                ],
+                "limitation_codes": list(member_material.limitation_codes),
+                "evidence_ids": list(member_keys),
             }
         )
-        evidence.extend(result.get("evidence", []))
-        conflicts.extend(result.get("conflicts", []))
-        source_errors.extend(result.get("source_errors", []))
-        degradations.extend(result.get("degradations", []))
-        limitations.extend(result.get("limitations", []))
+        for calculation in execution.calculations:
+            comparison_calculations.append(
+                DirectTaskCalculation(
+                    kind=f"{member_id}::{calculation.kind}",
+                    evidence_use="valuation_compare",
+                    observation_keys=tuple(
+                        key_map[key]
+                        for key in calculation.observation_keys
+                        if key in key_map
+                    ),
+                    payload=calculation.payload,
+                )
+            )
+        for conflict in execution.conflicts:
+            scoped_conflict = dict(conflict)
+            scoped_conflict["code"] = f"{member_id}::{conflict.get('code', 'conflict')}"
+            scoped_conflict["evidence_ids"] = [
+                key_map[key]
+                for key in conflict.get("evidence_ids", [])
+                if key in key_map
+            ]
+            conflicts.append(scoped_conflict)
     successful_rows = [row for row in rows if row["status"] != "blocked"]
     blocked_rows = [row for row in rows if row["status"] == "blocked"]
     if blocked_rows:
@@ -708,9 +861,7 @@ def build_valuation_comparison_result(
                 ],
             }
         )
-    return {
-        "schema_version": request["schema_version"],
-        "status": "limited" if successful_rows else "blocked",
+    comparison_payload: dict[str, object] = {
         "subjects": [
             {"security": row["security"], "name": row["name"]} for row in rows
         ],
@@ -726,12 +877,92 @@ def build_valuation_comparison_result(
             "metric_order": COMPARISON_METRIC_ORDER,
         },
         "rows": rows,
-        "evidence": _deduplicate_evidence(evidence),
-        "conflicts": conflicts,
-        "source_errors": source_errors,
-        "degradations": degradations,
-        "limitations": _deduplicate_limitations(limitations),
     }
+    all_keys = tuple(
+        str(observation["id"])
+        for outcome in comparison_outcomes
+        for observation in outcome.observations
+        if isinstance(observation.get("id"), str)
+    )
+    return _direct_valuation_execution(
+        request,
+        task_type="valuation_compare",
+        outcomes=tuple(comparison_outcomes),
+        conflicts=conflicts,
+        limitations=_deduplicate_limitations(limitations),
+        claims=[
+            DirectTaskClaim(
+                kind=(
+                    "valuation_compare_members"
+                    if successful_rows
+                    else "valuation_compare_diagnostics"
+                ),
+                evidence_use="valuation_compare",
+                observation_keys=all_keys,
+                payload=comparison_payload,
+            )
+        ],
+        calculations=comparison_calculations,
+    ).result
+
+
+def _scope_valuation_member(
+    outcomes: tuple[OperationOutcome, ...], member_id: str
+) -> tuple[tuple[OperationOutcome, ...], dict[str, str]]:
+    """Make operation, error, and local observation ownership member-unique."""
+
+    scoped_outcomes = []
+    key_map: dict[str, str] = {}
+    for outcome in outcomes:
+        operation_id = f"{member_id}::{outcome.operation_id}"
+        observations = []
+        for index, observation in enumerate(outcome.observations):
+            original_key = observation.get("id")
+            local_key = (
+                str(original_key)
+                if isinstance(original_key, str) and original_key
+                else f"{outcome.operation_id}:{index}"
+            )
+            scoped_key = f"{member_id}::{local_key}"
+            key_map[local_key] = scoped_key
+            payload = dict(observation)
+            payload["id"] = scoped_key
+            payload["source_operation"] = operation_id
+            observations.append(payload)
+        source_errors = []
+        for source_error in outcome.source_errors:
+            payload = dict(source_error)
+            payload["source_operation"] = operation_id
+            source_errors.append(payload)
+        scoped_outcomes.append(
+            OperationOutcome(
+                capability_id="valuation_compare_metrics",
+                operation_id=operation_id,
+                execution=outcome.execution,
+                observations=tuple(observations),
+                source_errors=tuple(source_errors),
+                field_dispositions=outcome.field_dispositions,
+                diagnostics=_scope_member_diagnostics(
+                    outcome.diagnostics, operation_id
+                ),
+            )
+        )
+    return tuple(scoped_outcomes), key_map
+
+
+def _scope_member_diagnostics(
+    diagnostics: dict[str, object] | Any, operation_id: str
+) -> dict[str, object]:
+    result = dict(diagnostics)
+    attempts = result.get("attempts")
+    if isinstance(attempts, list):
+        result["attempts"] = [
+            {**item, "source_operation": operation_id}
+            if isinstance(item, dict) and "source_operation" in item
+            else item
+            for item in attempts
+        ]
+    return result
 
 
 def _subject_clue(request: dict[str, Any]) -> str:
@@ -948,65 +1179,103 @@ def _calculations(
     price: Decimal,
     shares: Decimal,
     market_cap: Decimal,
-    ttm_profit: Decimal,
-    mrq_equity: Decimal,
-    forecast_year: int,
-    forecast_eps: Decimal,
-    next_year: int,
-    next_eps: Decimal,
+    ttm_profit: Decimal | None,
+    mrq_equity: Decimal | None,
+    forecast_year: int | None,
+    forecast_eps: Decimal | None,
+    next_year: int | None,
+    next_eps: Decimal | None,
     target_pe: Decimal,
 ) -> list[dict[str, Any]]:
-    return [
+    calculations: list[dict[str, Any]] = [
         {
             "id": "market_capitalization",
             "formula": "completed_unadjusted_close * effective_total_shares",
             "operands": {"price": format(price, "f"), "shares": format(shares, "f")},
         },
-        {
-            "id": "pe_ttm",
-            "formula": "market_capitalization / ttm_attributable_profit",
-            "operands": {
-                "market_capitalization": format(market_cap, "f"),
-                "ttm_attributable_profit": format(ttm_profit, "f"),
-            },
-        },
-        {
-            "id": "pb_mrq",
-            "formula": "market_capitalization / mrq_attributable_equity",
-            "operands": {
-                "market_capitalization": format(market_cap, "f"),
-                "mrq_attributable_equity": format(mrq_equity, "f"),
-            },
-        },
-        {
-            "id": "forward_pe",
-            "formula": "completed_unadjusted_close / first_forecast_year_consensus_eps",
-            "operands": {
-                "price": format(price, "f"),
-                "forecast_year": forecast_year,
-                "consensus_eps": format(forecast_eps, "f"),
-            },
-        },
-        {
-            "id": "forecast_eps_growth",
-            "formula": "next_year_eps / first_forecast_year_eps - 1",
-            "operands": {
-                "first_year": forecast_year,
-                "first_year_eps": format(forecast_eps, "f"),
-                "next_year": next_year,
-                "next_year_eps": format(next_eps, "f"),
-            },
-        },
-        {
-            "id": "peg",
-            "formula": "forward_pe / (forecast_eps_growth_percent)",
-        },
-        {
-            "id": "pe_digestion_years",
-            "formula": "ln(forward_pe / target_pe) / ln(1 + forecast_eps_growth)",
-            "operands": {"target_pe": format(target_pe, "f")},
-        },
     ]
+    if ttm_profit is not None and ttm_profit > 0:
+        calculations.append(
+            {
+                "id": "pe_ttm",
+                "formula": "market_capitalization / ttm_attributable_profit",
+                "operands": {
+                    "market_capitalization": format(market_cap, "f"),
+                    "ttm_attributable_profit": format(ttm_profit, "f"),
+                },
+            }
+        )
+    if mrq_equity is not None and mrq_equity > 0:
+        calculations.append(
+            {
+                "id": "pb_mrq",
+                "formula": "market_capitalization / mrq_attributable_equity",
+                "operands": {
+                    "market_capitalization": format(market_cap, "f"),
+                    "mrq_attributable_equity": format(mrq_equity, "f"),
+                },
+            }
+        )
+    if forecast_year is not None and forecast_eps is not None and forecast_eps > 0:
+        forward_pe = decimal_ratio(price, forecast_eps)
+        calculations.append(
+            {
+                "id": "forward_pe",
+                "formula": "completed_unadjusted_close / first_forecast_year_consensus_eps",
+                "operands": {
+                    "price": format(price, "f"),
+                    "forecast_year": forecast_year,
+                    "consensus_eps": format(forecast_eps, "f"),
+                },
+            }
+        )
+    if (
+        forecast_year is not None
+        and forecast_eps is not None
+        and forecast_eps > 0
+        and next_year is not None
+        and next_eps is not None
+    ):
+        growth = decimal_ratio(next_eps, forecast_eps) - Decimal(1)
+        calculations.append(
+            {
+                "id": "forecast_eps_growth",
+                "formula": "next_year_eps / first_forecast_year_eps - 1",
+                "operands": {
+                    "first_year": forecast_year,
+                    "first_year_eps": format(forecast_eps, "f"),
+                    "next_year": next_year,
+                    "next_year_eps": format(next_eps, "f"),
+                },
+            }
+        )
+        if growth > 0:
+            calculations.extend(
+                (
+                    {
+                        "id": "peg",
+                        "formula": "forward_pe / (forecast_eps_growth_percent)",
+                        "operands": {
+                            "forward_pe": format(forward_pe, "f"),
+                            "forecast_eps_growth_percent": format(
+                                growth * Decimal(100), "f"
+                            ),
+                        },
+                    },
+                    {
+                        "id": "pe_digestion_years",
+                        "formula": (
+                            "ln(forward_pe / target_pe) / ln(1 + forecast_eps_growth)"
+                        ),
+                        "operands": {
+                            "forward_pe": format(forward_pe, "f"),
+                            "forecast_eps_growth": format(growth, "f"),
+                            "target_pe": format(target_pe, "f"),
+                        },
+                    },
+                )
+            )
+    return calculations
 
 
 def _source_error(error: SourceOperationError) -> dict[str, str]:
@@ -1028,16 +1297,131 @@ def _deduplicate_limitations(items: list[dict[str, Any]]) -> list[dict[str, Any]
     return result
 
 
-def _deduplicate_evidence(items: list[Any]) -> list[Any]:
+_VALUATION_RAW_FIELDS: dict[str, tuple[str, ...]] = {
+    "sina_financial_statements@1": (
+        "publish_date",
+        "rType",
+        "rCurrency",
+        "is_audit",
+        "audit_opinion",
+        "data_source",
+        "update_time",
+        "item_title",
+        "item_value",
+        "item_tongbi",
+    ),
+    "ths_consensus_eps@1": (
+        "forecast_year",
+        "institutions",
+        "minimum",
+        "mean",
+        "maximum",
+    ),
+    "reported_financial_selection@1": ("statement_periods",),
+    "consensus_forecast_selection@1": ("forecast_years", "institutions"),
+}
+_VALUATION_REQUIRED_OPERATIONS = (
+    "eastmoney_stock_info@1",
+    "sina_financial_statements@1",
+    "ths_consensus_eps@1",
+)
+
+
+def _valuation_dispositions(operation_id: str) -> tuple[FieldDisposition, ...]:
+    if operation_id == EastmoneyStockInfoOperation.operation_id:
+        return EastmoneyStockInfoOperation.field_dispositions
     result = []
-    seen: set[object] = set()
-    for item in items:
-        evidence_id = item.get("id") if isinstance(item, dict) else None
-        key = evidence_id if evidence_id is not None else id(item)
-        if key not in seen:
-            seen.add(key)
-            result.append(item)
-    return result
+    for field in _VALUATION_RAW_FIELDS[operation_id]:
+        if field in {"audit_opinion", "item_tongbi"}:
+            result.append(
+                FieldDisposition(
+                    field,
+                    "excluded",
+                    None,
+                    "The provider field is not an approved deterministic operand.",
+                )
+            )
+        else:
+            result.append(
+                FieldDisposition(
+                    field,
+                    (
+                        "cross_check_only"
+                        if field in {"provider_market_cap", "provider_price"}
+                        else "normalized"
+                    ),
+                    f"observations.payload.{field}",
+                )
+            )
+    return tuple(result)
+
+
+def _valuation_outcome(
+    operation_id: str,
+    *,
+    observations: tuple[dict[str, Any], ...] = (),
+    error: dict[str, Any] | None = None,
+    skipped: str | None = None,
+    diagnostics: dict[str, object] | None = None,
+) -> OperationOutcome:
+    if (bool(observations) + (error is not None) + (skipped is not None)) != 1:
+        raise ValueError("valuation outcome requires exactly one execution fact")
+    if error is not None:
+        execution = OperationExecution("failed")
+        errors: tuple[dict[str, Any], ...] = (error,)
+    elif skipped is not None:
+        execution = OperationExecution(cast(Any, skipped))
+        errors = ()
+    else:
+        execution = OperationExecution("succeeded", query_complete=True)
+        errors = ()
+    return OperationOutcome(
+        capability_id="security_valuation_metrics",
+        operation_id=operation_id,
+        execution=execution,
+        observations=observations,
+        source_errors=errors,
+        field_dispositions=_valuation_dispositions(operation_id),
+        diagnostics=diagnostics or {},
+    )
+
+
+def _valuation_calculation_keys(
+    calculation_kind: str, evidence: list[dict[str, Any]]
+) -> tuple[str, ...]:
+    official_close = {"sse_daily_line@1", "szse_daily_line@1"}
+    operations = {
+        "market_capitalization": official_close | {"eastmoney_stock_info@1"},
+        "pe_ttm": official_close
+        | {"eastmoney_stock_info@1", "sina_financial_statements@1"},
+        "pb_mrq": official_close
+        | {"eastmoney_stock_info@1", "sina_financial_statements@1"},
+        "forward_pe": official_close | {"ths_consensus_eps@1"},
+        "forecast_eps_growth": {"ths_consensus_eps@1"},
+        "peg": official_close | {"ths_consensus_eps@1"},
+        "pe_digestion_years": official_close | {"ths_consensus_eps@1"},
+    }.get(calculation_kind, set())
+    return tuple(
+        str(item["id"])
+        for item in evidence
+        if isinstance(item.get("id"), str)
+        and item.get("source_operation") in operations
+    )
+
+
+def _valuation_observation_keys(
+    outcomes: tuple[OperationOutcome, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        str(local_key)
+        for outcome in outcomes
+        for index, observation in enumerate(outcome.observations)
+        for local_key in (
+            observation.get("id")
+            if isinstance(observation.get("id"), str) and observation.get("id")
+            else f"{outcome.operation_id}:{index}",
+        )
+    )
 
 
 def _blocked(
@@ -1046,29 +1430,291 @@ def _blocked(
     message: str,
     *,
     subjects: list[dict[str, Any]] | None = None,
-    evidence: list[Any] | None = None,
+    outcomes: tuple[OperationOutcome, ...] = (),
     conflicts: list[Any] | None = None,
-    source_errors: list[Any] | None = None,
     limitations: list[dict[str, Any]] | None = None,
     metrics: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> UnifiedResearchResult:
+    return _blocked_execution(
+        request,
+        code,
+        message,
+        subjects=subjects,
+        outcomes=outcomes,
+        conflicts=conflicts,
+        limitations=limitations,
+        metrics=metrics,
+    ).result
+
+
+def _blocked_execution(
+    request: dict[str, Any],
+    code: str,
+    message: str,
+    *,
+    subjects: list[dict[str, Any]] | None = None,
+    outcomes: tuple[OperationOutcome, ...] = (),
+    conflicts: list[Any] | None = None,
+    limitations: list[dict[str, Any]] | None = None,
+    metrics: dict[str, Any] | None = None,
+) -> SecurityValuationExecution:
     result_limitations = list(limitations or [])
     result_limitations.append({"code": code, "message": message})
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked",
-        "subjects": subjects if subjects is not None else request["subjects"],
-        "valuation_basis": {"status": "unresolved"},
-        "reported_financials": {},
-        "forecast": {},
-        "metrics": metrics or {},
-        "calculations": [],
-        "evidence": evidence or [],
-        "conflicts": conflicts or [],
-        "source_errors": source_errors or [],
-        "degradations": [],
-        "limitations": _deduplicate_limitations(result_limitations),
+    keys = _valuation_observation_keys(outcomes)
+    return _direct_valuation_execution(
+        request,
+        outcomes=outcomes,
+        conflicts=conflicts or [],
+        limitations=_deduplicate_limitations(result_limitations),
+        claims=(
+            [
+                DirectTaskClaim(
+                    kind="security_valuation_diagnostics",
+                    evidence_use="security_valuation",
+                    observation_keys=keys,
+                    payload={
+                        "subjects": (
+                            subjects if subjects is not None else request["subjects"]
+                        ),
+                        "valuation_basis": {"status": "unresolved"},
+                        "metrics": metrics or {},
+                    },
+                )
+            ]
+            if metrics
+            else []
+        ),
+    )
+
+
+def _direct_valuation_result(
+    request: dict[str, Any],
+    *,
+    outcomes: tuple[OperationOutcome, ...],
+    conflicts: list[Any],
+    limitations: list[dict[str, Any]],
+    claims: list[DirectTaskClaim],
+    calculations: list[DirectTaskCalculation] | None = None,
+) -> UnifiedResearchResult:
+    return _direct_valuation_execution(
+        request,
+        outcomes=outcomes,
+        conflicts=conflicts,
+        limitations=limitations,
+        claims=claims,
+        calculations=calculations,
+    ).result
+
+
+def _direct_valuation_execution(
+    request: dict[str, Any],
+    *,
+    outcomes: tuple[OperationOutcome, ...],
+    conflicts: list[Any],
+    limitations: list[dict[str, Any]],
+    claims: list[DirectTaskClaim],
+    calculations: list[DirectTaskCalculation] | None = None,
+    task_type: str = "security_valuation",
+) -> SecurityValuationExecution:
+    outcomes_by_owner = {
+        (item.capability_id, item.operation_id): item for item in outcomes
     }
+    if len(outcomes_by_owner) != len(outcomes):
+        raise ValueError("valuation outcomes must be uniquely owned")
+    existing_operations = {item.operation_id for item in outcomes}
+    missing_state = (
+        "skipped_policy"
+        if not request["source_policy"]["allow_experimental"]
+        else "skipped_research_dependency"
+    )
+    for operation_id in _VALUATION_REQUIRED_OPERATIONS:
+        if (
+            task_type == "security_valuation"
+            and operation_id not in existing_operations
+        ):
+            missing = _valuation_outcome(operation_id, skipped=missing_state)
+            outcomes_by_owner[(missing.capability_id, missing.operation_id)] = missing
+    ordered_outcomes = tuple(outcomes_by_owner.values())
+    obligations = []
+    for outcome in ordered_outcomes:
+        base_operation = outcome.operation_id.rsplit("::", 1)[-1]
+        evidence_role = (
+            "lineage"
+            if base_operation in {"sse_stock_list@1", "szse_stock_list@1"}
+            else "corroborating"
+            if base_operation
+            in {"cninfo_security_dictionary@1", "tencent_daily_line@1"}
+            else "supporting"
+        )
+        source_role = (
+            "authoritative_disclosure"
+            if base_operation in {"sse_stock_list@1", "szse_stock_list@1"}
+            else "signed_opinion"
+            if base_operation == "ths_consensus_eps@1"
+            else "market_observation"
+        )
+        obligations.append(
+            OperationObligation(
+                capability_id=outcome.capability_id,
+                operation_id=outcome.operation_id,
+                source_role=source_role,
+                experimental=True,
+                exchange=None,
+                evidence_uses=(
+                    EvidenceUsePolicy(
+                        (
+                            "valuation_compare"
+                            if task_type == "valuation_compare"
+                            else "security_valuation"
+                        ),
+                        cast(Any, evidence_role),
+                    ),
+                ),
+            )
+        )
+    known_keys = {
+        str(observation["id"])
+        for outcome in ordered_outcomes
+        for observation in outcome.observations
+        if isinstance(observation.get("id"), str)
+    }
+    evidence_use = (
+        "valuation_compare"
+        if task_type == "valuation_compare"
+        else "security_valuation"
+    )
+    dependencies = [
+        ResearchDependency(
+            consumer_id=(
+                "valuation_compare_members"
+                if task_type == "valuation_compare"
+                else "security_valuation_metrics"
+            ),
+            evidence_use=evidence_use,
+            minimum_supporting_observations=1,
+            core=True,
+        )
+    ]
+    if task_type == "security_valuation":
+        dependencies.extend(
+            ResearchDependency(
+                consumer_id=metric,
+                evidence_use=evidence_use,
+                minimum_supporting_observations=1,
+                core=False,
+            )
+            for metric in COMPARISON_METRIC_ORDER
+        )
+    result = fold_direct_task_research_result(
+        DirectTaskPlan(
+            task_type=task_type,
+            as_of=str(request["as_of"]),
+            obligations=tuple(obligations),
+            dependencies=tuple(dependencies),
+        ),
+        ordered_outcomes,
+        claims=tuple(claims),
+        calculations=tuple(calculations or ()),
+        conflicts=tuple(
+            DirectTaskConflict(
+                code=str(item.get("code", "valuation_conflict")),
+                message=str(item.get("message", "Valuation observations conflict.")),
+                observation_keys=tuple(
+                    key
+                    for key in item.get("evidence_ids", [])
+                    if isinstance(key, str) and key in known_keys
+                ),
+            )
+            for item in conflicts
+            if isinstance(item, dict)
+        ),
+        limitations=tuple(
+            DirectTaskLimitation(
+                code=str(item.get("code", "valuation_limited")),
+                message=str(item.get("message", "Valuation research is limited.")),
+            )
+            for item in limitations
+        ),
+        summary=(
+            "Deterministic valuation metrics and their operands were retained."
+            if any(
+                item.kind in {"security_valuation_metrics", "valuation_compare_members"}
+                for item in claims
+            )
+            else "The requested security valuation could not be established safely."
+        ),
+    )
+    return SecurityValuationExecution(
+        result=result,
+        outcomes=ordered_outcomes,
+        claims=tuple(claims),
+        calculations=tuple(calculations or ()),
+        conflicts=tuple(item for item in conflicts if isinstance(item, dict)),
+        limitations=tuple(limitations),
+        material=_valuation_member_material(
+            task_type=task_type,
+            outcomes=ordered_outcomes,
+            claims=tuple(claims),
+            limitations=tuple(limitations),
+        ),
+    )
+
+
+def _valuation_member_material(
+    *,
+    task_type: str,
+    outcomes: tuple[OperationOutcome, ...],
+    claims: tuple[DirectTaskClaim, ...],
+    limitations: tuple[dict[str, Any], ...],
+) -> ValuationMemberMaterial:
+    member_claim = next(
+        (item for item in claims if item.kind == "security_valuation_metrics"), None
+    )
+    security: str | None = None
+    name: str | None = None
+    trading_date: str | None = None
+    metrics: dict[str, Any] = {}
+    if member_claim is not None:
+        subjects = member_claim.payload.get("subjects")
+        subject = (
+            subjects[0]
+            if isinstance(subjects, list) and subjects and isinstance(subjects[0], dict)
+            else None
+        )
+        security_value = subject.get("security") if subject is not None else None
+        if isinstance(security_value, dict):
+            exchange = security_value.get("exchange")
+            code = security_value.get("code")
+            if isinstance(exchange, str) and isinstance(code, str):
+                security = f"{exchange}:{code}"
+        if subject is not None and isinstance(subject.get("name"), str):
+            name = str(subject["name"])
+        valuation_basis = member_claim.payload.get("valuation_basis")
+        if isinstance(valuation_basis, dict) and isinstance(
+            valuation_basis.get("trading_date"), str
+        ):
+            trading_date = str(valuation_basis["trading_date"])
+        claim_metrics = member_claim.payload.get("metrics")
+        if isinstance(claim_metrics, dict):
+            metrics = {str(key): dict(value) for key, value in claim_metrics.items()}
+    status: ResearchStatus = (
+        "limited"
+        if task_type == "security_valuation" and member_claim is not None
+        else "blocked"
+    )
+    return ValuationMemberMaterial(
+        status=status,
+        security=security,
+        name=name,
+        trading_date=trading_date,
+        metrics=metrics,
+        limitation_codes=tuple(
+            str(item["code"])
+            for item in limitations
+            if isinstance(item.get("code"), str)
+        ),
+        observation_keys=_valuation_observation_keys(outcomes),
+    )
 
 
 def _price_unavailable_metrics() -> dict[str, dict[str, str]]:

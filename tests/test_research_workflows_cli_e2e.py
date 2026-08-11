@@ -100,8 +100,11 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         self.assertEqual(result["workflow"]["id"], "single_security_valuation")
         self.assertEqual([step["step_id"] for step in result["steps"]], ["valuation"])
         leaf = result["steps"][0]["result"]
-        self.assertEqual(leaf["task_type"], "security_valuation")
-        self.assertEqual(leaf["subjects"][0]["security"]["code"], "601138")
+        self.assertEqual(leaf["plan"]["task_type"], "security_valuation")
+        self.assertEqual(
+            leaf["claims"][0]["payload"]["subjects"][0]["security"]["code"],
+            "601138",
+        )
         self.assertEqual(result["status"], "limited")
 
     def test_valuation_comparison_runs_five_fixture_securities(self) -> None:
@@ -120,10 +123,11 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         self.assert_successful_process(completed)
         self.assertEqual(result["workflow"]["id"], "valuation_comparison")
         comparison = result["steps"][0]["result"]
-        self.assertEqual(comparison["task_type"], "valuation_compare")
-        self.assertEqual(len(comparison["rows"]), 5)
+        self.assertEqual(comparison["plan"]["task_type"], "valuation_compare")
+        comparison_payload = comparison["claims"][0]["payload"]
+        self.assertEqual(len(comparison_payload["rows"]), 5)
         self.assertEqual(
-            {row["security"] for row in comparison["rows"]},
+            {row["security"] for row in comparison_payload["rows"]},
             {
                 "SSE:601138",
                 "SSE:600519",
@@ -263,7 +267,31 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
         )
         self.assertIn("observations", identity_step["result"])
         self.assertNotIn("evidence", identity_step["result"])
+        valuation_step = next(
+            step for step in result["steps"] if step["step_id"] == "valuation"
+        )
+        self.assertEqual(
+            set(valuation_step["result"]),
+            {
+                "schema_version",
+                "status",
+                "research_anchor",
+                "plan",
+                "capability_registry",
+                "coverage",
+                "observations",
+                "claims",
+                "calculations",
+                "conflicts",
+                "limitations",
+                "source_errors",
+                "task_views",
+                "briefs",
+            },
+        )
         for step in result["steps"][1:]:
+            if step["step_id"] == "valuation":
+                continue
             for field in (
                 "evidence",
                 "conflicts",

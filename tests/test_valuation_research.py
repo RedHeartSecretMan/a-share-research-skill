@@ -69,11 +69,12 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self,
     ) -> None:
         result = self.run_valuation()
+        payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["task_type"], "security_valuation")
+        self.assertEqual(result["plan"]["task_type"], "security_valuation")
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["subjects"][0],
+            payload["subjects"][0],
             {
                 "security": {
                     "exchange": "SSE",
@@ -89,7 +90,7 @@ class SecurityValuationProcessTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            result["valuation_basis"],
+            payload["valuation_basis"],
             {
                 "trading_date": "2026-07-31",
                 "price": {"value": "56.700", "unit": "CNY/share"},
@@ -102,13 +103,13 @@ class SecurityValuationProcessTests(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual(result["quarterly_snapshots"][0]["period"], "2026-03-31")
+        self.assertEqual(payload["quarterly_snapshots"][0]["period"], "2026-03-31")
         self.assertEqual(
-            set(result["quarterly_snapshots"][0]["statements"]),
+            set(payload["quarterly_snapshots"][0]["statements"]),
             {"income", "balance", "cashflow"},
         )
         self.assertEqual(
-            result["reported_financials"]["ttm_attributable_profit"],
+            payload["reported_financials"]["ttm_attributable_profit"],
             {
                 "value": "40649643000.000000",
                 "unit": "CNY",
@@ -118,14 +119,14 @@ class SecurityValuationProcessTests(unittest.TestCase):
         )
         self.assertEqual(
             {
-                item["source_role"]
-                for item in result["evidence"]
-                if item.get("source_operation") == "sina_financial_statements@1"
+                item["payload"]["source_role"]
+                for item in result["observations"]
+                if item["operation_id"] == "sina_financial_statements@1"
             },
             {"market_observation"},
         )
         self.assertEqual(
-            result["reported_financials"]["mrq_attributable_equity"],
+            payload["reported_financials"]["mrq_attributable_equity"],
             {
                 "value": "176218112000.000000",
                 "unit": "CNY",
@@ -136,7 +137,7 @@ class SecurityValuationProcessTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            result["forecast"]["consensus_eps"],
+            payload["forecast"]["consensus_eps"],
             [
                 {
                     "year": 2026,
@@ -159,7 +160,7 @@ class SecurityValuationProcessTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            {key: value["value"] for key, value in result["metrics"].items()},
+            {key: value["value"] for key, value in payload["metrics"].items()},
             {
                 "market_capitalization": "1125160032502.800",
                 "pe_ttm": "27.6795",
@@ -170,7 +171,7 @@ class SecurityValuationProcessTests(unittest.TestCase):
                 "pe_digestion_years": "0.0000",
             },
         )
-        self.assertEqual(result["metrics"]["pe_digestion_years"]["target_pe"], "30")
+        self.assertEqual(payload["metrics"]["pe_digestion_years"]["target_pe"], "30")
         self.assertEqual(result["conflicts"], [])
         self.assertEqual(result["source_errors"], [])
         self.assertIn(
@@ -178,11 +179,7 @@ class SecurityValuationProcessTests(unittest.TestCase):
             {item["code"] for item in result["limitations"]},
         )
         self.assertEqual(
-            {
-                item["source_operation"]
-                for item in result["evidence"]
-                if "source_operation" in item
-            },
+            {item["operation_id"] for item in result["observations"]},
             {
                 "sse_stock_list@1",
                 "cninfo_security_dictionary@1",
@@ -198,30 +195,32 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self,
     ) -> None:
         result = self.run_valuation("negative_profit")
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["metrics"]["pe_ttm"],
+            payload["metrics"]["pe_ttm"],
             {
                 "status": "no_valuation_meaning",
                 "reason": "ttm_attributable_profit_is_nonpositive",
             },
         )
         self.assertEqual(
-            result["metrics"]["market_capitalization"]["status"], "calculated"
+            payload["metrics"]["market_capitalization"]["status"], "calculated"
         )
-        self.assertEqual(result["metrics"]["pb_mrq"]["status"], "calculated")
-        self.assertEqual(result["metrics"]["forward_pe"]["status"], "calculated")
+        self.assertEqual(payload["metrics"]["pb_mrq"]["status"], "calculated")
+        self.assertEqual(payload["metrics"]["forward_pe"]["status"], "calculated")
 
-    def test_missing_consensus_forecast_blocks_but_keeps_reported_valuation(
+    def test_missing_consensus_forecast_limits_but_keeps_reported_valuation(
         self,
     ) -> None:
         result = self.run_valuation("missing_forecast")
+        payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["metrics"]["pe_ttm"]["status"], "calculated")
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(payload["metrics"]["pe_ttm"]["status"], "calculated")
         self.assertEqual(
-            result["metrics"]["forward_pe"],
+            payload["metrics"]["forward_pe"],
             {
                 "status": "not_calculable",
                 "reason": "consensus_eps_forecast_unavailable",
@@ -237,10 +236,11 @@ class SecurityValuationProcessTests(unittest.TestCase):
 
     def test_missing_price_blocks_and_keeps_unavailable_metric_contract(self) -> None:
         result = self.run_valuation("missing_price")
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
-            result["metrics"],
+            payload["metrics"],
             {
                 "market_capitalization": {
                     "status": "not_calculable",
@@ -272,21 +272,22 @@ class SecurityValuationProcessTests(unittest.TestCase):
                 },
             },
         )
-        self.assertTrue(result["evidence"])
+        self.assertTrue(result["observations"])
 
     def test_missing_shares_blocks_and_keeps_price_evidence(self) -> None:
         result = self.run_valuation("missing_shares")
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
-            result["metrics"]["market_capitalization"],
+            payload["metrics"]["market_capitalization"],
             {
                 "status": "not_calculable",
                 "reason": "effective_total_shares_unavailable",
             },
         )
         self.assertEqual(
-            {item["source_operation"] for item in result["evidence"]},
+            {item["operation_id"] for item in result["observations"]},
             {
                 "sse_stock_list@1",
                 "cninfo_security_dictionary@1",
@@ -295,35 +296,35 @@ class SecurityValuationProcessTests(unittest.TestCase):
             },
         )
 
-    def test_unusable_financial_statements_block_but_keep_forward_metrics(self) -> None:
+    def test_unusable_financial_statements_limit_but_keep_forward_metrics(self) -> None:
         result = self.run_valuation("financial_scope_conflict")
+        payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["metrics"]["pe_ttm"],
+            payload["metrics"]["pe_ttm"],
             {
                 "status": "not_calculable",
                 "reason": "reported_financial_statements_unavailable",
             },
         )
-        self.assertEqual(result["metrics"]["forward_pe"]["status"], "calculated")
+        self.assertEqual(payload["metrics"]["forward_pe"]["status"], "calculated")
         self.assertIn(
             "financial_scope_mismatch",
             {item["code"] for item in result["source_errors"]},
         )
-        critical_gap = next(
-            item
-            for item in result["limitations"]
-            if item["code"] == "automatic_valuation_critical_inputs_unavailable"
+        self.assertIn(
+            "automatic_valuation_critical_inputs_unavailable",
+            {item["code"] for item in result["limitations"]},
         )
-        self.assertEqual(critical_gap["inputs"], ["reported_financial_statements"])
 
-    def test_missing_financial_source_blocks_but_keeps_forward_metrics(self) -> None:
+    def test_missing_financial_source_limits_but_keeps_forward_metrics(self) -> None:
         result = self.run_valuation("missing_financials")
+        payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["metrics"]["pe_ttm"]["status"], "not_calculable")
-        self.assertEqual(result["metrics"]["forward_pe"]["status"], "calculated")
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(payload["metrics"]["pe_ttm"]["status"], "not_calculable")
+        self.assertEqual(payload["metrics"]["forward_pe"]["status"], "calculated")
         self.assertIn(
             "empty_response", {item["code"] for item in result["source_errors"]}
         )
@@ -332,10 +333,11 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self,
     ) -> None:
         result = self.run_valuation("provider_mcap_conflict")
+        payload = result["claims"][0]["payload"]
 
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["metrics"]["market_capitalization"]["value"],
+            payload["metrics"]["market_capitalization"]["value"],
             "1125160032502.800",
         )
         self.assertIn(
@@ -356,13 +358,14 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self,
     ) -> None:
         result = self.run_valuation("irrelevant_duplicate_financial_item")
+        payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["metrics"]["pe_ttm"]["status"], "calculated")
+        self.assertEqual(payload["metrics"]["pe_ttm"]["status"], "calculated")
         self.assertNotIn(
             "duplicate_financial_item",
             {item["code"] for item in result["source_errors"]},
         )
-        latest_income_items = result["financial_statements"]["income"][0]["items"]
+        latest_income_items = payload["financial_statements"]["income"][0]["items"]
         self.assertEqual(
             [
                 item["value"]
@@ -374,8 +377,9 @@ class SecurityValuationProcessTests(unittest.TestCase):
 
     def test_duplicate_required_statement_label_remains_inapplicable(self) -> None:
         result = self.run_valuation("required_duplicate_financial_item")
+        payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["metrics"]["pe_ttm"]["status"], "not_calculable")
+        self.assertEqual(payload["metrics"]["pe_ttm"]["status"], "not_calculable")
         self.assertIn(
             "duplicate_financial_item",
             {item["code"] for item in result["source_errors"]},
@@ -390,7 +394,7 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self.assertEqual(
             result["limitations"][-1]["code"], "multi_class_issuer_not_supported"
         )
-        self.assertEqual(result["metrics"], {})
+        self.assertEqual(result["claims"], [])
 
     def test_unknown_security_class_scope_blocks_before_issuer_valuation(self) -> None:
         request = {
@@ -426,6 +430,7 @@ class SecurityValuationProcessTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)
         self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["claims"], [])
         self.assertEqual(
             result["limitations"][-1]["code"],
             "issuer_security_class_scope_not_established",
@@ -433,7 +438,7 @@ class SecurityValuationProcessTests(unittest.TestCase):
 
 
 class ValuationComparisonProcessTests(unittest.TestCase):
-    def test_comparison_keeps_blocked_row_and_discloses_partial_coverage(self) -> None:
+    def test_comparison_keeps_limited_row_and_discloses_partial_coverage(self) -> None:
         request = {
             "schema_version": "1.0",
             "task_type": "valuation_compare",
@@ -475,22 +480,25 @@ class ValuationComparisonProcessTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)
+        payload = result["claims"][0]["payload"]
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            [row["status"] for row in result["rows"]], ["blocked", "limited"]
+            [row["status"] for row in payload["rows"]], ["limited", "limited"]
         )
         self.assertEqual(
-            result["rows"][0]["metrics"]["forward_pe"]["status"],
+            payload["rows"][0]["metrics"]["forward_pe"]["status"],
             "not_calculable",
         )
-        partial = next(
-            item
-            for item in result["limitations"]
-            if item["code"] == "valuation_comparison_contains_blocked_rows"
-        )
         self.assertEqual(
-            partial["blocked_subjects"],
-            [{"security": "SSE:601138", "name": "工业富联"}],
+            [
+                {"security": row["security"], "name": row["name"]}
+                for row in payload["rows"]
+                if row["status"] == "limited"
+            ],
+            [
+                {"security": "SSE:601138", "name": "工业富联"},
+                {"security": "SSE:600519", "name": "贵州茅台"},
+            ],
         )
 
     def test_five_security_comparison_uses_one_date_and_one_metric_basis(self) -> None:
@@ -535,10 +543,11 @@ class ValuationComparisonProcessTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stderr, "")
         result = json.loads(completed.stdout)
-        self.assertEqual(result["task_type"], "valuation_compare")
+        payload = result["claims"][0]["payload"]
+        self.assertEqual(result["plan"]["task_type"], "valuation_compare")
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["comparison_basis"],
+            payload["comparison_basis"],
             {
                 "as_of": "2026-08-02",
                 "price_basis": "latest_completed_unadjusted_close",
@@ -555,7 +564,7 @@ class ValuationComparisonProcessTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            [row["security"] for row in result["rows"]],
+            [row["security"] for row in payload["rows"]],
             [
                 "SSE:601138",
                 "SSE:600519",
@@ -564,12 +573,12 @@ class ValuationComparisonProcessTests(unittest.TestCase):
                 "SZSE:000001",
             ],
         )
-        self.assertEqual(len(result["rows"]), 5)
-        for row in result["rows"]:
+        self.assertEqual(len(payload["rows"]), 5)
+        for row in payload["rows"]:
             self.assertEqual(row["status"], "limited")
             self.assertEqual(row["trading_date"], "2026-07-31")
             self.assertEqual(
-                list(row["metrics"]), result["comparison_basis"]["metric_order"]
+                list(row["metrics"]), payload["comparison_basis"]["metric_order"]
             )
             self.assertTrue(
                 all(

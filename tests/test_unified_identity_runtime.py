@@ -18,6 +18,7 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from a_share_research.identity_resolution import (  # noqa: E402
     build_security_identity_research_result,
+    execute_security_identity_research,
 )
 from a_share_research.identity_sources import (  # noqa: E402
     HttpResponse,
@@ -1305,9 +1306,19 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             ),
         )
 
-        result = build_security_identity_research_result(request, operations).to_dict()
+        execution = execute_security_identity_research(request, operations)
+        result = execution.result.to_dict()
 
         self.assertEqual(result["status"], "limited")
+        self.assertEqual(execution.material.status, "limited")
+        assert execution.material.canonical_identity is not None
+        self.assertEqual(execution.material.canonical_identity.exchange, "SSE")
+        self.assertEqual(execution.material.canonical_identity.code, "600519")
+        self.assertEqual(execution.material.canonical_identity.name, "贵州茅台")
+        self.assertEqual(
+            {item.code for item in execution.material.limitations},
+            {"experimental_identity_sources"},
+        )
         self.assertEqual(len(result["claims"]), 1)
         self.assertEqual(
             set(result["coverage"]["security_identity_resolution"]["operations"]),

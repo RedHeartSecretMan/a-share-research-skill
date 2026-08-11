@@ -15,6 +15,15 @@ from .identity_sources import (
     SourceOperationError,
     TransportError,
 )
+from .research_result import FieldDisposition
+
+
+def _retained(field: str, destination: str) -> FieldDisposition:
+    return FieldDisposition(field, "normalized", destination)
+
+
+def _excluded(field: str, reason: str) -> FieldDisposition:
+    return FieldDisposition(field, "excluded", None, reason)
 
 
 def _operation_error(
@@ -339,6 +348,18 @@ class SseDailyLineOperation:
 
     operation_id = "sse_daily_line@1"
     endpoint = "https://yunhq.sse.com.cn:32042/v1/sh1/dayk"
+    field_dispositions = (
+        _retained("date", "observations.payload.observation.trading_date"),
+        _retained("open", "observations.payload.observed_value.value.open"),
+        _retained("high", "observations.payload.observed_value.value.high"),
+        _retained("low", "observations.payload.observed_value.value.low"),
+        _retained("close", "observations.payload.observed_value.value.close"),
+        _retained("volume", "observations.payload.observed_value.value.volume"),
+        _excluded(
+            "amount",
+            "The raw turnover amount is parsed for schema validity but is not retained.",
+        ),
+    )
 
     def observe(
         self, security: str, transport: HttpTransport
@@ -461,6 +482,20 @@ class SzseDailyLineOperation:
 
     operation_id = "szse_daily_line@1"
     endpoint = "https://www.szse.cn/api/market/ssjjhq/getHistoryData"
+    field_dispositions = (
+        _retained("row[0]", "observations.payload.observation.trading_date"),
+        _retained("row[1]", "observations.payload.observed_value.value.open"),
+        _retained("row[2]", "observations.payload.observed_value.value.close"),
+        _retained("row[3]", "observations.payload.observed_value.value.low"),
+        _retained("row[4]", "observations.payload.observed_value.value.high"),
+        _excluded("row[5]", "The provider column is not used by this operation."),
+        _excluded("row[6]", "The provider column is not used by this operation."),
+        _retained("row[7]", "observations.payload.observed_value.value.volume"),
+        _excluded(
+            "row[8]",
+            "The raw turnover amount is parsed for schema validity but is not retained.",
+        ),
+    )
 
     def observe(
         self, security: str, transport: HttpTransport
@@ -583,6 +618,50 @@ class TencentDailyLineOperation:
     operation_id = "tencent_daily_line@1"
     endpoint = "https://web.ifzq.gtimg.cn/appstock/app/kline/kline"
     corporate_action_fields = {"FHcontent", "cqr", "djr", "fh_sh", "nd"}
+    field_dispositions = (
+        _retained("day[0]", "observations.payload.observation.trading_date"),
+        _retained("day[1]", "observations.payload.observed_value.value.open"),
+        _retained("day[2]", "observations.payload.observed_value.value.close"),
+        _retained("day[3]", "observations.payload.observed_value.value.high"),
+        _retained("day[4]", "observations.payload.observed_value.value.low"),
+        _retained("day[5]", "observations.payload.observed_value.value.volume"),
+        FieldDisposition(
+            "day[6]",
+            "lineage_only",
+            "observations.payload.observation.corporate_action",
+        ),
+        FieldDisposition(
+            "qt[2]", "cross_check_only", "observations.payload.subject.security"
+        ),
+        _excluded(
+            "qt[3]",
+            "The quote price is used only to validate a suspension state and is not independently retained.",
+        ),
+        _excluded(
+            "qt[4]",
+            "Previous close is used only to validate a suspension state and is not retained.",
+        ),
+        _excluded(
+            "qt[6]",
+            "Quote volume is used only to validate a suspension state and is not independently retained.",
+        ),
+        FieldDisposition(
+            "qt[30]", "lineage_only", "observations.payload.evidence_time"
+        ),
+        _excluded(
+            "qt[31]",
+            "The optional intraday price type is not retained in daily-bar evidence.",
+        ),
+        _excluded(
+            "qt[32]",
+            "The optional observation boundary is not retained in daily-bar evidence.",
+        ),
+        _retained("qt[33]", "observations.payload.observation.trading_status"),
+        _excluded(
+            "qt[34]",
+            "The optional previous-close basis is not retained in daily-bar evidence.",
+        ),
+    )
 
     def observe(
         self,
