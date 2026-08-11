@@ -127,7 +127,438 @@ def query(
     )
 
 
+def multi_mode_query(data_types: tuple[str, ...]) -> CapitalQuery:
+    base = query("block_trade")
+    return CapitalQuery(
+        data_types=data_types,
+        as_of=base.as_of,
+        observed_from=base.observed_from,
+        observed_to=base.observed_to,
+        limit=base.limit,
+        subject=base.subject,
+        parameters=base.parameters,
+    )
+
+
 class EastmoneyTradingEventOperationTests(unittest.TestCase):
+    def test_later_lockup_http_failure_preserves_completed_block_trade_mode(
+        self,
+    ) -> None:
+        batch = EastmoneyTradingEventOperation(
+            FixedTransport(
+                [
+                    response("block_trade.json"),
+                    inline_response({}, status=500),
+                ]
+            ),
+            request_gate=no_wait_gate(),
+        ).collect(multi_mode_query(("block_trade", "lockup")))
+
+        block_trade = batch.mode_acquisitions["block_trade"]
+        lockup = batch.mode_acquisitions["lockup"]
+        self.assertEqual(block_trade.state, "observed_nonempty")
+        self.assertTrue(block_trade.complete)
+        self.assertEqual(len(block_trade.observations), 2)
+        self.assertEqual(block_trade.source_errors, ())
+        self.assertEqual(lockup.state, "indeterminate")
+        self.assertFalse(lockup.complete)
+        self.assertEqual(lockup.observations, ())
+        self.assertEqual(
+            [item.code for item in lockup.source_errors],
+            ["upstream_http_error"],
+        )
+        self.assertEqual(len(batch.observations), 2)
+
+    def test_failed_mode_does_not_stop_or_rewrite_later_sibling(self) -> None:
+        batch = EastmoneyTradingEventOperation(
+            FixedTransport(
+                [
+                    response("block_trade.json"),
+                    inline_response({}, status=500),
+                    response("dragon_records.json"),
+                    response("dragon_buy_seats.json"),
+                    response("dragon_sell_seats.json"),
+                ]
+            ),
+            request_gate=no_wait_gate(),
+        ).collect(multi_mode_query(("block_trade", "lockup", "dragon_tiger")))
+
+        self.assertEqual(
+            {
+                data_type: acquisition.state
+                for data_type, acquisition in batch.mode_acquisitions.items()
+            },
+            {
+                "block_trade": "observed_nonempty",
+                "lockup": "indeterminate",
+                "dragon_tiger": "observed_nonempty",
+            },
+        )
+        self.assertEqual(len(batch.mode_acquisitions["block_trade"].observations), 2)
+        self.assertEqual(len(batch.mode_acquisitions["dragon_tiger"].observations), 2)
+        self.assertEqual(len(batch.observations), 4)
+
+    def test_late_dragon_tiger_seat_http_failure_keeps_primary_records(self) -> None:
+        cases = (
+            (
+                "buy_details",
+                [response("dragon_records.json"), inline_response({}, status=500)],
+            ),
+            (
+                "sell_details",
+                [
+                    response("dragon_records.json"),
+                    response("dragon_buy_seats.json"),
+                    inline_response({}, status=500),
+                ],
+            ),
+        )
+        for failed_stage, responses in cases:
+            with self.subTest(failed_stage=failed_stage):
+                batch = EastmoneyTradingEventOperation(
+                    FixedTransport(responses),
+                    request_gate=no_wait_gate(),
+                ).collect(query("dragon_tiger"))
+
+                acquisition = batch.mode_acquisitions["dragon_tiger"]
+                self.assertEqual(acquisition.state, "partial")
+                self.assertFalse(acquisition.complete)
+                self.assertEqual(len(acquisition.observations), 2)
+                self.assertEqual(
+                    [item.code for item in acquisition.source_errors],
+                    ["upstream_http_error"],
+                )
+                for observation in acquisition.observations:
+                    self.assertEqual(observation.dimensions["buy_seats"], [])
+                    self.assertEqual(observation.dimensions["sell_seats"], [])
+                    self.assertIsNone(observation.metrics["institution_buy_amount"])
+                    self.assertIsNone(observation.metrics["institution_sell_amount"])
+                    self.assertIsNone(observation.metrics["institution_net_amount"])
+                    self.assertIn(
+                        "dragon_tiger_seat_and_institution_details_not_collected",
+                        observation.limitations,
+                    )
+
+    def test_late_page_row_schema_failure_keeps_valid_earlier_page(self) -> None:
+        block_rows = fixture_payload("block_trade.json")["result"]["data"]
+        dragon_rows = fixture_payload("dragon_records.json")["result"]["data"]
+        lockup_rows = fixture_payload("lockup.json")["result"]["data"]
+        market_page_1 = fixture_payload("market_dragon_page_1.json")
+        market_page_2 = fixture_payload("market_dragon_page_2.json")
+        cases = (
+            (
+                "block_trade",
+                block_rows[0],
+                block_rows[1],
+                "BUYER_NAME",
+                None,
+                "2026-07-01",
+                "2026-08-02",
+            ),
+            (
+                "dragon_tiger",
+                dragon_rows[0],
+                dragon_rows[1],
+                "EXPLANATION",
+                None,
+                "2026-07-01",
+                "2026-08-02",
+            ),
+            (
+                "lockup",
+                lockup_rows[0],
+                lockup_rows[1],
+                "FREE_SHARES_TYPE",
+                None,
+                "2026-07-01",
+                "2026-10-31",
+            ),
+            (
+                "market_dragon_tiger",
+                market_page_1["result"]["data"][0],
+                market_page_2["result"]["data"][0],
+                "EXPLANATION",
+                None,
+                "2026-08-01",
+                "2026-08-01",
+            ),
+            (
+                "block_trade",
+                block_rows[0],
+                block_rows[1],
+                "DEAL_PRICE",
+                "0",
+                "2026-07-01",
+                "2026-08-02",
+            ),
+            (
+                "block_trade",
+                block_rows[0],
+                block_rows[1],
+                "DEAL_VOLUME",
+                "-1",
+                "2026-07-01",
+                "2026-08-02",
+            ),
+            (
+                "lockup",
+                lockup_rows[0],
+                lockup_rows[1],
+                "FREE_SHARES",
+                "-1",
+                "2026-07-01",
+                "2026-10-31",
+            ),
+            (
+                "lockup",
+                lockup_rows[0],
+                lockup_rows[1],
+                "FREE_RATIO",
+                "2",
+                "2026-07-01",
+                "2026-10-31",
+            ),
+        )
+        for (
+            data_type,
+            first_row,
+            invalid_row,
+            field,
+            invalid_value,
+            start,
+            end,
+        ) in cases:
+            with self.subTest(data_type=data_type, field=field):
+                invalid_row = dict(invalid_row)
+                if invalid_value is None:
+                    invalid_row.pop(field)
+                else:
+                    invalid_row[field] = invalid_value
+                pages = [
+                    {
+                        "success": True,
+                        "code": 0,
+                        "result": {"pages": 2, "count": 2, "data": [first_row]},
+                    },
+                    {
+                        "success": True,
+                        "code": 0,
+                        "result": {"pages": 2, "count": 2, "data": [invalid_row]},
+                    },
+                ]
+                batch = EastmoneyTradingEventOperation(
+                    FixedTransport([inline_response(page) for page in pages]),
+                    request_gate=no_wait_gate(),
+                ).collect(query(data_type, observed_from=start, observed_to=end))
+
+                acquisition = batch.mode_acquisitions[data_type]
+                self.assertEqual(acquisition.state, "partial")
+                self.assertFalse(acquisition.complete)
+                self.assertEqual(len(acquisition.observations), 1)
+                self.assertEqual(
+                    [item.code for item in acquisition.source_errors],
+                    ["unknown_schema"],
+                )
+
+    def test_provider_proven_zero_rows_is_complete_for_each_mode(self) -> None:
+        empty_payload = {
+            "success": True,
+            "code": 0,
+            "result": {"pages": 1, "count": 0, "data": []},
+        }
+        for data_type in (
+            "block_trade",
+            "dragon_tiger",
+            "lockup",
+            "market_dragon_tiger",
+        ):
+            with self.subTest(data_type=data_type):
+                research_query = query(
+                    data_type,
+                    observed_from=(
+                        "2026-08-02"
+                        if data_type == "market_dragon_tiger"
+                        else "2026-07-01"
+                    ),
+                    observed_to="2026-08-02",
+                )
+                batch = EastmoneyTradingEventOperation(
+                    FixedTransport([inline_response(empty_payload)]),
+                    request_gate=no_wait_gate(),
+                ).collect(research_query)
+
+                acquisition = batch.mode_acquisitions[data_type]
+                self.assertEqual(acquisition.state, "observed_empty")
+                self.assertTrue(acquisition.complete)
+                self.assertEqual(acquisition.observations, ())
+                self.assertEqual(acquisition.source_errors, ())
+
+    def test_late_page_failure_keeps_valid_rows_as_partial_mode(self) -> None:
+        batch = EastmoneyTradingEventOperation(
+            FixedTransport(
+                [
+                    response("market_dragon_page_1.json"),
+                    inline_response({}, status=500),
+                ]
+            ),
+            request_gate=no_wait_gate(),
+        ).collect(
+            query(
+                "market_dragon_tiger",
+                observed_from="2026-08-01",
+                observed_to="2026-08-01",
+            )
+        )
+
+        acquisition = batch.mode_acquisitions["market_dragon_tiger"]
+        self.assertEqual(acquisition.state, "partial")
+        self.assertFalse(acquisition.complete)
+        self.assertEqual(len(acquisition.observations), 1)
+        self.assertEqual(acquisition.observations[0].data_type, "market_dragon_tiger")
+        self.assertEqual(
+            [item.code for item in acquisition.source_errors],
+            ["upstream_http_error"],
+        )
+
+    def test_late_page_schema_failure_keeps_valid_rows_as_partial_mode(self) -> None:
+        invalid_json = HttpResponse(
+            status=200,
+            content_type="application/json",
+            body=b"{",
+            retrieved_at=RETRIEVED_AT,
+        )
+        batch = EastmoneyTradingEventOperation(
+            FixedTransport(
+                [
+                    response("market_dragon_page_1.json"),
+                    invalid_json,
+                ]
+            ),
+            request_gate=no_wait_gate(),
+        ).collect(
+            query(
+                "market_dragon_tiger",
+                observed_from="2026-08-01",
+                observed_to="2026-08-01",
+            )
+        )
+
+        acquisition = batch.mode_acquisitions["market_dragon_tiger"]
+        self.assertEqual(acquisition.state, "partial")
+        self.assertEqual(len(acquisition.observations), 1)
+        self.assertEqual(
+            [item.code for item in acquisition.source_errors],
+            ["unknown_schema"],
+        )
+
+    def test_each_mode_retains_valid_first_page_on_late_transport_failure(self) -> None:
+        cases = (
+            ("block_trade", "block_trade.json", "2026-07-01", "2026-08-02", 2),
+            ("dragon_tiger", "dragon_records.json", "2026-07-01", "2026-08-02", 2),
+            ("lockup", "lockup.json", "2026-07-01", "2026-10-31", 2),
+            (
+                "market_dragon_tiger",
+                "market_dragon_page_1.json",
+                "2026-08-01",
+                "2026-08-01",
+                1,
+            ),
+        )
+        for data_type, fixture, observed_from, observed_to, row_count in cases:
+            with self.subTest(data_type=data_type):
+                payload = fixture_payload(fixture)
+                payload["result"]["pages"] = 2  # type: ignore[index]
+                payload["result"]["count"] = row_count + 1  # type: ignore[index]
+                batch = EastmoneyTradingEventOperation(
+                    FixedTransport(
+                        [inline_response(payload), inline_response({}, status=500)]
+                    ),
+                    request_gate=no_wait_gate(),
+                ).collect(
+                    query(
+                        data_type,
+                        observed_from=observed_from,
+                        observed_to=observed_to,
+                    )
+                )
+
+                acquisition = batch.mode_acquisitions[data_type]
+                self.assertEqual(acquisition.state, "partial")
+                self.assertFalse(acquisition.complete)
+                self.assertEqual(len(acquisition.observations), row_count)
+                self.assertEqual(
+                    [item.code for item in acquisition.source_errors],
+                    ["upstream_http_error"],
+                )
+
+    def test_each_mode_schema_failure_is_indeterminate_and_mode_local(self) -> None:
+        invalid_json = HttpResponse(
+            status=200,
+            content_type="application/json",
+            body=b"{",
+            retrieved_at=RETRIEVED_AT,
+        )
+        for data_type in (
+            "block_trade",
+            "dragon_tiger",
+            "lockup",
+            "market_dragon_tiger",
+        ):
+            with self.subTest(data_type=data_type):
+                batch = EastmoneyTradingEventOperation(
+                    FixedTransport([invalid_json]),
+                    request_gate=no_wait_gate(),
+                ).collect(
+                    query(
+                        data_type,
+                        observed_from=(
+                            "2026-08-01"
+                            if data_type == "market_dragon_tiger"
+                            else "2026-07-01"
+                        ),
+                        observed_to=(
+                            "2026-10-31" if data_type == "lockup" else "2026-08-01"
+                        ),
+                    )
+                )
+
+                acquisition = batch.mode_acquisitions[data_type]
+                self.assertEqual(acquisition.state, "indeterminate")
+                self.assertFalse(acquisition.complete)
+                self.assertEqual(acquisition.observations, ())
+                self.assertEqual(
+                    [item.code for item in acquisition.source_errors],
+                    ["unknown_schema"],
+                )
+
+    def test_semantic_duplicate_conflict_fails_closed_for_that_mode(self) -> None:
+        payload = fixture_payload("market_dragon_page_1.json")
+        first = payload["result"]["data"][0]  # type: ignore[index]
+        conflicting = dict(first)
+        conflicting["BILLBOARD_NET_AMT"] = "49000000"
+        payload["result"]["pages"] = 1  # type: ignore[index]
+        payload["result"]["count"] = 2  # type: ignore[index]
+        payload["result"]["data"] = [first, conflicting]  # type: ignore[index]
+
+        batch = EastmoneyTradingEventOperation(
+            FixedTransport([inline_response(payload)]),
+            request_gate=no_wait_gate(),
+        ).collect(
+            query(
+                "market_dragon_tiger",
+                observed_from="2026-08-01",
+                observed_to="2026-08-01",
+            )
+        )
+
+        acquisition = batch.mode_acquisitions["market_dragon_tiger"]
+        self.assertEqual(acquisition.state, "indeterminate")
+        self.assertEqual(acquisition.observations, ())
+        self.assertEqual(
+            [item.code for item in acquisition.source_errors],
+            ["duplicate_source_conflict"],
+        )
+
     def assert_time_contract(
         self, observations: tuple[CapitalObservation, ...]
     ) -> None:
@@ -165,6 +596,10 @@ class EastmoneyTradingEventOperationTests(unittest.TestCase):
 
         self.assertTrue(batch.complete)
         self.assertEqual(batch.source_errors, ())
+        self.assertEqual(
+            batch.mode_acquisitions["dragon_tiger"].state,
+            "observed_nonempty",
+        )
         self.assertEqual(gate.calls, 3)
         self.assertEqual(len(batch.degradations), 3)
         self.assertEqual(len(batch.observations), 2)
@@ -266,6 +701,10 @@ class EastmoneyTradingEventOperationTests(unittest.TestCase):
 
         self.assertTrue(batch.complete)
         self.assertEqual(batch.source_errors, ())
+        self.assertEqual(
+            batch.mode_acquisitions["market_dragon_tiger"].state,
+            "observed_nonempty",
+        )
         self.assertEqual(len(batch.observations), 2)
         self.assert_time_contract(batch.observations)
         first, second = batch.observations
@@ -411,6 +850,10 @@ class EastmoneyTradingEventOperationTests(unittest.TestCase):
         self.assertTrue(batch.complete)
         self.assertEqual(batch.source_errors, ())
         self.assertEqual(
+            batch.mode_acquisitions["lockup"].state,
+            "observed_nonempty",
+        )
+        self.assertEqual(
             [item.observed_on for item in batch.observations],
             ["2026-07-15", "2026-08-20"],
         )
@@ -474,6 +917,10 @@ class EastmoneyTradingEventOperationTests(unittest.TestCase):
         self.assertTrue(batch.complete)
         self.assertEqual(batch.source_errors, ())
         self.assertEqual(
+            batch.mode_acquisitions["lockup"].state,
+            "observed_nonempty",
+        )
+        self.assertEqual(
             [item.observed_on for item in batch.observations],
             ["2026-08-20"],
         )
@@ -495,6 +942,10 @@ class EastmoneyTradingEventOperationTests(unittest.TestCase):
 
         self.assertTrue(batch.complete)
         self.assertEqual(batch.source_errors, ())
+        self.assertEqual(
+            batch.mode_acquisitions["block_trade"].state,
+            "observed_nonempty",
+        )
         self.assertEqual(len(batch.observations), 2)
         self.assert_time_contract(batch.observations)
         first = batch.observations[0]
@@ -644,7 +1095,7 @@ class EastmoneyTradingEventOperationTests(unittest.TestCase):
             (wrong_security, "wrong_security_payload"),
             (wrong_date, "wrong_date_payload"),
             (missing_count, "unknown_schema"),
-            (empty, "empty_response"),
+            (empty, None),
             (provider_empty, "empty_response"),
         )
         for payload, expected_code in cases:
@@ -654,9 +1105,13 @@ class EastmoneyTradingEventOperationTests(unittest.TestCase):
                     request_gate=no_wait_gate(),
                 ).collect(query("dragon_tiger"))
 
-                self.assertFalse(batch.complete)
                 self.assertEqual(batch.observations, ())
-                self.assertEqual(batch.source_errors[0].code, expected_code)
+                if expected_code is None:
+                    self.assertTrue(batch.complete)
+                    self.assertEqual(batch.source_errors, ())
+                else:
+                    self.assertFalse(batch.complete)
+                    self.assertEqual(batch.source_errors[0].code, expected_code)
 
     def test_dragon_tiger_seat_security_and_date_must_match_latest_record(
         self,
@@ -694,7 +1149,11 @@ class EastmoneyTradingEventOperationTests(unittest.TestCase):
         )
 
         self.assertFalse(batch.complete)
-        self.assertEqual(batch.observations, ())
+        self.assertEqual(len(batch.observations), 1)
+        self.assertEqual(
+            batch.mode_acquisitions["market_dragon_tiger"].state,
+            "partial",
+        )
         self.assertEqual(batch.source_errors[0].code, "pagination_incomplete")
 
     def test_terminal_429_keeps_structured_backoff_diagnostic(self) -> None:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from .content_contract import ContentHttpTransport
@@ -85,6 +87,44 @@ class CapitalSourceFailure:
 
 
 @dataclass(frozen=True)
+class CapitalModeAcquisition:
+    """One trading-event mode's fixed source-acquisition material."""
+
+    data_type: str
+    operation_id: str
+    observations: tuple[CapitalObservation, ...] = ()
+    source_errors: tuple[CapitalSourceFailure, ...] = ()
+    degradations: tuple[CapitalSourceFailure, ...] = ()
+    complete: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "observations", tuple(self.observations))
+        object.__setattr__(self, "source_errors", tuple(self.source_errors))
+        object.__setattr__(self, "degradations", tuple(self.degradations))
+        if self.data_type not in CAPITAL_DATA_TYPES:
+            raise ValueError("capital acquisition data type is unknown")
+        if any(
+            item.data_type != self.data_type
+            or item.source_operation != self.operation_id
+            for item in self.observations
+        ):
+            raise ValueError("capital acquisition observation owner is inconsistent")
+        if any(
+            item.source_operation != self.operation_id
+            for item in (*self.source_errors, *self.degradations)
+        ):
+            raise ValueError("capital acquisition error owner is inconsistent")
+
+    @property
+    def state(self) -> str:
+        """Derive one mode's four-state acquisition result."""
+
+        if self.complete:
+            return "observed_nonempty" if self.observations else "observed_empty"
+        return "partial" if self.observations else "indeterminate"
+
+
+@dataclass(frozen=True)
 class CapitalSourceBatch:
     """One operation's bounded observations and explicit acquisition state."""
 
@@ -94,6 +134,77 @@ class CapitalSourceBatch:
     degradations: tuple[CapitalSourceFailure, ...] = ()
     limitations: tuple[str, ...] = ()
     complete: bool = True
+    mode_acquisitions: Mapping[str, CapitalModeAcquisition] = field(
+        default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "observations", tuple(self.observations))
+        object.__setattr__(self, "source_errors", tuple(self.source_errors))
+        object.__setattr__(self, "degradations", tuple(self.degradations))
+        object.__setattr__(self, "limitations", tuple(self.limitations))
+        acquisitions = MappingProxyType(dict(self.mode_acquisitions))
+        object.__setattr__(self, "mode_acquisitions", acquisitions)
+        if not acquisitions:
+            return
+        if any(
+            key != item.data_type or item.operation_id != self.operation_id
+            for key, item in acquisitions.items()
+        ):
+            raise ValueError("capital mode acquisition owner is inconsistent")
+        expected_observations = tuple(
+            observation
+            for acquisition in acquisitions.values()
+            for observation in acquisition.observations
+        )
+        expected_errors = tuple(
+            error
+            for acquisition in acquisitions.values()
+            for error in acquisition.source_errors
+        )
+        expected_degradations = tuple(
+            degradation
+            for acquisition in acquisitions.values()
+            for degradation in acquisition.degradations
+        )
+        if (
+            self.observations != expected_observations
+            or self.source_errors != expected_errors
+            or self.degradations != expected_degradations
+            or self.complete != all(item.complete for item in acquisitions.values())
+        ):
+            raise ValueError("capital batch disagrees with mode acquisition material")
+
+    @classmethod
+    def from_mode_acquisitions(
+        cls,
+        operation_id: str,
+        acquisitions: Mapping[str, CapitalModeAcquisition],
+        *,
+        limitations: tuple[str, ...] = (),
+    ) -> CapitalSourceBatch:
+        """Build aggregate batch fields from the typed source material."""
+
+        fixed = tuple(acquisitions.values())
+        return cls(
+            operation_id=operation_id,
+            observations=tuple(
+                observation
+                for acquisition in fixed
+                for observation in acquisition.observations
+            ),
+            source_errors=tuple(
+                error for acquisition in fixed for error in acquisition.source_errors
+            ),
+            degradations=tuple(
+                degradation
+                for acquisition in fixed
+                for degradation in acquisition.degradations
+            ),
+            limitations=limitations,
+            complete=all(item.complete for item in fixed),
+            mode_acquisitions=acquisitions,
+        )
 
 
 class CapitalSourceOperation(Protocol):

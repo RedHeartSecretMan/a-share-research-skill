@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 
 from .capital_contract import (
     CapitalHttpTransport,
+    CapitalModeAcquisition,
     CapitalObservation,
     CapitalQuery,
     CapitalSourceBatch,
@@ -35,6 +36,10 @@ class _FetchedRow:
     value: dict[str, Any]
     retrieved_at: datetime
     locator_uri: str
+    page_number: int
+
+
+_StockDragonRecord = tuple[_FetchedRow, str, str, Decimal, Decimal]
 
 
 class _SourceError(Exception):
@@ -44,10 +49,35 @@ class _SourceError(Exception):
         message: str,
         *,
         diagnostics: tuple[RequestGateDiagnostic, ...] = (),
+        partial_rows: tuple[_FetchedRow, ...] = (),
+        observations: tuple[CapitalObservation, ...] = (),
+        retain_prior_pages: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.diagnostics = diagnostics
+        self.partial_rows = partial_rows
+        self.observations = observations
+        self.retain_prior_pages = retain_prior_pages
+
+
+def _row_error_with_prior_pages(
+    error: _SourceError,
+    rows: list[_FetchedRow],
+    failed_row: _FetchedRow,
+) -> _SourceError:
+    if not error.retain_prior_pages:
+        return error
+    prior_rows = tuple(row for row in rows if row.page_number < failed_row.page_number)
+    if not prior_rows:
+        return error
+    return _SourceError(
+        error.code,
+        str(error),
+        diagnostics=error.diagnostics,
+        partial_rows=prior_rows,
+        retain_prior_pages=True,
+    )
 
 
 def _failure(operation_id: str, error: _SourceError) -> CapitalSourceFailure:
@@ -97,8 +127,7 @@ class EastmoneyTradingEventOperation:
         )
         if not selected:
             return CapitalSourceBatch(operation_id=self.operation_id)
-        observations: list[CapitalObservation] = []
-        degradations: list[CapitalSourceFailure] = []
+        acquisitions: dict[str, CapitalModeAcquisition] = {}
         for data_type in selected:
             try:
                 if data_type == "dragon_tiger":
@@ -115,25 +144,30 @@ class EastmoneyTradingEventOperation:
                         "The trading-event data type is not implemented.",
                     )
             except _SourceError as error:
-                degradations.extend(
+                degradations = tuple(
                     _gate_degradation(self.operation_id, item)
                     for item in error.diagnostics
                 )
-                return CapitalSourceBatch(
+                acquisitions[data_type] = CapitalModeAcquisition(
+                    data_type=data_type,
                     operation_id=self.operation_id,
-                    observations=tuple(observations),
+                    observations=error.observations,
                     source_errors=(_failure(self.operation_id, error),),
-                    degradations=tuple(degradations),
+                    degradations=degradations,
                     complete=False,
                 )
-            observations.extend(collected)
-            degradations.extend(
-                _gate_degradation(self.operation_id, item) for item in diagnostics
+                continue
+            acquisitions[data_type] = CapitalModeAcquisition(
+                data_type=data_type,
+                operation_id=self.operation_id,
+                observations=tuple(collected),
+                degradations=tuple(
+                    _gate_degradation(self.operation_id, item) for item in diagnostics
+                ),
             )
-        return CapitalSourceBatch(
-            operation_id=self.operation_id,
-            observations=tuple(observations),
-            degradations=tuple(degradations),
+        return CapitalSourceBatch.from_mode_acquisitions(
+            self.operation_id,
+            acquisitions,
         )
 
     def _collect_stock_dragon_tiger(
@@ -142,54 +176,70 @@ class EastmoneyTradingEventOperation:
     ) -> tuple[list[CapitalObservation], tuple[RequestGateDiagnostic, ...]]:
         observed_from, observed_to = _historical_window(query)
         _exchange, code = _canonical_subject(query)
-        records, diagnostics = self._fetch_report(
-            "RPT_DAILYBILLBOARD_DETAILSNEW",
-            filter_value=(
-                f"(TRADE_DATE>='{observed_from}')(TRADE_DATE<='{observed_to}')"
-                f'(SECURITY_CODE="{code}")'
-            ),
-            sort_columns="TRADE_DATE",
-            sort_types="-1",
-            page_size=min(self._page_size, 500),
-        )
-        normalized_records: list[tuple[_FetchedRow, str, str, Decimal, Decimal]] = []
-        for fetched in records:
-            row = fetched.value
-            _require_security(row, code)
-            observed_on = _row_date(row.get("TRADE_DATE"), "trade date")
-            _require_in_window(observed_on, observed_from, observed_to)
-            reason = _required_text(row.get("EXPLANATION"), "billboard reason")
-            normalized_records.append(
-                (
-                    fetched,
-                    observed_on,
-                    reason,
-                    _required_decimal(row.get("BILLBOARD_NET_AMT"), "net buy"),
-                    _required_decimal(row.get("TURNOVERRATE"), "turnover rate"),
-                )
+        try:
+            records, diagnostics = self._fetch_report(
+                "RPT_DAILYBILLBOARD_DETAILSNEW",
+                filter_value=(
+                    f"(TRADE_DATE>='{observed_from}')(TRADE_DATE<='{observed_to}')"
+                    f'(SECURITY_CODE="{code}")'
+                ),
+                sort_columns="TRADE_DATE",
+                sort_types="-1",
+                page_size=min(self._page_size, 500),
             )
-        normalized_records.sort(key=lambda item: item[1], reverse=True)
-        normalized_records = normalized_records[: query.limit]
-        if not normalized_records:
+            normalized_records = self._normalize_stock_dragon_tiger_records(
+                records, code, observed_from, observed_to, query.limit
+            )
+        except _SourceError as error:
+            if not error.partial_rows:
+                raise
+            normalized_records = self._normalize_stock_dragon_tiger_records(
+                list(error.partial_rows), code, observed_from, observed_to, query.limit
+            )
+            observations = self._stock_dragon_tiger_observations(
+                normalized_records,
+                query,
+            )
             raise _SourceError(
-                "empty_response",
-                "The source returned no usable dragon-tiger records.",
-            )
+                error.code,
+                str(error),
+                diagnostics=error.diagnostics,
+                observations=tuple(observations),
+            ) from error
+        if not normalized_records:
+            return [], diagnostics
         latest_date = normalized_records[0][1]
-        buy_rows, buy_diagnostics = self._fetch_report(
-            "RPT_BILLBOARD_DAILYDETAILSBUY",
-            filter_value=(f"(TRADE_DATE='{latest_date}')(SECURITY_CODE=\"{code}\")"),
-            sort_columns="BUY",
-            sort_types="-1",
-            page_size=50,
-        )
-        sell_rows, sell_diagnostics = self._fetch_report(
-            "RPT_BILLBOARD_DAILYDETAILSSELL",
-            filter_value=(f"(TRADE_DATE='{latest_date}')(SECURITY_CODE=\"{code}\")"),
-            sort_columns="SELL",
-            sort_types="-1",
-            page_size=50,
-        )
+        try:
+            buy_rows, buy_diagnostics = self._fetch_report(
+                "RPT_BILLBOARD_DAILYDETAILSBUY",
+                filter_value=(
+                    f"(TRADE_DATE='{latest_date}')(SECURITY_CODE=\"{code}\")"
+                ),
+                sort_columns="BUY",
+                sort_types="-1",
+                page_size=50,
+            )
+        except _SourceError as error:
+            raise self._dragon_tiger_detail_error(
+                error, normalized_records, query, diagnostics
+            ) from error
+        try:
+            sell_rows, sell_diagnostics = self._fetch_report(
+                "RPT_BILLBOARD_DAILYDETAILSSELL",
+                filter_value=(
+                    f"(TRADE_DATE='{latest_date}')(SECURITY_CODE=\"{code}\")"
+                ),
+                sort_columns="SELL",
+                sort_types="-1",
+                page_size=50,
+            )
+        except _SourceError as error:
+            raise self._dragon_tiger_detail_error(
+                error,
+                normalized_records,
+                query,
+                diagnostics + buy_diagnostics,
+            ) from error
         buy_seats = _normalize_seats(
             buy_rows, side="buy", code=code, trade_date=latest_date
         )
@@ -212,12 +262,103 @@ class EastmoneyTradingEventOperation:
             ),
             Decimal(0),
         )
-        retrieved_at = max(
-            [item.retrieved_at for item in records + buy_rows + sell_rows]
+        observations = self._stock_dragon_tiger_observations(
+            normalized_records,
+            query,
+            buy_seats=buy_seats,
+            sell_seats=sell_seats,
+            institution_buy=institution_buy,
+            institution_sell=institution_sell,
+            detailed_retrieved_at=max(
+                item.retrieved_at for item in records + buy_rows + sell_rows
+            ),
         )
+        return observations, diagnostics + buy_diagnostics + sell_diagnostics
+
+    def _dragon_tiger_detail_error(
+        self,
+        error: _SourceError,
+        normalized_records: list[_StockDragonRecord],
+        query: CapitalQuery,
+        prior_diagnostics: tuple[RequestGateDiagnostic, ...],
+    ) -> _SourceError:
+        observations = self._stock_dragon_tiger_observations(
+            normalized_records,
+            query,
+        )
+        return _SourceError(
+            error.code,
+            str(error),
+            diagnostics=prior_diagnostics + error.diagnostics,
+            observations=tuple(observations),
+        )
+
+    def _normalize_stock_dragon_tiger_records(
+        self,
+        records: list[_FetchedRow],
+        code: str,
+        observed_from: str,
+        observed_to: str,
+        limit: int,
+    ) -> list[_StockDragonRecord]:
+        normalized_records: list[_StockDragonRecord] = []
+        for fetched in records:
+            try:
+                row = fetched.value
+                _require_security(row, code)
+                observed_on = _row_date(row.get("TRADE_DATE"), "trade date")
+                _require_in_window(observed_on, observed_from, observed_to)
+                reason = _required_text(row.get("EXPLANATION"), "billboard reason")
+                normalized_records.append(
+                    (
+                        fetched,
+                        observed_on,
+                        reason,
+                        _required_decimal(row.get("BILLBOARD_NET_AMT"), "net buy"),
+                        _required_decimal(row.get("TURNOVERRATE"), "turnover rate"),
+                    )
+                )
+            except _SourceError as error:
+                raise _row_error_with_prior_pages(error, records, fetched) from error
+        normalized_records.sort(key=lambda item: item[1], reverse=True)
+        return normalized_records[:limit]
+
+    def _stock_dragon_tiger_observations(
+        self,
+        normalized_records: list[_StockDragonRecord],
+        query: CapitalQuery,
+        *,
+        buy_seats: list[dict[str, Any]] | None = None,
+        sell_seats: list[dict[str, Any]] | None = None,
+        institution_buy: Decimal | None = None,
+        institution_sell: Decimal | None = None,
+        detailed_retrieved_at: datetime | None = None,
+    ) -> list[CapitalObservation]:
+        if not normalized_records:
+            return []
+        latest_date = normalized_records[0][1]
+        has_details = (
+            buy_seats is not None
+            and sell_seats is not None
+            and institution_buy is not None
+            and institution_sell is not None
+            and detailed_retrieved_at is not None
+        )
+        if not has_details:
+            buy_seats = []
+            sell_seats = []
+            institution_buy = Decimal(0)
+            institution_sell = Decimal(0)
+            detailed_retrieved_at = normalized_records[0][0].retrieved_at
+        assert buy_seats is not None
+        assert sell_seats is not None
+        assert institution_buy is not None
+        assert institution_sell is not None
+        assert detailed_retrieved_at is not None
         observations: list[CapitalObservation] = []
         for fetched, observed_on, reason, net_buy, turnover_rate in normalized_records:
             is_latest = observed_on == latest_date
+            has_record_details = is_latest and has_details
             observations.append(
                 CapitalObservation(
                     data_type="dragon_tiger",
@@ -226,7 +367,11 @@ class EastmoneyTradingEventOperation:
                     subject=query.subject,
                     observed_on=observed_on,
                     available_at=None,
-                    retrieved_at=retrieved_at if is_latest else fetched.retrieved_at,
+                    retrieved_at=(
+                        detailed_retrieved_at
+                        if has_record_details
+                        else fetched.retrieved_at
+                    ),
                     period={
                         "start": observed_on,
                         "end": observed_on,
@@ -236,15 +381,15 @@ class EastmoneyTradingEventOperation:
                         "net_buy_amount": _decimal_text(net_buy),
                         "turnover_rate": _decimal_text(turnover_rate),
                         "institution_buy_amount": _decimal_text(institution_buy)
-                        if is_latest
+                        if has_record_details
                         else None,
                         "institution_sell_amount": _decimal_text(institution_sell)
-                        if is_latest
+                        if has_record_details
                         else None,
                         "institution_net_amount": _decimal_text(
                             institution_buy - institution_sell
                         )
-                        if is_latest
+                        if has_record_details
                         else None,
                     },
                     units={
@@ -263,8 +408,8 @@ class EastmoneyTradingEventOperation:
                     },
                     dimensions={
                         "reason": reason,
-                        "buy_seats": buy_seats[:5] if is_latest else [],
-                        "sell_seats": sell_seats[:5] if is_latest else [],
+                        "buy_seats": buy_seats[:5] if has_record_details else [],
+                        "sell_seats": sell_seats[:5] if has_record_details else [],
                         "seat_amount_unit": "CNY",
                         "seat_amount_directions": {
                             "buy_amount": "positive_is_buy",
@@ -277,13 +422,13 @@ class EastmoneyTradingEventOperation:
                         "availability_time_unknown",
                         *(
                             ("dragon_tiger_seat_and_institution_details_not_collected",)
-                            if not is_latest
+                            if not has_record_details
                             else ()
                         ),
                     ),
                 )
             )
-        return observations, diagnostics + buy_diagnostics + sell_diagnostics
+        return observations
 
     def _collect_market_dragon_tiger(
         self,
@@ -300,15 +445,46 @@ class EastmoneyTradingEventOperation:
                 "invalid_window",
                 "The all-market dragon-tiger ranking requires one exact date.",
             )
-        rows, diagnostics = self._fetch_report(
-            "RPT_DAILYBILLBOARD_DETAILSNEW",
-            filter_value=(
-                f"(TRADE_DATE>='{observed_from}')(TRADE_DATE<='{observed_to}')"
-            ),
-            sort_columns="BILLBOARD_NET_AMT",
-            sort_types="-1",
-            page_size=min(self._page_size, 500),
-        )
+        try:
+            rows, diagnostics = self._fetch_report(
+                "RPT_DAILYBILLBOARD_DETAILSNEW",
+                filter_value=(
+                    f"(TRADE_DATE>='{observed_from}')(TRADE_DATE<='{observed_to}')"
+                ),
+                sort_columns="BILLBOARD_NET_AMT",
+                sort_types="-1",
+                page_size=min(self._page_size, 500),
+            )
+            observations = self._market_dragon_tiger_observations(
+                rows,
+                query,
+                observed_from,
+                observed_to,
+            )
+        except _SourceError as error:
+            if not error.partial_rows:
+                raise
+            observations = self._market_dragon_tiger_observations(
+                list(error.partial_rows),
+                query,
+                observed_from,
+                observed_to,
+            )
+            raise _SourceError(
+                error.code,
+                str(error),
+                diagnostics=error.diagnostics,
+                observations=tuple(observations),
+            ) from error
+        return observations, diagnostics
+
+    def _market_dragon_tiger_observations(
+        self,
+        rows: list[_FetchedRow],
+        query: CapitalQuery,
+        observed_from: str,
+        observed_to: str,
+    ) -> list[CapitalObservation]:
         normalized: list[
             tuple[
                 _FetchedRow,
@@ -325,32 +501,48 @@ class EastmoneyTradingEventOperation:
                 ],
             ]
         ] = []
+        semantic_rows: dict[
+            tuple[str, str, str],
+            tuple[str, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal | None],
+        ] = {}
         for fetched in rows:
-            row = fetched.value
-            provider_code, provider_name = _market_provider_security(row)
-            observed_on = _row_date(row.get("TRADE_DATE"), "trade date")
-            _require_in_window(observed_on, observed_from, observed_to)
-            reason = _required_text(row.get("EXPLANATION"), "billboard reason")
-            metrics = (
-                _required_decimal(row.get("CLOSE_PRICE"), "close price"),
-                _required_decimal(row.get("CHANGE_RATE"), "change rate"),
-                _required_decimal(row.get("BILLBOARD_NET_AMT"), "net buy"),
-                _required_decimal(row.get("BILLBOARD_BUY_AMT"), "buy amount"),
-                _required_decimal(row.get("BILLBOARD_SELL_AMT"), "sell amount"),
-                _optional_decimal(row.get("TURNOVERRATE"), "turnover rate"),
-            )
-            normalized.append(
-                (
-                    fetched,
-                    {
-                        "provider_security_code": provider_code,
-                        "provider_security_name": provider_name,
-                    },
-                    observed_on,
-                    reason,
-                    metrics,
+            try:
+                row = fetched.value
+                provider_code, provider_name = _market_provider_security(row)
+                observed_on = _row_date(row.get("TRADE_DATE"), "trade date")
+                _require_in_window(observed_on, observed_from, observed_to)
+                reason = _required_text(row.get("EXPLANATION"), "billboard reason")
+                metrics = (
+                    _required_decimal(row.get("CLOSE_PRICE"), "close price"),
+                    _required_decimal(row.get("CHANGE_RATE"), "change rate"),
+                    _required_decimal(row.get("BILLBOARD_NET_AMT"), "net buy"),
+                    _required_decimal(row.get("BILLBOARD_BUY_AMT"), "buy amount"),
+                    _required_decimal(row.get("BILLBOARD_SELL_AMT"), "sell amount"),
+                    _optional_decimal(row.get("TURNOVERRATE"), "turnover rate"),
                 )
-            )
+                semantic_key = (provider_code, observed_on, reason)
+                semantic_value = (provider_name, *metrics)
+                previous = semantic_rows.get(semantic_key)
+                if previous is not None and previous != semantic_value:
+                    raise _SourceError(
+                        "duplicate_source_conflict",
+                        "Duplicate market dragon-tiger rows disagree.",
+                    )
+                semantic_rows[semantic_key] = semantic_value
+                normalized.append(
+                    (
+                        fetched,
+                        {
+                            "provider_security_code": provider_code,
+                            "provider_security_name": provider_name,
+                        },
+                        observed_on,
+                        reason,
+                        metrics,
+                    )
+                )
+            except _SourceError as error:
+                raise _row_error_with_prior_pages(error, rows, fetched) from error
         normalized.sort(key=lambda item: item[4][2], reverse=True)
         observations: list[CapitalObservation] = []
         for rank, (
@@ -417,7 +609,7 @@ class EastmoneyTradingEventOperation:
                     ),
                 )
             )
-        return observations, diagnostics
+        return observations
 
     def _collect_block_trade(
         self,
@@ -425,16 +617,42 @@ class EastmoneyTradingEventOperation:
     ) -> tuple[list[CapitalObservation], tuple[RequestGateDiagnostic, ...]]:
         observed_from, observed_to = _historical_window(query)
         _exchange, code = _canonical_subject(query)
-        rows, diagnostics = self._fetch_report(
-            "RPT_DATA_BLOCKTRADE",
-            filter_value=(
-                f'(SECURITY_CODE="{code}")'
-                f"(TRADE_DATE>='{observed_from}')(TRADE_DATE<='{observed_to}')"
-            ),
-            sort_columns="TRADE_DATE",
-            sort_types="-1",
-            page_size=min(self._page_size, 500),
-        )
+        try:
+            rows, diagnostics = self._fetch_report(
+                "RPT_DATA_BLOCKTRADE",
+                filter_value=(
+                    f'(SECURITY_CODE="{code}")'
+                    f"(TRADE_DATE>='{observed_from}')(TRADE_DATE<='{observed_to}')"
+                ),
+                sort_columns="TRADE_DATE",
+                sort_types="-1",
+                page_size=min(self._page_size, 500),
+            )
+            observations = self._block_trade_observations(
+                rows, query, code, observed_from, observed_to
+            )
+        except _SourceError as error:
+            if not error.partial_rows:
+                raise
+            observations = self._block_trade_observations(
+                list(error.partial_rows), query, code, observed_from, observed_to
+            )
+            raise _SourceError(
+                error.code,
+                str(error),
+                diagnostics=error.diagnostics,
+                observations=tuple(observations),
+            ) from error
+        return observations, diagnostics
+
+    def _block_trade_observations(
+        self,
+        rows: list[_FetchedRow],
+        query: CapitalQuery,
+        code: str,
+        observed_from: str,
+        observed_to: str,
+    ) -> list[CapitalObservation]:
         normalized: list[
             tuple[
                 _FetchedRow,
@@ -448,32 +666,39 @@ class EastmoneyTradingEventOperation:
             ]
         ] = []
         for fetched in rows:
-            row = fetched.value
-            _require_security(row, code)
-            observed_on = _row_date(row.get("TRADE_DATE"), "block-trade date")
-            _require_in_window(observed_on, observed_from, observed_to)
-            deal_price = _required_positive_decimal(row.get("DEAL_PRICE"), "deal price")
-            close_price = _required_positive_decimal(
-                row.get("CLOSE_PRICE"), "close price"
-            )
-            volume = _required_nonnegative_decimal(
-                row.get("DEAL_VOLUME"), "deal volume"
-            )
-            amount = _required_nonnegative_decimal(row.get("DEAL_AMT"), "deal amount")
-            buyer = _required_text(row.get("BUYER_NAME"), "buyer department")
-            seller = _required_text(row.get("SELLER_NAME"), "seller department")
-            normalized.append(
-                (
-                    fetched,
-                    observed_on,
-                    deal_price,
-                    close_price,
-                    volume,
-                    amount,
-                    buyer,
-                    seller,
+            try:
+                row = fetched.value
+                _require_security(row, code)
+                observed_on = _row_date(row.get("TRADE_DATE"), "block-trade date")
+                _require_in_window(observed_on, observed_from, observed_to)
+                deal_price = _required_positive_decimal(
+                    row.get("DEAL_PRICE"), "deal price"
                 )
-            )
+                close_price = _required_positive_decimal(
+                    row.get("CLOSE_PRICE"), "close price"
+                )
+                volume = _required_nonnegative_decimal(
+                    row.get("DEAL_VOLUME"), "deal volume"
+                )
+                amount = _required_nonnegative_decimal(
+                    row.get("DEAL_AMT"), "deal amount"
+                )
+                buyer = _required_text(row.get("BUYER_NAME"), "buyer department")
+                seller = _required_text(row.get("SELLER_NAME"), "seller department")
+                normalized.append(
+                    (
+                        fetched,
+                        observed_on,
+                        deal_price,
+                        close_price,
+                        volume,
+                        amount,
+                        buyer,
+                        seller,
+                    )
+                )
+            except _SourceError as error:
+                raise _row_error_with_prior_pages(error, rows, fetched) from error
         normalized.sort(key=lambda item: item[1], reverse=True)
         observations: list[CapitalObservation] = []
         for (
@@ -538,7 +763,7 @@ class EastmoneyTradingEventOperation:
                     limitations=("availability_time_unknown",),
                 )
             )
-        return observations, diagnostics
+        return observations
 
     def _collect_lockup(
         self,
@@ -546,41 +771,78 @@ class EastmoneyTradingEventOperation:
     ) -> tuple[list[CapitalObservation], tuple[RequestGateDiagnostic, ...]]:
         observed_from, observed_to, as_of = _lockup_window(query)
         _exchange, code = _canonical_subject(query)
-        rows, diagnostics = self._fetch_report(
-            "RPT_LIFT_STAGE",
-            filter_value=(
-                f'(SECURITY_CODE="{code}")'
-                f"(FREE_DATE>='{observed_from}')(FREE_DATE<='{observed_to}')"
-            ),
-            sort_columns="FREE_DATE",
-            sort_types="1",
-            page_size=min(self._page_size, 500),
-        )
+        try:
+            rows, diagnostics = self._fetch_report(
+                "RPT_LIFT_STAGE",
+                filter_value=(
+                    f'(SECURITY_CODE="{code}")'
+                    f"(FREE_DATE>='{observed_from}')(FREE_DATE<='{observed_to}')"
+                ),
+                sort_columns="FREE_DATE",
+                sort_types="1",
+                page_size=min(self._page_size, 500),
+            )
+            observations = self._lockup_observations(
+                rows, query, code, observed_from, observed_to, as_of
+            )
+        except _SourceError as error:
+            if not error.partial_rows:
+                raise
+            observations = self._lockup_observations(
+                list(error.partial_rows),
+                query,
+                code,
+                observed_from,
+                observed_to,
+                as_of,
+            )
+            raise _SourceError(
+                error.code,
+                str(error),
+                diagnostics=error.diagnostics,
+                observations=tuple(observations),
+            ) from error
+        return observations, diagnostics
+
+    def _lockup_observations(
+        self,
+        rows: list[_FetchedRow],
+        query: CapitalQuery,
+        code: str,
+        observed_from: str,
+        observed_to: str,
+        as_of: str,
+    ) -> list[CapitalObservation]:
         normalized: list[tuple[_FetchedRow, str, str, Decimal, Decimal, Decimal]] = []
         for fetched in rows:
-            row = fetched.value
-            _require_security(row, code)
-            observed_on = _row_date(row.get("FREE_DATE"), "lockup date")
-            _require_in_window(observed_on, observed_from, observed_to)
-            lockup_type = _required_text(
-                row.get("FREE_SHARES_TYPE"), "lockup share type"
-            )
-            released = _required_nonnegative_decimal(
-                row.get("FREE_SHARES"), "released shares"
-            )
-            tradable = _required_nonnegative_decimal(
-                row.get("ABLE_FREE_SHARES"), "tradable shares"
-            )
-            ratio = _required_nonnegative_decimal(
-                row.get("FREE_RATIO"), "total share ratio"
-            )
-            if ratio > 1:
-                raise _SourceError(
-                    "unknown_schema", "The source total share ratio exceeds one."
+            try:
+                row = fetched.value
+                _require_security(row, code)
+                observed_on = _row_date(row.get("FREE_DATE"), "lockup date")
+                _require_in_window(observed_on, observed_from, observed_to)
+                lockup_type = _required_text(
+                    row.get("FREE_SHARES_TYPE"), "lockup share type"
                 )
-            normalized.append(
-                (fetched, observed_on, lockup_type, released, tradable, ratio)
-            )
+                released = _required_nonnegative_decimal(
+                    row.get("FREE_SHARES"), "released shares"
+                )
+                tradable = _required_nonnegative_decimal(
+                    row.get("ABLE_FREE_SHARES"), "tradable shares"
+                )
+                ratio = _required_nonnegative_decimal(
+                    row.get("FREE_RATIO"), "total share ratio"
+                )
+                if ratio > 1:
+                    raise _SourceError(
+                        "unknown_schema",
+                        "The source total share ratio exceeds one.",
+                        retain_prior_pages=True,
+                    )
+                normalized.append(
+                    (fetched, observed_on, lockup_type, released, tradable, ratio)
+                )
+            except _SourceError as error:
+                raise _row_error_with_prior_pages(error, rows, fetched) from error
         normalized.sort(key=lambda item: item[1])
         observations: list[CapitalObservation] = []
         for fetched, observed_on, lockup_type, released, tradable, ratio in normalized[
@@ -625,7 +887,7 @@ class EastmoneyTradingEventOperation:
                     limitations=("availability_time_unknown",),
                 )
             )
-        return observations, diagnostics
+        return observations
 
     def _fetch_report(
         self,
@@ -661,12 +923,14 @@ class EastmoneyTradingEventOperation:
                     cause.code,
                     str(cause),
                     diagnostics=tuple(diagnostics) + gate_error.diagnostics,
+                    partial_rows=tuple(rows),
                 ) from gate_error
             except _SourceError as error:
                 raise _SourceError(
                     error.code,
                     str(error),
                     diagnostics=tuple(diagnostics),
+                    partial_rows=tuple(rows),
                 ) from error
             diagnostics.extend(gate_diagnostics)
             try:
@@ -676,6 +940,7 @@ class EastmoneyTradingEventOperation:
                     error.code,
                     str(error),
                     diagnostics=tuple(diagnostics),
+                    partial_rows=tuple(rows),
                 ) from error
             if expected_pages is None:
                 expected_pages, expected_count = pages, count
@@ -684,8 +949,11 @@ class EastmoneyTradingEventOperation:
                     "pagination_schema_changed",
                     "The source pagination metadata changed between pages.",
                     diagnostics=tuple(diagnostics),
+                    partial_rows=tuple(rows),
                 )
-            rows.extend(_FetchedRow(item, response.retrieved_at, url) for item in data)
+            rows.extend(
+                _FetchedRow(item, response.retrieved_at, url, page) for item in data
+            )
             if page >= pages:
                 assert expected_count is not None
                 if len(rows) != expected_count:
@@ -693,18 +961,14 @@ class EastmoneyTradingEventOperation:
                         "pagination_incomplete",
                         "The source pagination did not yield its declared row count.",
                         diagnostics=tuple(diagnostics),
-                    )
-                if not rows:
-                    raise _SourceError(
-                        "empty_response",
-                        "The source returned no trading-event rows.",
-                        diagnostics=tuple(diagnostics),
+                        partial_rows=tuple(rows),
                     )
                 return rows, tuple(diagnostics)
         raise _SourceError(
             "pagination_incomplete",
             "The bounded pagination did not cover the source result.",
             diagnostics=tuple(diagnostics),
+            partial_rows=tuple(rows),
         )
 
     def _get(self, url: str) -> HttpResponse:
@@ -914,21 +1178,35 @@ def _require_in_window(value: str, observed_from: str, observed_to: str) -> None
 
 def _required_text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise _SourceError("unknown_schema", f"The source {field} is missing.")
+        raise _SourceError(
+            "unknown_schema",
+            f"The source {field} is missing.",
+            retain_prior_pages=True,
+        )
     return value.strip()
 
 
 def _required_decimal(value: object, field: str) -> Decimal:
     if isinstance(value, bool) or value is None:
-        raise _SourceError("unknown_schema", f"The source {field} is missing.")
+        raise _SourceError(
+            "unknown_schema",
+            f"The source {field} is missing.",
+            retain_prior_pages=True,
+        )
     try:
         parsed = Decimal(str(value))
     except (InvalidOperation, ValueError) as error:
         raise _SourceError(
-            "unknown_schema", f"The source {field} is invalid."
+            "unknown_schema",
+            f"The source {field} is invalid.",
+            retain_prior_pages=True,
         ) from error
     if not parsed.is_finite():
-        raise _SourceError("unknown_schema", f"The source {field} is invalid.")
+        raise _SourceError(
+            "unknown_schema",
+            f"The source {field} is invalid.",
+            retain_prior_pages=True,
+        )
     return parsed
 
 
@@ -941,14 +1219,22 @@ def _optional_decimal(value: object, field: str) -> Decimal | None:
 def _required_nonnegative_decimal(value: object, field: str) -> Decimal:
     parsed = _required_decimal(value, field)
     if parsed < 0:
-        raise _SourceError("unknown_schema", f"The source {field} is negative.")
+        raise _SourceError(
+            "unknown_schema",
+            f"The source {field} is negative.",
+            retain_prior_pages=True,
+        )
     return parsed
 
 
 def _required_positive_decimal(value: object, field: str) -> Decimal:
     parsed = _required_decimal(value, field)
     if parsed <= 0:
-        raise _SourceError("unknown_schema", f"The source {field} is not positive.")
+        raise _SourceError(
+            "unknown_schema",
+            f"The source {field} is not positive.",
+            retain_prior_pages=True,
+        )
     return parsed
 
 
