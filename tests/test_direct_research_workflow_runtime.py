@@ -437,6 +437,48 @@ def _replace_step_material(
 
 
 class DirectResearchWorkflowRuntimeTests(unittest.TestCase):
+    def test_policy_blocked_comparison_workflow_retains_formal_leaf_plan(self) -> None:
+        request = workflow_request("valuation_comparison")
+        request["subjects"] = [
+            {"clue": "工业富联", "issuer_security_class_count": 1},
+            {"clue": "贵州茅台", "issuer_security_class_count": 1},
+        ]
+
+        result = ResearchRuntime().research(request).to_dict()
+
+        registry = result["capability_registry"]["steps"]["comparison"]
+        leaf_plan = registry["leaf_plan"]
+        leaf_coverage = result["coverage"]["steps"]["comparison"]["leaf"]
+        self.assertEqual(leaf_plan["task_type"], "valuation_compare")
+        self.assertEqual(len(leaf_plan["operation_obligations"]), 6)
+        self.assertEqual(set(leaf_coverage), {"valuation_compare_metrics"})
+        claim = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "valuation_compare_diagnostics"
+        )
+        self.assertEqual(
+            [item["name"] for item in claim["payload"]["rows"]],
+            ["工业富联", "贵州茅台"],
+        )
+
+    def test_policy_blocked_comparison_rejects_leaf_for_other_subjects(self) -> None:
+        def blocked(clues: list[str]) -> dict[str, object]:
+            request = workflow_request("valuation_comparison")
+            request["subjects"] = [
+                {"clue": clue, "issuer_security_class_count": 1} for clue in clues
+            ]
+            return ResearchRuntime().research(request).to_dict()
+
+        target = blocked(["工业富联", "贵州茅台"])
+        source = blocked(["中国平安", "蓝色光标"])
+        _replace_step_material(target, source, "comparison")
+
+        with self.assertRaisesRegex(
+            ValueError, "workflow leaf subject contradicts its request scope"
+        ):
+            _validate_serialized(_rehash_workflow(target))
+
     def test_runtime_source_has_no_private_legacy_result_constructor(self) -> None:
         runtime_source = (
             SKILL_ROOT / "scripts/a_share_research/research_runtime.py"

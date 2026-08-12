@@ -596,6 +596,39 @@ def _validate_leaf_request_facts(
     expected_securities = _securities_for_request_clues(leaf, resolvable_subjects)
     if expected_securities is None:
         if leaf["status"] == "blocked":
+            if task_type == "valuation_compare":
+                payload = (
+                    comparison_claim.get("payload")
+                    if isinstance(comparison_claim, Mapping)
+                    else None
+                )
+                claim_subjects = (
+                    payload.get("subjects") if isinstance(payload, Mapping) else None
+                )
+                if (
+                    not isinstance(claim_subjects, list)
+                    or len(claim_subjects) != len(subjects)
+                    or comparison_rows is None
+                    or any(
+                        not isinstance(claim_subject, Mapping)
+                        or claim_subject.get("security") is not None
+                        or claim_subject.get("name")
+                        != cast(Mapping[str, object], subject).get("clue")
+                        or row.get("security") is not None
+                        or row.get("name")
+                        != cast(Mapping[str, object], subject).get("clue")
+                        or row.get("status") != "blocked"
+                        for subject, claim_subject, row in zip(
+                            subjects,
+                            claim_subjects,
+                            comparison_rows,
+                            strict=True,
+                        )
+                    )
+                ):
+                    raise ValueError(
+                        "workflow leaf subject contradicts its request scope"
+                    )
             return
         raise ValueError("workflow leaf subject contradicts its request scope")
     if task_type == "valuation_compare":

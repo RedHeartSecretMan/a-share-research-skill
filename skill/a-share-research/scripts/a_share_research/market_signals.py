@@ -1270,6 +1270,7 @@ def build_market_signals_result(
             False,
             None,
             (EvidenceUsePolicy(_MARKET_SIGNAL_EVIDENCE_USE, "supporting"),),
+            operation_kind="deterministic_coordinator",
         )
         coordinator_outcome = OperationOutcome(
             capability_id=_MARKET_SIGNAL_CAPABILITY,

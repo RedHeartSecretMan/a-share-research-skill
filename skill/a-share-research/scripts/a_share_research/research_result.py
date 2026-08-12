@@ -42,6 +42,7 @@ OperationExecutionState = Literal[
     "failed",
     "succeeded",
 ]
+OperationKind = Literal["external_source", "deterministic_coordinator"]
 EvidenceUse = str
 EvidenceRole = Literal[
     "supporting",
@@ -77,6 +78,7 @@ _EXECUTION_STATES = frozenset(
         "succeeded",
     }
 )
+_OPERATION_KINDS = frozenset({"external_source", "deterministic_coordinator"})
 _IDENTITY_EVIDENCE_USES = frozenset(
     {"security_identity", "attribution_lineage", "issuer_relationship"}
 )
@@ -268,6 +270,7 @@ def _validate_public_source_error(
         raise ValueError("source error scope material is invalid")
     data_type = details.get("data_type")
     signal_types = details.get("signal_types")
+    contract_codes = details.get("contract_codes")
     if isinstance(data_type, str) and data_type:
         _require_exact_keys(details, {"data_type"}, path="source error details")
         return details
@@ -278,6 +281,17 @@ def _validate_public_source_error(
         and len(signal_types) == len(set(signal_types))
     ):
         _require_exact_keys(details, {"signal_types"}, path="source error details")
+        return details
+    if (
+        isinstance(contract_codes, list)
+        and contract_codes
+        and all(
+            isinstance(item, str) and re.fullmatch(r"[0-9]{8}", item)
+            for item in contract_codes
+        )
+        and contract_codes == sorted(set(contract_codes))
+    ):
+        _require_exact_keys(details, {"contract_codes"}, path="source error details")
         return details
     raise ValueError("source error scope material is invalid")
 
@@ -399,10 +413,20 @@ class OperationObligation:
     experimental: bool
     exchange: str | None
     evidence_uses: tuple[EvidenceUsePolicy, ...]
+    producer_operation_id: str | None = None
+    operation_kind: OperationKind = "external_source"
 
     def __post_init__(self) -> None:
         if not self.capability_id.strip() or not self.operation_id.strip():
             raise ValueError("operation obligation identity must be non-empty")
+        producer_operation_id = self.producer_operation_id
+        if producer_operation_id is None:
+            producer_operation_id = self.operation_id
+            object.__setattr__(self, "producer_operation_id", producer_operation_id)
+        if not producer_operation_id.strip():
+            raise ValueError("operation producer identity must be non-empty")
+        if self.operation_kind not in _OPERATION_KINDS:
+            raise ValueError("operation obligation kind is unsupported")
         if not self.source_role.strip():
             raise ValueError("operation obligation source role must be non-empty")
         if self.exchange not in {None, "SSE", "SZSE"}:
@@ -418,6 +442,8 @@ class OperationObligation:
         return {
             "capability_id": self.capability_id,
             "operation_id": self.operation_id,
+            "producer_operation_id": self.producer_operation_id,
+            "operation_kind": self.operation_kind,
             "source_role": self.source_role,
             "experimental": self.experimental,
             "exchange": self.exchange,
@@ -560,14 +586,12 @@ def _validate_inner_source_operation(value: object, owner: str) -> None:
             _validate_inner_source_operation(nested, owner)
 
 
-def _validate_disposition_destination(
+def validate_field_disposition_destination_contract(
     destination: str,
     owner: tuple[str, str],
-    observation_ids: Sequence[str],
-    result: Mapping[str, object],
-    *,
-    empty_collection_fields: Mapping[str, frozenset[str]] | None = None,
 ) -> None:
+    """Validate the public path vocabulary independently of retained output."""
+
     coverage_destination = f"coverage.{owner[0]}.operations.{owner[1]}.query_complete"
     if destination == coverage_destination:
         return
@@ -590,6 +614,32 @@ def _validate_disposition_destination(
     path = suffix.split(".") if suffix else []
     if any(not segment for segment in path):
         raise ValueError("field disposition destination is invalid")
+
+
+def _validate_disposition_destination(
+    destination: str,
+    owner: tuple[str, str],
+    observation_ids: Sequence[str],
+    result: Mapping[str, object],
+    *,
+    empty_collection_fields: Mapping[str, frozenset[str]] | None = None,
+) -> None:
+    validate_field_disposition_destination_contract(destination, owner)
+    coverage_destination = f"coverage.{owner[0]}.operations.{owner[1]}.query_complete"
+    if destination == coverage_destination:
+        return
+    collections = (
+        ("observations[].payload", "observations", "observation_ids"),
+        ("observations.payload", "observations", "observation_ids"),
+    )
+    contract = next(
+        candidate
+        for candidate in collections
+        if destination == candidate[0] or destination.startswith(f"{candidate[0]}.")
+    )
+    prefix, collection_name, reference_field = contract
+    suffix = destination.removeprefix(prefix).removeprefix(".")
+    path = suffix.split(".") if suffix else []
     if not observation_ids:
         return
     collection = result.get(collection_name)
@@ -658,6 +708,8 @@ def _operation_obligation_from_public(value: object) -> OperationObligation:
         {
             "capability_id",
             "operation_id",
+            "producer_operation_id",
+            "operation_kind",
             "source_role",
             "experimental",
             "exchange",
@@ -688,7 +740,15 @@ def _operation_obligation_from_public(value: object) -> OperationObligation:
         )
     capability_id = value.get("capability_id")
     operation_id = value.get("operation_id")
-    if not isinstance(capability_id, str) or not isinstance(operation_id, str):
+    producer_operation_id = value.get("producer_operation_id")
+    operation_kind = value.get("operation_kind")
+    if (
+        not isinstance(capability_id, str)
+        or not isinstance(operation_id, str)
+        or not isinstance(producer_operation_id, str)
+        or not producer_operation_id
+        or operation_kind != "external_source"
+    ):
         raise ValueError("operation obligation identity is invalid")
     if (
         not isinstance(value.get("source_role"), str)
@@ -705,6 +765,8 @@ def _operation_obligation_from_public(value: object) -> OperationObligation:
         experimental=cast(bool, value["experimental"]),
         exchange=cast(str | None, value["exchange"]),
         evidence_uses=tuple(typed_evidence_uses),
+        producer_operation_id=producer_operation_id,
+        operation_kind="external_source",
     )
 
 
@@ -1108,6 +1170,11 @@ class UnifiedResearchResult:
                 _operation_obligation_from_public(item)
                 for item in operation_obligations
             )
+            if any(
+                item.producer_operation_id != item.operation_id
+                for item in raw_obligations
+            ):
+                raise ValueError("identity producer operation is not canonical")
             validate_capability_execution_material(
                 version=cast(str, plan.get("version")),
                 material=execution_material,
@@ -1762,6 +1829,8 @@ class UnifiedResearchResult:
                 {
                     "capability_id",
                     "operation_id",
+                    "producer_operation_id",
+                    "operation_kind",
                     "source_role",
                     "experimental",
                     "exchange",
@@ -1771,12 +1840,17 @@ class UnifiedResearchResult:
             )
             capability_id = obligation.get("capability_id")
             operation_id = obligation.get("operation_id")
+            producer_operation_id = obligation.get("producer_operation_id")
+            operation_kind = obligation.get("operation_kind")
             policies = obligation.get("evidence_uses")
             if (
                 not isinstance(capability_id, str)
                 or not capability_id
                 or not isinstance(operation_id, str)
                 or not operation_id
+                or not isinstance(producer_operation_id, str)
+                or not producer_operation_id
+                or operation_kind not in _OPERATION_KINDS
                 or not isinstance(obligation.get("source_role"), str)
                 or not isinstance(obligation.get("experimental"), bool)
                 or obligation.get("exchange") not in {None, "SSE", "SZSE"}
@@ -1926,6 +2000,11 @@ class UnifiedResearchResult:
                     and error_capability == "market_signal_observations"
                     and "signal_types" in details
                 )
+                or (
+                    task_type == "etf_options"
+                    and error_capability == "etf_option_contracts"
+                    and "contract_codes" in details
+                )
             ):
                 raise ValueError("source error scope is invalid for this task")
             payload = {
@@ -2021,6 +2100,10 @@ class UnifiedResearchResult:
                     raise ValueError(
                         "operation ownership or field disposition is invalid"
                     )
+                execution = OperationExecution(
+                    cast(OperationExecutionState, operation.get("execution_state")),
+                    query_complete=cast(bool | None, operation.get("query_complete")),
+                )
                 seen_fields: set[str] = set()
                 for disposition in dispositions:
                     if not isinstance(disposition, dict):
@@ -2040,17 +2123,17 @@ class UnifiedResearchResult:
                         cast(str | None, disposition.get("reason")),
                     )
                     if typed_disposition.destination is not None:
-                        _validate_disposition_destination(
-                            typed_disposition.destination,
-                            owner,
-                            cast(list[str], observation_ids),
-                            result,
-                            empty_collection_fields=empty_collection_fields,
+                        validate_field_disposition_destination_contract(
+                            typed_disposition.destination, owner
                         )
-                execution = OperationExecution(
-                    cast(OperationExecutionState, operation.get("execution_state")),
-                    query_complete=cast(bool | None, operation.get("query_complete")),
-                )
+                        if execution.state != "failed":
+                            _validate_disposition_destination(
+                                typed_disposition.destination,
+                                owner,
+                                cast(list[str], observation_ids),
+                                result,
+                                empty_collection_fields=empty_collection_fields,
+                            )
                 state = _derive_operation_coverage(
                     execution,
                     tuple({} for _ in observation_ids),
@@ -2368,7 +2451,82 @@ class UnifiedResearchResult:
         ):
             raise ValueError("brief reference is invalid")
         _validate_production_identity_dispositions(result)
+        _validate_direct_producer_operation_authority(result, task_type)
         _validate_direct_domain_facts(result, task_type)
+
+
+def _validate_direct_producer_operation_authority(
+    result: Mapping[str, object], task_type: str
+) -> None:
+    """Reject application-to-producer identities not declared by their owner."""
+
+    plan = cast(dict[str, object], result["plan"])
+    if plan.get("task_type") != task_type:
+        raise ValueError("producer operation contradicts source authority")
+    validate_plan_operation_producer_authority(plan)
+
+
+def validate_plan_operation_producer_authority(
+    plan: Mapping[str, object],
+) -> None:
+    """Validate the producer identity rule declared by a public direct plan."""
+
+    task_type = plan.get("task_type")
+    obligations = plan.get("operation_obligations")
+    if not isinstance(task_type, str) or not isinstance(obligations, list):
+        raise ValueError("producer operation contradicts source authority")
+    for raw_obligation in obligations:
+        if not isinstance(raw_obligation, Mapping):
+            raise ValueError("producer operation contradicts source authority")
+        operation_id = raw_obligation.get("operation_id")
+        producer_operation_id = raw_obligation.get("producer_operation_id")
+        operation_kind = raw_obligation.get("operation_kind")
+        if (
+            not isinstance(operation_id, str)
+            or not operation_id
+            or not isinstance(producer_operation_id, str)
+            or not producer_operation_id
+            or operation_kind not in _OPERATION_KINDS
+        ):
+            raise ValueError("producer operation contradicts source authority")
+        # Valuation comparison is the sole many-applications-to-one-producer plan.
+        # Reuse its owner-local application identity authority; consumers never
+        # infer a producer namespace or maintain a second operation registry.
+        if task_type == "valuation_compare":
+            from .automatic_valuation import (
+                _valuation_member_producer_operation_id,
+            )
+
+            try:
+                expected_producer = _valuation_member_producer_operation_id(
+                    operation_id
+                )
+            except ValueError as error:
+                raise ValueError(
+                    "producer operation contradicts source authority"
+                ) from error
+            if producer_operation_id != expected_producer:
+                raise ValueError("producer operation contradicts source authority")
+        elif producer_operation_id != operation_id:
+            raise ValueError("producer operation contradicts source authority")
+        # Market signals alone declares a deterministic coordinator.  Reuse its
+        # owner-local identity instead of allowing a task-wide kind exemption.
+        if task_type == "market_signals":
+            from .market_signals import COORDINATOR_OPERATION_ID
+
+            expected_kind = (
+                "deterministic_coordinator"
+                if operation_id == COORDINATOR_OPERATION_ID
+                else "external_source"
+            )
+        else:
+            expected_kind = "external_source"
+        if operation_kind != expected_kind:
+            if task_type == "market_signals":
+                raise ValueError(
+                    "market-signal operation kind contradicts owner authority"
+                )
+            raise ValueError("operation kind contradicts source authority")
 
 
 def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) -> None:
@@ -2719,13 +2877,25 @@ def _validate_market_signal_domain_facts(
 ) -> None:
     _require_absent_evidence_storage_plan(result, domain="market-signal")
     from .market_signal_registry import build_default_market_signal_operations
-    from .market_signals import _market_signal_dispositions
+    from .market_signals import COORDINATOR_OPERATION_ID, _market_signal_dispositions
 
     transport = _NoIoHttpTransport()
     authorities = {
         item.operation_id: _market_signal_dispositions(item)
         for item in build_default_market_signal_operations(transport)
     }
+    obligations = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], result["plan"])["operation_obligations"],
+    )
+    for obligation in obligations:
+        expected_kind = (
+            "deterministic_coordinator"
+            if obligation.get("operation_id") == COORDINATOR_OPERATION_ID
+            else "external_source"
+        )
+        if obligation.get("operation_kind") != expected_kind:
+            raise ValueError("market-signal operation kind contradicts owner authority")
     _require_known_operation_capability(
         result,
         authorities,
@@ -5078,6 +5248,7 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
         retained_observed_months.update(iso_date(item, month=True) for item in months)
 
     listings: list[dict[str, object]] = []
+    listed_contract_codes: set[str] = set()
     for listing in payloads_by_kind.get("etf_option_contract_listing", []):
         if identity_security is not None and listing.get(
             "subject_code"
@@ -5093,6 +5264,17 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
         ):
             raise ValueError("ETF-option domain facts contain an invalid listing")
         listings.append(listing)
+        listed_contract_codes.update(cast(list[str], codes))
+
+    for source_error in cast(list[dict[str, object]], result["source_errors"]):
+        details = source_error.get("details")
+        if not isinstance(details, dict) or "contract_codes" not in details:
+            continue
+        contract_codes = cast(list[str], details["contract_codes"])
+        if not set(contract_codes).issubset(listed_contract_codes):
+            raise ValueError(
+                "ETF-option source error contradicts acquired contract listings"
+            )
 
     quote_contracts: list[dict[str, object]] = []
     for quote in payloads_by_kind.get("etf_option_quote", []):
@@ -6130,6 +6312,7 @@ def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
     from .automatic_valuation import (
         _VALUATION_REQUIRED_OPERATIONS,
         _valuation_dispositions,
+        _valuation_member_producer_operation_id,
     )
     from .close_observation import _close_dispositions
     from .close_sources import (
@@ -6156,20 +6339,28 @@ def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
         | set(identity_authorities)
     )
     known_namespaced_ids: set[str] = set()
+    plan = cast(dict[str, object], result["plan"])
+    producer_by_application = {
+        cast(str, item["operation_id"]): item.get("producer_operation_id")
+        for item in cast(list[dict[str, object]], plan["operation_obligations"])
+    }
     for candidate_aggregate in cast(dict[str, object], result["coverage"]).values():
         if not isinstance(candidate_aggregate, dict) or not isinstance(
             candidate_aggregate.get("operations"), dict
         ):
             continue
         for candidate_id in cast(dict[str, object], candidate_aggregate["operations"]):
-            namespace, separator, base_operation_id = candidate_id.partition("::")
-            if (
-                separator
-                and namespace.startswith("member-")
-                and namespace.removeprefix("member-").isdigit()
-                and base_operation_id in known_base_ids
-            ):
-                known_namespaced_ids.add(candidate_id)
+            try:
+                base_operation_id = _valuation_member_producer_operation_id(
+                    candidate_id
+                )
+            except ValueError:
+                continue
+            if base_operation_id not in known_base_ids:
+                continue
+            if producer_by_application.get(candidate_id) != base_operation_id:
+                raise ValueError("producer operation contradicts source authority")
+            known_namespaced_ids.add(candidate_id)
     _require_known_operation_capability(
         result,
         known_namespaced_ids,
@@ -6185,13 +6376,11 @@ def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
     for operation_id, operation in cast(
         dict[str, object], aggregate["operations"]
     ).items():
-        namespace, separator, base_operation_id = operation_id.partition("::")
-        valid_namespace = (
-            separator
-            and namespace.startswith("member-")
-            and namespace.removeprefix("member-").isdigit()
-        )
-        if valid_namespace and base_operation_id in _VALUATION_REQUIRED_OPERATIONS:
+        try:
+            base_operation_id = _valuation_member_producer_operation_id(operation_id)
+        except ValueError:
+            continue
+        if base_operation_id in _VALUATION_REQUIRED_OPERATIONS:
             if not isinstance(operation, dict):
                 raise ValueError("comparison field disposition contract is invalid")
             _require_exact_disposition_contract(
@@ -6199,7 +6388,7 @@ def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
                 _valuation_dispositions(base_operation_id),
                 domain="comparison",
             )
-        elif valid_namespace and base_operation_id in close_operation_ids:
+        elif base_operation_id in close_operation_ids:
             if not isinstance(operation, dict):
                 raise ValueError("comparison field disposition contract is invalid")
             _require_exact_disposition_contract(
@@ -6207,7 +6396,7 @@ def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
                 _close_dispositions(base_operation_id),
                 domain="comparison",
             )
-        elif valid_namespace and base_operation_id in identity_authorities:
+        elif base_operation_id in identity_authorities:
             if not isinstance(operation, dict):
                 raise ValueError("comparison field disposition contract is invalid")
             _require_exact_disposition_contract(

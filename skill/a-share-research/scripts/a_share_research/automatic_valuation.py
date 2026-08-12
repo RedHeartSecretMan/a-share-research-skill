@@ -802,12 +802,38 @@ def build_valuation_comparison_result(
         raise ValueError("valuation_compare subjects must be unique")
 
     if not request["source_policy"]["allow_experimental"]:
+        blocked_outcomes = tuple(
+            _valuation_outcome(operation_id, skipped="skipped_policy")
+            for operation_id in _VALUATION_REQUIRED_OPERATIONS
+        )
+        blocked_rows = [
+            {
+                "member_id": f"member-{index}",
+                "security": None,
+                "name": clue,
+                "status": "blocked",
+                "trading_date": None,
+                "metrics": {
+                    metric: {
+                        "status": "not_calculable",
+                        "reason": "source_policy_not_satisfied",
+                    }
+                    for metric in COMPARISON_METRIC_ORDER
+                },
+                "limitation_codes": ["source_policy_not_satisfied"],
+                "evidence_ids": [],
+            }
+            for index, clue in enumerate(normalized_clues)
+        ]
         return _direct_valuation_execution(
             request,
             task_type="valuation_compare",
             outcomes=tuple(
-                _valuation_outcome(operation_id, skipped="skipped_policy")
-                for operation_id in _VALUATION_REQUIRED_OPERATIONS
+                outcome
+                for index in range(len(subjects))
+                for outcome in _scope_valuation_member(
+                    blocked_outcomes, f"member-{index}"
+                )[0]
             ),
             conflicts=[],
             limitations=[
@@ -819,7 +845,31 @@ def build_valuation_comparison_result(
                     ),
                 }
             ],
-            claims=[],
+            claims=[
+                DirectTaskClaim(
+                    kind="valuation_compare_diagnostics",
+                    evidence_use="valuation_compare",
+                    observation_keys=(),
+                    payload={
+                        "subjects": [
+                            {"security": None, "name": clue}
+                            for clue in normalized_clues
+                        ],
+                        "research": {
+                            "as_of": request["as_of"],
+                            "timezone": "Asia/Shanghai",
+                            "question": "same_basis_valuation_comparison",
+                        },
+                        "comparison_basis": {
+                            "as_of": request["as_of"],
+                            "price_basis": "latest_completed_unadjusted_close",
+                            "target_pe": format(_target_pe(request["parameters"]), "f"),
+                            "metric_order": COMPARISON_METRIC_ORDER,
+                        },
+                        "rows": blocked_rows,
+                    },
+                )
+            ],
         ).result
 
     rows: list[dict[str, Any]] = []
@@ -993,6 +1043,21 @@ def _scope_valuation_member(
             )
         )
     return tuple(scoped_outcomes), key_map
+
+
+def _valuation_member_producer_operation_id(operation_id: str) -> str:
+    """Invert the application identity emitted by ``_scope_valuation_member``."""
+
+    member_id, separator, producer_operation_id = operation_id.partition("::")
+    if (
+        separator != "::"
+        or not member_id.startswith("member-")
+        or not member_id.removeprefix("member-").isdigit()
+        or not producer_operation_id
+        or "::" in producer_operation_id
+    ):
+        raise ValueError("valuation member application identity is invalid")
+    return producer_operation_id
 
 
 def _scope_member_diagnostics(
@@ -1797,7 +1862,11 @@ def _direct_valuation_execution(
     ordered_outcomes = tuple(outcomes_by_owner.values())
     obligations = []
     for outcome in ordered_outcomes:
-        base_operation = outcome.operation_id.rsplit("::", 1)[-1]
+        base_operation = (
+            _valuation_member_producer_operation_id(outcome.operation_id)
+            if task_type == "valuation_compare"
+            else outcome.operation_id
+        )
         evidence_role = (
             "lineage"
             if base_operation in {"sse_stock_list@1", "szse_stock_list@1"}
@@ -1830,6 +1899,7 @@ def _direct_valuation_execution(
                         cast(Any, evidence_role),
                     ),
                 ),
+                producer_operation_id=base_operation,
             )
         )
     known_keys = {

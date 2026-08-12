@@ -629,16 +629,47 @@ def _deduplicate_observations(
 
 
 def _owned_errors(
-    batch: OptionSourceBatch, owner: str
+    batch: OptionSourceBatch, owner: str, *, retain_contract_scope: bool
 ) -> tuple[Mapping[str, object], ...]:
+    grouped: dict[tuple[str, str], set[str]] = {}
+    for item in batch.source_errors:
+        if item.source_operation != owner:
+            continue
+        contract_codes = grouped.setdefault((item.code, item.message), set())
+        contract_code = (
+            item.details.get("contract_code") if retain_contract_scope else None
+        )
+        if (
+            isinstance(contract_code, str)
+            and len(contract_code) == 8
+            and contract_code.isascii()
+            and contract_code.isdigit()
+        ):
+            contract_codes.add(contract_code)
+        affected_many = (
+            item.details.get("contract_codes") if retain_contract_scope else None
+        )
+        if isinstance(affected_many, (list, tuple)):
+            contract_codes.update(
+                code
+                for code in affected_many
+                if isinstance(code, str)
+                and len(code) == 8
+                and code.isascii()
+                and code.isdigit()
+            )
     return tuple(
         {
             "source_operation": owner,
-            "code": item.code,
-            "message": item.message,
+            "code": code,
+            "message": message,
+            **(
+                {"details": {"contract_codes": sorted(contract_codes)}}
+                if contract_codes
+                else {}
+            ),
         }
-        for item in batch.source_errors
-        if item.source_operation == owner
+        for (code, message), contract_codes in sorted(grouped.items())
     )
 
 
@@ -680,7 +711,11 @@ def _option_outcomes(
         (owners.reference_operation, reference_observations),
         (owners.option_operation, _deduplicate_observations(option_observations)),
     ):
-        errors = _owned_errors(batch, operation_id)
+        errors = _owned_errors(
+            batch,
+            operation_id,
+            retain_contract_scope=operation_id == owners.option_operation,
+        )
         outcomes.append(
             _outcome(
                 owners,

@@ -199,6 +199,82 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                 self.assertEqual(result["status"], "blocked")
                 self.assertEqual(result["task_views"][task_type]["status"], "blocked")
 
+    def test_market_signal_owner_rejects_rehashed_operation_kind_forgery(
+        self,
+    ) -> None:
+        from a_share_research.market_signal_contract import (
+            MarketSignalQuery,
+            SignalCoverage,
+            SignalSourceBatch,
+        )
+        from a_share_research.market_signals import (
+            COORDINATOR_OPERATION_ID,
+            build_market_signals_result,
+        )
+
+        from tests.test_market_signals import NoIdentityTransport, signal_request
+
+        class EmptyOwnerOperation:
+            def __init__(self, owner: object) -> None:
+                self.operation_id = owner.operation_id  # type: ignore[attr-defined]
+                self.supported_signal_types = owner.supported_signal_types  # type: ignore[attr-defined]
+                self.raw_fields = owner.raw_fields  # type: ignore[attr-defined]
+
+            def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
+                relevant = self.supported_signal_types.intersection(query.signal_types)
+                return SignalSourceBatch(
+                    operation_id=self.operation_id,
+                    coverage={
+                        signal_type: SignalCoverage("observed_empty")
+                        for signal_type in relevant
+                    },
+                )
+
+        class NoNetwork:
+            def get(self, url: str, headers: dict[str, str]) -> object:
+                raise AssertionError("owner construction must not use the network")
+
+        owners = build_default_market_signal_operations(NoNetwork())  # type: ignore[arg-type]
+        operations = tuple(
+            EmptyOwnerOperation(owner)
+            for owner in owners
+            if owner.supported_signal_types.intersection(
+                {"focus_monitoring", "severe_abnormal_movement"}
+            )
+        )
+        result = build_market_signals_result(
+            signal_request(["monitoring_intersection"]),
+            operations,  # type: ignore[arg-type]
+            NoIdentityTransport(),
+        ).to_dict()
+        obligations = result["plan"]["operation_obligations"]
+        self.assertEqual(
+            {item["operation_id"]: item["operation_kind"] for item in obligations},
+            {
+                "eastmoney_focus_monitoring@1": "external_source",
+                "eastmoney_severe_abnormal_movement@1": "external_source",
+                COORDINATOR_OPERATION_ID: "deterministic_coordinator",
+            },
+        )
+
+        for target_id, forged_kind in (
+            (COORDINATOR_OPERATION_ID, "external_source"),
+            ("eastmoney_focus_monitoring@1", "deterministic_coordinator"),
+        ):
+            with self.subTest(target_id=target_id):
+                forged = deepcopy(result)
+                target = next(
+                    item
+                    for item in forged["plan"]["operation_obligations"]
+                    if item["operation_id"] == target_id
+                )
+                target["operation_kind"] = forged_kind
+                _rehash_direct_plan(forged)
+                with self.assertRaisesRegex(
+                    ValueError, "operation kind contradicts owner authority"
+                ):
+                    _validate_serialized(forged)
+
     def test_all_production_adapters_declare_owned_static_raw_fields(self) -> None:
         class NoNetworkTransport:
             def get(self, url: str, headers: dict[str, str]) -> object:

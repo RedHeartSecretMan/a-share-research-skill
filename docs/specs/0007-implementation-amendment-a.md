@@ -2,7 +2,9 @@
 
 ## 状态
 
-**Accepted by maintainer; tracker applied**，2026-08-10。
+**Accepted by maintainer; tracker applied**，2026-08-10。A-08 两阶段修订于 2026-08-13 获维护者批准。
+
+2026-08-13 的后续裁决只调整 release evidence 的实施时序，不削弱 v0.3.0 release gate：原 A-08 拆为确定性的 A-08a 资格基线与最终 A-08b live attestation。来源组和综合计划先消费 A-08a，再由 A-08b 对全部生产变更完成后的冻结候选形成当次 release candidate 的脱敏 live evidence 与 durable matrix。开发 Ticket 不再因交易时段或临时上游状态等待；#72 仍在 A-08b 精确闭合前失败关闭。
 
 本修订案在维护者批准前不授权修改现有 Issue 状态、原生依赖边、生产代码、发布标签或 Release。批准后，它在与父 Spec #36 冲突的实施范围、实施架构、Ticket 处置和 v0.3.0 release gate 上具有优先权；未被本修订明确修改的产品承诺继续由父 Spec #36 管理。
 
@@ -201,17 +203,17 @@ observation 和 source error 在 outcome 内按构造归属于 operation。运�
 | #49 | open | 原范围保留；依赖 #47 | 核心显式存储 |
 | #50 | open | 从 #36 的 v0.3.0 子图移出，移除 `ready-for-agent`，标记 `needs-triage` 等待 v0.4.0 Spec | 延期 |
 | #51–#57 | open | 固定 47 端点探测与完整矩阵从 v0.3.0 子图移出，移除 `ready-for-agent`，等待独立来源扩展或 v0.4.0 规格 | 延期，不阻塞核心发布 |
-| #58 | open | 保留编号并修订为仅验证/补齐核心身份与交易会话 operations；移除 BSE 全市场筛选要求；依赖 A-08 | 核心来源组 |
-| #59 | open | 保留编号并收缩到核心计划实际发布的日线、指数、ETF 与期权 operations；依赖 A-08 | 核心来源组 |
+| #58 | open | 保留编号并修订为仅验证/补齐核心身份与交易会话 operations；移除 BSE 全市场筛选要求；依赖 A-08a | 核心来源组 |
+| #59 | open | 保留编号并收缩到核心计划实际发布的日线、指数、ETF 与期权 operations；依赖 A-08a | 核心来源组 |
 | #60 | open | 新增分钟、五档和逐笔端点从 v0.3.0 子图移出；现有盘中快照与复盘由 A-04 保留 | 延期扩展 |
-| #61 | open | 保留编号并收缩到综合单标的实际使用的财务、F10、股本、估值与一致预期 operations；依赖 A-08 | 核心来源组 |
-| #62 | open | 保留编号并收缩到综合研究实际使用的公告、研报、新闻、快讯与互动 operations；依赖 A-08 | 核心来源组 |
-| #63 | open | 保留编号并收缩到综合研究实际使用的资金流、龙虎榜、两融和资本事件 operations；依赖 A-08 | 核心来源组 |
-| #64 | open | 保留编号并收缩到综合市场实际使用的广度、涨跌停、轮动、热度、监控、异常和北向披露 operations；依赖 A-08 | 核心来源组 |
+| #61 | open | 保留编号并收缩到综合单标的实际使用的财务、F10、股本、估值与一致预期 operations；依赖 A-08a | 核心来源组 |
+| #62 | open | 保留编号并收缩到综合研究实际使用的公告、研报、新闻、快讯与互动 operations；依赖 A-08a | 核心来源组 |
+| #63 | open | 保留编号并收缩到综合研究实际使用的资金流、龙虎榜、两融和资本事件 operations；依赖 A-08a | 核心来源组 |
+| #64 | open | 保留编号并收缩到综合市场实际使用的广度、涨跌停、轮动、热度、监控、异常和北向披露 operations；依赖 A-08a | 核心来源组 |
 | #65 | open | 原综合单标的产品范围保留；移除 #60 及完整 47 端点链依赖；依赖 #47、#58、#59、#61–#64 | 核心产品计划 |
 | #66 | open | 原综合市场产品范围保留；微观结构只保持显式扩展语义，不依赖新增 #60；依赖 #47、#58、#59、#62–#64 | 核心产品计划 |
 | #67–#71 | open | 从 #36 的 v0.3.0 子图移出，移除 `ready-for-agent`，标记 `needs-triage` 等待 v0.4.0 Spec | 延期 |
-| #72 | open | 修订为核心 v0.3.0 release gate，删除筛选、适当性、投资动作、仓位和全 47 端点要求；依赖 #48、#49、#65、#66、A-08 | 最终 gate |
+| #72 | open | 修订为核心 v0.3.0 release gate，删除筛选、适当性、投资动作、仓位和全 47 端点要求；依赖 #48、#49、#65、#66、A-08b | 最终 gate |
 
 延期 Ticket 保持开放以保留产品意图，不以 `wontfix` 关闭，也不删除历史依赖说明。批准后应从 #36 的原生子 Issue/DAG 中移除，并在 v0.4.0 Spec 建立时重新挂接。
 
@@ -264,11 +266,17 @@ observation 和 source error 在 outcome 内按构造归属于 operation。运�
 
 本票通过后，#45 和 #46 才能执行确认性验收并重新关闭。
 
-### A-08：建立核心 v0.3.0 正式 operation 资格与 release matrix
+### A-08a：建立核心 v0.3.0 正式 operation 资格基线与 attestation 工具
 
-从 #45、#46、#47、#48 实际发布路径枚举 v0.3.0 核心计划将调用的 operations，复用现有 operation 资格材料、离线契约和 live probe 入口，形成仅针对正式 operations 的 release matrix。不得先建立通用探测框架；只有现有模式不能满足一个已确认来源时才增加最小能力。
+从 #45、#46、#47、#48 实际发布路径枚举 v0.3.0 核心计划将调用的 operations，形成逐 producer 审阅的 qualification manifest、确定性离线契约闭包、安装加载闭包、typed matrix builder 和 sanitized append-only attempt harness。缺少 final live evidence 时 generator 必须失败关闭。不得先建立通用探测框架；只有现有模式不能满足一个已确认来源时才增加最小能力。
 
-每个 operation 记录：适用范围、字段、时点、单位、失败/空结果语义、来源角色、获取角色、依赖、凭据、限流、字段去向、最近 `verified_at` 和结果。矩阵发现的缺口只进入对应 #58、#59、#61–#64，不自动扩大到固定 47 端点。
+每个 operation 的资格基线记录：适用范围、字段、时点、单位、失败/空结果语义、来源角色、获取角色、依赖、凭据、限流、字段去向和对应 gap route。A-08a 不以交易时段、外部来源可用性、最终 `verified_at` 或 durable release matrix 作为关闭条件；它只证明后续来源组能够在一个稳定、计划派生且失败关闭的分母上工作。
+
+### A-08b（#88）：对冻结候选闭合 live attestation 与 durable release matrix
+
+在 #58、#59、#61–#64 和综合计划 #65/#66 完成全部生产变更后，冻结一个 clean candidate commit。复用 A-08a 的唯一 maintainer harness，通过 copied-installed 公共 `run --request` 收集同一候选、显式带时区时点、最多 16 个且不超过 7×24 小时的 append-only sanitized attempts。只有 public application 的 `execution_state` 为 `succeeded` 或 `failed` 才计 attempted；任何 skipped 或 `not_requested` 都不计。
+
+A-08b 必须精确闭合 reviewed 且 plan-derived 的正式 operation 分母，生成 final release-probe evidence 与完全派生的 durable matrix，并证明 disposition、active-request 字段去向和安装加载率均为 100%。跨候选、过期、未来、重复、篡改、未知 owner、plan/disposition/load 漂移或隐私形态不安全都失败关闭。该票只负责最终发布证明；发现的实现缺口回到对应 #58、#59、#61–#64，不扩大到固定 47 端点。
 
 ## 修订后的 DAG
 
@@ -283,11 +291,12 @@ A-02, A-07 -> #46
 #45, #46 -> #47
 #45 -> #48
 #47 -> #49
-#47, #48 -> A-08
-A-08 -> #58, #59, #61, #62, #63, #64
+#47, #48 -> A-08a
+A-08a -> #58, #59, #61, #62, #63, #64
 #47, #58, #59, #61, #62, #63, #64 -> #65
 #47, #58, #59, #62, #63, #64 -> #66
-#48, #49, A-08, #65, #66 -> #72
+A-08a, #65, #66 -> A-08b (#88)
+#48, #49, A-08b (#88), #65, #66 -> #72
 ```
 
 ### 可并发 frontier
@@ -297,10 +306,11 @@ A-08 -> #58, #59, #61, #62, #63, #64
 3. A-02 完成后：A-03、A-04、A-05、A-06 可按最多三个独立 worktrees 并发；共享文件冲突高的 ticket 由主协调代理串行化。
 4. 四个领域迁移完成后：A-07。
 5. #45/#46 确认通过后：#47 与 #48 可并发。
-6. #47 完成后 #49 可与 A-08 并发；A-08 还需 #48。
-7. A-08 完成后：#58、#59、#61–#64 按真实文件 ownership 和来源独立性并发。
+6. #47 完成后 #49 可与 A-08a 并发；A-08a 还需 #48。
+7. A-08a 完成后：#58、#59、#61–#64 按真实文件 ownership 和来源独立性并发；这些实现票不等待 live provider。
 8. 核心来源组完成后：#65 与 #66 可并发。
-9. 最终 frontier：#72。
+9. #65/#66 完成后：A-08b（#88）对冻结候选闭合最终 live attestation。
+10. 最终 frontier：#72。
 
 该 DAG 不包含 #50–#57、#60、#67–#71。它们不再阻塞 v0.3.0。
 
@@ -349,13 +359,14 @@ A-08 -> #58, #59, #61, #62, #63, #64
 ## 批准后的 tracker 应用记录
 
 1. 将本修订案发布为 #36 的 amendment 子 Issue，并在 #36 留下权威链接和 scope override 摘要；
-2. 创建 A-01–A-08，挂接为 #36 子 Issues；
+2. 创建 A-01–A-08a，挂接为 #36 子 Issues；2026-08-13 追加 A-08b（#88）作为最终 live attestation 子 Issue；
 3. 重新打开 #45、#46，添加历史候选未满足 AC 的证据评论；
 4. 更新 #47–#49、#58、#59、#61–#66、#72 的 Amendment 链接、收缩范围和 native `blocked_by`；
 5. 从 #36 v0.3.0 子图移出 #50–#57、#60、#67–#71，移除 `ready-for-agent` 并添加 `needs-triage`；
 6. 为 #37–#44 添加 superseded implementation-path 评论但保持历史关闭；
 7. 逐项读取原生依赖，证明新图无环、只有 A-01 是初始 frontier；
-8. 在所有 tracker 写入回读一致后，才把 A-01 标为 `ready-for-agent` 并启动新的持久协调实施任务。
+8. 在所有 tracker 写入回读一致后，才把 A-01 标为 `ready-for-agent` 并启动新的持久协调实施任务；
+9. 2026-08-13 将 A-08 的 final live AC 移至 A-08b（#88），保持 A-08a 为来源组的确定性前置，并把 #72 的最终 live 依赖重接到 #88。
 
 ## Review 清单
 
@@ -366,6 +377,6 @@ A-08 -> #58, #59, #61, #62, #63, #64
 - 历史候选分支保留但不整体继承，新恢复实现从干净 `origin/main` 选择性迁移资产；
 - #45、#46 重新打开；
 - #37–#44 保持历史关闭但不计作修订后的完成证据；
-- A-01–A-08 和修订后的 DAG；
+- A-01–A-08a、最终 A-08b 和修订后的 DAG；
 - #49 显式研究证据存储仍属于 v0.3.0；
 - tracker 变更和生产代码实施分成两个门禁：先应用 tracker，再另行启动实施。

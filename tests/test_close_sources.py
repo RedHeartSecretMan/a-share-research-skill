@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from a_share_research.close_sources import (  # noqa: E402
     SseDailyLineOperation,
+    SzseDailyLineOperation,
     TencentDailyLineOperation,
 )
 from a_share_research.identity_sources import (  # noqa: E402
@@ -42,6 +43,67 @@ class StaticTransport:
 
 
 class CloseSourceOperationTests(unittest.TestCase):
+    def test_szse_daily_line_normalizes_bars_units_and_owner_evidence(self) -> None:
+        operation = SzseDailyLineOperation()
+        transport = StaticTransport(
+            Path(FIXTURE_CLI.parent, "szse_000001_daily.json").read_bytes()
+        )
+
+        observations = operation.observe("SZSE:000001", transport)
+        latest = observations[-1]
+        evidence = latest.to_bar_evidence()
+
+        self.assertEqual(operation.operation_id, "szse_daily_line@1")
+        self.assertEqual(
+            [
+                (
+                    item.trading_date.isoformat(),
+                    item.open_value,
+                    item.high_value,
+                    item.low_value,
+                    item.close_value,
+                    item.volume_shares,
+                    item.amount_cny,
+                )
+                for item in observations
+            ],
+            [
+                (
+                    "2026-07-30",
+                    "11.28",
+                    "11.62",
+                    "11.18",
+                    "11.61",
+                    "277770800",
+                    "3194072443.00",
+                ),
+                (
+                    "2026-07-31",
+                    "11.50",
+                    "11.63",
+                    "11.28",
+                    "11.63",
+                    "202497900",
+                    "2318839881.00",
+                ),
+            ],
+        )
+        self.assertEqual(evidence["source_operation"], "szse_daily_line@1")
+        self.assertEqual(
+            evidence["observed_value"],
+            {
+                "value": {
+                    "open": "11.50",
+                    "high": "11.63",
+                    "low": "11.28",
+                    "close": "11.63",
+                    "volume": "202497900",
+                },
+                "unit": {"price": "CNY/share", "volume": "shares"},
+            },
+        )
+        self.assertEqual(evidence["observation"]["trading_date"], "2026-07-31")
+
     def test_http_success_with_no_daily_rows_fails_closed(self) -> None:
         transport = StaticTransport(b'{"code":"600519","kline":[]}')
 

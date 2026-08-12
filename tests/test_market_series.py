@@ -375,6 +375,14 @@ class EtfMarketProcessTests(unittest.TestCase):
         self.assertEqual(result["conflicts"], [])
         self.assertEqual(result["source_errors"], [])
         self.assertEqual(len(result["observations"]), 3)
+        self.assertEqual(
+            {item["operation_id"] for item in result["observations"]},
+            {
+                "sse_etf_list@1",
+                "sse_etf_snapshot@1",
+                "tencent_daily_line@1",
+            },
+        )
         self.assertIn(
             "experimental_etf_market_sources",
             {item["code"] for item in result["limitations"]},

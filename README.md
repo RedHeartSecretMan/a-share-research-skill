@@ -269,7 +269,7 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 - 单只 SSE/SZSE A 股的研究级盘中行情快照和 ETF 交易所快照已经支持；尚不支持分钟、逐笔、持续行情、交易、新闻情绪评分、全量公司画像或批量选股。
 - 研究分析与建议遵循安装产物的 [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md)；README 不另行定义第二套执行规则。
 
-完整产品领域与术语见 [`CONTEXT.md`](CONTEXT.md)；[`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) 是已被取代的 v0.0.1 早期估值内核方案；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 定义实际交付的 v0.0.1 可信证据内核；[`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) 定义完整 v0.1.0 能力与发布门槛；[`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) 定义 v0.1.1 的呈现边界与文档发布修订；[`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 定义已实现并可通过 `intraday_market_signal` 使用的 v0.2.0 研究级盘中行情快照。发布门禁与回读证据单独记录在 [`v0.2.0 发布审计`](docs/research/v0.2.0-release-audit-2026-08-03.md)，不把一次 live probe 当作来源生产准入。
+完整产品领域与术语见 [`CONTEXT.md`](CONTEXT.md)；[`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) 是已被取代的 v0.0.1 早期估值内核方案；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 定义实际交付的 v0.0.1 可信证据内核；[`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) 定义完整 v0.1.0 能力与发布门槛；[`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) 定义 v0.1.1 的呈现边界与文档发布修订；[`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 定义已实现并可通过 `intraday_market_signal` 使用的 v0.2.0 研究级盘中行情快照。发布门禁与回读证据单独记录在 [`v0.2.0 发布审计`](docs/research/v0.2.0-release-audit-2026-08-03.md)；core-v0.3.0 的正式来源操作分母、A-08a 资格基线、最终 A-08b attestation 边界和可复现命令记录在 [`operation release matrix`](docs/research/core-v0.3.0-operation-release-matrix.md)。确定性资格基线不等待交易时段，最终发布仍必须闭合当次候选的 live evidence；两者都不把一次 live probe 当作来源生产准入。
 
 ## 仓库结构
 

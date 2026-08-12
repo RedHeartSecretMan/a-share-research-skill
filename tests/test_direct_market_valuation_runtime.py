@@ -836,6 +836,107 @@ class DirectMarketValuationPublicSeamTests(unittest.TestCase):
 
 
 class DirectResultInvariantTests(unittest.TestCase):
+    def test_policy_blocked_comparison_retains_member_producer_contracts(self) -> None:
+        transport = _NoIoHttpTransport()
+        result = build_valuation_comparison_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "valuation_compare",
+                "subjects": [
+                    {"clue": "工业富联", "issuer_security_class_count": 1},
+                    {"clue": "贵州茅台", "issuer_security_class_count": 1},
+                ],
+                "as_of": "2026-08-12",
+                "window": None,
+                "parameters": {"target_pe": "30"},
+                "source_policy": {
+                    "allow_experimental": False,
+                    "allow_credentials": False,
+                    "allow_fallback": False,
+                },
+            },
+            transport,
+            datetime(2026, 8, 12, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        ).to_dict()
+
+        obligations = result["plan"]["operation_obligations"]
+        self.assertEqual(len(obligations), 6)
+        self.assertEqual(
+            {item["operation_id"].partition("::")[0] for item in obligations},
+            {"member-0", "member-1"},
+        )
+        self.assertTrue(
+            all(
+                item["producer_operation_id"] == item["operation_id"].partition("::")[2]
+                for item in obligations
+            )
+        )
+        self.assertEqual(set(result["coverage"]), {"valuation_compare_metrics"})
+        self.assertEqual(transport.calls, [])
+
+    def test_ordinary_direct_serializer_rejects_rehashed_producer_identity(
+        self,
+    ) -> None:
+        result = build_market_trend_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "market_trend",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": "2026-08-02",
+                "window": {"trading_days": 10},
+                "parameters": {"adjustment": "unadjusted"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            load_fixture_transport(MARKET_FIXTURE_CLI, "FixtureTransport"),
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        )
+        obligation = result.plan["operation_obligations"][0]
+        obligation["producer_operation_id"] = "forged_market_operation@1"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(
+            ValueError, "producer operation contradicts source authority"
+        ):
+            result.to_dict()
+
+    def test_comparison_serializer_rejects_rehashed_producer_identity(self) -> None:
+        result = build_valuation_comparison_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "valuation_compare",
+                "subjects": [
+                    {"clue": "工业富联", "issuer_security_class_count": 1},
+                    {"clue": "贵州茅台", "issuer_security_class_count": 1},
+                ],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {"target_pe": "30"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            load_fixture_transport(VALUATION_FIXTURE_CLI, "ValuationFixtureTransport"),
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        )
+        obligation = next(
+            item
+            for item in result.plan["operation_obligations"]
+            if item["operation_id"] == "member-0::sina_financial_statements@1"
+        )
+        obligation["producer_operation_id"] = "forged_financials@1"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(
+            ValueError, "producer operation contradicts source authority"
+        ):
+            result.to_dict()
+
     def test_default_contract_authorities_construct_without_transport_io(self) -> None:
         from a_share_research.capital_registry import build_default_capital_operations
         from a_share_research.content_registry import build_default_content_operations
@@ -969,6 +1070,51 @@ class DirectResultInvariantTests(unittest.TestCase):
                     result["coverage"]["example_capability"]["state"],
                     expected_state,
                 )
+
+    def test_failed_operation_rejects_an_unsupported_field_destination(self) -> None:
+        plan = DirectTaskPlan(
+            task_type="destination_guard_task",
+            as_of="2026-08-11",
+            obligations=(
+                OperationObligation(
+                    capability_id="example_capability",
+                    operation_id="example_operation@1",
+                    source_role="market_observation",
+                    experimental=False,
+                    exchange=None,
+                    evidence_uses=(EvidenceUsePolicy("example_use", "supporting"),),
+                ),
+            ),
+            dependencies=(
+                ResearchDependency("example_consumer", "example_use", 1, True),
+            ),
+        )
+        result = fold_direct_task_research_result(
+            plan,
+            (
+                OperationOutcome(
+                    capability_id="example_capability",
+                    operation_id="example_operation@1",
+                    execution=OperationExecution("failed"),
+                    source_errors=(
+                        {
+                            "source_operation": "example_operation@1",
+                            "code": "fixture_failure",
+                            "message": "The fixture operation failed.",
+                        },
+                    ),
+                    field_dispositions=(
+                        FieldDisposition(
+                            "alpha", "normalized", "totally.invalid.destination"
+                        ),
+                    ),
+                ),
+            ),
+            summary="Failed destination fixture.",
+        )
+
+        with self.assertRaisesRegex(ValueError, "destination is unsupported"):
+            result.to_dict()
 
     def test_serializer_rejects_forged_status_ids_refs_and_coverage(self) -> None:
         status_tamper = build_invariant_result(include_second_claim=True)

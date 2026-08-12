@@ -279,6 +279,70 @@ def rehash_direct_plan(result: UnifiedResearchResult) -> None:
 
 
 class DirectEtfOptionsRuntimeTests(unittest.TestCase):
+    def test_serializer_rejects_rehashed_unlisted_contract_error_scope(self) -> None:
+        quote_text = (
+            Path(__file__).parent / "fixtures/etf_options/tquotes_510050_2608.txt"
+        ).read_text(encoding="utf-8")
+        prior_day_quotes = quote_text.replace(
+            "2026-07-31 15:00:00", "2026-07-30 15:00:00"
+        )
+        operation = SinaEtfOptionSnapshotOperation(
+            FixtureTransport(overrides={"CON_OP_": text_response(prior_day_quotes)}),
+            request_gate=DiagnosticGate(),
+        )
+        batch = operation.collect(query())
+        request = option_request(allow_experimental=True)
+        request["as_of"] = "2026-08-02"
+        request["window"] = {
+            "observed_from": "2026-07-31",
+            "observed_to": "2026-07-31",
+        }
+        request["parameters"]["quote_mode"] = "latest_completed"
+        result = invoke_injected_batch(batch, request)
+        result.to_dict()
+
+        source_error = next(
+            item
+            for item in result.source_errors
+            if item["code"] == "quote_date_mismatch"
+        )
+        old_error_id = source_error["id"]
+        source_error["details"] = {"contract_codes": ["99999999"]}
+        source_error["id"] = stable_result_id(
+            "source-error",
+            {key: value for key, value in source_error.items() if key != "id"},
+        )
+        new_error_id = source_error["id"]
+
+        def replace_reference(value: object) -> None:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    if nested == old_error_id:
+                        value[key] = new_error_id
+                    else:
+                        replace_reference(nested)
+            elif isinstance(value, list):
+                for index, nested in enumerate(value):
+                    if nested == old_error_id:
+                        value[index] = new_error_id
+                    else:
+                        replace_reference(nested)
+
+        replace_reference(result.coverage)
+        replace_reference(result.task_views)
+        replace_reference(result.briefs)
+        brief = result.briefs[0]
+        old_brief_id = brief["id"]
+        brief["id"] = stable_result_id(
+            "brief", {key: value for key, value in brief.items() if key != "id"}
+        )
+        view = result.task_views["etf_options"]
+        if view.get("brief_id") == old_brief_id:
+            view["brief_id"] = brief["id"]
+
+        with self.assertRaisesRegex(ValueError, "acquired contract listings"):
+            result.to_dict()
+
     def test_option_authority_rejects_rehashed_existing_sibling_destination(
         self,
     ) -> None:
