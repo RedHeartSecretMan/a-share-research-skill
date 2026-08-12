@@ -95,7 +95,7 @@ class WorkflowCapitalOperation:
 class WorkflowBoardMembershipOperation:
     """Return one subject-bound board-membership market observation."""
 
-    operation_id = "eastmoney_security_board_membership@1"
+    operation_id = "fixture_workflow_board_membership@1"
     supported_signal_types = frozenset({"security_board_membership"})
     raw_fields = ("data.diff[]", "f12", "f14", "f3", "f128")
 

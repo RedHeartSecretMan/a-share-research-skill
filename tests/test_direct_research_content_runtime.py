@@ -115,6 +115,44 @@ def validate_serialized(result: dict[str, object]) -> None:
     ).to_dict()
 
 
+def rehash_direct_plan(result: dict[str, object]) -> None:
+    plan = result["plan"]  # type: ignore[assignment]
+    plan["id"] = stable_result_id(
+        "plan",
+        {
+            "version": plan["version"],
+            "task_type": plan["task_type"],
+            "operation_obligations": plan["operation_obligations"],
+            "research_dependencies": plan["research_dependencies"],
+            "field_dispositions": [
+                {
+                    "capability_id": capability_id,
+                    "operation_id": operation_id,
+                    "fields": operation["field_dispositions"],
+                }
+                for capability_id, capability in result["coverage"].items()  # type: ignore[union-attr]
+                for operation_id, operation in capability["operations"].items()
+            ],
+        },
+    )
+
+
+def aggregate_state(operations: dict[str, dict[str, object]]) -> str:
+    states = [operation["state"] for operation in operations.values()]
+    if len(set(states)) == 1:
+        return states[0]  # type: ignore[return-value]
+    if "failed" in states or "partial" in states:
+        return "failed" if all(state == "failed" for state in states) else "partial"
+    if any(
+        state in {"not_requested", "skipped_policy", "skipped_research_dependency"}
+        for state in states
+    ):
+        return "partial"
+    if "complete" in states:
+        return "complete"
+    return "observed_empty"
+
+
 def content_request(*, allow_experimental: bool) -> dict[str, object]:
     return {
         "schema_version": "1.0",
@@ -400,6 +438,76 @@ def invoke_copied_installed(
 
 
 class DirectResearchContentPublicSeamTests(unittest.TestCase):
+    def test_content_authority_rejects_coherent_capability_rebinding(self) -> None:
+        result = invoke_copied_installed(content_request(allow_experimental=False))
+        source_capability = "research_content_materials"
+        target_capability = "forged_content_materials"
+        operation_id = "eastmoney_reports@1"
+
+        source_coverage = result["coverage"][source_capability]
+        operation = source_coverage["operations"].pop(operation_id)
+        operation["capability_id"] = target_capability
+        for disposition in operation["field_dispositions"]:
+            destination = disposition["destination"]
+            if isinstance(destination, str) and destination.startswith(
+                f"coverage.{source_capability}."
+            ):
+                disposition["destination"] = destination.replace(
+                    f"coverage.{source_capability}.",
+                    f"coverage.{target_capability}.",
+                    1,
+                )
+            if disposition["field"] == "data[].stockCode":
+                disposition["destination"] = "observations[].payload.title"
+        source_coverage["state"] = aggregate_state(source_coverage["operations"])
+        result["coverage"][target_capability] = {
+            "state": operation["state"],
+            "operations": {operation_id: operation},
+        }
+
+        source_registration = result["capability_registry"][source_capability]
+        registration = next(
+            item
+            for item in source_registration["operations"]
+            if item["id"] == operation_id
+        )
+        source_registration["operations"].remove(registration)
+        result["capability_registry"][target_capability] = {
+            "id": target_capability,
+            "version": source_registration["version"],
+            "granularity": source_registration["granularity"],
+            "operations": [registration],
+        }
+        result["plan"]["capabilities"].append(target_capability)
+        next(
+            item
+            for item in result["plan"]["operation_obligations"]
+            if item["operation_id"] == operation_id
+        )["capability_id"] = target_capability
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "content operation capability"):
+            validate_serialized(result)
+
+    def test_content_authority_rejects_rehashed_existing_sibling_destination(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(content_request(allow_experimental=False))
+        operation = result["coverage"]["research_content_materials"]["operations"][
+            "eastmoney_reports@1"
+        ]
+        retained = next(
+            item
+            for item in operation["field_dispositions"]
+            if item["destination"] is not None
+            and item["destination"].startswith("observations[].payload.")
+        )
+        retained["destination"] = "observations[].payload.title"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "field disposition contract"):
+            validate_serialized(result)
+
     def test_copied_installed_policy_block_is_the_formal_unified_result(self) -> None:
         result = invoke_copied_installed(content_request(allow_experimental=False))
 
@@ -423,6 +531,15 @@ class DirectResearchContentPublicSeamTests(unittest.TestCase):
         self.assertEqual(
             {item["field"] for item in operation["field_dispositions"]},
             set(EastmoneyReportOperation.raw_fields),
+        )
+        stock_code = next(
+            item
+            for item in operation["field_dispositions"]
+            if item["field"] == "data[].stockCode"
+        )
+        self.assertEqual(
+            stock_code["destination"],
+            "observations[].payload.attributes.provider_stock_code",
         )
         for disposition in operation["field_dispositions"]:
             if disposition["disposition"] == "excluded":

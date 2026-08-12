@@ -1363,7 +1363,7 @@ class ResearchContentProcessTests(unittest.TestCase):
                 )
 
         class CninfoAnnouncementOperation:
-            operation_id = "cninfo_announcement@1"
+            operation_id = "fixture_cninfo_announcement@1"
             supported_material_types = frozenset({"announcement"})
             raw_fields = FIXTURE_RAW_FIELDS
 
@@ -1380,7 +1380,7 @@ class ResearchContentProcessTests(unittest.TestCase):
                 )
 
         class SzseAnnouncementOperation:
-            operation_id = "szse_announcement@1"
+            operation_id = "fixture_szse_announcement@1"
             supported_material_types = frozenset({"announcement"})
             raw_fields = FIXTURE_RAW_FIELDS
 
@@ -1431,8 +1431,8 @@ class ResearchContentProcessTests(unittest.TestCase):
                 for error in result["source_errors"]
             ],
             [
-                ("cninfo_announcement@1", "unknown_schema"),
-                ("szse_announcement@1", "pagination_incomplete"),
+                ("fixture_cninfo_announcement@1", "unknown_schema"),
+                ("fixture_szse_announcement@1", "pagination_incomplete"),
             ],
         )
         self.assertIn(

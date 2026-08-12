@@ -299,12 +299,12 @@ class SseStockListOperation:
             FieldDisposition(
                 "STATE_CODE_A_DESC",
                 "cross_check_only",
-                "claims[].payload.security.validity.status",
+                "observations[].payload.observation.listing_status",
             ),
             FieldDisposition(
                 "COMPANY_CODE",
                 "cross_check_only",
-                "claims[].payload.issuer.security_relationship",
+                "observations[].payload.observation.issuer_relationship_verified",
             ),
         ),
         required_fields=frozenset(
@@ -550,7 +550,9 @@ class CninfoSecurityDictionaryOperation:
                 "zwjc", "normalized", "observations[].payload.observation.name"
             ),
             FieldDisposition(
-                "category", "cross_check_only", "claims[].payload.security.type"
+                "category",
+                "cross_check_only",
+                "observations[].payload.observation.security_type",
             ),
             FieldDisposition(
                 "orgId",

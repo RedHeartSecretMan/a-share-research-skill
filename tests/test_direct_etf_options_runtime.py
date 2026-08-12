@@ -257,7 +257,99 @@ def rehash_observation_closure(
     view["brief_id"] = brief["id"]
 
 
+def rehash_direct_plan(result: UnifiedResearchResult) -> None:
+    result.plan["id"] = stable_result_id(
+        "plan",
+        {
+            "version": result.plan["version"],
+            "task_type": result.plan["task_type"],
+            "operation_obligations": result.plan["operation_obligations"],
+            "research_dependencies": result.plan["research_dependencies"],
+            "field_dispositions": [
+                {
+                    "capability_id": capability_id,
+                    "operation_id": operation_id,
+                    "fields": operation["field_dispositions"],
+                }
+                for capability_id, capability in result.coverage.items()
+                for operation_id, operation in capability["operations"].items()
+            ],
+        },
+    )
+
+
 class DirectEtfOptionsRuntimeTests(unittest.TestCase):
+    def test_option_authority_rejects_rehashed_existing_sibling_destination(
+        self,
+    ) -> None:
+        request = option_request(allow_experimental=True)
+        request["as_of"] = "2026-08-02"
+        request["window"] = {
+            "observed_from": "2026-07-31",
+            "observed_to": "2026-07-31",
+        }
+        request["parameters"]["quote_mode"] = "latest_completed"
+        result = ResearchRuntime(
+            etf_option_operations=[SinaEtfOptionSnapshotOperation(FixtureTransport())]
+        ).research(request)
+        operation = result.coverage["etf_option_contracts"]["operations"][
+            "sina_etf_option_snapshot@1"
+        ]
+        next(
+            item
+            for item in operation["field_dispositions"]
+            if item["field"] == "quote[2]"
+        )["destination"] = "observations.payload.quote.bid"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "field disposition contract"):
+            result.to_dict()
+
+    def test_natural_option_destinations_resolve_or_are_explicitly_excluded(
+        self,
+    ) -> None:
+        request = option_request(allow_experimental=True)
+        request["as_of"] = "2026-08-02"
+        request["window"] = {
+            "observed_from": "2026-07-31",
+            "observed_to": "2026-07-31",
+        }
+        request["parameters"]["quote_mode"] = "latest_completed"
+        result = (
+            ResearchRuntime(
+                etf_option_operations=[
+                    SinaEtfOptionSnapshotOperation(FixtureTransport())
+                ]
+            )
+            .research(request)
+            .to_dict()
+        )
+
+        operations = {
+            operation_id: operation
+            for capability in result["coverage"].values()
+            for operation_id, operation in capability["operations"].items()
+        }
+        reference = {
+            item["field"]: item
+            for item in operations["sse_etf_snapshot@1"]["field_dispositions"]
+        }
+        option = {
+            item["field"]: item
+            for item in operations["sina_etf_option_snapshot@1"]["field_dispositions"]
+        }
+        self.assertEqual(reference["cpxxextendname"]["disposition"], "excluded")
+        self.assertEqual(option["months.result.status.code"]["disposition"], "excluded")
+        self.assertEqual(option["analytics[1]"]["disposition"], "excluded")
+        self.assertEqual(
+            option["months.result.data.stockId"]["destination"],
+            "observations.payload.subject_code",
+        )
+        self.assertEqual(
+            option["analytics[12]"]["destination"],
+            "observations.payload.contract.security.code",
+        )
+
     def test_copied_installed_etf_options_policy_block_is_formal_unified_result(
         self,
     ) -> None:
@@ -1203,7 +1295,7 @@ class DirectEtfOptionsRuntimeTests(unittest.TestCase):
             },
             "sse_etf_snapshot@1": {
                 "name": "excluded",
-                "cpxxextendname": "cross_check_only",
+                "cpxxextendname": "excluded",
                 "open": "excluded",
                 "high": "excluded",
                 "low": "excluded",
@@ -1246,17 +1338,22 @@ class DirectEtfOptionsRuntimeTests(unittest.TestCase):
                 **{
                     field: "cross_check_only"
                     for field in (
-                        "months.result.status.code",
                         "months.result.data.stockId",
                         "quote[36]",
-                        "analytics[1]",
-                        "analytics[2]",
-                        "analytics[3]",
                         "analytics[4]",
                         "analytics[12]",
                         "analytics[13]",
                         "analytics[14]",
                         "analytics[16]",
+                    )
+                },
+                **{
+                    field: "excluded"
+                    for field in (
+                        "months.result.status.code",
+                        "analytics[1]",
+                        "analytics[2]",
+                        "analytics[3]",
                     )
                 },
             },

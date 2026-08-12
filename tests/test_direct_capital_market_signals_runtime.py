@@ -44,6 +44,46 @@ UNIFIED_RESULT_KEYS = {
 }
 
 
+def _rehash_direct_plan(result: dict[str, object]) -> None:
+    plan = result["plan"]  # type: ignore[assignment]
+    plan["id"] = stable_result_id(
+        "plan",
+        {
+            "version": plan["version"],
+            "task_type": plan["task_type"],
+            "operation_obligations": plan["operation_obligations"],
+            "research_dependencies": plan["research_dependencies"],
+            "field_dispositions": [
+                {
+                    "capability_id": capability_id,
+                    "operation_id": operation_id,
+                    "fields": operation["field_dispositions"],
+                }
+                for capability_id, capability in result["coverage"].items()  # type: ignore[union-attr]
+                for operation_id, operation in capability["operations"].items()
+            ],
+        },
+    )
+
+
+def _validate_serialized(result: dict[str, object]) -> None:
+    UnifiedResearchResult(
+        status=result["status"],  # type: ignore[arg-type]
+        research_anchor=result["research_anchor"],  # type: ignore[arg-type]
+        plan=result["plan"],  # type: ignore[arg-type]
+        capability_registry=result["capability_registry"],  # type: ignore[arg-type]
+        coverage=result["coverage"],  # type: ignore[arg-type]
+        observations=tuple(result["observations"]),  # type: ignore[arg-type]
+        claims=tuple(result["claims"]),  # type: ignore[arg-type]
+        calculations=tuple(result["calculations"]),  # type: ignore[arg-type]
+        conflicts=tuple(result["conflicts"]),  # type: ignore[arg-type]
+        limitations=tuple(result["limitations"]),  # type: ignore[arg-type]
+        source_errors=tuple(result["source_errors"]),  # type: ignore[arg-type]
+        task_views=result["task_views"],  # type: ignore[arg-type]
+        briefs=tuple(result["briefs"]),  # type: ignore[arg-type]
+    ).to_dict()
+
+
 def _destination_resolves(
     result: dict[str, object], operation_id: str, destination: str
 ) -> bool:
@@ -127,6 +167,30 @@ def _invoke_copied_installed(
 
 
 class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
+    def test_production_authorities_reject_rehashed_sibling_destinations(self) -> None:
+        for task_type, capability_id in (
+            ("capital_events", "capital_event_observations"),
+            ("market_signals", "market_signal_observations"),
+        ):
+            with self.subTest(task_type=task_type):
+                result = _invoke_copied_installed(_request(task_type))
+                operations = result["coverage"][capability_id]["operations"]
+                operation = next(iter(operations.values()))
+                forged_destination = (
+                    f"coverage.{capability_id}.operations."
+                    f"{operation['operation_id']}.query_complete"
+                )
+                retained = next(
+                    item
+                    for item in operation["field_dispositions"]
+                    if item["destination"] is not None
+                    and item["destination"] != forged_destination
+                )
+                retained["destination"] = forged_destination
+                _rehash_direct_plan(result)
+                with self.assertRaisesRegex(ValueError, "field disposition contract"):
+                    _validate_serialized(result)
+
     def test_copied_installed_policy_block_uses_one_unified_result(self) -> None:
         for task_type in ("capital_events", "market_signals"):
             with self.subTest(task_type=task_type):

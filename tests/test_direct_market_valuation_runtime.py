@@ -36,6 +36,7 @@ from a_share_research.research_result import (  # noqa: E402
     OperationOutcome,
     ResearchDependency,
     UnifiedResearchResult,
+    _NoIoHttpTransport,
     fold_direct_task_research_result,
     stable_result_id,
 )
@@ -111,6 +112,84 @@ def rehash_direct_consumer(
         new_id if item == old_id else item for item in view[reference_field]
     ]
     view["brief_id"] = brief["id"]
+
+
+def rehash_direct_plan(result: UnifiedResearchResult) -> None:
+    dispositions = [
+        {
+            "capability_id": capability_id,
+            "operation_id": operation_id,
+            "fields": operation["field_dispositions"],
+        }
+        for capability_id, capability in result.coverage.items()
+        for operation_id, operation in capability["operations"].items()
+    ]
+    result.plan["id"] = stable_result_id(
+        "plan",
+        {
+            "version": result.plan["version"],
+            "task_type": result.plan["task_type"],
+            "operation_obligations": result.plan["operation_obligations"],
+            "research_dependencies": result.plan["research_dependencies"],
+            "field_dispositions": dispositions,
+        },
+    )
+
+
+def aggregate_state(operations: dict[str, dict[str, object]]) -> str:
+    states = [operation["state"] for operation in operations.values()]
+    if len(set(states)) == 1:
+        return states[0]  # type: ignore[return-value]
+    if "failed" in states or "partial" in states:
+        return "failed" if all(state == "failed" for state in states) else "partial"
+    if any(
+        state in {"not_requested", "skipped_policy", "skipped_research_dependency"}
+        for state in states
+    ):
+        return "partial"
+    if "complete" in states:
+        return "complete"
+    return "observed_empty"
+
+
+def move_operation_capability(
+    result: UnifiedResearchResult,
+    operation_id: str,
+    source_capability: str,
+    target_capability: str,
+) -> None:
+    source_coverage = result.coverage[source_capability]
+    target_coverage = result.coverage[target_capability]
+    operation = source_coverage["operations"].pop(operation_id)
+    operation["capability_id"] = target_capability
+    for disposition in operation["field_dispositions"]:
+        destination = disposition["destination"]
+        if isinstance(destination, str) and destination.startswith(
+            f"coverage.{source_capability}."
+        ):
+            disposition["destination"] = destination.replace(
+                f"coverage.{source_capability}.",
+                f"coverage.{target_capability}.",
+                1,
+            )
+    target_coverage["operations"][operation_id] = operation
+    source_coverage["state"] = aggregate_state(source_coverage["operations"])
+    target_coverage["state"] = aggregate_state(target_coverage["operations"])
+
+    source_registration = result.capability_registry[source_capability]
+    target_registration = result.capability_registry[target_capability]
+    registration = next(
+        item for item in source_registration["operations"] if item["id"] == operation_id
+    )
+    source_registration["operations"].remove(registration)
+    target_registration["operations"].append(registration)
+    next(
+        item
+        for item in result.plan["operation_obligations"]
+        if item["operation_id"] == operation_id
+        and item["capability_id"] == source_capability
+    )["capability_id"] = target_capability
+    rehash_direct_plan(result)
 
 
 def invoke_copied_installed(
@@ -285,6 +364,135 @@ def build_invariant_result(*, include_second_claim: bool = False):
 
 
 class DirectMarketValuationPublicSeamTests(unittest.TestCase):
+    def test_known_identity_and_market_operations_reject_capability_rebinding(
+        self,
+    ) -> None:
+        for operation_id, source_capability, target_capability in (
+            (
+                "sse_stock_list@1",
+                "security_identity_resolution",
+                "market_trend_series",
+            ),
+            (
+                "sse_daily_line@1",
+                "market_trend_series",
+                "security_identity_resolution",
+            ),
+        ):
+            with self.subTest(operation_id=operation_id):
+                result = build_market_trend_result(
+                    {
+                        "schema_version": "1.0",
+                        "task_type": "market_trend",
+                        "subjects": [{"clue": "蓝色光标"}],
+                        "as_of": "2026-08-02",
+                        "window": {"trading_days": 5},
+                        "parameters": {"adjustment": "unadjusted"},
+                        "source_policy": {
+                            "allow_experimental": True,
+                            "allow_credentials": False,
+                            "allow_fallback": True,
+                        },
+                    },
+                    load_fixture_transport(MARKET_FIXTURE_CLI, "FixtureTransport"),
+                    datetime(
+                        2026,
+                        8,
+                        2,
+                        18,
+                        30,
+                        tzinfo=timezone(timedelta(hours=8)),
+                    ),
+                )
+                move_operation_capability(
+                    result, operation_id, source_capability, target_capability
+                )
+
+                with self.assertRaisesRegex(ValueError, "operation capability"):
+                    result.to_dict()
+
+    def test_natural_identity_cross_checks_resolve_to_owned_public_facts(self) -> None:
+        result = build_market_trend_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "market_trend",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": "2026-08-02",
+                "window": {"trading_days": 5},
+                "parameters": {"adjustment": "unadjusted"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            load_fixture_transport(MARKET_FIXTURE_CLI, "FixtureTransport"),
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        ).to_dict()
+
+        operations = result["coverage"]["security_identity_resolution"]["operations"]
+        sse = {
+            item["field"]: item["destination"]
+            for item in operations["sse_stock_list@1"]["field_dispositions"]
+        }
+        cninfo = {
+            item["field"]: item["destination"]
+            for item in operations["cninfo_security_dictionary@1"]["field_dispositions"]
+        }
+        self.assertEqual(
+            sse["STATE_CODE_A_DESC"],
+            "observations[].payload.observation.listing_status",
+        )
+        self.assertEqual(
+            sse["COMPANY_CODE"],
+            "observations[].payload.observation.issuer_relationship_verified",
+        )
+        self.assertEqual(
+            cninfo["category"],
+            "observations[].payload.observation.security_type",
+        )
+
+    def test_natural_valuation_destinations_resolve_to_owned_public_facts(self) -> None:
+        result = build_security_valuation_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "security_valuation",
+                "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {"target_pe": "30"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            load_fixture_transport(VALUATION_FIXTURE_CLI, "ValuationFixtureTransport"),
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        ).to_dict()
+
+        operations = result["coverage"]["security_valuation_metrics"]["operations"]
+        statements = {
+            item["field"]: item["destination"]
+            for item in operations["sina_financial_statements@1"]["field_dispositions"]
+        }
+        consensus = {
+            item["field"]: item["destination"]
+            for item in operations["ths_consensus_eps@1"]["field_dispositions"]
+        }
+        self.assertEqual(
+            statements["publish_date"],
+            "observations.payload.report.publication_date",
+        )
+        self.assertEqual(
+            statements["item_value"],
+            "observations.payload.full_statement_items[].value",
+        )
+        self.assertEqual(
+            consensus["forecast_year"],
+            "observations.payload.observed_value.value[].year",
+        )
+
     def test_market_trend_consumes_typed_identity_without_public_serialization(
         self,
     ) -> None:
@@ -628,6 +836,35 @@ class DirectMarketValuationPublicSeamTests(unittest.TestCase):
 
 
 class DirectResultInvariantTests(unittest.TestCase):
+    def test_default_contract_authorities_construct_without_transport_io(self) -> None:
+        from a_share_research.capital_registry import build_default_capital_operations
+        from a_share_research.content_registry import build_default_content_operations
+        from a_share_research.etf_option_registry import (
+            build_default_etf_option_operations,
+        )
+        from a_share_research.identity_sources import build_default_identity_operations
+        from a_share_research.market_signal_registry import (
+            build_default_market_signal_operations,
+        )
+
+        transport = _NoIoHttpTransport()
+        self.assertEqual(len(build_default_identity_operations(transport)), 3)
+        self.assertEqual(len(build_default_etf_option_operations(transport)), 1)
+        self.assertEqual(len(build_default_capital_operations(transport)), 7)
+        self.assertEqual(len(build_default_market_signal_operations(transport)), 8)
+        self.assertEqual(
+            len(
+                build_default_content_operations(
+                    transport,
+                    allow_credentials=True,
+                    allow_fallback=True,
+                    research_now=None,
+                )
+            ),
+            11,
+        )
+        self.assertEqual(transport.calls, [])
+
     def test_dependency_satisfaction_is_scoped_by_consumer_and_evidence_use(
         self,
     ) -> None:
@@ -636,6 +873,102 @@ class DirectResultInvariantTests(unittest.TestCase):
 
         self.assertEqual(missing_use.status, "blocked")
         self.assertEqual(complete_pairs.status, "limited")
+
+    def test_destination_validation_preserves_heterogeneous_zero_empty_and_failed(
+        self,
+    ) -> None:
+        dispositions = (
+            FieldDisposition("alpha", "normalized", "observations.payload.alpha"),
+            FieldDisposition("beta", "normalized", "observations.payload.beta"),
+            FieldDisposition(
+                "unused",
+                "excluded",
+                None,
+                "The fixture field is intentionally not retained.",
+            ),
+        )
+        plan = DirectTaskPlan(
+            task_type="destination_guard_task",
+            as_of="2026-08-11",
+            obligations=(
+                OperationObligation(
+                    capability_id="example_capability",
+                    operation_id="example_operation@1",
+                    source_role="market_observation",
+                    experimental=False,
+                    exchange=None,
+                    evidence_uses=(EvidenceUsePolicy("example_use", "supporting"),),
+                ),
+            ),
+            dependencies=(
+                ResearchDependency("example_consumer", "example_use", 1, True),
+            ),
+        )
+
+        heterogeneous = fold_direct_task_research_result(
+            plan,
+            (
+                OperationOutcome(
+                    capability_id="example_capability",
+                    operation_id="example_operation@1",
+                    execution=OperationExecution("succeeded", query_complete=True),
+                    observations=(
+                        {
+                            "id": "alpha",
+                            "source_operation": "example_operation@1",
+                            "alpha": 0,
+                        },
+                        {
+                            "id": "beta",
+                            "source_operation": "example_operation@1",
+                            "beta": "",
+                        },
+                    ),
+                    field_dispositions=dispositions,
+                ),
+            ),
+            summary="Heterogeneous destination fixture.",
+        ).to_dict()
+        self.assertEqual(
+            heterogeneous["coverage"]["example_capability"]["state"], "complete"
+        )
+
+        for execution, errors, expected_state in (
+            (
+                OperationExecution("succeeded", query_complete=True),
+                (),
+                "observed_empty",
+            ),
+            (
+                OperationExecution("failed"),
+                (
+                    {
+                        "source_operation": "example_operation@1",
+                        "code": "fixture_failure",
+                        "message": "The fixture operation failed.",
+                    },
+                ),
+                "failed",
+            ),
+        ):
+            with self.subTest(expected_state=expected_state):
+                result = fold_direct_task_research_result(
+                    plan,
+                    (
+                        OperationOutcome(
+                            capability_id="example_capability",
+                            operation_id="example_operation@1",
+                            execution=execution,
+                            source_errors=errors,
+                            field_dispositions=dispositions,
+                        ),
+                    ),
+                    summary="Empty destination fixture.",
+                ).to_dict()
+                self.assertEqual(
+                    result["coverage"]["example_capability"]["state"],
+                    expected_state,
+                )
 
     def test_serializer_rejects_forged_status_ids_refs_and_coverage(self) -> None:
         status_tamper = build_invariant_result(include_second_claim=True)
@@ -727,6 +1060,197 @@ class DirectResultInvariantTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "inner source operation"):
             result.to_dict()
+
+    def test_serializer_rejects_rehashed_unresolved_field_destination(self) -> None:
+        transport = load_fixture_transport(MARKET_FIXTURE_CLI, "FixtureTransport")
+        result = build_market_trend_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "market_trend",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": "2026-08-02",
+                "window": {"trading_days": 5},
+                "parameters": {"adjustment": "unadjusted"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            transport,
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        )
+        operation = result.coverage["market_trend_series"]["operations"][
+            "szse_daily_line@1"
+        ]
+        disposition = next(
+            item
+            for item in operation["field_dispositions"]
+            if item["field"] == "row[0]"
+        )
+        disposition["destination"] = "observations.payload.forged_but_nonempty"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "destination does not resolve"):
+            result.to_dict()
+
+    def test_serializer_rejects_rehashed_existing_sibling_field_destination(
+        self,
+    ) -> None:
+        transport = load_fixture_transport(MARKET_FIXTURE_CLI, "FixtureTransport")
+        result = build_market_trend_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "market_trend",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": "2026-08-02",
+                "window": {"trading_days": 5},
+                "parameters": {"adjustment": "unadjusted"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            transport,
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        )
+        operation = result.coverage["market_trend_series"]["operations"][
+            "szse_daily_line@1"
+        ]
+        disposition = next(
+            item
+            for item in operation["field_dispositions"]
+            if item["field"] == "row[0]"
+        )
+        disposition["destination"] = "observations.payload.observed_value.value.close"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "field disposition contract"):
+            result.to_dict()
+
+    def test_shared_identity_authority_rejects_rehashed_sibling_destination(
+        self,
+    ) -> None:
+        result = build_market_trend_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "market_trend",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": "2026-08-02",
+                "window": {"trading_days": 5},
+                "parameters": {"adjustment": "unadjusted"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            load_fixture_transport(MARKET_FIXTURE_CLI, "FixtureTransport"),
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        )
+        operation = result.coverage["security_identity_resolution"]["operations"][
+            "szse_stock_list@1"
+        ]
+        next(
+            item for item in operation["field_dispositions"] if item["field"] == "agdm"
+        )["destination"] = "observations[].payload.observation.name"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "field disposition contract"):
+            result.to_dict()
+
+    def test_task_authorities_reject_rehashed_existing_sibling_destinations(
+        self,
+    ) -> None:
+        research_now = datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8)))
+        policy = {
+            "allow_experimental": True,
+            "allow_credentials": False,
+            "allow_fallback": True,
+        }
+        market_transport = load_fixture_transport(
+            MARKET_FIXTURE_CLI, "FixtureTransport"
+        )
+        valuation_transport = load_fixture_transport(
+            VALUATION_FIXTURE_CLI, "ValuationFixtureTransport"
+        )
+        etf = build_etf_market_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "etf_market",
+                "subjects": [{"clue": "510050"}],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {},
+                "source_policy": policy,
+            },
+            market_transport,
+            research_now,
+        )
+        valuation = build_security_valuation_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "security_valuation",
+                "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {"target_pe": "30"},
+                "source_policy": policy,
+            },
+            valuation_transport,
+            research_now,
+        )
+        comparison = build_valuation_comparison_result(
+            {
+                "schema_version": "1.0",
+                "task_type": "valuation_compare",
+                "subjects": [
+                    {"clue": "工业富联", "issuer_security_class_count": 1},
+                    {"clue": "贵州茅台", "issuer_security_class_count": 1},
+                ],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {"target_pe": "30"},
+                "source_policy": policy,
+            },
+            valuation_transport,
+            research_now,
+        )
+        cases = (
+            (
+                etf,
+                "etf_market_quote",
+                "sse_etf_snapshot@1",
+                "last",
+                "observations.payload.observed_value.value.open",
+            ),
+            (
+                valuation,
+                "security_valuation_metrics",
+                "sina_financial_statements@1",
+                "publish_date",
+                "observations.payload.report.scope",
+            ),
+            (
+                comparison,
+                "valuation_compare_metrics",
+                "member-0::sina_financial_statements@1",
+                "publish_date",
+                "observations.payload.report.scope",
+            ),
+        )
+        for result, capability_id, operation_id, field, destination in cases:
+            with self.subTest(task_type=result.plan["task_type"]):
+                dispositions = result.coverage[capability_id]["operations"][
+                    operation_id
+                ]["field_dispositions"]
+                next(item for item in dispositions if item["field"] == field)[
+                    "destination"
+                ] = destination
+                rehash_direct_plan(result)
+                with self.assertRaisesRegex(ValueError, "field disposition contract"):
+                    result.to_dict()
 
     def test_business_claims_adopt_identity_observations(self) -> None:
         market_transport = load_fixture_transport(

@@ -174,12 +174,13 @@ def _dispositions(
             "date": "observations.payload.trading_date",
             "time": "observations.payload.observed_at",
         }
-        cross_checks = {
-            "cpxxextendname": "acquisition.identity_validation",
-            "code": "observations.payload.subject.security.code",
-        }
+        cross_checks = {"code": "observations.payload.subject.security.code"}
         excluded = {
             "name": "The short name is schema-validated but not retained.",
+            "cpxxextendname": (
+                "The extended name is used for identity comparison but is not "
+                "retained in the public result."
+            ),
             "open": "The open price is outside the ETF-option reference fact.",
             "high": "The high price is outside the ETF-option reference fact.",
             "low": "The low price is outside the ETF-option reference fact.",
@@ -235,23 +236,40 @@ def _dispositions(
         "analytics[15]": "observations.payload.analytics.theoretical_value",
     }
     cross_checks = {
-        "months.result.status.code": "acquisition.schema_validation",
-        "months.result.data.stockId": "acquisition.identity_validation",
-        "quote[36]": "acquisition.identity_validation",
-        "analytics[1]": "acquisition.schema_validation",
-        "analytics[2]": "acquisition.schema_validation",
-        "analytics[3]": "acquisition.schema_validation",
-        "analytics[4]": "acquisition.quote_analytics_validation",
-        "analytics[12]": "acquisition.identity_validation",
-        "analytics[13]": "acquisition.quote_analytics_validation",
-        "analytics[14]": "acquisition.quote_analytics_validation",
-        "analytics[16]": "acquisition.identity_validation",
+        "months.result.data.stockId": "observations.payload.subject_code",
+        "quote[36]": "observations.payload.subject_code",
+        "analytics[4]": "observations.payload.quote.volume",
+        "analytics[12]": "observations.payload.contract.security.code",
+        "analytics[13]": "observations.payload.contract.strike",
+        "analytics[14]": "observations.payload.quote.last",
+        "analytics[16]": "observations.payload.contract.series",
+    }
+    excluded = {
+        "months.result.status.code": (
+            "The provider status code is used only for source-contract validation."
+        ),
+        "analytics[1]": (
+            "The empty provider slot is used only for shifted-schema validation."
+        ),
+        "analytics[2]": (
+            "The empty provider slot is used only for shifted-schema validation."
+        ),
+        "analytics[3]": (
+            "The empty provider slot is used only for shifted-schema validation."
+        ),
     }
     return tuple(
         FieldDisposition(
             field,
-            "normalized" if field not in cross_checks else "cross_check_only",
-            normalized.get(field, cross_checks.get(field, "observations.payload")),
+            "excluded"
+            if field in excluded
+            else "cross_check_only"
+            if field in cross_checks
+            else "normalized",
+            None
+            if field in excluded
+            else normalized.get(field, cross_checks.get(field, "observations.payload")),
+            excluded.get(field),
         )
         for field in fields
     )
@@ -1007,12 +1025,16 @@ def build_etf_options_result(
     query = _normalize_query(request)
     operation_list = list(operations)
     if len(operation_list) != 1:
+        from .etf_option_sources import SinaEtfOptionSnapshotOperation
+
         return _direct_option_result(
             request,
             owners=_DEFAULT_OWNERS,
-            raw_fields=(),
+            raw_fields=SinaEtfOptionSnapshotOperation.raw_fields,
             outcomes=_skipped_option_outcomes(
-                _DEFAULT_OWNERS, (), "skipped_research_dependency"
+                _DEFAULT_OWNERS,
+                SinaEtfOptionSnapshotOperation.raw_fields,
+                "skipped_research_dependency",
             ),
             limitations=(
                 DirectTaskLimitation(

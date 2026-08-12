@@ -17,7 +17,7 @@ from decimal import (
     localcontext,
 )
 from hashlib import sha256
-from typing import Literal, Mapping, Sequence, cast
+from typing import Collection, Literal, Mapping, NoReturn, Sequence, cast
 
 CoverageState = Literal[
     "not_requested",
@@ -556,46 +556,186 @@ def _validate_disposition_destination(
     destination: str,
     owner: tuple[str, str],
     observation_ids: Sequence[str],
-    observations_by_id: Mapping[str, Mapping[str, object]],
+    result: Mapping[str, object],
+    *,
+    empty_collection_fields: Mapping[str, frozenset[str]] | None = None,
 ) -> None:
     coverage_destination = f"coverage.{owner[0]}.operations.{owner[1]}.query_complete"
     if destination == coverage_destination:
         return
-    prefix = "observations[].payload."
-    if not destination.startswith(prefix):
+    collections = (
+        ("observations[].payload", "observations", "observation_ids"),
+        ("observations.payload", "observations", "observation_ids"),
+    )
+    contract = next(
+        (
+            candidate
+            for candidate in collections
+            if destination == candidate[0] or destination.startswith(f"{candidate[0]}.")
+        ),
+        None,
+    )
+    if contract is None:
         raise ValueError("field disposition destination is unsupported")
-    path = destination.removeprefix(prefix).split(".")
-    if not path or any(not segment for segment in path):
+    prefix, collection_name, reference_field = contract
+    suffix = destination.removeprefix(prefix).removeprefix(".")
+    path = suffix.split(".") if suffix else []
+    if any(not segment for segment in path):
         raise ValueError("field disposition destination is invalid")
     if not observation_ids:
         return
-    for observation_id in observation_ids:
-        record = observations_by_id.get(observation_id)
-        if record is None:
-            raise ValueError("field disposition destination owner is missing")
-        values: list[object] = [record.get("payload")]
-        for segment in path:
-            collection = segment.endswith("[]")
-            key = segment.removesuffix("[]")
-            nested_values: list[object] = []
-            for value in values:
-                if not isinstance(value, Mapping) or key not in value:
-                    continue
-                nested = value[key]
-                if collection:
-                    if isinstance(nested, list):
-                        nested_values.extend(nested)
-                else:
-                    nested_values.append(nested)
-            if not nested_values:
-                break
-            values = nested_values
-        else:
-            return
+    collection = result.get(collection_name)
+    if not isinstance(collection, list):
+        raise ValueError("field disposition destination collection is invalid")
+    owned_ids = set(observation_ids)
+    records = [
+        record
+        for record in collection
+        if isinstance(record, Mapping)
+        and (
+            record.get("id") in owned_ids
+            if collection_name == "observations"
+            else isinstance(record.get(reference_field), list)
+            and bool(owned_ids.intersection(cast(list[str], record[reference_field])))
+        )
+    ]
+
+    def resolves(value: object, remaining: Sequence[str]) -> bool:
+        if not remaining:
+            return True
+        if isinstance(value, list):
+            return any(resolves(item, remaining) for item in value)
+        if not isinstance(value, Mapping):
+            return False
+        segment, *tail = remaining
+        is_collection = segment.endswith("[]")
+        key = segment.removesuffix("[]")
+        if key not in value:
+            return False
+        nested = value[key]
+        if isinstance(nested, list) and not nested and tail:
+            allowed = (empty_collection_fields or {}).get(key)
+            return allowed is not None and len(tail) == 1 and tail[0] in allowed
+        if not is_collection:
+            return resolves(nested, tail)
+        if not isinstance(nested, list):
+            return False
+        if not tail:
+            return True
+        return any(resolves(item, tail) for item in nested)
+
+    if any(resolves(record.get("payload"), path) for record in records):
+        return
     raise ValueError(
         "field disposition destination does not resolve: "
         f"{owner[0]}/{owner[1]} -> {destination}"
     )
+
+
+def _require_exact_disposition_contract(
+    operation: Mapping[str, object],
+    expected: Sequence[FieldDisposition],
+    *,
+    domain: str,
+) -> None:
+    if operation.get("field_dispositions") != [item.to_dict() for item in expected]:
+        raise ValueError(f"{domain} field disposition contract is invalid")
+
+
+def _require_known_operation_capability(
+    result: Mapping[str, object],
+    operation_ids: Collection[str],
+    capability_id: str | Collection[str],
+    *,
+    domain: str,
+) -> None:
+    known_ids = set(operation_ids)
+    allowed_capabilities = (
+        {capability_id} if isinstance(capability_id, str) else set(capability_id)
+    )
+    for actual_capability, aggregate in cast(
+        dict[str, object], result["coverage"]
+    ).items():
+        if not isinstance(aggregate, dict) or not isinstance(
+            aggregate.get("operations"), dict
+        ):
+            continue
+        if actual_capability in allowed_capabilities:
+            continue
+        if known_ids.intersection(cast(dict[str, object], aggregate["operations"])):
+            raise ValueError(f"{domain} operation capability is invalid")
+
+
+class _NoIoHttpTransport:
+    """Fail loudly if contract-authority construction ever performs I/O."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def get(self, url: str, headers: dict[str, str]) -> NoReturn:
+        del headers
+        self.calls.append(("GET", url))
+        raise AssertionError("destination contract validation must not perform I/O")
+
+    def post(self, url: str, headers: dict[str, str], body: bytes) -> NoReturn:
+        del headers, body
+        self.calls.append(("POST", url))
+        raise AssertionError("destination contract validation must not perform I/O")
+
+
+def _validate_production_identity_dispositions(
+    result: Mapping[str, object],
+) -> None:
+    from .identity_sources import build_default_identity_operations
+
+    transport = _NoIoHttpTransport()
+    authorities = {
+        item.obligation.operation_id: item.field_dispositions
+        for item in build_default_identity_operations(transport)
+    }
+    identity_capabilities = {"security_identity_resolution"}
+    plan = result.get("plan")
+    if isinstance(plan, Mapping) and plan.get("task_type") == "market_signals":
+        for observation in cast(Sequence[Mapping[str, object]], result["observations"]):
+            payload = observation.get("payload")
+            dimensions = (
+                payload.get("dimensions") if isinstance(payload, Mapping) else None
+            )
+            provider_code = (
+                dimensions.get("provider_security_code")
+                if isinstance(dimensions, Mapping)
+                else None
+            )
+            if isinstance(provider_code, str):
+                namespace = sha256(provider_code.encode()).hexdigest()[:12]
+                identity_capabilities.add(
+                    f"security_identity_resolution.monitoring.{namespace}"
+                )
+    _require_known_operation_capability(
+        result,
+        authorities,
+        identity_capabilities,
+        domain="identity",
+    )
+    coverage = cast(dict[str, object], result["coverage"])
+    for aggregate in coverage.values():
+        if not isinstance(aggregate, dict) or not isinstance(
+            aggregate.get("operations"), dict
+        ):
+            continue
+        for operation_id, operation in cast(
+            dict[str, object], aggregate["operations"]
+        ).items():
+            if operation_id in authorities:
+                if not isinstance(operation, dict):
+                    raise ValueError("identity field disposition contract is invalid")
+                _require_exact_disposition_contract(
+                    operation,
+                    authorities[operation_id],
+                    domain="identity",
+                )
+    if transport.calls:
+        raise AssertionError("identity contract construction performed I/O")
 
 
 @dataclass(frozen=True)
@@ -1216,6 +1356,7 @@ class UnifiedResearchResult:
             raise ValueError("operation observation ownership is incomplete")
         if covered_source_error_ids != set(source_error_owners):
             raise ValueError("operation source-error ownership is incomplete")
+        _validate_production_identity_dispositions(result)
 
         ids_by_reference_field = {
             "observation_ids": {
@@ -1654,6 +1795,18 @@ class UnifiedResearchResult:
         covered_operations: set[tuple[str, str]] = set()
         derived_states: list[CoverageState] = []
         disposition_contracts: list[dict[str, object]] = []
+        empty_collection_fields: Mapping[str, frozenset[str]] = {}
+        if task_type == "intraday_replay":
+            from dataclasses import fields as dataclass_fields
+
+            from .intraday_replay_contract import IntradayReplaySourceRow
+
+            empty_collection_fields = {
+                "source_records": frozenset(
+                    item.name for item in dataclass_fields(IntradayReplaySourceRow)
+                )
+                | {"provider_observation_id"}
+            }
         for capability_id, aggregate in coverage.items():
             if not isinstance(aggregate, dict):
                 raise ValueError("capability coverage must be an object")
@@ -1719,15 +1872,13 @@ class UnifiedResearchResult:
                         cast(str | None, disposition.get("destination")),
                         cast(str | None, disposition.get("reason")),
                     )
-                    if (task_type, capability_id) in {
-                        ("capital_events", "capital_event_observations"),
-                        ("market_signals", "market_signal_observations"),
-                    } and typed_disposition.destination is not None:
+                    if typed_disposition.destination is not None:
                         _validate_disposition_destination(
                             typed_disposition.destination,
                             owner,
                             cast(list[str], observation_ids),
-                            observations_by_id,
+                            result,
+                            empty_collection_fields=empty_collection_fields,
                         )
                 execution = OperationExecution(
                     cast(OperationExecutionState, operation.get("execution_state")),
@@ -2049,6 +2200,7 @@ class UnifiedResearchResult:
             "brief", {key: value for key, value in brief.items() if key != "id"}
         ):
             raise ValueError("brief reference is invalid")
+        _validate_production_identity_dispositions(result)
         _validate_direct_domain_facts(result, task_type)
 
 
@@ -2078,6 +2230,39 @@ def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) 
 def _validate_capital_event_domain_facts(
     result: Mapping[str, object],
 ) -> None:
+    from .capital_events import _capital_dispositions
+    from .capital_registry import build_default_capital_operations
+
+    transport = _NoIoHttpTransport()
+    authorities = {
+        item.operation_id: _capital_dispositions(item)
+        for item in build_default_capital_operations(transport)
+    }
+    _require_known_operation_capability(
+        result,
+        authorities,
+        "capital_event_observations",
+        domain="capital",
+    )
+    aggregate = cast(dict[str, object], result["coverage"]).get(
+        "capital_event_observations"
+    )
+    if not isinstance(aggregate, dict) or not isinstance(
+        aggregate.get("operations"), dict
+    ):
+        raise ValueError("capital field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], aggregate["operations"]
+    ).items():
+        if operation_id in authorities:
+            if not isinstance(operation, dict):
+                raise ValueError("capital field disposition contract is invalid")
+            _require_exact_disposition_contract(
+                operation, authorities[operation_id], domain="capital"
+            )
+    if transport.calls:
+        raise AssertionError("capital contract construction performed I/O")
+
     observations = cast(list[dict[str, object]], result["observations"])
     source_errors = cast(list[dict[str, object]], result["source_errors"])
     capital_records: list[tuple[str, dict[str, object]]] = []
@@ -2356,6 +2541,39 @@ def _validate_capital_event_domain_facts(
 def _validate_market_signal_domain_facts(
     result: Mapping[str, object],
 ) -> None:
+    from .market_signal_registry import build_default_market_signal_operations
+    from .market_signals import _market_signal_dispositions
+
+    transport = _NoIoHttpTransport()
+    authorities = {
+        item.operation_id: _market_signal_dispositions(item)
+        for item in build_default_market_signal_operations(transport)
+    }
+    _require_known_operation_capability(
+        result,
+        authorities,
+        "market_signal_observations",
+        domain="market-signal",
+    )
+    aggregate = cast(dict[str, object], result["coverage"]).get(
+        "market_signal_observations"
+    )
+    if not isinstance(aggregate, dict) or not isinstance(
+        aggregate.get("operations"), dict
+    ):
+        raise ValueError("market-signal field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], aggregate["operations"]
+    ).items():
+        if operation_id in authorities:
+            if not isinstance(operation, dict):
+                raise ValueError("market-signal field disposition contract is invalid")
+            _require_exact_disposition_contract(
+                operation, authorities[operation_id], domain="market-signal"
+            )
+    if transport.calls:
+        raise AssertionError("market-signal contract construction performed I/O")
+
     observations = cast(list[dict[str, object]], result["observations"])
     source_errors = cast(list[dict[str, object]], result["source_errors"])
     observations_by_id = {
@@ -2864,6 +3082,41 @@ def _validate_market_signal_domain_facts(
 def _validate_research_content_domain_facts(
     result: Mapping[str, object],
 ) -> None:
+    from .content_registry import build_default_content_operations
+    from .research_content import _content_dispositions
+
+    transport = _NoIoHttpTransport()
+    authorities = {
+        item.operation_id: _content_dispositions(item)
+        for item in build_default_content_operations(
+            transport,
+            allow_credentials=True,
+            allow_fallback=True,
+            research_now=None,
+        )
+    }
+    _require_known_operation_capability(
+        result,
+        authorities,
+        "research_content_materials",
+        domain="content",
+    )
+    aggregate = cast(dict[str, object], result["coverage"]).get(
+        "research_content_materials"
+    )
+    if isinstance(aggregate, dict) and isinstance(aggregate.get("operations"), dict):
+        for operation_id, operation in cast(
+            dict[str, object], aggregate["operations"]
+        ).items():
+            if operation_id in authorities:
+                if not isinstance(operation, dict):
+                    raise ValueError("content field disposition contract is invalid")
+                _require_exact_disposition_contract(
+                    operation, authorities[operation_id], domain="content"
+                )
+    if transport.calls:
+        raise AssertionError("content contract construction performed I/O")
+
     observations = cast(list[dict[str, object]], result["observations"])
     claims = cast(list[dict[str, object]], result["claims"])
     materials: list[tuple[str, dict[str, object]]] = []
@@ -3267,6 +3520,37 @@ def _reject_sensitive_research_content_attributes(value: Mapping[str, object]) -
 def _validate_intraday_snapshot_domain_facts(
     result: Mapping[str, object],
 ) -> None:
+    from .intraday_snapshot import (
+        _SNAPSHOT_FIELD_DISPOSITIONS,
+        _SNAPSHOT_OPERATIONS,
+    )
+
+    _require_known_operation_capability(
+        result,
+        _SNAPSHOT_OPERATIONS,
+        "intraday_market_snapshot",
+        domain="intraday snapshot",
+    )
+    coverage = cast(dict[str, object], result["coverage"])
+    aggregate = coverage.get("intraday_market_snapshot")
+    if not isinstance(aggregate, dict) or not isinstance(
+        aggregate.get("operations"), dict
+    ):
+        raise ValueError("intraday snapshot field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], aggregate["operations"]
+    ).items():
+        if operation_id in _SNAPSHOT_OPERATIONS:
+            if not isinstance(operation, dict):
+                raise ValueError(
+                    "intraday snapshot field disposition contract is invalid"
+                )
+            _require_exact_disposition_contract(
+                operation,
+                _SNAPSHOT_FIELD_DISPOSITIONS[operation_id],
+                domain="intraday snapshot",
+            )
+
     claims = cast(list[dict[str, object]], result["claims"])
     calculations = cast(list[dict[str, object]], result["calculations"])
     snapshot_claims = [
@@ -3591,6 +3875,81 @@ def _validate_intraday_snapshot_domain_facts(
 
 
 def _validate_intraday_replay_domain_facts(result: Mapping[str, object]) -> None:
+    from .intraday_replay import _default_replay_field_dispositions
+    from .intraday_replay_mootdx import MootdxIntradayReplayOperation
+    from .intraday_replay_registry import (
+        ExchangeReplayDailyBoundaryOperation,
+        exchange_daily_field_dispositions,
+    )
+
+    _require_known_operation_capability(
+        result,
+        (MootdxIntradayReplayOperation.operation_id,),
+        "intraday_replay_sequence",
+        domain="intraday replay",
+    )
+    _require_known_operation_capability(
+        result,
+        (ExchangeReplayDailyBoundaryOperation.operation_id,),
+        "intraday_replay_daily_boundary",
+        domain="intraday replay daily",
+    )
+    obligations = cast(dict[str, object], result["plan"]).get("operation_obligations")
+    if not isinstance(obligations, list):
+        raise ValueError("intraday replay field disposition contract is missing")
+    exchanges = {
+        (item.get("capability_id"), item.get("operation_id")): item.get("exchange")
+        for item in obligations
+        if isinstance(item, dict)
+    }
+    coverage = cast(dict[str, object], result["coverage"])
+    replay_aggregate = coverage.get("intraday_replay_sequence")
+    daily_aggregate = coverage.get("intraday_replay_daily_boundary")
+    if not isinstance(replay_aggregate, dict) or not isinstance(
+        replay_aggregate.get("operations"), dict
+    ):
+        raise ValueError("intraday replay field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], replay_aggregate["operations"]
+    ).items():
+        if operation_id == MootdxIntradayReplayOperation.operation_id:
+            if not isinstance(operation, dict):
+                raise ValueError(
+                    "intraday replay field disposition contract is invalid"
+                )
+            _require_exact_disposition_contract(
+                operation,
+                _default_replay_field_dispositions(),
+                domain="intraday replay",
+            )
+    if not isinstance(daily_aggregate, dict) or not isinstance(
+        daily_aggregate.get("operations"), dict
+    ):
+        raise ValueError("intraday replay daily field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], daily_aggregate["operations"]
+    ).items():
+        if operation_id == ExchangeReplayDailyBoundaryOperation.operation_id:
+            exchange = exchanges.get(("intraday_replay_daily_boundary", operation_id))
+            if not isinstance(operation, dict):
+                raise ValueError(
+                    "intraday replay daily field disposition contract is invalid"
+                )
+            expected_contracts = (
+                (exchange_daily_field_dispositions(cast(str, exchange)),)
+                if exchange in {"SSE", "SZSE"}
+                else (
+                    exchange_daily_field_dispositions("SSE"),
+                    exchange_daily_field_dispositions("SZSE"),
+                )
+            )
+            if operation.get("field_dispositions") not in [
+                [item.to_dict() for item in expected] for expected in expected_contracts
+            ]:
+                raise ValueError(
+                    "intraday replay daily field disposition contract is invalid"
+                )
+
     claims = cast(list[dict[str, object]], result["claims"])
     calculations = cast(list[dict[str, object]], result["calculations"])
     allowed_claims = {"intraday_replay", "intraday_daily_boundary"}
@@ -4351,6 +4710,52 @@ def _claim_by_kind(result: Mapping[str, object], kind: str) -> dict[str, object]
 
 
 def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
+    from .etf_option_sources import SinaEtfOptionSnapshotOperation
+    from .etf_options import (
+        _declared_owners,
+        _declared_raw_fields,
+        _dispositions,
+    )
+
+    transport = _NoIoHttpTransport()
+    authorities: dict[str, tuple[FieldDisposition, ...]] = {}
+    source_operation = SinaEtfOptionSnapshotOperation(transport)
+    owners = _declared_owners(source_operation)
+    raw_fields = _declared_raw_fields(source_operation)
+    for operation_id in (
+        owners.identity_operation,
+        owners.reference_operation,
+        owners.option_operation,
+    ):
+        authorities[operation_id] = _dispositions(operation_id, owners, raw_fields)
+    for capability_id, operation_id in (
+        ("etf_option_identity", owners.identity_operation),
+        ("etf_option_reference", owners.reference_operation),
+        ("etf_option_contracts", owners.option_operation),
+    ):
+        _require_known_operation_capability(
+            result,
+            (operation_id,),
+            capability_id,
+            domain="ETF-option",
+        )
+    for aggregate in cast(dict[str, object], result["coverage"]).values():
+        if not isinstance(aggregate, dict) or not isinstance(
+            aggregate.get("operations"), dict
+        ):
+            continue
+        for operation_id, operation in cast(
+            dict[str, object], aggregate["operations"]
+        ).items():
+            if operation_id in authorities:
+                if not isinstance(operation, dict):
+                    raise ValueError("ETF-option field disposition contract is invalid")
+                _require_exact_disposition_contract(
+                    operation, authorities[operation_id], domain="ETF-option"
+                )
+    if transport.calls:
+        raise AssertionError("ETF-option contract construction performed I/O")
+
     observations = _owned_observations(result)
 
     def reject_private_references(value: object) -> None:
@@ -4906,6 +5311,32 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
 
 
 def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
+    from .market_series import _MARKET_OPERATION_ROLES, _market_dispositions
+
+    _require_known_operation_capability(
+        result,
+        _MARKET_OPERATION_ROLES,
+        "market_trend_series",
+        domain="market",
+    )
+    coverage = cast(dict[str, object], result["coverage"])
+    aggregate = coverage.get("market_trend_series")
+    if not isinstance(aggregate, dict) or not isinstance(
+        aggregate.get("operations"), dict
+    ):
+        raise ValueError("market field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], aggregate["operations"]
+    ).items():
+        if not isinstance(operation, dict):
+            raise ValueError("market field disposition contract is invalid")
+        if operation_id in _MARKET_OPERATION_ROLES:
+            _require_exact_disposition_contract(
+                operation,
+                _market_dispositions(operation_id),
+                domain="market",
+            )
+
     claim = _claim_by_kind(result, "market_trend_summary")
     if claim is None:
         return
@@ -5060,6 +5491,32 @@ def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
 
 
 def _validate_etf_domain_facts(result: Mapping[str, object]) -> None:
+    from .etf_market import _ETF_OPERATION_CONTRACTS
+
+    _require_known_operation_capability(
+        result,
+        _ETF_OPERATION_CONTRACTS,
+        "etf_market_quote",
+        domain="ETF",
+    )
+    coverage = cast(dict[str, object], result["coverage"])
+    aggregate = coverage.get("etf_market_quote")
+    if not isinstance(aggregate, dict) or not isinstance(
+        aggregate.get("operations"), dict
+    ):
+        raise ValueError("ETF field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], aggregate["operations"]
+    ).items():
+        if operation_id in _ETF_OPERATION_CONTRACTS:
+            if not isinstance(operation, dict):
+                raise ValueError("ETF field disposition contract is invalid")
+            _require_exact_disposition_contract(
+                operation,
+                _ETF_OPERATION_CONTRACTS[operation_id][2],
+                domain="ETF",
+            )
+
     claim = _claim_by_kind(result, "etf_market_quote")
     if claim is None:
         return
@@ -5356,6 +5813,69 @@ def _valuation_owned_facts(
 
 
 def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
+    from .automatic_valuation import (
+        _VALUATION_REQUIRED_OPERATIONS,
+        _valuation_dispositions,
+    )
+    from .close_observation import _close_dispositions
+    from .close_sources import (
+        SseDailyLineOperation,
+        SzseDailyLineOperation,
+        TencentDailyLineOperation,
+    )
+
+    _require_known_operation_capability(
+        result,
+        _VALUATION_REQUIRED_OPERATIONS,
+        "security_valuation_metrics",
+        domain="valuation",
+    )
+    coverage = cast(dict[str, object], result["coverage"])
+    aggregate = coverage.get("security_valuation_metrics")
+    if not isinstance(aggregate, dict) or not isinstance(
+        aggregate.get("operations"), dict
+    ):
+        raise ValueError("valuation field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], aggregate["operations"]
+    ).items():
+        if operation_id in _VALUATION_REQUIRED_OPERATIONS:
+            if not isinstance(operation, dict):
+                raise ValueError("valuation field disposition contract is invalid")
+            _require_exact_disposition_contract(
+                operation,
+                _valuation_dispositions(operation_id),
+                domain="valuation",
+            )
+    close_aggregate = coverage.get("valuation_close")
+    close_operation_ids = {
+        SseDailyLineOperation.operation_id,
+        SzseDailyLineOperation.operation_id,
+        TencentDailyLineOperation.operation_id,
+    }
+    _require_known_operation_capability(
+        result,
+        close_operation_ids,
+        "valuation_close",
+        domain="valuation close",
+    )
+    if isinstance(close_aggregate, dict) and isinstance(
+        close_aggregate.get("operations"), dict
+    ):
+        for operation_id, operation in cast(
+            dict[str, object], close_aggregate["operations"]
+        ).items():
+            if operation_id in close_operation_ids:
+                if not isinstance(operation, dict):
+                    raise ValueError(
+                        "valuation close field disposition contract is invalid"
+                    )
+                _require_exact_disposition_contract(
+                    operation,
+                    _close_dispositions(operation_id),
+                    domain="valuation close",
+                )
+
     claims = cast(list[dict[str, object]], result["claims"])
     allowed_claims = {
         "security_valuation_diagnostics",
@@ -5412,6 +5932,97 @@ def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
 
 
 def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
+    from .automatic_valuation import (
+        _VALUATION_REQUIRED_OPERATIONS,
+        _valuation_dispositions,
+    )
+    from .close_observation import _close_dispositions
+    from .close_sources import (
+        SseDailyLineOperation,
+        SzseDailyLineOperation,
+        TencentDailyLineOperation,
+    )
+    from .identity_sources import build_default_identity_operations
+
+    transport = _NoIoHttpTransport()
+    identity_authorities = {
+        item.obligation.operation_id: item.field_dispositions
+        for item in build_default_identity_operations(transport)
+    }
+    close_operation_ids = {
+        SseDailyLineOperation.operation_id,
+        SzseDailyLineOperation.operation_id,
+        TencentDailyLineOperation.operation_id,
+    }
+
+    known_base_ids = (
+        set(_VALUATION_REQUIRED_OPERATIONS)
+        | close_operation_ids
+        | set(identity_authorities)
+    )
+    known_namespaced_ids: set[str] = set()
+    for candidate_aggregate in cast(dict[str, object], result["coverage"]).values():
+        if not isinstance(candidate_aggregate, dict) or not isinstance(
+            candidate_aggregate.get("operations"), dict
+        ):
+            continue
+        for candidate_id in cast(dict[str, object], candidate_aggregate["operations"]):
+            namespace, separator, base_operation_id = candidate_id.partition("::")
+            if (
+                separator
+                and namespace.startswith("member-")
+                and namespace.removeprefix("member-").isdigit()
+                and base_operation_id in known_base_ids
+            ):
+                known_namespaced_ids.add(candidate_id)
+    _require_known_operation_capability(
+        result,
+        known_namespaced_ids,
+        "valuation_compare_metrics",
+        domain="comparison",
+    )
+    coverage = cast(dict[str, object], result["coverage"])
+    aggregate = coverage.get("valuation_compare_metrics")
+    if not isinstance(aggregate, dict) or not isinstance(
+        aggregate.get("operations"), dict
+    ):
+        raise ValueError("comparison field disposition contract is missing")
+    for operation_id, operation in cast(
+        dict[str, object], aggregate["operations"]
+    ).items():
+        namespace, separator, base_operation_id = operation_id.partition("::")
+        valid_namespace = (
+            separator
+            and namespace.startswith("member-")
+            and namespace.removeprefix("member-").isdigit()
+        )
+        if valid_namespace and base_operation_id in _VALUATION_REQUIRED_OPERATIONS:
+            if not isinstance(operation, dict):
+                raise ValueError("comparison field disposition contract is invalid")
+            _require_exact_disposition_contract(
+                operation,
+                _valuation_dispositions(base_operation_id),
+                domain="comparison",
+            )
+        elif valid_namespace and base_operation_id in close_operation_ids:
+            if not isinstance(operation, dict):
+                raise ValueError("comparison field disposition contract is invalid")
+            _require_exact_disposition_contract(
+                operation,
+                _close_dispositions(base_operation_id),
+                domain="comparison",
+            )
+        elif valid_namespace and base_operation_id in identity_authorities:
+            if not isinstance(operation, dict):
+                raise ValueError("comparison field disposition contract is invalid")
+            _require_exact_disposition_contract(
+                operation,
+                identity_authorities[base_operation_id],
+                domain="comparison",
+            )
+    if transport.calls:
+        raise AssertionError("comparison contract construction performed I/O")
+
     claims = cast(list[dict[str, object]], result["claims"])
     allowed_claims = {
         "valuation_compare_diagnostics",

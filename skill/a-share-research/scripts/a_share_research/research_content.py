@@ -403,6 +403,19 @@ def _content_field_disposition(operation_id: str, field: str) -> FieldDispositio
             None,
             "Provider collection containers are not retained in the public result.",
         )
+    if operation_id == "eastmoney_reports@1" and field == "data[].stockCode":
+        return FieldDisposition(
+            field,
+            "cross_check_only",
+            "observations[].payload.attributes.provider_stock_code",
+        )
+    if operation_id == "cninfo_announcement@1" and field == "stockList[].category":
+        return FieldDisposition(
+            field,
+            "excluded",
+            None,
+            "The A-share category is used only to validate the CNINFO route.",
+        )
     destinations = {
         "report_id": ("normalized", "observations[].payload.source_document_id"),
         "infocode": ("normalized", "observations[].payload.source_document_id"),

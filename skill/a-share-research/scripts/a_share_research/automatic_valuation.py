@@ -1330,6 +1330,23 @@ _VALUATION_REQUIRED_OPERATIONS = (
 def _valuation_dispositions(operation_id: str) -> tuple[FieldDisposition, ...]:
     if operation_id == EastmoneyStockInfoOperation.operation_id:
         return EastmoneyStockInfoOperation.field_dispositions
+    destinations = {
+        "publish_date": "observations.payload.report.publication_date",
+        "rType": "observations.payload.report.scope",
+        "rCurrency": "observations.payload.observed_value.unit",
+        "is_audit": "observations.payload.report.audit_status",
+        "data_source": "observations.payload.report.data_source",
+        "update_time": "observations.payload.report.source_update_time",
+        "item_title": "observations.payload.full_statement_items[].label",
+        "item_value": "observations.payload.full_statement_items[].value",
+        "forecast_year": "observations.payload.observed_value.value[].year",
+        "institutions": "observations.payload.observed_value.value[].institutions",
+        "minimum": "observations.payload.observed_value.value[].minimum",
+        "mean": "observations.payload.observed_value.value[].mean",
+        "maximum": "observations.payload.observed_value.value[].maximum",
+        "statement_periods": "observations.payload.statement_periods",
+        "forecast_years": "observations.payload.forecast_years",
+    }
     result = []
     for field in _VALUATION_RAW_FIELDS[operation_id]:
         if field in {"audit_opinion", "item_tongbi"}:
@@ -1350,7 +1367,7 @@ def _valuation_dispositions(operation_id: str) -> tuple[FieldDisposition, ...]:
                         if field in {"provider_market_cap", "provider_price"}
                         else "normalized"
                     ),
-                    f"observations.payload.{field}",
+                    destinations[field],
                 )
             )
     return tuple(result)

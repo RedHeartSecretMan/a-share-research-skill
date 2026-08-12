@@ -124,6 +124,17 @@ class ResearchContentCliE2ETests(unittest.TestCase):
             materials[0]["payload"]["subject"]["security"],
             {"exchange": "SZSE", "code": "300058", "type": "A_SHARE"},
         )
+        cninfo_operation = result["coverage"]["research_content_materials"][
+            "operations"
+        ]["cninfo_announcement@1"]
+        category = next(
+            item
+            for item in cninfo_operation["field_dispositions"]
+            if item["field"] == "stockList[].category"
+        )
+        self.assertEqual(category["disposition"], "excluded")
+        self.assertIsNone(category["destination"])
+        self.assertTrue(category["reason"])
         self.assertEqual(result["source_errors"], [])
 
 

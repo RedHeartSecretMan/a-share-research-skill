@@ -255,6 +255,29 @@ def validate_serialized(result: dict[str, object]) -> None:
     ).to_dict()
 
 
+def rehash_direct_plan(result: dict[str, object]) -> None:
+    dispositions = [
+        {
+            "capability_id": capability_id,
+            "operation_id": operation_id,
+            "fields": operation["field_dispositions"],
+        }
+        for capability_id, capability in result["coverage"].items()  # type: ignore[union-attr]
+        for operation_id, operation in capability["operations"].items()
+    ]
+    plan = result["plan"]  # type: ignore[assignment]
+    plan["id"] = stable_result_id(
+        "plan",
+        {
+            "version": plan["version"],
+            "task_type": plan["task_type"],
+            "operation_obligations": plan["operation_obligations"],
+            "research_dependencies": plan["research_dependencies"],
+            "field_dispositions": dispositions,
+        },
+    )
+
+
 class DirectIntradayPublicSeamTests(unittest.TestCase):
     def assert_formal_result(self, result: dict[str, object], task_type: str) -> None:
         self.assertEqual(set(result), UNIFIED_RESULT_KEYS)
@@ -357,6 +380,24 @@ class DirectIntradayPublicSeamTests(unittest.TestCase):
         self.assertEqual(
             self.disposition_fields(failure, "intraday_market_snapshot"), expected
         )
+
+    def test_snapshot_authority_rejects_rehashed_existing_sibling_destination(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_market_signal", allow_experimental=True),
+            fixture=True,
+        )
+        operation = result["coverage"]["intraday_market_snapshot"]["operations"][
+            "tongdaxin_intraday_snapshot@1"
+        ]
+        next(
+            item for item in operation["field_dispositions"] if item["field"] == "price"
+        )["destination"] = "observations.payload.prices.open"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "field disposition contract"):
+            validate_serialized(result)
 
     def test_snapshot_tencent_consumes_the_versioned_typed_daily_seam(self) -> None:
         self.assertEqual(
@@ -519,6 +560,46 @@ class DirectIntradayPublicSeamTests(unittest.TestCase):
                     "fixture_intraday_replay@1",
                     item["destination"],
                 )
+
+    def test_replay_authority_rejects_rehashed_existing_sibling_destination(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_replay", allow_experimental=False)
+        )
+        operation = result["coverage"]["intraday_replay_sequence"]["operations"][
+            "mootdx_intraday_replay@1"
+        ]
+        next(
+            item for item in operation["field_dispositions"] if item["field"] == "open"
+        )["destination"] = "observations.payload.source_records.close_price"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "field disposition contract"):
+            validate_serialized(result)
+
+    def test_empty_replay_rows_reject_rehashed_unknown_source_record_field(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_replay", allow_experimental=True),
+            fixture=True,
+            fixture_environment={
+                "A_SHARE_INTRADAY_REPLAY_SCENARIO": "suspension_confirmed"
+            },
+        )
+        operation = result["coverage"]["intraday_replay_sequence"]["operations"][
+            "fixture_intraday_replay@1"
+        ]
+        next(
+            item
+            for item in operation["field_dispositions"]
+            if item["field"] == "timestamp_semantics"
+        )["destination"] = "observations.payload.source_records.forged_unknown"
+        rehash_direct_plan(result)
+
+        with self.assertRaisesRegex(ValueError, "does not resolve"):
+            validate_serialized(result)
 
     def test_replay_retains_valid_batch_when_calendar_adoption_fails(self) -> None:
         result = invoke_copied_installed(

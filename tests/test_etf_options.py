@@ -22,6 +22,9 @@ from a_share_research.etf_option_contract import (  # noqa: E402
     OptionSourceBatch,
     OptionSourceFailure,
 )
+from a_share_research.etf_option_sources import (  # noqa: E402
+    SinaEtfOptionSnapshotOperation,
+)
 from a_share_research.etf_options import (  # noqa: E402
     build_etf_options_result as build_unified_etf_options_result,
 )
@@ -773,6 +776,13 @@ class EtfOptionsContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
             result["limitations"][0]["code"], "option_source_count_invalid"
+        )
+        operation = result["coverage"]["etf_option_contracts"]["operations"][
+            "sina_etf_option_snapshot@1"
+        ]
+        self.assertEqual(
+            [item["field"] for item in operation["field_dispositions"]],
+            list(SinaEtfOptionSnapshotOperation.raw_fields),
         )
 
 
