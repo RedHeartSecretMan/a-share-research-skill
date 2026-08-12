@@ -13,6 +13,9 @@ SKILL_ROOT = Path(__file__).resolve().parents[1] / "skill" / "a-share-research"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 import a_share_research.capability_execution as capability_execution  # noqa: E402
+from a_share_research.bounded_public_data import (  # noqa: E402
+    validate_bounded_public_data,
+)
 from a_share_research.capability_execution import (  # noqa: E402
     BoundedOperationRequest,
     CapabilityExecutionPlan,
@@ -68,6 +71,29 @@ PUBLIC_RESULT_KEYS = {
 
 
 class InstalledCapabilityExecutionTests(unittest.TestCase):
+    def test_worker_wire_and_shared_validator_keep_case_normalized_secret_policy(
+        self,
+    ) -> None:
+        for key in (
+            "Authorization-Header",
+            "AUTHORIZATION.header",
+            "authorization header",
+            "Api-Key",
+            "apiKey",
+        ):
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError) as wire_error:
+                    capability_execution._validate_bounded_wire_value({key: "SECRET"})
+                with self.assertRaises(ValueError) as shared_error:
+                    validate_bounded_public_data(
+                        {key: "SECRET"}, artifact="operation wire"
+                    )
+                self.assertEqual(str(wire_error.exception), str(shared_error.exception))
+                self.assertEqual(
+                    str(wire_error.exception),
+                    "operation wire contains a private or sensitive field",
+                )
+
     def test_installed_worker_wire_rejects_secret_fields_without_losing_siblings(
         self,
     ) -> None:

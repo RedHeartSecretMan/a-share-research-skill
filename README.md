@@ -110,7 +110,27 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 
 `run --request` 是唯一受支持的公共调用形式；调用者不需要了解来源端点、内部模块或历史子命令。`scripts/entrypoint.py` 是 Skill 唯一的公共运行入口，其他 Python 模块均为内部实现。CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON，`stderr` 只输出诊断；有效的 `limited` 或 `blocked` 研究结果仍以零退出码返回。
 
-只有调用者明确传入 `--output <file>` 时才保存规范化 ResearchResult；不传时不会创建结果文件、隐式缓存、数据库或全局 provider 配置。
+只有调用者明确传入 `--output <file>` 时才保存规范化 ResearchResult。未配置下述研究证据存储时，运行时仍保持默认无状态：不创建结果文件、隐式缓存、数据库、锁文件、用户配置或全局 provider 配置。
+
+需要在多次请求之间复用合格的规范化观测时，可在 `source_policy` 中显式增加严格的 `evidence_store` 对象；`path` 必须是绝对路径，父目录必须已经存在且不能经过符号链接，`mode` 只能是 `read_write` 或 `delete`：
+
+```json
+{
+  "allow_experimental": true,
+  "allow_credentials": false,
+  "allow_fallback": true,
+  "evidence_store": {
+    "mode": "read_write",
+    "path": "/absolute/path/to/research-evidence.json"
+  }
+}
+```
+
+当前只有 `market_trend`、`research_content` 和 `security_valuation` 接受这项采集策略。能力策略只允许复用已由来源 operation 明确建立许可边界的公告与研报、稳定的已发布财务报表，以及研究边界内已经完成的未复权或前复权历史日线；许可状态为 `not_established` 的内容只返回当前观测，不读写存储。新闻、市场快讯、互动问答、F10、共识资料、当前估值快照和盘中观测不进入存储。非许可的 `research_content` operation 仍正常执行并在 operation coverage 中报告 `not_permitted / not_written`，不会验证路径或访问文件系统；其他不支持该策略的任务在检查路径之前安全拒绝。盘中行情永远不会从持久化记录冒充当前观测。
+
+存储只包含有界的规范化 operation-owned evidence/outcome 及必要审计，不包含公共 claims、calculations、views、briefs、请求头、凭据或未获许可的完整供应商原始响应。对 `research_content`，记录还只保留当前 fold 所需的有界 limitation/degradation code，不保存其诊断消息或细节；命中时这些 code 必须在 operation audit 与重新生成的公共 limitations 中精确闭合，不能静默丢失或新增。命中记录仍须重验当前请求身份、范围、来源版本、研究时点、新鲜度、用途适用性和 operation owner，再由当前 fold/serializer 重新生成结果。`plan.evidence_storage` 披露已脱敏的策略与请求范围；对应 operation 的 `coverage...evidence_storage` 披露 `lookup_state`、`write_state`、原获取时间、当前结果获取时间、新鲜度和用途适用性，但绝不回显存储路径。这里的获取时间是 outcome 内规范化观测最晚 `retrieved_at` 所形成的 operation 完成边界，不是材料发布时间或事实时点。
+
+`delete` 只删除当前请求和 operation 对应的 canonical record，并保留同一文件中的其他记录；随后仍执行本次新鲜采集，但不会把它重新写入。对同一文件的更新使用跨进程锁和同目录原子替换，失败不会先截断已有内容。显式持久化当前只在能通过 anchored directory descriptor 防止父目录竞态的平台上启用；其他平台会在访问路径前失败关闭。显式路径为符号链接、reparse point、非普通文件，或其父目录边界无法安全证明时，运行时失败关闭且诊断不包含路径。这不影响默认无状态请求，也不影响非许可 operation 的当前采集与 formal audit。
 
 盘中快照使用 `task_type: "intraday_market_signal"`，`subjects` 必须恰好包含一个已经规范化的 `SSE:<code>` 或 `SZSE:<code>` A 股，`as_of` 必须是当前北京时间交易日，`window` 为 `null`，并显式设置 `source_policy.allow_experimental: true`。`limited` 表示快照仍可回答但实验来源资格或其他限制必须披露；`blocked` 表示身份、会话、时点或核心来源证据不足。Agent 只能在非阻断结果上依据返回字段形成标注清楚的分析，不能把结果当作交易级行情或投资行动建议。
 

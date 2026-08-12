@@ -151,6 +151,31 @@ class SourceBatch:
     complete: bool = True
 
 
+@dataclass(frozen=True)
+class ContentEvidencePersistenceDeclaration:
+    """One source owner's explicit license opt-in for normalized evidence reuse."""
+
+    license_status: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.license_status, str)
+            or not self.license_status.strip()
+            or self.license_status == "not_established"
+        ):
+            raise ValueError("content evidence persistence license is invalid")
+
+
+class EvidencePersistableContentSourceOperation:
+    """Nominal opt-in mixin; structural lookalikes receive no persistence right."""
+
+    @property
+    def evidence_persistence(
+        self,
+    ) -> ContentEvidencePersistenceDeclaration:
+        raise NotImplementedError
+
+
 class ContentSourceOperation(Protocol):
     """Adapter operation seam hidden behind the research module."""
 

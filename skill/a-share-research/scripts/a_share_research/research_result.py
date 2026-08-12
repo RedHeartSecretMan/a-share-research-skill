@@ -488,6 +488,7 @@ class DirectTaskPlan:
     as_of: str
     obligations: tuple[OperationObligation, ...]
     dependencies: tuple[ResearchDependency, ...]
+    evidence_storage: Mapping[str, object] | None = None
     version: str = "1.0"
 
     def __post_init__(self) -> None:
@@ -512,6 +513,10 @@ class DirectTaskPlan:
         }
         if any(item.evidence_use not in declared_uses for item in self.dependencies):
             raise ValueError("direct task dependency use must be declared by the plan")
+        if self.evidence_storage is not None:
+            from .evidence_store import validate_plan_audit
+
+            validate_plan_audit(self.evidence_storage)
 
 
 @dataclass(frozen=True)
@@ -799,6 +804,64 @@ def _validate_production_identity_dispositions(
         raise AssertionError("identity contract construction performed I/O")
 
 
+_OPERATION_REUSE_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+_MAX_OPERATION_REUSE_CODES = 64
+
+
+@dataclass(frozen=True)
+class OperationReuseFacts:
+    """Bounded operation-owned facts required to fold reusable evidence."""
+
+    limitation_codes: tuple[str, ...] = ()
+    degradation_codes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        all_codes: list[str] = []
+        for codes in (self.limitation_codes, self.degradation_codes):
+            if (
+                not isinstance(codes, tuple)
+                or any(
+                    not isinstance(code, str)
+                    or _OPERATION_REUSE_CODE_PATTERN.fullmatch(code) is None
+                    for code in codes
+                )
+                or codes != tuple(sorted(set(codes)))
+            ):
+                raise ValueError("operation reuse facts are invalid")
+            all_codes.extend(codes)
+        if len(all_codes) > _MAX_OPERATION_REUSE_CODES:
+            raise ValueError("operation reuse facts exceed their bounded size")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "limitation_codes": list(self.limitation_codes),
+            "degradation_codes": list(self.degradation_codes),
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> OperationReuseFacts:
+        if not isinstance(value, Mapping) or set(value) != {
+            "limitation_codes",
+            "degradation_codes",
+        }:
+            raise ValueError("operation reuse facts have an invalid shape")
+        limitation_codes = value.get("limitation_codes")
+        degradation_codes = value.get("degradation_codes")
+        if (
+            not isinstance(limitation_codes, list)
+            or not isinstance(degradation_codes, list)
+            or any(
+                not isinstance(code, str)
+                for code in (*limitation_codes, *degradation_codes)
+            )
+        ):
+            raise ValueError("operation reuse facts are invalid")
+        return cls(
+            tuple(cast(list[str], limitation_codes)),
+            tuple(cast(list[str], degradation_codes)),
+        )
+
+
 @dataclass(frozen=True)
 class OperationOutcome:
     """All public proof owned by exactly one source operation."""
@@ -810,6 +873,8 @@ class OperationOutcome:
     source_errors: tuple[Mapping[str, object], ...] = ()
     field_dispositions: tuple[FieldDisposition, ...] = ()
     diagnostics: Mapping[str, object] = dataclass_field(default_factory=dict)
+    evidence_storage: Mapping[str, object] | None = None
+    reuse_facts: OperationReuseFacts | None = None
 
     def __post_init__(self) -> None:
         if not self.capability_id.strip() or not self.operation_id.strip():
@@ -829,6 +894,19 @@ class OperationOutcome:
             path="operation diagnostics",
             max_bytes=_MAX_DIAGNOSTIC_BYTES,
         )
+        evidence_storage = (
+            None
+            if self.evidence_storage is None
+            else _json_object(
+                self.evidence_storage,
+                path="operation evidence storage audit",
+                max_bytes=_MAX_DIAGNOSTIC_BYTES,
+            )
+        )
+        if self.reuse_facts is not None and not isinstance(
+            self.reuse_facts, OperationReuseFacts
+        ):
+            raise ValueError("operation reuse facts are invalid")
         self._validate_ownership(observations, source_errors)
         fields = [item.field for item in self.field_dispositions]
         if len(fields) != len(set(fields)):
@@ -837,6 +915,7 @@ class OperationOutcome:
         object.__setattr__(self, "observations", observations)
         object.__setattr__(self, "source_errors", source_errors)
         object.__setattr__(self, "diagnostics", diagnostics)
+        object.__setattr__(self, "evidence_storage", evidence_storage)
 
     @property
     def coverage(self) -> CoverageState:
@@ -872,7 +951,7 @@ class OperationOutcome:
             raise ValueError("operation observation ownership is incomplete")
         if len(source_error_ids) != len(self.source_errors):
             raise ValueError("operation source-error ownership is incomplete")
-        return {
+        result: dict[str, object] = {
             "capability_id": self.capability_id,
             "operation_id": self.operation_id,
             "execution_state": self.execution.state,
@@ -887,6 +966,13 @@ class OperationOutcome:
                 max_bytes=_MAX_DIAGNOSTIC_BYTES,
             ),
         }
+        if self.evidence_storage is not None:
+            result["evidence_storage"] = _json_copy(
+                self.evidence_storage,
+                path="operation evidence storage audit",
+                max_bytes=_MAX_DIAGNOSTIC_BYTES,
+            )
+        return result
 
 
 @dataclass(frozen=True)
@@ -1636,16 +1722,25 @@ class UnifiedResearchResult:
         """Re-derive the public closure for a migrated narrow task."""
 
         plan = cast(dict[str, object], result["plan"])
+        plan_keys = {
+            "id",
+            "version",
+            "task_type",
+            "capabilities",
+            "operation_obligations",
+            "research_dependencies",
+        }
+        plan_evidence_storage = plan.get("evidence_storage")
+        if plan_evidence_storage is not None:
+            plan_keys.add("evidence_storage")
+            if not isinstance(plan_evidence_storage, Mapping):
+                raise ValueError("plan evidence storage audit must be an object")
+            from .evidence_store import validate_plan_audit
+
+            validate_plan_audit(plan_evidence_storage)
         _require_exact_keys(
             plan,
-            {
-                "id",
-                "version",
-                "task_type",
-                "capabilities",
-                "operation_obligations",
-                "research_dependencies",
-            },
+            plan_keys,
             path="research plan",
         )
         task_type = plan.get("task_type")
@@ -1872,19 +1967,37 @@ class UnifiedResearchResult:
             for operation_id, operation in operations.items():
                 if not isinstance(operation, dict):
                     raise ValueError("operation coverage must be an object")
+                operation_keys = {
+                    "capability_id",
+                    "operation_id",
+                    "execution_state",
+                    "state",
+                    "query_complete",
+                    "observation_ids",
+                    "source_error_ids",
+                    "field_dispositions",
+                    "diagnostics",
+                }
+                operation_evidence_storage = operation.get("evidence_storage")
+                if operation_evidence_storage is not None:
+                    operation_keys.add("evidence_storage")
+                    if not isinstance(
+                        operation_evidence_storage, Mapping
+                    ) or not isinstance(plan_evidence_storage, Mapping):
+                        raise ValueError(
+                            "operation evidence storage audit lacks its plan policy"
+                        )
+                    from .evidence_store import validate_operation_audit
+
+                    validate_operation_audit(
+                        operation_evidence_storage,
+                        plan_audit=plan_evidence_storage,
+                        capability_id=capability_id,
+                        operation_id=operation_id,
+                    )
                 _require_exact_keys(
                     operation,
-                    {
-                        "capability_id",
-                        "operation_id",
-                        "execution_state",
-                        "state",
-                        "query_complete",
-                        "observation_ids",
-                        "source_error_ids",
-                        "field_dispositions",
-                        "diagnostics",
-                    },
+                    operation_keys,
                     path="operation coverage",
                 )
                 owner = (capability_id, operation_id)
@@ -1967,16 +2080,16 @@ class UnifiedResearchResult:
             or covered_errors != set(source_error_owners)
         ):
             raise ValueError("operation ownership is incomplete")
-        expected_plan_id = stable_result_id(
-            "plan",
-            {
-                "version": plan.get("version"),
-                "task_type": task_type,
-                "operation_obligations": obligations_value,
-                "research_dependencies": plan.get("research_dependencies"),
-                "field_dispositions": disposition_contracts,
-            },
-        )
+        expected_plan_payload: dict[str, object] = {
+            "version": plan.get("version"),
+            "task_type": task_type,
+            "operation_obligations": obligations_value,
+            "research_dependencies": plan.get("research_dependencies"),
+            "field_dispositions": disposition_contracts,
+        }
+        if plan_evidence_storage is not None:
+            expected_plan_payload["evidence_storage"] = plan_evidence_storage
+        expected_plan_id = stable_result_id("plan", expected_plan_payload)
         if plan.get("id") != expected_plan_id:
             raise ValueError("plan ID contradicts its operation contracts")
 
@@ -2281,9 +2394,18 @@ def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) 
         _validate_market_signal_domain_facts(result)
 
 
+def _require_absent_evidence_storage_plan(
+    result: Mapping[str, object], *, domain: str
+) -> None:
+    plan = result.get("plan")
+    if not isinstance(plan, Mapping) or plan.get("evidence_storage") is not None:
+        raise ValueError(f"{domain} evidence storage authority is invalid")
+
+
 def _validate_capital_event_domain_facts(
     result: Mapping[str, object],
 ) -> None:
+    _require_absent_evidence_storage_plan(result, domain="capital-event")
     from .capital_events import _capital_dispositions
     from .capital_registry import build_default_capital_operations
 
@@ -2595,6 +2717,7 @@ def _validate_capital_event_domain_facts(
 def _validate_market_signal_domain_facts(
     result: Mapping[str, object],
 ) -> None:
+    _require_absent_evidence_storage_plan(result, domain="market-signal")
     from .market_signal_registry import build_default_market_signal_operations
     from .market_signals import _market_signal_dispositions
 
@@ -3137,17 +3260,21 @@ def _validate_research_content_domain_facts(
     result: Mapping[str, object],
 ) -> None:
     from .content_registry import build_default_content_operations
-    from .research_content import _content_dispositions
+    from .research_content import (
+        _content_dispositions,
+        _validate_content_evidence_storage_authority,
+    )
 
     transport = _NoIoHttpTransport()
+    canonical_operations = build_default_content_operations(
+        transport,
+        allow_credentials=True,
+        allow_fallback=True,
+        research_now=None,
+    )
+    _validate_content_evidence_storage_authority(result, canonical_operations)
     authorities = {
-        item.operation_id: _content_dispositions(item)
-        for item in build_default_content_operations(
-            transport,
-            allow_credentials=True,
-            allow_fallback=True,
-            research_now=None,
-        )
+        item.operation_id: _content_dispositions(item) for item in canonical_operations
     }
     _require_known_operation_capability(
         result,
@@ -3574,6 +3701,7 @@ def _reject_sensitive_research_content_attributes(value: Mapping[str, object]) -
 def _validate_intraday_snapshot_domain_facts(
     result: Mapping[str, object],
 ) -> None:
+    _require_absent_evidence_storage_plan(result, domain="intraday snapshot")
     from .intraday_snapshot import (
         _SNAPSHOT_FIELD_DISPOSITIONS,
         _SNAPSHOT_OPERATIONS,
@@ -3929,6 +4057,7 @@ def _validate_intraday_snapshot_domain_facts(
 
 
 def _validate_intraday_replay_domain_facts(result: Mapping[str, object]) -> None:
+    _require_absent_evidence_storage_plan(result, domain="intraday replay")
     from .intraday_replay import _default_replay_field_dispositions
     from .intraday_replay_mootdx import MootdxIntradayReplayOperation
     from .intraday_replay_registry import (
@@ -4764,6 +4893,7 @@ def _claim_by_kind(result: Mapping[str, object], kind: str) -> dict[str, object]
 
 
 def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
+    _require_absent_evidence_storage_plan(result, domain="ETF-option")
     from .etf_option_sources import SinaEtfOptionSnapshotOperation
     from .etf_options import (
         _declared_owners,
@@ -5365,7 +5495,13 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
 
 
 def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
-    from .market_series import _MARKET_OPERATION_ROLES, _market_dispositions
+    from .market_series import (
+        _MARKET_OPERATION_ROLES,
+        _market_dispositions,
+        _validate_market_evidence_storage_authority,
+    )
+
+    _validate_market_evidence_storage_authority(result)
 
     _require_known_operation_capability(
         result,
@@ -5545,6 +5681,7 @@ def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
 
 
 def _validate_etf_domain_facts(result: Mapping[str, object]) -> None:
+    _require_absent_evidence_storage_plan(result, domain="ETF")
     from .etf_market import _ETF_OPERATION_CONTRACTS
 
     _require_known_operation_capability(
@@ -5869,6 +6006,7 @@ def _valuation_owned_facts(
 def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
     from .automatic_valuation import (
         _VALUATION_REQUIRED_OPERATIONS,
+        _validate_valuation_evidence_storage_authority,
         _valuation_dispositions,
     )
     from .close_observation import _close_dispositions
@@ -5877,6 +6015,8 @@ def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
         SzseDailyLineOperation,
         TencentDailyLineOperation,
     )
+
+    _validate_valuation_evidence_storage_authority(result)
 
     _require_known_operation_capability(
         result,
@@ -5986,6 +6126,7 @@ def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
 
 
 def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
+    _require_absent_evidence_storage_plan(result, domain="valuation comparison")
     from .automatic_valuation import (
         _VALUATION_REQUIRED_OPERATIONS,
         _valuation_dispositions,
@@ -6448,34 +6589,37 @@ def fold_direct_task_research_result(
     brief_id = stable_result_id("brief", brief_payload)
     obligation_payloads = [item.to_dict() for item in plan.obligations]
     dependency_payloads = [item.to_dict() for item in plan.dependencies]
-    plan_id = stable_result_id(
-        "plan",
-        {
-            "version": plan.version,
-            "task_type": plan.task_type,
-            "operation_obligations": obligation_payloads,
-            "research_dependencies": dependency_payloads,
-            "field_dispositions": [
-                {
-                    "capability_id": outcome.capability_id,
-                    "operation_id": outcome.operation_id,
-                    "fields": [item.to_dict() for item in outcome.field_dispositions],
-                }
-                for outcome in outcomes
-            ],
-        },
-    )
+    plan_identity: dict[str, object] = {
+        "version": plan.version,
+        "task_type": plan.task_type,
+        "operation_obligations": obligation_payloads,
+        "research_dependencies": dependency_payloads,
+        "field_dispositions": [
+            {
+                "capability_id": outcome.capability_id,
+                "operation_id": outcome.operation_id,
+                "fields": [item.to_dict() for item in outcome.field_dispositions],
+            }
+            for outcome in outcomes
+        ],
+    }
+    if plan.evidence_storage is not None:
+        plan_identity["evidence_storage"] = dict(plan.evidence_storage)
+    plan_id = stable_result_id("plan", plan_identity)
+    public_plan: dict[str, object] = {
+        "id": plan_id,
+        "version": plan.version,
+        "task_type": plan.task_type,
+        "capabilities": capability_ids,
+        "operation_obligations": obligation_payloads,
+        "research_dependencies": dependency_payloads,
+    }
+    if plan.evidence_storage is not None:
+        public_plan["evidence_storage"] = dict(plan.evidence_storage)
     return UnifiedResearchResult(
         status=status,
         research_anchor={"as_of": plan.as_of, "timezone": "Asia/Shanghai"},
-        plan={
-            "id": plan_id,
-            "version": plan.version,
-            "task_type": plan.task_type,
-            "capabilities": capability_ids,
-            "operation_obligations": obligation_payloads,
-            "research_dependencies": dependency_payloads,
-        },
+        plan=public_plan,
         capability_registry=registry,
         coverage=coverage,
         observations=tuple(observation_records),
@@ -7250,6 +7394,7 @@ __all__ = [
     "OperationExecution",
     "OperationObligation",
     "OperationOutcome",
+    "OperationReuseFacts",
     "ResearchDependency",
     "ResearchStatus",
     "UnifiedResearchResult",

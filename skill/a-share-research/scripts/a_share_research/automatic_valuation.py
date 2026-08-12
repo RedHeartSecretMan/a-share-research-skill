@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 from .close_observation import execute_close_research
 from .decimal_math import decimal_ratio, exact_difference, exact_product, exact_sum
+from .evidence_store import (
+    EvidenceReusePolicy,
+    EvidenceStoreRequest,
+    resolve_operation_evidence,
+)
 from .identity_resolution import execute_security_identity_research
 from .identity_sources import (
     CHINA_STANDARD_TIME,
@@ -36,6 +41,7 @@ from .valuation_sources import (
     ConsensusEpsObservation,
     ConsensusEpsSnapshot,
     EastmoneyStockInfoOperation,
+    FinancialStatementItem,
     FinancialStatementObservation,
     SinaFinancialStatementsOperation,
     ThsConsensusEpsOperation,
@@ -129,9 +135,10 @@ def build_security_valuation_result(
     transport: HttpTransport,
     now: datetime | None = None,
     stock_info_operation: EastmoneyStockInfoOperation | None = None,
+    evidence_store: EvidenceStoreRequest | None = None,
 ) -> UnifiedResearchResult:
     return _execute_security_valuation(
-        request, transport, now, stock_info_operation
+        request, transport, now, stock_info_operation, evidence_store
     ).result
 
 
@@ -140,6 +147,7 @@ def _execute_security_valuation(
     transport: HttpTransport,
     now: datetime | None = None,
     stock_info_operation: EastmoneyStockInfoOperation | None = None,
+    evidence_store: EvidenceStoreRequest | None = None,
 ) -> SecurityValuationExecution:
     research_now = now or datetime.now(CHINA_STANDARD_TIME)
     research_date = date.fromisoformat(request["as_of"])
@@ -149,6 +157,7 @@ def _execute_security_valuation(
             request,
             "source_policy_not_satisfied",
             "security_valuation currently requires experimental source operations",
+            evidence_store=evidence_store,
         )
     request_subjects = request["subjects"]
     request_subject = (
@@ -166,6 +175,7 @@ def _execute_security_valuation(
                 "the runtime will not assume that one A-share is the issuer's "
                 "only priced ordinary-share class."
             ),
+            evidence_store=evidence_store,
         )
     if (
         not isinstance(security_class_count, int)
@@ -181,6 +191,7 @@ def _execute_security_valuation(
                 "Issuer-wide valuation is blocked because multiple security "
                 "classes require separate prices, currencies, and share counts."
             ),
+            evidence_store=evidence_store,
         )
     clue = _subject_clue(request)
     identity_execution = execute_security_identity_research(
@@ -208,6 +219,7 @@ def _execute_security_valuation(
             "The valuation subject does not resolve to one A-share security.",
             outcomes=identity_execution.outcomes,
             limitations=identity_limitations,
+            evidence_store=evidence_store,
         )
     security = f"{canonical_identity.exchange}:{canonical_identity.code}"
     subject = {
@@ -247,6 +259,7 @@ def _execute_security_valuation(
             outcomes=tuple(outcomes),
             conflicts=conflicts,
             limitations=limitations,
+            evidence_store=evidence_store,
         )
 
     close_execution = execute_close_research(
@@ -267,6 +280,7 @@ def _execute_security_valuation(
             conflicts=conflicts,
             limitations=limitations,
             metrics=_price_unavailable_metrics(),
+            evidence_store=evidence_store,
         )
 
     try:
@@ -296,6 +310,7 @@ def _execute_security_valuation(
                 }
                 for metric in COMPARISON_METRIC_ORDER
             },
+            evidence_store=evidence_store,
         )
     outcomes.append(
         _valuation_outcome(
@@ -321,20 +336,53 @@ def _execute_security_valuation(
             outcomes=tuple(outcomes),
             conflicts=conflicts,
             limitations=limitations,
+            evidence_store=evidence_store,
         )
 
     statements: dict[str, list[FinancialStatementObservation]] = {}
     selected: SelectedReportedFinancials | None = None
-    try:
-        statements = SinaFinancialStatementsOperation().observe(
-            security, research_date, transport
-        )
-    except SourceOperationError as error:
-        outcomes.append(
-            _valuation_outcome(
-                "sina_financial_statements@1", error=_source_error(error)
+    statement_operation = SinaFinancialStatementsOperation()
+
+    def acquire_statements() -> OperationOutcome:
+        try:
+            acquired = statement_operation.observe(security, research_date, transport)
+        except SourceOperationError as error:
+            return _valuation_outcome(
+                statement_operation.operation_id,
+                error=_source_error(error),
             )
+        return _valuation_outcome(
+            statement_operation.operation_id,
+            observations=tuple(_statement_evidence(acquired)),
         )
+
+    if evidence_store is None:
+        statement_outcome = acquire_statements()
+    else:
+        statement_resolution = resolve_operation_evidence(
+            evidence_store,
+            EvidenceReusePolicy(
+                capability_id="security_valuation_metrics",
+                operation_id=statement_operation.operation_id,
+                source_version=_FINANCIAL_EVIDENCE_STORE_VERSION,
+                source_role="market_observation",
+                experimental=True,
+                field_dispositions=_valuation_dispositions(
+                    statement_operation.operation_id
+                ),
+                subject_identity=security,
+                evidence_scope="completed_history",
+                max_age=timedelta(days=31),
+            ),
+            acquire_statements,
+            now=research_now,
+        )
+        statement_outcome = replace(
+            statement_resolution.outcome,
+            evidence_storage=statement_resolution.audit,
+        )
+    outcomes.append(statement_outcome)
+    if statement_outcome.execution.state != "succeeded":
         limitations.append(
             {
                 "code": "reported_financial_statements_unavailable",
@@ -342,12 +390,7 @@ def _execute_security_valuation(
             }
         )
     else:
-        outcomes.append(
-            _valuation_outcome(
-                "sina_financial_statements@1",
-                observations=tuple(_statement_evidence(statements)),
-            )
-        )
+        statements = _statements_from_outcome(statement_outcome, security)
         try:
             selected = _select_reported_financials(statements)
         except (InvalidOperation, KeyError, ValueError) as error:
@@ -436,6 +479,7 @@ def _execute_security_valuation(
             outcomes=tuple(outcomes),
             conflicts=conflicts,
             limitations=limitations,
+            evidence_store=evidence_store,
         )
 
     provider_market_cap_difference = exact_difference(market_cap, provider_market_cap)
@@ -734,6 +778,7 @@ def _execute_security_valuation(
             )
         ],
         calculations=direct_calculations,
+        evidence_store=evidence_store,
     )
 
 
@@ -1075,6 +1120,128 @@ def _statement_evidence(
     ]
 
 
+def _statements_from_outcome(
+    outcome: OperationOutcome, security: str
+) -> dict[str, list[FinancialStatementObservation]]:
+    """Rebuild typed statement operands from the one normalized owned outcome."""
+
+    if (
+        outcome.capability_id != "security_valuation_metrics"
+        or outcome.operation_id != "sina_financial_statements@1"
+        or outcome.execution.state != "succeeded"
+        or outcome.execution.query_complete is not True
+        or outcome.source_errors
+    ):
+        raise ValueError("financial statement outcome is not reusable")
+    statements: dict[str, list[FinancialStatementObservation]] = {
+        "income": [],
+        "balance": [],
+        "cashflow": [],
+    }
+    for evidence in outcome.observations:
+        if (
+            evidence.get("source_operation") != outcome.operation_id
+            or evidence.get("subject") != {"security": security}
+            or evidence.get("source_role") != "market_observation"
+            or evidence.get("experimental") is not True
+        ):
+            raise ValueError("financial statement evidence owner is invalid")
+        basis = evidence.get("basis")
+        if not isinstance(basis, str) or not (
+            basis.startswith("reported_") and basis.endswith("_statement")
+        ):
+            raise ValueError("financial statement evidence basis is invalid")
+        statement_type = basis.removeprefix("reported_").removesuffix("_statement")
+        if statement_type not in statements:
+            raise ValueError("financial statement evidence type is invalid")
+        report = evidence.get("report")
+        observed_value = evidence.get("observed_value")
+        full_items = evidence.get("full_statement_items")
+        locator = evidence.get("locator")
+        retrieved_at = evidence.get("retrieved_at")
+        if (
+            not isinstance(report, dict)
+            or set(report)
+            != {
+                "period",
+                "publication_date",
+                "scope",
+                "audit_status",
+                "data_source",
+                "source_update_time",
+                "version_identifier",
+                "version_relationship",
+            }
+            or report.get("version_identifier") != report.get("source_update_time")
+            or report.get("version_relationship")
+            != "unique_period_snapshot_from_source_response"
+            or not isinstance(observed_value, dict)
+            or set(observed_value) != {"value", "unit"}
+            or observed_value.get("unit") != "CNY"
+            or not isinstance(observed_value.get("value"), dict)
+            or not isinstance(full_items, list)
+            or not isinstance(locator, dict)
+            or set(locator) != {"uri", "observation"}
+            or not isinstance(locator.get("uri"), str)
+            or not isinstance(retrieved_at, str)
+        ):
+            raise ValueError("financial statement evidence contract is invalid")
+        try:
+            period = date.fromisoformat(cast(str, report["period"]))
+            publication_date = date.fromisoformat(cast(str, report["publication_date"]))
+            retrieved = datetime.fromisoformat(retrieved_at)
+        except (TypeError, ValueError) as error:
+            raise ValueError("financial statement evidence time is invalid") from error
+        if (
+            retrieved.utcoffset() is None
+            or publication_date > retrieved.date()
+            or evidence.get("evidence_time") != period.isoformat()
+            or evidence.get("available_at") != publication_date.isoformat()
+        ):
+            raise ValueError("financial statement evidence time is invalid")
+        items: list[FinancialStatementItem] = []
+        for item in full_items:
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"label", "value", "unit"}
+                or item.get("unit") != "CNY"
+                or not isinstance(item.get("label"), str)
+                or not isinstance(item.get("value"), str)
+            ):
+                raise ValueError("financial statement item is invalid")
+            items.append(
+                FinancialStatementItem(
+                    label=cast(str, item["label"]),
+                    value=cast(str, item["value"]),
+                )
+            )
+        values = {item.label: item.value for item in items}
+        selected_values = cast(dict[str, object], observed_value["value"])
+        if any(values.get(field) != value for field, value in selected_values.items()):
+            raise ValueError("financial statement selected values contradict items")
+        statement = FinancialStatementObservation(
+            security=security,
+            statement_type=statement_type,
+            period=period,
+            publication_date=publication_date,
+            currency="CNY",
+            report_scope=cast(str, report["scope"]),
+            audit_status=cast(str, report["audit_status"]),
+            data_source=cast(str, report["data_source"]),
+            update_time=cast(str, report["source_update_time"]),
+            values=values,
+            items=tuple(items),
+            source_uri=cast(str, locator["uri"]),
+            retrieved_at=retrieved,
+        )
+        if statement.to_evidence(STATEMENT_FIELDS[statement_type]) != evidence:
+            raise ValueError("financial statement evidence is not canonical")
+        statements[statement_type].append(statement)
+    if not all(statements.values()):
+        raise ValueError("financial statement outcome is incomplete")
+    return statements
+
+
 def _report_summary(report: FinancialStatementObservation) -> dict[str, Any]:
     return {
         "period": report.period.isoformat(),
@@ -1325,6 +1492,79 @@ _VALUATION_REQUIRED_OPERATIONS = (
     "sina_financial_statements@1",
     "ths_consensus_eps@1",
 )
+_FINANCIAL_EVIDENCE_STORE_VERSION = "valuation-financial-statements/1.0"
+
+
+def _validate_valuation_evidence_storage_authority(
+    result: Mapping[str, object],
+) -> None:
+    plan = result.get("plan")
+    anchor = result.get("research_anchor")
+    coverage = result.get("coverage")
+    observations = result.get("observations")
+    if not isinstance(plan, Mapping) or not isinstance(anchor, Mapping):
+        raise ValueError("valuation evidence storage authority is invalid")
+    plan_audit = plan.get("evidence_storage")
+    if plan_audit is None:
+        return
+    if (
+        not isinstance(plan_audit, Mapping)
+        or not isinstance(coverage, Mapping)
+        or not isinstance(observations, (list, tuple))
+    ):
+        raise ValueError("valuation evidence storage authority is invalid")
+    request_scope = plan_audit.get("request_scope")
+    if (
+        not isinstance(request_scope, Mapping)
+        or request_scope.get("task_type") != "security_valuation"
+        or request_scope.get("as_of") != anchor.get("as_of")
+        or request_scope.get("window") is not None
+    ):
+        raise ValueError("valuation evidence storage authority is invalid")
+    for capability_id, aggregate in coverage.items():
+        if not isinstance(aggregate, Mapping) or not isinstance(
+            aggregate.get("operations"), Mapping
+        ):
+            continue
+        operations = cast(Mapping[str, object], aggregate["operations"])
+        for operation_id, operation in operations.items():
+            if not isinstance(operation, Mapping):
+                continue
+            audit = operation.get("evidence_storage")
+            if audit is None:
+                if (
+                    capability_id == "security_valuation_metrics"
+                    and operation_id == SinaFinancialStatementsOperation.operation_id
+                    and operation.get("execution_state") in {"succeeded", "failed"}
+                ):
+                    raise ValueError("valuation evidence storage authority is invalid")
+                continue
+            if (
+                capability_id != "security_valuation_metrics"
+                or operation_id != SinaFinancialStatementsOperation.operation_id
+                or operation.get("execution_state") not in {"succeeded", "failed"}
+                or not isinstance(audit, Mapping)
+                or audit.get("source_version") != _FINANCIAL_EVIDENCE_STORE_VERSION
+                or "reuse_facts" in audit
+            ):
+                raise ValueError("valuation evidence storage authority is invalid")
+            owned_subjects: set[str] = set()
+            for record in observations:
+                if (
+                    not isinstance(record, Mapping)
+                    or record.get("capability_id") != "security_valuation_metrics"
+                    or record.get("operation_id") != operation_id
+                    or not isinstance(record.get("payload"), Mapping)
+                ):
+                    continue
+                payload = cast(Mapping[str, object], record["payload"])
+                subject = payload.get("subject")
+                if isinstance(subject, Mapping) and isinstance(
+                    subject.get("security"), str
+                ):
+                    owned_subjects.add(cast(str, subject["security"]))
+            if owned_subjects and audit.get("subject_identity") not in owned_subjects:
+                raise ValueError("valuation evidence storage authority is invalid")
 
 
 def _valuation_dispositions(operation_id: str) -> tuple[FieldDisposition, ...]:
@@ -1474,6 +1714,7 @@ def _blocked_execution(
     conflicts: list[Any] | None = None,
     limitations: list[dict[str, Any]] | None = None,
     metrics: dict[str, Any] | None = None,
+    evidence_store: EvidenceStoreRequest | None = None,
 ) -> SecurityValuationExecution:
     result_limitations = list(limitations or [])
     result_limitations.append({"code": code, "message": message})
@@ -1501,6 +1742,7 @@ def _blocked_execution(
             if metrics
             else []
         ),
+        evidence_store=evidence_store,
     )
 
 
@@ -1532,6 +1774,7 @@ def _direct_valuation_execution(
     claims: list[DirectTaskClaim],
     calculations: list[DirectTaskCalculation] | None = None,
     task_type: str = "security_valuation",
+    evidence_store: EvidenceStoreRequest | None = None,
 ) -> SecurityValuationExecution:
     outcomes_by_owner = {
         (item.capability_id, item.operation_id): item for item in outcomes
@@ -1628,6 +1871,9 @@ def _direct_valuation_execution(
             as_of=str(request["as_of"]),
             obligations=tuple(obligations),
             dependencies=tuple(dependencies),
+            evidence_storage=(
+                None if evidence_store is None else evidence_store.plan_audit()
+            ),
         ),
         ordered_outcomes,
         claims=tuple(claims),

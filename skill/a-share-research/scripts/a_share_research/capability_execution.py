@@ -14,6 +14,12 @@ from typing import Callable, Literal, Mapping, Protocol, Sequence, cast
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from a_share_research.bounded_public_data import (
+        MAX_PUBLIC_DATA_KEY_LENGTH as _MAX_WIRE_KEY_LENGTH,
+    )
+    from a_share_research.bounded_public_data import (
+        validate_bounded_public_data,
+    )
     from a_share_research.research_result import (
         FieldDisposition,
         OperationExecution,
@@ -22,6 +28,12 @@ if __package__ in {None, ""}:
     )
     from a_share_research.source_throttle import RequestGateError, SerialRequestGate
 else:
+    from .bounded_public_data import (
+        MAX_PUBLIC_DATA_KEY_LENGTH as _MAX_WIRE_KEY_LENGTH,
+    )
+    from .bounded_public_data import (
+        validate_bounded_public_data,
+    )
     from .research_result import (
         FieldDisposition,
         OperationExecution,
@@ -39,46 +51,6 @@ _MAX_WIRE_BYTES = 2 * 1024 * 1024
 _MAX_OPERATIONS = 64
 _MAX_TIMEOUT_SECONDS = 60.0
 _MAX_TOTAL_BUDGET_SECONDS = 120.0
-_FORBIDDEN_WIRE_KEYS = frozenset(
-    {
-        "access_token",
-        "authorization",
-        "authorization_header",
-        "callable",
-        "cookie",
-        "cookies",
-        "credential",
-        "credentials",
-        "header",
-        "headers",
-        "api_key",
-        "apikey",
-        "password",
-        "passwords",
-        "provider_raw_payload",
-        "raw_payload",
-        "refresh_token",
-        "secret",
-        "secrets",
-        "token",
-        "transport",
-    }
-)
-_FORBIDDEN_WIRE_KEY_PREFIXES = (
-    "authorization",
-    "api_key",
-    "apikey",
-    "cookie",
-    "credential",
-    "header",
-    "password",
-    "secret",
-    "token",
-)
-_MAX_WIRE_DEPTH = 32
-_MAX_WIRE_ITEMS = 10_000
-_MAX_WIRE_KEY_LENGTH = 128
-_MAX_WIRE_STRING_LENGTH = 64 * 1024
 
 
 class _AttemptRunner(Protocol):
@@ -958,49 +930,7 @@ def _validate_wire_public_data(value: object) -> None:
 
 
 def _validate_bounded_wire_value(value: object) -> None:
-    item_count = 0
-
-    def visit(item: object, depth: int) -> None:
-        nonlocal item_count
-        item_count += 1
-        if item_count > _MAX_WIRE_ITEMS or depth > _MAX_WIRE_DEPTH:
-            raise ValueError("operation wire exceeds its structural bounds")
-        if isinstance(item, Mapping):
-            for key, nested in item.items():
-                if (
-                    not isinstance(key, str)
-                    or not key
-                    or not key.isascii()
-                    or len(key) > _MAX_WIRE_KEY_LENGTH
-                ):
-                    raise ValueError("operation wire key is invalid")
-                normalized = (
-                    key.casefold().replace("-", "_").replace(".", "_").replace(" ", "_")
-                )
-                if (
-                    key.startswith("_")
-                    or normalized in _FORBIDDEN_WIRE_KEYS
-                    or any(
-                        normalized.startswith(f"{prefix}_")
-                        for prefix in _FORBIDDEN_WIRE_KEY_PREFIXES
-                    )
-                ):
-                    raise ValueError(
-                        "operation wire contains a private or sensitive field"
-                    )
-                visit(nested, depth + 1)
-        elif isinstance(item, (list, tuple)):
-            for nested in item:
-                visit(nested, depth + 1)
-        elif isinstance(item, str):
-            if len(item) > _MAX_WIRE_STRING_LENGTH:
-                raise ValueError("operation wire string exceeds its bound")
-        elif isinstance(item, float) and not math.isfinite(item):
-            raise ValueError("operation wire number must be finite")
-        elif item is not None and not isinstance(item, (bool, int, float)):
-            raise ValueError("operation wire contains a non-JSON value")
-
-    visit(value, 0)
+    validate_bounded_public_data(value, artifact="operation wire")
 
 
 def _worker_main() -> int:

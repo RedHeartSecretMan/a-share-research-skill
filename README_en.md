@@ -110,7 +110,27 @@ All capabilities use the stable research-task Interface:
 
 `run --request` is the only supported public invocation. Callers do not need to know source endpoints, internal modules, or historical subcommands. `scripts/entrypoint.py` is the Skill's only public runtime entry point; every other Python module is an implementation detail. The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
 
-Only an explicit `--output <file>` option persists the normalized ResearchResult; without it, the runtime creates no result file, implicit cache, database, or global provider configuration.
+Only an explicit `--output <file>` option persists the normalized ResearchResult. Without the evidence-store policy below, the runtime remains stateless and creates no result file, implicit cache, database, lock file, user configuration, or global provider configuration.
+
+To reuse qualified normalized observations across requests, add the exact `evidence_store` object to `source_policy`. `path` must be absolute with an existing real parent, and `mode` is either `read_write` or `delete`:
+
+```json
+{
+  "allow_experimental": true,
+  "allow_credentials": false,
+  "allow_fallback": true,
+  "evidence_store": {
+    "mode": "read_write",
+    "path": "/absolute/path/to/research-evidence.json"
+  }
+}
+```
+
+Only `market_trend`, `research_content`, and `security_valuation` accept this acquisition policy. Capability policy permits announcements and research reports only when their source operation explicitly establishes the license boundary, plus stable published financial statements and completed unadjusted or forward-adjusted historical daily bars. Content whose license status is `not_established` remains a current observation and neither reads nor writes the store. News, market flashes, investor Q&A, F10 profiles, consensus material, current valuation snapshots, and intraday observations are not persisted. Non-eligible content operations still run normally and report `not_permitted / not_written` without probing the path; unsupported tasks reject the policy before filesystem access. Intraday data is never served from persistence as current.
+
+Records contain only bounded normalized operation-owned evidence/outcome and required audit facts. They exclude public claims, calculations, views, briefs, credentials, request headers, and unlicensed complete provider raw payloads. For `research_content`, a record additionally retains only the bounded limitation/degradation codes required by the current fold, never their diagnostic messages or details; a hit must close those codes exactly between the operation audit and the rebuilt public limitations, without silently dropping or adding one. A hit revalidates request scope, identity, owner, source version, research boundary, freshness, fitness, and field dispositions before the current fold and serializer rebuild the result. Sanitized policy appears at `plan.evidence_storage`; operation lookup/write state, original/result acquisition times, freshness, and fitness appear at `coverage...evidence_storage`, without the path. Acquisition time is the operation completion boundary—the latest normalized observation `retrieved_at`—not publication, event, availability, or result-generation time.
+
+`delete` removes only the current canonical operation record, preserves unrelated records, and performs a fresh acquisition without rewriting it. Cross-process locking and same-directory atomic replacement protect updates. Explicit persistence is currently enabled only where anchored directory descriptors can prevent parent-directory replacement races; other platforms fail closed before accessing the configured path. Symlinks, reparse points, non-regular leaves, and filesystem boundaries that cannot be proven safe also fail closed without revealing the path. This does not affect default-stateless requests or the fresh acquisition and formal audit of non-permitted operations.
 
 The intraday snapshot uses `task_type: "intraday_market_signal"`, exactly one canonical `SSE:<code>` or `SZSE:<code>` A-share, the current China Standard Time trading date, `window: null`, and `source_policy.allow_experimental: true`. `limited` means the snapshot remains answerable but experimental-source qualification or another disclosed limitation remains; `blocked` means identity, session, timing, or core-source evidence is insufficient. Agent analysis may interpret only a non-blocked result within the returned fields and limitations; it is not a trading feed, prediction, or action instruction.
 

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from dataclasses import replace
+from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 from .adjusted_series_sources import (
     EastmoneyForwardAdjustedDailyLineOperation,
@@ -15,6 +16,11 @@ from .close_sources import (
     SseDailyLineOperation,
     SzseDailyLineOperation,
     TencentDailyLineOperation,
+)
+from .evidence_store import (
+    EvidenceReusePolicy,
+    EvidenceStoreRequest,
+    resolve_operation_evidence,
 )
 from .identity_resolution import execute_security_identity_research
 from .identity_sources import (
@@ -46,6 +52,8 @@ def build_market_trend_result(
     request: dict[str, Any],
     transport: HttpTransport,
     now: datetime | None = None,
+    *,
+    evidence_store: EvidenceStoreRequest | None = None,
 ) -> UnifiedResearchResult:
     """Build one unadjusted, cross-checked completed-session trend result."""
 
@@ -58,9 +66,10 @@ def build_market_trend_result(
             request,
             code="unsupported_adjustment",
             message=("market_trend supports adjustment=unadjusted or forward_adjusted"),
+            evidence_store=evidence_store,
         )
     if not request["source_policy"]["allow_experimental"]:
-        return _market_policy_block(request, adjustment)
+        return _market_policy_block(request, adjustment, evidence_store)
     subjects = request["subjects"]
     if len(subjects) != 1 or not isinstance(subjects[0], dict):
         raise ValueError("market_trend requires exactly one subject object")
@@ -91,6 +100,7 @@ def build_market_trend_result(
                     "message": "The requested security identity could not be resolved safely.",
                 }
             ],
+            evidence_store=evidence_store,
         )
     security = f"{canonical_identity.exchange}:{canonical_identity.code}"
     operation_outcomes = list(identity_execution.outcomes)
@@ -122,6 +132,7 @@ def build_market_trend_result(
             message="The research date is later than the retrieval date.",
             identity=identity,
             outcomes=tuple(operation_outcomes),
+            evidence_store=evidence_store,
         )
 
     source_failed = False
@@ -130,9 +141,67 @@ def build_market_trend_result(
         adjusted_secondary = TencentForwardAdjustedDailyLineOperation()
         secondary_operation_id = adjusted_secondary.operation_id
         try:
-            official_observations = adjusted_primary.observe(
-                security, research_date, transport
-            )
+            if evidence_store is None:
+                official_observations = adjusted_primary.observe(
+                    security, research_date, transport
+                )
+                official_outcome = _market_outcome(
+                    adjusted_primary.operation_id,
+                    observations=official_observations,
+                )
+            else:
+                adjusted_acquired_observations: list[DailyBarObservation] = []
+
+                def acquire_adjusted() -> OperationOutcome:
+                    try:
+                        adjusted_acquired_observations.extend(
+                            _completed_history_for_store(
+                                adjusted_primary.observe(
+                                    security,
+                                    research_date,
+                                    transport,
+                                ),
+                                research_date,
+                                research_now,
+                            )
+                        )
+                    except SourceOperationError as error:
+                        return _market_outcome(
+                            adjusted_primary.operation_id,
+                            error=error,
+                        )
+                    return _market_outcome(
+                        adjusted_primary.operation_id,
+                        observations=adjusted_acquired_observations,
+                    )
+
+                resolution = resolve_operation_evidence(
+                    evidence_store,
+                    EvidenceReusePolicy(
+                        capability_id="market_trend_series",
+                        operation_id=adjusted_primary.operation_id,
+                        source_version=_MARKET_EVIDENCE_STORE_VERSION,
+                        source_role="market_observation",
+                        experimental=True,
+                        field_dispositions=_market_dispositions(
+                            adjusted_primary.operation_id
+                        ),
+                        subject_identity=security,
+                        evidence_scope="completed_history",
+                        max_age=timedelta(days=31),
+                    ),
+                    acquire_adjusted,
+                    now=research_now,
+                )
+                official_observations = adjusted_acquired_observations
+                if not adjusted_acquired_observations:
+                    official_observations = _daily_bars_from_outcome(resolution.outcome)
+                official_outcome = replace(
+                    resolution.outcome,
+                    evidence_storage=resolution.audit,
+                )
+                if official_outcome.execution.state == "failed":
+                    source_failed = True
         except SourceOperationError as error:
             official_observations = []
             source_failed = True
@@ -140,11 +209,7 @@ def build_market_trend_result(
                 _market_outcome(adjusted_primary.operation_id, error=error)
             )
         else:
-            operation_outcomes.append(
-                _market_outcome(
-                    adjusted_primary.operation_id, observations=official_observations
-                )
-            )
+            operation_outcomes.append(official_outcome)
         try:
             fallback_observations = adjusted_secondary.observe(
                 security, research_date, transport
@@ -170,7 +235,61 @@ def build_market_trend_result(
         unadjusted_secondary = TencentDailyLineOperation()
         secondary_operation_id = unadjusted_secondary.operation_id
         try:
-            official_observations = exchange_operation.observe(security, transport)
+            if evidence_store is None:
+                official_observations = exchange_operation.observe(security, transport)
+                official_outcome = _market_outcome(
+                    exchange_operation.operation_id,
+                    observations=official_observations,
+                )
+            else:
+                acquired_observations: list[DailyBarObservation] = []
+
+                def acquire_official() -> OperationOutcome:
+                    try:
+                        acquired_observations.extend(
+                            _completed_history_for_store(
+                                exchange_operation.observe(security, transport),
+                                research_date,
+                                research_now,
+                            )
+                        )
+                    except SourceOperationError as error:
+                        return _market_outcome(
+                            exchange_operation.operation_id,
+                            error=error,
+                        )
+                    return _market_outcome(
+                        exchange_operation.operation_id,
+                        observations=acquired_observations,
+                    )
+
+                resolution = resolve_operation_evidence(
+                    evidence_store,
+                    EvidenceReusePolicy(
+                        capability_id="market_trend_series",
+                        operation_id=exchange_operation.operation_id,
+                        source_version=_MARKET_EVIDENCE_STORE_VERSION,
+                        source_role="authoritative_disclosure",
+                        experimental=True,
+                        field_dispositions=_market_dispositions(
+                            exchange_operation.operation_id
+                        ),
+                        subject_identity=security,
+                        evidence_scope="completed_history",
+                        max_age=timedelta(days=31),
+                    ),
+                    acquire_official,
+                    now=research_now,
+                )
+                official_observations = acquired_observations
+                if not acquired_observations:
+                    official_observations = _daily_bars_from_outcome(resolution.outcome)
+                official_outcome = replace(
+                    resolution.outcome,
+                    evidence_storage=resolution.audit,
+                )
+                if official_outcome.execution.state == "failed":
+                    source_failed = True
         except SourceOperationError as error:
             official_observations = []
             source_failed = True
@@ -178,11 +297,7 @@ def build_market_trend_result(
                 _market_outcome(exchange_operation.operation_id, error=error)
             )
         else:
-            operation_outcomes.append(
-                _market_outcome(
-                    exchange_operation.operation_id, observations=official_observations
-                )
-            )
+            operation_outcomes.append(official_outcome)
         try:
             fallback_observations = unadjusted_secondary.observe(
                 security, research_date, transport
@@ -238,6 +353,7 @@ def build_market_trend_result(
                     payload={"rejected_observations": rejected},
                 )
             ],
+            evidence_store=evidence_store,
         )
     official = _completed_observations(
         official_observations, research_date, research_boundary
@@ -256,6 +372,7 @@ def build_market_trend_result(
             ),
             identity=identity,
             outcomes=tuple(operation_outcomes),
+            evidence_store=evidence_store,
         )
 
     fallback_by_date = {item.trading_date: item for item in fallback}
@@ -316,6 +433,7 @@ def build_market_trend_result(
                     payload={"selected_session_count": len(pairs)},
                 )
             ],
+            evidence_store=evidence_store,
         )
 
     bars = [official_bar for official_bar, _ in pairs]
@@ -353,6 +471,7 @@ def build_market_trend_result(
                     },
                 )
             ],
+            evidence_store=evidence_store,
         )
 
     metrics, calculations = _metrics(bars)
@@ -440,6 +559,7 @@ def build_market_trend_result(
             )
             for item in calculations
         ],
+        evidence_store=evidence_store,
     )
 
 
@@ -459,6 +579,80 @@ def _completed_observations(
         ),
         key=lambda item: item.trading_date,
     )
+
+
+def _completed_history_for_store(
+    observations: list[DailyBarObservation],
+    research_date: date,
+    research_now: datetime,
+) -> list[DailyBarObservation]:
+    boundary = (
+        datetime.combine(research_date, time.max, tzinfo=CHINA_STANDARD_TIME)
+        if research_date < research_now.date()
+        else research_now
+    )
+    return [
+        item
+        for item in observations
+        if item.trading_date <= research_date
+        and item.available_at <= boundary
+        and item.price_type == "close"
+    ]
+
+
+def _daily_bars_from_outcome(
+    outcome: OperationOutcome,
+) -> list[DailyBarObservation]:
+    restored: list[DailyBarObservation] = []
+    for evidence in outcome.observations:
+        subject = evidence.get("subject")
+        observed_value = evidence.get("observed_value")
+        observation = evidence.get("observation")
+        locator = evidence.get("locator")
+        if not all(
+            isinstance(item, dict)
+            for item in (subject, observed_value, observation, locator)
+        ):
+            raise ValueError("stored daily-bar evidence contract is invalid")
+        assert isinstance(subject, dict)
+        assert isinstance(observed_value, dict)
+        assert isinstance(observation, dict)
+        assert isinstance(locator, dict)
+        values = observed_value.get("value")
+        units = observed_value.get("unit")
+        if not isinstance(values, dict) or units != {
+            "price": "CNY/share",
+            "volume": "shares",
+        }:
+            raise ValueError("stored daily-bar values are invalid")
+        try:
+            item = DailyBarObservation(
+                source_operation=outcome.operation_id,
+                source_uri=str(locator["uri"]),
+                security=str(subject["security"]),
+                trading_date=date.fromisoformat(str(observation["trading_date"])),
+                open_value=str(values["open"]),
+                high_value=str(values["high"]),
+                low_value=str(values["low"]),
+                close_value=str(values["close"]),
+                volume_shares=str(values["volume"]),
+                price_type="close",
+                trading_status=str(observation["trading_status"]),
+                evidence_time=datetime.fromisoformat(str(evidence["evidence_time"])),
+                available_at=datetime.fromisoformat(str(evidence["available_at"])),
+                retrieved_at=datetime.fromisoformat(str(evidence["retrieved_at"])),
+                availability_status=str(evidence["availability_status"]),
+                corporate_action=cast(
+                    dict[str, str] | None, observation.get("corporate_action")
+                ),
+                adjustment=str(observation["adjustment"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("stored daily-bar evidence contract is invalid") from error
+        if item.to_bar_evidence() != evidence:
+            raise ValueError("stored daily-bar evidence is not canonical")
+        restored.append(item)
+    return restored
 
 
 def _differing_fields(
@@ -663,7 +857,9 @@ def _market_outcome(
 
 
 def _market_policy_block(
-    request: dict[str, Any], adjustment: str
+    request: dict[str, Any],
+    adjustment: str,
+    evidence_store: EvidenceStoreRequest | None,
 ) -> UnifiedResearchResult:
     operation_ids = (
         (
@@ -710,6 +906,9 @@ def _market_policy_block(
                     core=True,
                 ),
             ),
+            evidence_storage=(
+                None if evidence_store is None else evidence_store.plan_audit()
+            ),
         ),
         outcomes,
         limitations=(
@@ -731,6 +930,7 @@ def _blocked(
     outcomes: tuple[OperationOutcome, ...] = (),
     conflicts: list[dict[str, Any]] | None = None,
     claims: list[DirectTaskClaim] | None = None,
+    evidence_store: EvidenceStoreRequest | None = None,
 ) -> UnifiedResearchResult:
     identity = identity or {}
     limitations = list(identity.get("limitations", []))
@@ -751,6 +951,7 @@ def _blocked(
         ],
         limitations=limitations,
         claims=claims,
+        evidence_store=evidence_store,
     )
 
 
@@ -762,6 +963,113 @@ _MARKET_OPERATION_ROLES = {
     "tencent_forward_adjusted_daily_line@1": ("market_observation", "corroborating"),
 }
 
+_MARKET_EVIDENCE_STORE_VERSION = "market-series-contract/1.0"
+_MARKET_PERSISTED_OPERATIONS = frozenset(
+    {
+        SseDailyLineOperation.operation_id,
+        SzseDailyLineOperation.operation_id,
+        EastmoneyForwardAdjustedDailyLineOperation.operation_id,
+    }
+)
+
+
+def _validate_market_evidence_storage_authority(
+    result: Mapping[str, object],
+) -> None:
+    plan = result.get("plan")
+    anchor = result.get("research_anchor")
+    coverage = result.get("coverage")
+    if not isinstance(plan, Mapping) or not isinstance(anchor, Mapping):
+        raise ValueError("market evidence storage authority is invalid")
+    plan_audit = plan.get("evidence_storage")
+    if plan_audit is None:
+        return
+    if not isinstance(plan_audit, Mapping) or not isinstance(coverage, Mapping):
+        raise ValueError("market evidence storage authority is invalid")
+    request_scope = plan_audit.get("request_scope")
+    if (
+        not isinstance(request_scope, Mapping)
+        or request_scope.get("task_type") != "market_trend"
+        or request_scope.get("as_of") != anchor.get("as_of")
+    ):
+        raise ValueError("market evidence storage authority is invalid")
+    parameters = request_scope.get("parameters")
+    if not isinstance(parameters, Mapping):
+        raise ValueError("market evidence storage authority is invalid")
+    adjustment = parameters.get("adjustment")
+    trading_days = _trading_days(request_scope.get("window"))
+    eligible_operations = (
+        {EastmoneyForwardAdjustedDailyLineOperation.operation_id}
+        if adjustment == "forward_adjusted"
+        else {
+            SseDailyLineOperation.operation_id,
+            SzseDailyLineOperation.operation_id,
+        }
+        if adjustment == "unadjusted"
+        else set()
+    )
+    if not eligible_operations:
+        raise ValueError("market evidence storage authority is invalid")
+    audited: list[tuple[str, Mapping[str, object]]] = []
+    for capability_id, aggregate in coverage.items():
+        if not isinstance(aggregate, Mapping) or not isinstance(
+            aggregate.get("operations"), Mapping
+        ):
+            continue
+        operations = cast(Mapping[str, object], aggregate["operations"])
+        for operation_id, operation in operations.items():
+            if not isinstance(operation, Mapping):
+                continue
+            audit = operation.get("evidence_storage")
+            if audit is None:
+                if (
+                    capability_id == "market_trend_series"
+                    and operation_id in eligible_operations
+                    and operation.get("execution_state") in {"succeeded", "failed"}
+                ):
+                    raise ValueError("market evidence storage authority is invalid")
+                continue
+            if (
+                capability_id != "market_trend_series"
+                or operation_id not in _MARKET_PERSISTED_OPERATIONS
+                or operation.get("execution_state") not in {"succeeded", "failed"}
+                or not isinstance(audit, Mapping)
+                or audit.get("source_version") != _MARKET_EVIDENCE_STORE_VERSION
+                or "reuse_facts" in audit
+            ):
+                raise ValueError("market evidence storage authority is invalid")
+            audited.append((operation_id, audit))
+    if not audited:
+        return
+    if any(operation_id not in eligible_operations for operation_id, _ in audited):
+        raise ValueError("market evidence storage authority is invalid")
+    claims = result.get("claims")
+    if not isinstance(claims, (list, tuple)):
+        raise ValueError("market evidence storage authority is invalid")
+    claim = next(
+        (
+            item
+            for item in claims
+            if isinstance(item, Mapping) and item.get("kind") == "market_trend_summary"
+        ),
+        None,
+    )
+    if claim is None:
+        return
+    payload = claim.get("payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError("market evidence storage authority is invalid")
+    research = payload.get("research")
+    window = payload.get("window")
+    if (
+        not isinstance(research, Mapping)
+        or not isinstance(window, Mapping)
+        or research.get("as_of") != request_scope.get("as_of")
+        or research.get("adjustment") != adjustment
+        or window.get("requested_trading_days") != trading_days
+    ):
+        raise ValueError("market evidence storage authority is invalid")
+
 
 def _direct_market_result(
     request: dict[str, Any],
@@ -772,6 +1080,7 @@ def _direct_market_result(
     limitations: list[dict[str, Any]] | None = None,
     claims: list[DirectTaskClaim] | None = None,
     calculations: list[DirectTaskCalculation] | None = None,
+    evidence_store: EvidenceStoreRequest | None = None,
 ) -> UnifiedResearchResult:
     adjustment = request.get("parameters", {}).get("adjustment")
     expected = (
@@ -866,6 +1175,9 @@ def _direct_market_result(
                     minimum_supporting_observations=1,
                     core=True,
                 ),
+            ),
+            evidence_storage=(
+                None if evidence_store is None else evidence_store.plan_audit()
             ),
         ),
         ordered_outcomes,

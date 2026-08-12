@@ -26,6 +26,7 @@ from .content_registry import build_default_content_operations
 from .etf_market import build_etf_market_result
 from .etf_option_contract import OptionSourceOperation
 from .etf_options import build_etf_options_result
+from .evidence_store import EvidenceStoreRequest, parse_evidence_store_request
 from .identity_resolution import build_security_identity_research_result
 from .identity_sources import (
     CHINA_STANDARD_TIME,
@@ -130,13 +131,21 @@ class ResearchRuntime:
     def research(self, request: dict[str, Any]) -> UnifiedResearchResult:
         """Execute one versioned research task."""
 
-        _validate_request_envelope(request)
-        if request["task_type"] == "security_identity":
+        sanitized_request, evidence_store = parse_evidence_store_request(request)
+        _validate_request_envelope(sanitized_request)
+        if sanitized_request["task_type"] == "security_identity":
+            _require_no_evidence_store(
+                evidence_store, str(sanitized_request["task_type"])
+            )
             return build_security_identity_research_result(
-                request,
+                sanitized_request,
                 build_default_identity_operations(self._identity_transport),
             )
-        return self._dispatch_validated(request, allow_workflow=True)
+        return self._dispatch_validated(
+            sanitized_request,
+            allow_workflow=True,
+            evidence_store=evidence_store,
+        )
 
     def _run_leaf_task(self, request: dict[str, Any]) -> UnifiedResearchResult:
         """Run an internally compiled leaf task through this Runtime."""
@@ -149,19 +158,25 @@ class ResearchRuntime:
                 request,
                 build_default_identity_operations(self._identity_transport),
             )
-        return self._dispatch_validated(request, allow_workflow=False)
+        return self._dispatch_validated(
+            request,
+            allow_workflow=False,
+            evidence_store=None,
+        )
 
     def _dispatch_validated(
         self,
         request: dict[str, Any],
         *,
         allow_workflow: bool,
+        evidence_store: EvidenceStoreRequest | None,
     ) -> UnifiedResearchResult:
         """Dispatch an envelope that has already passed common validation."""
 
         task_type = request["task_type"]
         result: UnifiedResearchResult
         if task_type == "research_workflow":
+            _require_no_evidence_store(evidence_store, task_type)
             if not allow_workflow:
                 raise ValueError("nested research_workflow tasks are not allowed")
             result = build_research_workflow_result(request, self._run_leaf_task)
@@ -170,14 +185,17 @@ class ResearchRuntime:
                 request,
                 self._identity_transport,
                 self._research_now,
+                evidence_store=evidence_store,
             )
         elif task_type == "etf_market":
+            _require_no_evidence_store(evidence_store, task_type)
             result = build_etf_market_result(
                 request,
                 self._identity_transport,
                 self._research_now,
             )
         elif task_type == "etf_options":
+            _require_no_evidence_store(evidence_store, task_type)
             etf_option_operations = self._etf_option_operations
             if etf_option_operations is None:
                 from .etf_option_registry import build_default_etf_option_operations
@@ -191,8 +209,10 @@ class ResearchRuntime:
                 request,
                 self._identity_transport,
                 self._research_now,
+                evidence_store=evidence_store,
             )
         elif task_type == "valuation_compare":
+            _require_no_evidence_store(evidence_store, task_type)
             result = build_valuation_comparison_result(
                 request,
                 self._identity_transport,
@@ -211,6 +231,7 @@ class ResearchRuntime:
                 result = build_research_content_blocked_result(
                     request,
                     content_operations,
+                    evidence_store,
                 )
             else:
                 result = build_research_content_result(
@@ -218,8 +239,11 @@ class ResearchRuntime:
                     content_operations,
                     self._identity_transport,
                     self._content_transport,
+                    evidence_store,
+                    self._research_now,
                 )
         elif task_type == "capital_events":
+            _require_no_evidence_store(evidence_store, task_type)
             capital_operations = self._capital_operations
             if capital_operations is None:
                 capital_operations = build_default_capital_operations(
@@ -237,6 +261,7 @@ class ResearchRuntime:
                     self._identity_transport,
                 )
         elif task_type == "market_signals":
+            _require_no_evidence_store(evidence_store, task_type)
             market_signal_operations = self._market_signal_operations
             if market_signal_operations is None:
                 from .market_signal_registry import (
@@ -258,6 +283,7 @@ class ResearchRuntime:
                     self._identity_transport,
                 )
         elif task_type == "intraday_market_signal":
+            _require_no_evidence_store(evidence_store, task_type)
             if not request["source_policy"]["allow_experimental"]:
                 result = build_intraday_blocked_result(
                     request,
@@ -298,6 +324,7 @@ class ResearchRuntime:
                     self._research_now or datetime.now(CHINA_STANDARD_TIME),
                 )
         elif task_type == "intraday_replay":
+            _require_no_evidence_store(evidence_store, task_type)
             if not request["source_policy"]["allow_experimental"]:
                 result = build_intraday_replay_blocked_result(
                     request,
@@ -373,6 +400,13 @@ class ResearchRuntime:
         if self._available_optional_dependencies is not None:
             return f"{dependency}=={version}" in self._available_optional_dependencies
         return dependency_available(dependency, version)
+
+
+def _require_no_evidence_store(
+    evidence_store: EvidenceStoreRequest | None, task_type: str
+) -> None:
+    if evidence_store is not None:
+        raise ValueError(f"{task_type} does not permit persisted research evidence")
 
 
 def research(

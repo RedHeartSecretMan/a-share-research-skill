@@ -5,18 +5,27 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from datetime import date, datetime
-from typing import Any, Collection, Mapping, cast
+from datetime import date, datetime, timedelta
+from functools import partial
+from typing import Any, Callable, Collection, Mapping, cast
 
 from .content_contract import (
     PUBLIC_MATERIAL_TYPES,
     PUBLIC_SOURCE_ROLES,
+    ContentEvidencePersistenceDeclaration,
     ContentHttpTransport,
     ContentObservation,
     ContentQuery,
     ContentSourceOperation,
+    EvidencePersistableContentSourceOperation,
+    SourceBatch,
     SourceFailure,
     valid_f10_profile_categories,
+)
+from .evidence_store import (
+    EvidenceReusePolicy,
+    EvidenceStoreRequest,
+    resolve_operation_evidence,
 )
 from .identity_resolution import execute_security_identity_research
 from .identity_sources import HttpTransport, build_default_identity_operations
@@ -30,6 +39,7 @@ from .research_result import (
     OperationExecution,
     OperationObligation,
     OperationOutcome,
+    OperationReuseFacts,
     ResearchDependency,
     UnifiedResearchResult,
     fold_direct_task_research_result,
@@ -48,11 +58,30 @@ SUBJECT_REQUIRED_TYPES = frozenset(
 )
 _CONTENT_CAPABILITY = "research_content_materials"
 _CONTENT_EVIDENCE_USE = "research_content_material"
+_CONTENT_EVIDENCE_STORE_VERSION = "research-content-contract/1.0"
+_CONTENT_REUSE_LIMITATION_CODES = frozenset(
+    {
+        "feed_completeness_unproven",
+        "pagination_incomplete",
+        "semantic_search_completeness_unproven",
+        "theme_report_universe_incomplete",
+        "title_keyword_filter_not_semantic_search",
+    }
+)
+_CONTENT_REUSE_DEGRADATION_CODES = frozenset(
+    {
+        "fallback_used",
+        "future_material_rejected",
+        "rate_limit_backoff",
+        "source_request_paced",
+    }
+)
 
 
 def build_research_content_blocked_result(
     request: dict[str, Any],
     operations: Collection[ContentSourceOperation],
+    evidence_store: EvidenceStoreRequest | None = None,
 ) -> UnifiedResearchResult:
     """Return the formal result when policy prevents content acquisition."""
 
@@ -87,6 +116,9 @@ def build_research_content_blocked_result(
                     core=True,
                 ),
             ),
+            evidence_storage=(
+                None if evidence_store is None else evidence_store.plan_audit()
+            ),
         ),
         outcomes,
         limitations=(
@@ -104,10 +136,13 @@ def build_research_content_result(
     operations: Collection[ContentSourceOperation],
     identity_transport: HttpTransport,
     document_transport: ContentHttpTransport | None = None,
+    evidence_store: EvidenceStoreRequest | None = None,
+    now: datetime | None = None,
 ) -> UnifiedResearchResult:
     """Collect, time-bound, and reconcile research materials."""
 
     del document_transport
+    research_now = now or datetime.now().astimezone()
     query = _normalize_query(request)
     operation_list = tuple(operations)
     execution_operations = _validate_and_order_content_operations(operation_list, query)
@@ -174,7 +209,7 @@ def build_research_content_result(
                 ),
             )
     outcomes: list[OperationOutcome] = []
-    accepted_by_operation: dict[str, list[tuple[ContentObservation, str]]] = {}
+    accepted_by_operation: dict[str, list[tuple[Mapping[str, object], str]]] = {}
     owned_material_count = 0
     limitation_codes: set[str] = {"experimental_research_content_sources"}
     for operation in execution_operations:
@@ -191,11 +226,14 @@ def build_research_content_result(
             if not query.allow_fallback or accepted_by_operation.get(fallback_for):
                 outcomes.append(_content_skipped_outcome(operation, "not_requested"))
                 continue
-        try:
-            batch = operation.collect(query)
-        except Exception:
-            outcomes.append(
-                _content_failed_outcome(
+
+        def acquire_content(
+            operation: ContentSourceOperation = operation,
+        ) -> OperationOutcome:
+            try:
+                batch = operation.collect(query)
+            except Exception:
+                return _content_failed_outcome(
                     operation,
                     SourceFailure(
                         operation.operation_id,
@@ -203,11 +241,8 @@ def build_research_content_result(
                         "The source operation failed without a safe diagnostic.",
                     ),
                 )
-            )
-            continue
-        if batch.operation_id != operation.operation_id:
-            outcomes.append(
-                _content_failed_outcome(
+            if batch.operation_id != operation.operation_id:
+                return _content_failed_outcome(
                     operation,
                     SourceFailure(
                         operation.operation_id,
@@ -215,35 +250,75 @@ def build_research_content_result(
                         "The source batch contradicted its operation owner.",
                     ),
                 )
+            valid, schema_errors = _validate_observation_enums(
+                operation.operation_id, batch.observations
             )
-            continue
-        valid, schema_errors = _validate_observation_enums(
-            operation.operation_id, batch.observations
-        )
-        owned = [
-            (item, _content_observation_key(item, index))
-            for index, item in enumerate(valid)
-        ]
-        accepted = [
-            (item, key) for item, key in owned if _within_research_window(item, query)
-        ]
-        accepted_by_operation[operation.operation_id] = accepted
-        owned_material_count += len(valid)
-        errors = (*schema_errors, *batch.source_errors)
-        outcomes.append(
-            _content_outcome(
+            return _content_outcome(
                 operation,
                 observations=tuple(
                     _content_observation_payload(item, index, query)
                     for index, item in enumerate(valid)
                 ),
-                errors=tuple(errors),
+                errors=tuple((*schema_errors, *batch.source_errors)),
                 query_complete=batch.complete,
+                reuse_facts=_content_reuse_facts(batch),
             )
+
+        if evidence_store is None:
+            outcome = acquire_content()
+        else:
+            persistence_license = _content_persistence_license(operation)
+            persistence_eligible = set(query.material_types).issubset(
+                {"announcement", "research_report"}
+            )
+            outcome_fitness: Callable[[OperationOutcome], bool] | None = None
+            if persistence_eligible and persistence_license is not None:
+                outcome_fitness = partial(
+                    _content_outcome_license_fitness,
+                    required_status=persistence_license,
+                )
+            resolution = resolve_operation_evidence(
+                evidence_store,
+                EvidenceReusePolicy(
+                    capability_id=_CONTENT_CAPABILITY,
+                    operation_id=operation.operation_id,
+                    source_version=_CONTENT_EVIDENCE_STORE_VERSION,
+                    source_role="declared_per_observation",
+                    experimental=True,
+                    field_dispositions=_content_dispositions(operation),
+                    subject_identity=_content_subject_identity(query),
+                    evidence_scope="completed_history",
+                    max_age=timedelta(days=31),
+                    persistence_permitted=(
+                        persistence_eligible and persistence_license is not None
+                    ),
+                    outcome_fitness=outcome_fitness,
+                ),
+                acquire_content,
+                now=research_now,
+            )
+            outcome = replace(
+                resolution.outcome,
+                evidence_storage=resolution.audit,
+            )
+        outcomes.append(outcome)
+        accepted = [
+            material
+            for payload in outcome.observations
+            for material in (_normalized_content_material(payload, query),)
+            if material is not None
+        ]
+        accepted_by_operation[operation.operation_id] = accepted
+        owned_material_count += len(outcome.observations)
+        if outcome.reuse_facts is not None:
+            limitation_codes.update(outcome.reuse_facts.limitation_codes)
+            limitation_codes.update(outcome.reuse_facts.degradation_codes)
+        limitation_codes.update(
+            code
+            for payload in outcome.observations
+            for code in cast(list[object], payload.get("limitations", []))
+            if isinstance(code, str)
         )
-        limitation_codes.update(batch.limitations)
-        limitation_codes.update(code for item in valid for code in item.limitations)
-        limitation_codes.update(item.code for item in batch.degradations)
 
     accepted = [
         item
@@ -251,7 +326,7 @@ def build_research_content_result(
         for item in accepted_by_operation.get(operation.operation_id, ())
     ]
     claims, conflicts, selected_materials = _content_material_groups(accepted, query)
-    present_types = {item.material_type for item in selected_materials}
+    present_types = {str(item["material_type"]) for item in selected_materials}
     missing_types = sorted(set(query.material_types).difference(present_types))
     limitations = [
         DirectTaskLimitation(code, _limitation_message(code))
@@ -298,6 +373,9 @@ def build_research_content_result(
                     if operation_list
                     else ()
                 ),
+            ),
+            evidence_storage=(
+                None if evidence_store is None else evidence_store.plan_audit()
             ),
         ),
         (*identity_outcomes, *ordered_outcomes),
@@ -556,6 +634,7 @@ def _content_outcome(
     observations: tuple[Mapping[str, object], ...] = (),
     errors: tuple[SourceFailure, ...] = (),
     query_complete: bool,
+    reuse_facts: OperationReuseFacts | None = None,
 ) -> OperationOutcome:
     execution = (
         OperationExecution("failed")
@@ -569,6 +648,18 @@ def _content_outcome(
         observations=observations,
         source_errors=tuple(item.to_result() for item in errors),
         field_dispositions=_content_dispositions(operation),
+        reuse_facts=(OperationReuseFacts() if reuse_facts is None else reuse_facts),
+    )
+
+
+def _content_reuse_facts(batch: SourceBatch) -> OperationReuseFacts:
+    """Retain only bounded operation codes required by the content fold."""
+
+    return OperationReuseFacts(
+        limitation_codes=tuple(sorted(set(batch.limitations))),
+        degradation_codes=tuple(
+            sorted({degradation.code for degradation in batch.degradations})
+        ),
     )
 
 
@@ -646,19 +737,23 @@ def _content_observation_payload(
 
 
 def _content_material_groups(
-    observations: list[tuple[ContentObservation, str]], query: ContentQuery
+    observations: list[tuple[Mapping[str, object], str]], query: ContentQuery
 ) -> tuple[
     tuple[DirectTaskClaim, ...],
     tuple[DirectTaskConflict, ...],
-    tuple[ContentObservation, ...],
+    tuple[Mapping[str, object], ...],
 ]:
-    grouped: dict[tuple[str, str, str], list[tuple[ContentObservation, str]]] = {}
+    grouped: dict[tuple[str, str, str], list[tuple[Mapping[str, object], str]]] = {}
     for observation, observation_key in observations:
-        grouped.setdefault(_canonical_observation_key(observation), []).append(
-            (observation, observation_key)
-        )
+        material_type = cast(str, observation["material_type"])
+        namespace = cast(str, observation["source_document_namespace"])
+        document_id = cast(str, observation["source_document_id"])
+        grouped.setdefault(
+            (material_type, namespace, f"document:{document_id}"),
+            [],
+        ).append((observation, observation_key))
     counts: dict[str, int] = {}
-    selected: list[ContentObservation] = []
+    selected: list[Mapping[str, object]] = []
     claims: list[DirectTaskClaim] = []
     conflicts: list[DirectTaskConflict] = []
     for group_key, members in grouped.items():
@@ -676,10 +771,7 @@ def _content_material_groups(
                 payload={
                     "material_type": material_type,
                     "source_document_namespace": group_key[1],
-                    "source_document_id": (
-                        members[0][0].source_document_id
-                        or _observation_fingerprint(members[0][0])[:24]
-                    ),
+                    "source_document_id": members[0][0]["source_document_id"],
                     "member_evidence_ids": list(keys),
                     "member_count": len(keys),
                 },
@@ -687,10 +779,10 @@ def _content_material_groups(
         )
         comparable = {
             (
-                item[0].title,
-                item[0].author,
-                item[0].published_at,
-                item[0].summary,
+                item[0]["title"],
+                item[0]["author"],
+                item[0]["published_at"],
+                item[0]["summary"],
             )
             for item in members
         }
@@ -703,6 +795,336 @@ def _content_material_groups(
                 )
             )
     return tuple(claims), tuple(conflicts), tuple(selected)
+
+
+def _content_subject_identity(query: ContentQuery) -> str:
+    subject = query.subject
+    if isinstance(subject, Mapping):
+        security = subject.get("security")
+        if isinstance(security, Mapping):
+            exchange = security.get("exchange")
+            code = security.get("code")
+            if isinstance(exchange, str) and isinstance(code, str):
+                return f"{exchange}:{code}"
+    theme_scope = json.dumps(
+        {
+            "material_types": list(query.material_types),
+            "keywords": list(query.keywords),
+            "parameters": query.parameters,
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"theme:{hashlib.sha256(theme_scope.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _content_persistence_license(
+    operation: ContentSourceOperation,
+) -> str | None:
+    """Return only an explicit operation-owned license permission."""
+
+    if not isinstance(operation, EvidencePersistableContentSourceOperation):
+        return None
+    declaration: ContentEvidencePersistenceDeclaration = operation.evidence_persistence
+    return declaration.license_status
+
+
+def _content_outcome_license_fitness(
+    outcome: OperationOutcome,
+    *,
+    required_status: str,
+) -> bool:
+    """Require every normalized observation to retain the owner's license boundary."""
+
+    return (
+        bool(outcome.observations)
+        and outcome.reuse_facts is not None
+        and set(outcome.reuse_facts.limitation_codes).issubset(
+            _CONTENT_REUSE_LIMITATION_CODES
+        )
+        and set(outcome.reuse_facts.degradation_codes).issubset(
+            _CONTENT_REUSE_DEGRADATION_CODES
+        )
+        and all(
+            _content_payload_has_license_status(observation, required_status)
+            for observation in outcome.observations
+        )
+    )
+
+
+def _validate_content_evidence_storage_authority(
+    result: Mapping[str, object],
+    canonical_operations: Collection[ContentSourceOperation] = (),
+) -> None:
+    plan = result.get("plan")
+    anchor = result.get("research_anchor")
+    coverage = result.get("coverage")
+    observations = result.get("observations")
+    limitations = result.get("limitations")
+    if not isinstance(plan, Mapping) or not isinstance(anchor, Mapping):
+        raise ValueError("content evidence storage authority is invalid")
+    plan_audit = plan.get("evidence_storage")
+    if plan_audit is None:
+        return
+    if (
+        not isinstance(plan_audit, Mapping)
+        or not isinstance(coverage, Mapping)
+        or not isinstance(observations, (list, tuple))
+        or not isinstance(limitations, (list, tuple))
+    ):
+        raise ValueError("content evidence storage authority is invalid")
+    request_scope = plan_audit.get("request_scope")
+    if (
+        not isinstance(request_scope, Mapping)
+        or request_scope.get("task_type") != "research_content"
+        or request_scope.get("as_of") != anchor.get("as_of")
+    ):
+        raise ValueError("content evidence storage authority is invalid")
+    try:
+        query = _normalize_query(dict(request_scope))
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("content evidence storage authority is invalid") from error
+    eligible = set(query.material_types).issubset({"announcement", "research_report"})
+    canonical_by_id = {
+        operation.operation_id: operation for operation in canonical_operations
+    }
+    declared_reuse_codes: set[str] = set()
+    for capability_id, aggregate in coverage.items():
+        if not isinstance(aggregate, Mapping) or not isinstance(
+            aggregate.get("operations"), Mapping
+        ):
+            continue
+        operations = cast(Mapping[str, object], aggregate["operations"])
+        for operation_id, operation in operations.items():
+            if not isinstance(operation, Mapping):
+                continue
+            audit = operation.get("evidence_storage")
+            if audit is None:
+                if capability_id == _CONTENT_CAPABILITY and operation.get(
+                    "execution_state"
+                ) in {"succeeded", "failed"}:
+                    raise ValueError("content evidence storage authority is invalid")
+                continue
+            if (
+                capability_id != _CONTENT_CAPABILITY
+                or operation.get("execution_state") not in {"succeeded", "failed"}
+                or not isinstance(audit, Mapping)
+                or audit.get("source_version") != _CONTENT_EVIDENCE_STORE_VERSION
+                or not eligible
+                and audit.get("lookup_state") != "not_permitted"
+            ):
+                raise ValueError("content evidence storage authority is invalid")
+            try:
+                reuse_facts = OperationReuseFacts.from_dict(audit.get("reuse_facts"))
+            except ValueError as error:
+                raise ValueError(
+                    "content evidence storage authority is invalid"
+                ) from error
+            if not set(reuse_facts.limitation_codes).issubset(
+                _CONTENT_REUSE_LIMITATION_CODES
+            ) or not set(reuse_facts.degradation_codes).issubset(
+                _CONTENT_REUSE_DEGRADATION_CODES
+            ):
+                raise ValueError("content evidence storage authority is invalid")
+            declared_reuse_codes.update(reuse_facts.limitation_codes)
+            declared_reuse_codes.update(reuse_facts.degradation_codes)
+            canonical_operation = canonical_by_id.get(operation_id)
+            canonical_license = (
+                _content_persistence_license(canonical_operation)
+                if canonical_operation is not None
+                else None
+            )
+            if (
+                canonical_operation is not None
+                and canonical_license is None
+                and audit.get("lookup_state") != "not_permitted"
+            ):
+                raise ValueError("content evidence storage authority is invalid")
+            owned_subjects: set[str] = set()
+            owned_license_fit = True
+            canonical_license_fit = True
+            for record in observations:
+                if (
+                    not isinstance(record, Mapping)
+                    or record.get("capability_id") != _CONTENT_CAPABILITY
+                    or record.get("operation_id") != operation_id
+                    or not isinstance(record.get("payload"), Mapping)
+                ):
+                    continue
+                payload = cast(Mapping[str, object], record["payload"])
+                _normalized_content_material(payload, query)
+                owned_license_fit = owned_license_fit and (
+                    _content_payload_has_established_license(payload)
+                )
+                if canonical_license is not None:
+                    canonical_license_fit = canonical_license_fit and (
+                        _content_payload_has_license_status(payload, canonical_license)
+                    )
+                subject = payload.get("subject")
+                if isinstance(subject, Mapping) and isinstance(
+                    subject.get("security"), Mapping
+                ):
+                    security = cast(Mapping[str, object], subject["security"])
+                    exchange = security.get("exchange")
+                    code = security.get("code")
+                    if isinstance(exchange, str) and isinstance(code, str):
+                        owned_subjects.add(f"{exchange}:{code}")
+            if audit.get("lookup_state") != "not_permitted" and not owned_license_fit:
+                raise ValueError("content evidence storage authority is invalid")
+            if (
+                audit.get("lookup_state") != "not_permitted"
+                and not canonical_license_fit
+            ):
+                raise ValueError("content evidence storage authority is invalid")
+            expected_subjects = (
+                owned_subjects
+                if owned_subjects
+                else {_content_subject_identity(query)}
+                if query.subject is None
+                else set()
+            )
+            if expected_subjects and audit.get("subject_identity") not in (
+                expected_subjects
+            ):
+                raise ValueError("content evidence storage authority is invalid")
+    top_level_reuse_codes = {
+        code
+        for limitation in limitations
+        if isinstance(limitation, Mapping)
+        for code in (limitation.get("code"),)
+        if isinstance(code, str)
+        and code in _CONTENT_REUSE_LIMITATION_CODES | _CONTENT_REUSE_DEGRADATION_CODES
+    }
+    if top_level_reuse_codes != declared_reuse_codes:
+        raise ValueError("content evidence storage authority is invalid")
+
+
+def _normalized_content_material(
+    payload: Mapping[str, object], query: ContentQuery
+) -> tuple[Mapping[str, object], str] | None:
+    expected_keys = {
+        "id",
+        "source_operation",
+        "kind",
+        "material_type",
+        "query_scope",
+        "source_role",
+        "source_document_namespace",
+        "source_document_id",
+        "title",
+        "published_at",
+        "available_at",
+        "retrieved_at",
+        "locator",
+        "document_locator",
+        "subject",
+        "author",
+        "summary",
+        "content",
+        "attributes",
+        "limitations",
+        "license_boundary",
+    }
+    if set(payload) != expected_keys:
+        raise ValueError("normalized research content evidence has an invalid shape")
+    observation_id = payload.get("id")
+    material_type = payload.get("material_type")
+    namespace = payload.get("source_document_namespace")
+    document_id = payload.get("source_document_id")
+    if (
+        not isinstance(observation_id, str)
+        or not observation_id
+        or payload.get("kind") != "research_content_material"
+        or not isinstance(material_type, str)
+        or material_type not in query.material_types
+        or not isinstance(namespace, str)
+        or not namespace
+        or not isinstance(document_id, str)
+        or not document_id
+    ):
+        raise ValueError("normalized research content evidence is invalid")
+    expected_scope = {
+        "as_of": query.as_of,
+        "published_from": query.published_from,
+        "published_to": query.published_to,
+        "material_types": list(query.material_types),
+        "query": list(query.keywords),
+        "limit": query.limit,
+        "verify_documents": query.parameters.get("verify_documents", False),
+    }
+    if payload.get("query_scope") != expected_scope:
+        raise ValueError("normalized research content query scope contradicts")
+    license_boundary = payload.get("license_boundary")
+    if (
+        not isinstance(license_boundary, Mapping)
+        or license_boundary.get("raw_payload") != "excluded"
+        or payload.get("content") is not None
+        and material_type in {"announcement", "research_report"}
+    ):
+        raise ValueError("normalized research content license boundary is invalid")
+    retrieved_at = payload.get("retrieved_at")
+    if not isinstance(retrieved_at, str):
+        raise ValueError("normalized research content retrieval time is invalid")
+    try:
+        retrieved = datetime.fromisoformat(retrieved_at)
+    except ValueError as error:
+        raise ValueError(
+            "normalized research content retrieval time is invalid"
+        ) from error
+    if retrieved.utcoffset() is None:
+        raise ValueError("normalized research content retrieval time is invalid")
+    published_at = payload.get("published_at")
+    attributes = payload.get("attributes")
+    limitations = payload.get("limitations")
+    if not isinstance(attributes, Mapping) or not isinstance(limitations, list):
+        raise ValueError("normalized research content evidence is invalid")
+    if published_at is None:
+        publication_date = _strict_publication_date(attributes.get("publication_date"))
+        relevant_date = publication_date or retrieved.date().isoformat()
+    elif isinstance(published_at, str):
+        try:
+            published = datetime.fromisoformat(published_at)
+        except ValueError as error:
+            raise ValueError(
+                "normalized research content publication time is invalid"
+            ) from error
+        if published.utcoffset() is None or published > retrieved:
+            raise ValueError("normalized research content publication time is invalid")
+        relevant_date = published.date().isoformat()
+    else:
+        raise ValueError("normalized research content publication time is invalid")
+    if not query.published_from <= relevant_date <= query.published_to:
+        return None
+    return payload, observation_id
+
+
+def _content_payload_has_established_license(
+    payload: Mapping[str, object],
+) -> bool:
+    license_boundary = payload.get("license_boundary")
+    if not isinstance(license_boundary, Mapping):
+        return False
+    status = license_boundary.get("status")
+    return (
+        isinstance(status, str)
+        and bool(status.strip())
+        and status != "not_established"
+        and license_boundary.get("raw_payload") == "excluded"
+    )
+
+
+def _content_payload_has_license_status(
+    payload: Mapping[str, object], required_status: str
+) -> bool:
+    license_boundary = payload.get("license_boundary")
+    return (
+        isinstance(license_boundary, Mapping)
+        and set(license_boundary) == {"status", "raw_payload"}
+        and license_boundary.get("status") == required_status
+        and license_boundary.get("raw_payload") == "excluded"
+    )
 
 
 def _normalize_query(request: dict[str, Any]) -> ContentQuery:
