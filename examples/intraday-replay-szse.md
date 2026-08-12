@@ -20,7 +20,7 @@ This is a fixture-only delivery case. It is not a provider response and contains
 
 The versioned request is [intraday-replay-szse.json](requests/intraday-replay-szse.json). For offline acceptance, the repository fixture CLI can be run with `A_SHARE_INTRADAY_REPLAY_SCENARIO=summary_metrics`; this produces deterministic partial coverage and an unavailable daily boundary. The `complete` fixture path separately proves the full expected session denominator and is used by the public replay tests.
 
-If the installed environment does not contain `mootdx==0.11.7`, running the same request through `entrypoint.py run --request` returns a structured `blocked` result with `missing_optional_dependency`; it does not switch sources. A separate `security_identity` request remains available in that environment, so the missing capability dependency does not widen the block.
+The standard Skill installation includes locked `mootdx==0.11.7`. If it is missing, version-mismatched, or unloadable, installation health reports `installation_incomplete`; this software fact does not claim that a source is accessible or that its evidence is adoptable, and it never triggers a source switch. An ordinary `security_identity` task still runs independently and reports its own source outcome.
 
 ## Evidence-shaped output
 

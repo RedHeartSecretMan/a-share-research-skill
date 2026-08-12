@@ -6,10 +6,10 @@
 
 盘中任务只接受**当前北京时间交易日**。后续运行时先复制请求文件，把 `as_of` 改成运行当日的明确 `YYYY-MM-DD`；不要把“今天”原样写入 JSON，也不要把历史示例日期当成当前研究时点。
 
-该能力按需依赖 `mootdx==0.11.7`。依赖必须安装在实际执行 Skill 的同一个 Python 3.12+ 环境中；缺少它只会让盘中任务返回 `missing_optional_dependency` / `blocked`，不会阻断其他研究能力。
+默认 Skill 安装会把锁定的 `mootdx==0.11.7` 安装到自身运行目录。依赖缺失、版本不符或无法加载时，安装健康返回 `installation_incomplete`；这只表示软件安装不完整，不代表来源不可访问或证据不合格。
 
 ```text
-<python> -m pip install "mootdx==0.11.7"
+<python> skill/a-share-research/scripts/install.py
 <python> skill/a-share-research/scripts/entrypoint.py run --request <copied-current-date-request.json>
 ```
 

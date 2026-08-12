@@ -1,4 +1,4 @@
-"""Fail-closed candidate adapters for the optional mootdx replay source."""
+"""Fail-closed candidate adapters for the default-installed mootdx replay source."""
 
 from __future__ import annotations
 

@@ -428,7 +428,7 @@ class DirectIntradayPublicSeamTests(unittest.TestCase):
         limitation = next(
             item
             for item in result["limitations"]  # type: ignore[union-attr]
-            if item["code"] == "missing_optional_dependency"
+            if item["code"] == "installation_incomplete"
         )
         self.assertIn("capability=intraday_replay", limitation["message"])
         self.assertIn("dependency=mootdx", limitation["message"])

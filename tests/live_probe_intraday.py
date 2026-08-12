@@ -109,7 +109,7 @@ _KNOWN_FAILURE_CODES = {
     "intraday_trading_date_mismatch",
     "intraday_trading_status_mismatch",
     "inconsistent_price_bar",
-    "missing_optional_dependency",
+    "installation_incomplete",
     "midday_break_morning_observation",
     "operation_failure",
     "operation_identity_mismatch",
@@ -130,7 +130,7 @@ _KNOWN_FAILURE_CODES = {
     "wrong_security_payload",
 }
 _SAFE_FAILURE_MESSAGES = {
-    "missing_optional_dependency": "The capability-scoped source dependency is unavailable.",
+    "installation_incomplete": "The locked core source dependency installation is incomplete.",
     "source_policy_not_satisfied": "The explicit probe source policy was rejected.",
     "upstream_unavailable": "A required source operation was unavailable.",
     "upstream_http_error": "A required source operation returned an HTTP failure.",

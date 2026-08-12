@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.metadata
 from datetime import date, datetime
 from typing import Any, Collection
 
@@ -33,6 +32,10 @@ from .identity_sources import (
     HttpTransport,
     UrlLibTransport,
     build_default_identity_operations,
+)
+from .installation_health import (
+    MOOTDX_RUNTIME_DEPENDENCY,
+    dependency_available,
 )
 from .intraday_contract import IntradaySourceOperation
 from .intraday_replay import (
@@ -264,13 +267,16 @@ class ResearchRuntime:
                         "operations"
                     ),
                 )
-            elif not self._dependency_available("mootdx", "0.11.7"):
+            elif not self._dependency_available(
+                MOOTDX_RUNTIME_DEPENDENCY.distribution,
+                MOOTDX_RUNTIME_DEPENDENCY.required_version,
+            ):
                 result = build_intraday_blocked_result(
                     request,
-                    code="missing_optional_dependency",
+                    code="installation_incomplete",
                     message=(
-                        "intraday_market_data requires the optional mootdx Adapter "
-                        "dependency"
+                        "intraday_market_data requires the locked core mootdx "
+                        "Adapter dependency installation"
                     ),
                     limitation_details={
                         "capability": "intraday_market_data",
@@ -303,14 +309,17 @@ class ResearchRuntime:
                 )
             elif (
                 self._intraday_replay_operations is None
-                and not self._dependency_available("mootdx", "0.11.7")
+                and not self._dependency_available(
+                    MOOTDX_RUNTIME_DEPENDENCY.distribution,
+                    MOOTDX_RUNTIME_DEPENDENCY.required_version,
+                )
             ):
                 result = build_intraday_replay_blocked_result(
                     request,
-                    code="missing_optional_dependency",
+                    code="installation_incomplete",
                     message=(
-                        "intraday_replay requires the optional mootdx Adapter "
-                        "dependency"
+                        "intraday_replay requires the locked core mootdx Adapter "
+                        "dependency installation"
                     ),
                     limitation_details={
                         "capability": "intraday_replay",
@@ -338,10 +347,10 @@ class ResearchRuntime:
                     except ModuleNotFoundError:
                         result = build_intraday_replay_blocked_result(
                             request,
-                            code="missing_optional_dependency",
+                            code="installation_incomplete",
                             message=(
-                                "intraday_replay requires the optional mootdx Adapter "
-                                "dependency"
+                                "intraday_replay requires the locked core mootdx "
+                                "Adapter dependency installation"
                             ),
                             limitation_details={
                                 "capability": "intraday_replay",
@@ -363,10 +372,7 @@ class ResearchRuntime:
     def _dependency_available(self, dependency: str, version: str) -> bool:
         if self._available_optional_dependencies is not None:
             return f"{dependency}=={version}" in self._available_optional_dependencies
-        try:
-            return importlib.metadata.version(dependency) == version
-        except importlib.metadata.PackageNotFoundError:
-            return False
+        return dependency_available(dependency, version)
 
 
 def research(

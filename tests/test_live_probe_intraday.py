@@ -117,7 +117,7 @@ class IntradayLiveProbeTests(unittest.TestCase):
             "status": "blocked",
             "subjects": [{"security": "SSE:600519"}],
             "evidence": [],
-            "limitations": [{"code": "missing_optional_dependency"}],
+            "limitations": [{"code": "installation_incomplete"}],
         }
         self.assertEqual(
             live_probe._result_from_process(0, json.dumps(valid_blocked), ""),

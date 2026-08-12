@@ -83,21 +83,20 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 <skills-directory>/a-share-research/
 ├── SKILL.md
 ├── agents/openai.yaml
+├── requirements.lock
 ├── references/
 └── scripts/
 ```
 
-The core runtime requires only the Python 3.12 or later standard library and does not require installing this repository as a package. Below, `<python>` means an interpreter already confirmed to be version 3.12 or later: Windows normally uses `py -3.12`; macOS and Linux should prefer `python3.12`, and should use `python3` only after `python3 --version` confirms the requirement. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for the complete invocation contract.
-
-F10 issuer-profile retrieval, the `intraday_market_signal` snapshot, and `intraday_replay` are capability-scoped optional capabilities and require an extra dependency. Install the release-audited version into the same Python environment that runs the corresponding Skill capability when needed:
+The core runtime requires Python 3.12 or later. Below, `<python>` means an interpreter already confirmed to be version 3.12 or later: Windows normally uses `py -3.12`; macOS and Linux should prefer `python3.12`, and should use `python3` only after `python3 --version` confirms the requirement. After copying the complete directory, run the one standard installation step. It installs the locked core dependencies from the bundled manifest into that Skill copy's own `.runtime`, so no task-specific package installation is needed, and finishes by checking dependency and operation loads:
 
 ```text
-<python> -m pip install "mootdx==0.11.7"
+<python> <skill-root>/scripts/install.py
 ```
 
-The standard-library core installation does not include `mootdx`. When it is absent, only F10, `intraday_market_signal`, `intraday_replay`, and steps explicitly dependent on them report `missing_optional_dependency` or return `blocked`; other research capabilities remain available. The runtime must not silently switch sources, fabricate empty data, or widen the blocked scope. The maintainer-only live probe uses an ephemeral home and does not create project-owned global configuration.
+A successful installation exits zero with JSON `status: "complete"`. Run `<python> <skill-root>/scripts/installation_health.py` at any time to recheck it; a missing, version-mismatched, or unloadable dependency exits nonzero with `status: "installation_incomplete"`. `mootdx==0.11.7` is currently the only direct extra dependency required by released core operations. `requirements.lock` exactly pins the minimum actual runtime closure, including platform-applicable entries, loaded by the released F10, intraday snapshot, and intraday replay operations; it is not the complete declared closure of unpublished or lazy `mootdx` utilities and CLI features. The installer consumes that complete minimum closure without resolving extra packages at install time. A generic upstream-package `pip check` is not a substitute for this Skill's formal-operation installation health. Installation health proves only that artifact-local software files, versions, modules, and operations load. It does not probe or promise source accessibility, credentials, paid permissions, or evidence-adoption qualification; request source policy and research results continue to express those facts.
 
-The F10, `intraday_market_signal`, and `intraday_replay` integrations each pin `mootdx==0.11.7` within their capability scope. Its other quote interfaces do not become default sources or fallbacks merely because they ship in the same library. Each source operation must separately qualify identity, timing, units, failure semantics, and licensing, and must improve the evidence chain before integration; intraday never silently switches source when evidence is unavailable.
+`mootdx` enters the default install only for the released F10, `intraday_market_signal`, and `intraday_replay` operations. Its other candidate quote interfaces do not become default sources, dependency scope, or fallbacks merely because they ship in the same library. Each source operation must still separately qualify identity, timing, units, failure semantics, and licensing; an unavailable source never triggers a silent switch. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for the complete invocation contract.
 
 ## CLI
 
@@ -107,7 +106,7 @@ All capabilities use the stable research-task Interface:
 <python> <skill-root>/scripts/entrypoint.py run --request <research-task.json>
 ```
 
-`research-task.json` is a structured task, not natural-language text. It carries the version, task type, subjects, research date, window, parameters, and source policy. Unknown tasks, policy-disallowed sources, and missing optional Adapter dependencies return explicit `blocked` results.
+`research-task.json` is a structured task, not natural-language text. It carries the version, task type, subjects, research date, window, parameters, and source policy. Unknown tasks, policy-disallowed sources, and incomplete core Adapter installations return explicit `blocked` results.
 
 `run --request` is the only supported public invocation. Callers do not need to know source endpoints, internal modules, or historical subcommands. `scripts/entrypoint.py` is the Skill's only public runtime entry point; every other Python module is an implementation detail. The CLI does not process natural language or call a model. `stdout` contains versioned JSON only and `stderr` contains diagnostics only. A valid `limited` or `blocked` result still exits with zero.
 
@@ -326,7 +325,7 @@ Run each vertical slice explicitly against live sources with versioned requests:
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
-`intraday-market-snapshot.json` records the v0.2.0 release-date request shape. Before a later run, copy it and replace `as_of` with that run's current China Standard Time date; historical dates, non-trading dates, and non-applicable sessions intentionally return `blocked`. Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the integrated F10 capability that requires the optional `mootdx` dependency and should return an explicit blocked result when the dependency is absent.
+`intraday-market-snapshot.json` records the v0.2.0 release-date request shape. Before a later run, copy it and replace `as_of` with that run's current China Standard Time date; historical dates, non-trading dates, and non-applicable sessions intentionally return `blocked`. Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the default-installed `mootdx==0.11.7` F10 operation; missing or mismatched software is `installation_incomplete` health, while source-access failure remains a research-result fact.
 
 The dated results and environment limitations for all eight market-signal scenarios are recorded in the [2026-08-02 live smoke record](docs/research/market-signals-smoke-2026-08-02.md).
 

@@ -313,11 +313,11 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
 
         result = invoke_copied_installed(replay_request("SSE:600519"))
         self.assertEqual(result["status"], "blocked")
-        self.assertIn("missing_optional_dependency", self.codes(result))
+        self.assertIn("installation_incomplete", self.codes(result))
         message = next(
             item["message"]
             for item in result["limitations"]
-            if item["code"] == "missing_optional_dependency"
+            if item["code"] == "installation_incomplete"
         )
         self.assertIn("capability=intraday_replay", message)
         self.assertIn("dependency=mootdx", message)

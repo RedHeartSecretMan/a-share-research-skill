@@ -461,7 +461,7 @@ class IdentityResolutionCliTests(unittest.TestCase):
             {"skipped_research_dependency"},
         )
         limitation = result["limitations"][0]
-        self.assertEqual(limitation["code"], "missing_optional_dependency")
+        self.assertEqual(limitation["code"], "installation_incomplete")
         self.assertIn("capability=intraday_market_data", limitation["message"])
         self.assertIn("dependency=mootdx", limitation["message"])
 

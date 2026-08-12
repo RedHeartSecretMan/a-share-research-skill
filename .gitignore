@@ -4,6 +4,7 @@
 .pytest_cache/
 .ruff_cache/
 .venv/
+/skill/a-share-research/.runtime/
 __pycache__/
 *.pyc
 htmlcov/

@@ -1,18 +1,699 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = REPOSITORY_ROOT / "skill" / "a-share-research"
+_LOCKED_REQUIREMENT = re.compile(
+    r"^([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+!-]+)"
+    r'(?:\s*;\s*sys_platform\s*==\s*"([^"]+)")?$'
+)
+
+
+def _applicable_locked_requirements(
+    skill_root: Path,
+    *,
+    platform: str = sys.platform,
+) -> list[tuple[str, str]]:
+    requirements: list[tuple[str, str]] = []
+    for raw_line in (
+        (skill_root / "requirements.lock").read_text(encoding="utf-8").splitlines()
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _LOCKED_REQUIREMENT.fullmatch(line)
+        if match is None:
+            raise AssertionError(f"unexpected test lock syntax: {line}")
+        distribution, version, required_platform = match.groups()
+        if required_platform is None or required_platform == platform:
+            requirements.append((distribution, version))
+    return requirements
+
+
+def _write_fake_locked_wheelhouse(
+    skill_root: Path,
+    wheelhouse: Path,
+    *,
+    module_sources: dict[str, str] | None = None,
+) -> None:
+    module_sources = module_sources or {}
+    wheelhouse.mkdir()
+    for distribution, version in _applicable_locked_requirements(skill_root):
+        normalized = distribution.replace("-", "_")
+        import_root = {
+            "python-dateutil": "dateutil",
+            "py-mini-racer": "py_mini_racer",
+            "typing-extensions": "typing_extensions",
+        }.get(distribution, normalized)
+        package_source = module_sources.get(distribution, "")
+        if distribution == "py-mini-racer" and distribution not in module_sources:
+            package_source = "class MiniRacer:\n    pass\n"
+        files = {
+            f"{import_root}/__init__.py": package_source,
+        }
+        if distribution == "mootdx":
+            files["mootdx/quotes.py"] = (
+                "class Quotes:\n"
+                "    @staticmethod\n"
+                "    def factory(*args, **kwargs):\n"
+                "        return object()\n"
+            )
+        dist_info = f"{normalized}-{version}.dist-info"
+        files[f"{dist_info}/METADATA"] = (
+            f"Metadata-Version: 2.1\nName: {distribution}\nVersion: {version}\n"
+        )
+        files[f"{dist_info}/WHEEL"] = (
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        )
+        files[f"{dist_info}/top_level.txt"] = f"{import_root}\n"
+        record = "".join(f"{path},,\n" for path in files)
+        record += f"{dist_info}/RECORD,,\n"
+        wheel = wheelhouse / f"{normalized}-{version}-py3-none-any.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            for path, contents in files.items():
+                archive.writestr(path, contents)
+            archive.writestr(f"{dist_info}/RECORD", record)
+
+
+def _install_fake_locked_runtime(
+    installed: Path,
+    temporary_root: Path,
+    *,
+    module_sources: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    wheelhouse = temporary_root / "wheelhouse"
+    _write_fake_locked_wheelhouse(
+        installed,
+        wheelhouse,
+        module_sources=module_sources,
+    )
+    return subprocess.run(
+        [sys.executable, "-I", str(installed / "scripts" / "install.py")],
+        cwd=temporary_root,
+        env={
+            "PATH": str(Path(sys.executable).parent),
+            "PIP_NO_INDEX": "1",
+            "PIP_FIND_LINKS": str(wheelhouse),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 class SkillDistributionTests(unittest.TestCase):
+    def test_domain_docs_separate_installation_health_from_source_facts(self) -> None:
+        context = Path(REPOSITORY_ROOT, "CONTEXT.md").read_text(encoding="utf-8")
+        adr = Path(
+            REPOSITORY_ROOT,
+            "docs",
+            "adr",
+            "0018-default-install-released-core-dependencies.md",
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("**安装完整性**:", context)
+        for distinction in ("来源可访问", "凭据", "evidence adoption"):
+            with self.subTest(distinction=distinction):
+                self.assertIn(distinction, context)
+        self.assertIn("status: accepted", adr)
+        self.assertIn("supersedes: ADR-0016", adr)
+        self.assertIn("installation_incomplete", adr)
+        self.assertIn("候选或未发布 operation", adr)
+
+    def test_installer_consumes_a_fully_pinned_runtime_lock(self) -> None:
+        lock_path = SKILL_ROOT / "requirements.lock"
+        locked_lines = [
+            line.strip()
+            for line in lock_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+        self.assertTrue(locked_lines)
+        for requirement in locked_lines:
+            with self.subTest(requirement=requirement):
+                self.assertIsNotNone(_LOCKED_REQUIREMENT.fullmatch(requirement))
+        self.assertIn("mootdx==0.11.7", locked_lines)
+        installer = (SKILL_ROOT / "scripts" / "install.py").read_text(encoding="utf-8")
+        self.assertIn('skill_root / "requirements.lock"', installer)
+        self.assertNotIn('skill_root / "requirements.txt"', installer)
+
+        health = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                str(SKILL_ROOT / "scripts" / "installation_health.py"),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        facts = json.loads(health.stdout)
+        self.assertEqual(
+            [
+                (item["distribution"], item["required_version"])
+                for item in facts["dependencies"]
+            ],
+            _applicable_locked_requirements(SKILL_ROOT),
+        )
+
+    def test_copied_install_bootstraps_locked_core_dependency_and_checks_health(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            completed = _install_fake_locked_runtime(installed, temporary_root)
+
+            checked = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(installed / "scripts" / "installation_health.py"),
+                ],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            installed_requirements = (installed / "requirements.lock").read_text(
+                encoding="utf-8"
+            )
+            request = temporary_root / "source-failure-request.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "task_type": "security_identity",
+                        "subjects": [{"clue": "600519"}],
+                        "as_of": "2026-08-01",
+                        "window": None,
+                        "parameters": {},
+                        "source_policy": {
+                            "allow_experimental": True,
+                            "allow_credentials": False,
+                            "allow_fallback": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            external_failure = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    str(installed / "scripts" / "entrypoint.py"),
+                    "run",
+                    "--request",
+                    str(request),
+                ],
+                cwd=temporary_root,
+                env={
+                    "PATH": str(Path(sys.executable).parent),
+                    "HTTP_PROXY": "http://127.0.0.1:1",
+                    "HTTPS_PROXY": "http://127.0.0.1:1",
+                    "ALL_PROXY": "http://127.0.0.1:1",
+                    "NO_PROXY": "",
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertEqual(checked.stderr, "")
+        self.assertEqual(completed.stdout, checked.stdout)
+        health = json.loads(checked.stdout)
+        self.assertEqual(health["status"], "complete")
+        self.assertEqual(
+            health["operations"],
+            [
+                {"operation_id": "mootdx_f10@1", "status": "complete"},
+                {
+                    "operation_id": "mootdx_intraday_replay@1",
+                    "status": "complete",
+                },
+                {
+                    "operation_id": "tongdaxin_intraday_snapshot@1",
+                    "status": "complete",
+                },
+            ],
+        )
+        self.assertIn("mootdx==0.11.7\n", installed_requirements)
+        self.assertNotIn(str(REPOSITORY_ROOT), checked.stdout)
+        self.assertEqual(external_failure.returncode, 0, external_failure.stderr)
+        self.assertEqual(external_failure.stderr, "")
+        source_failure_result = json.loads(external_failure.stdout)
+        self.assertEqual(source_failure_result["schema_version"], "1.0")
+        self.assertEqual(source_failure_result["status"], "blocked")
+        self.assertTrue(source_failure_result["source_errors"])
+
+    def test_copied_install_reports_incomplete_core_runtime_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(installed / "scripts" / "installation_health.py"),
+                ],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        health = json.loads(completed.stdout)
+        self.assertEqual(health["schema_version"], "1.0")
+        self.assertEqual(health["status"], "installation_incomplete")
+        self.assertEqual(
+            len(health["dependencies"]),
+            len(_applicable_locked_requirements(SKILL_ROOT)),
+        )
+        self.assertEqual(
+            {item["status"] for item in health["dependencies"]},
+            {"missing"},
+        )
+        self.assertEqual(
+            next(
+                item
+                for item in health["dependencies"]
+                if item["distribution"] == "mootdx"
+            ),
+            {
+                "distribution": "mootdx",
+                "required_version": "0.11.7",
+                "installed_version": None,
+                "status": "missing",
+                "modules": ["mootdx.quotes"],
+                "operation_ids": [
+                    "mootdx_f10@1",
+                    "mootdx_intraday_replay@1",
+                    "tongdaxin_intraday_snapshot@1",
+                ],
+            },
+        )
+        self.assertEqual(
+            health["source_policy"],
+            {
+                "source_accessibility": "not_checked",
+                "credentials": "not_checked",
+                "evidence_adoption": "not_checked",
+            },
+        )
+
+    def test_copied_health_rejects_exact_dependencies_outside_local_runtime(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            external_site = temporary_root / "external-site"
+            external_site.mkdir()
+            lock_lines = [
+                line.strip()
+                for line in (installed / "requirements.lock")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
+            for requirement in lock_lines:
+                distribution, version = requirement.split("==", 1)
+                normalized = distribution.replace("-", "_")
+                dist_info = external_site / f"{normalized}-{version}.dist-info"
+                dist_info.mkdir()
+                (dist_info / "METADATA").write_text(
+                    "Metadata-Version: 2.1\n"
+                    f"Name: {distribution}\n"
+                    f"Version: {version}\n",
+                    encoding="utf-8",
+                )
+            mootdx = external_site / "mootdx"
+            mootdx.mkdir()
+            (mootdx / "__init__.py").write_text("", encoding="utf-8")
+            (mootdx / "quotes.py").write_text(
+                "class Quotes:\n    pass\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(installed / "scripts" / "installation_health.py"),
+                ],
+                cwd=temporary_root,
+                env={
+                    "PATH": str(Path(sys.executable).parent),
+                    "PYTHONPATH": str(external_site),
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        health = json.loads(completed.stdout)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(health["status"], "installation_incomplete")
+        self.assertEqual(
+            {item["status"] for item in health["dependencies"]},
+            {"missing"},
+        )
+
+    def test_copied_health_rejects_runtime_symlinked_outside_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            installation = _install_fake_locked_runtime(installed, temporary_root)
+            runtime = installed / ".runtime"
+            external_runtime = temporary_root / "external-runtime"
+            runtime.rename(external_runtime)
+            runtime.symlink_to(external_runtime, target_is_directory=True)
+
+            command = "\n".join(
+                (
+                    "import runpy, sys",
+                    f"sys.path.insert(0, {str(external_runtime)!r})",
+                    "import mootdx.quotes",
+                    (
+                        "runpy.run_path("
+                        f"{str(installed / 'scripts' / 'installation_health.py')!r}, "
+                        "run_name='__main__')"
+                    ),
+                )
+            )
+            completed = subprocess.run(
+                [sys.executable, "-I", "-S", "-c", command],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(installation.returncode, 0, installation.stderr)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(
+            json.loads(completed.stdout)["status"],
+            "installation_incomplete",
+        )
+
+    def test_copied_installer_rejects_runtime_symlink_without_external_writes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            external_runtime = temporary_root / "external-runtime"
+            external_runtime.mkdir()
+            (installed / ".runtime").symlink_to(
+                external_runtime,
+                target_is_directory=True,
+            )
+
+            completed = _install_fake_locked_runtime(installed, temporary_root)
+            externally_written = list(external_runtime.iterdir())
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(
+            json.loads(completed.stdout)["status"],
+            "installation_incomplete",
+        )
+        self.assertEqual(externally_written, [])
+
+    def test_copied_health_rejects_preloaded_external_operation_module(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            installation = _install_fake_locked_runtime(installed, temporary_root)
+            external_module = temporary_root / "external-operation.py"
+            external_module.write_text("external operation", encoding="utf-8")
+            command = "\n".join(
+                (
+                    "import runpy, sys, types",
+                    f"sys.path.insert(0, {str(installed / 'scripts')!r})",
+                    "from _runtime_path import add_bundled_runtime",
+                    "add_bundled_runtime()",
+                    "import a_share_research.installation_health",
+                    (
+                        "module = types.ModuleType("
+                        "'a_share_research.communication_sources')"
+                    ),
+                    f"module.__file__ = {str(external_module)!r}",
+                    (
+                        "module.MootdxF10Operation = type("
+                        "'MootdxF10Operation', (), "
+                        "{'operation_id': 'mootdx_f10@1'})"
+                    ),
+                    ("sys.modules['a_share_research.communication_sources'] = module"),
+                    (
+                        "runpy.run_path("
+                        f"{str(installed / 'scripts' / 'installation_health.py')!r}, "
+                        "run_name='__main__')"
+                    ),
+                )
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-I", "-S", "-c", command],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(installation.returncode, 0, installation.stderr)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        health = json.loads(completed.stdout)
+        self.assertEqual(health["status"], "installation_incomplete")
+        self.assertEqual(health["operations"][0]["status"], "load_failed")
+
+    def test_copied_health_rejects_locked_distribution_missing_installed_code(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            installation = _install_fake_locked_runtime(installed, temporary_root)
+            shutil.rmtree(installed / ".runtime" / "httpx")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(installed / "scripts" / "installation_health.py"),
+                ],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(installation.returncode, 0, installation.stderr)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        health = json.loads(completed.stdout)
+        self.assertEqual(health["status"], "installation_incomplete")
+        httpx = next(
+            item for item in health["dependencies"] if item["distribution"] == "httpx"
+        )
+        self.assertEqual(httpx["status"], "load_failed")
+
+    def test_copied_health_rejects_locked_file_symlinked_outside_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            installation = _install_fake_locked_runtime(installed, temporary_root)
+            module = installed / ".runtime" / "httpx" / "__init__.py"
+            external_module = temporary_root / "external-httpx.py"
+            external_module.write_text("external code", encoding="utf-8")
+            module.unlink()
+            module.symlink_to(external_module)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(installed / "scripts" / "installation_health.py"),
+                ],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(installation.returncode, 0, installation.stderr)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        health = json.loads(completed.stdout)
+        self.assertEqual(health["status"], "installation_incomplete")
+        httpx = next(
+            item for item in health["dependencies"] if item["distribution"] == "httpx"
+        )
+        self.assertEqual(httpx["status"], "load_failed")
+
+    def test_copied_health_sanitizes_bundled_operation_import_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            installation = _install_fake_locked_runtime(installed, temporary_root)
+            (
+                installed / "scripts" / "a_share_research" / "communication_sources.py"
+            ).write_text(
+                "raise RuntimeError('private bundled operation path')\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(installed / "scripts" / "installation_health.py"),
+                ],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(installation.returncode, 0, installation.stderr)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        health = json.loads(completed.stdout)
+        self.assertEqual(health["status"], "installation_incomplete")
+        self.assertNotIn("private bundled operation path", completed.stdout)
+
+    def test_formal_lock_excludes_mootdx_dependencies_not_loaded_by_core_operations(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            installation = _install_fake_locked_runtime(installed, temporary_root)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(installed / "scripts" / "installation_health.py"),
+                ],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(installation.returncode, 0, installation.stderr)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        health = json.loads(completed.stdout)
+        self.assertEqual(health["status"], "complete")
+        locked = {item["distribution"] for item in health["dependencies"]}
+        self.assertTrue({"py-mini-racer", "prettytable", "wcwidth"}.isdisjoint(locked))
+
+    def test_lock_covers_windows_python312_closure_without_runtime_resolution(
+        self,
+    ) -> None:
+        lock = (SKILL_ROOT / "requirements.lock").read_text(encoding="utf-8")
+        installer = (SKILL_ROOT / "scripts" / "install.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'colorama==0.4.6 ; sys_platform == "win32"',
+            lock,
+        )
+        self.assertIn(
+            'tzdata==2026.3 ; sys_platform == "win32"',
+            lock,
+        )
+        self.assertIn('"--no-deps"', installer)
+        self.assertEqual(len(_applicable_locked_requirements(SKILL_ROOT)), 17)
+        self.assertEqual(
+            len(
+                _applicable_locked_requirements(
+                    SKILL_ROOT,
+                    platform="win32",
+                )
+            ),
+            19,
+        )
+        locked_facts: list[tuple[str, str | None]] = []
+        for raw_line in lock.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = _LOCKED_REQUIREMENT.fullmatch(line)
+            self.assertIsNotNone(match, line)
+            assert match is not None
+            distribution, _, marker = match.groups()
+            locked_facts.append((distribution.casefold(), marker))
+        self.assertEqual(len(locked_facts), len(set(locked_facts)))
+
+    def test_copied_health_rejects_unknown_lock_marker_syntax(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            with (installed / "requirements.lock").open(
+                "a",
+                encoding="utf-8",
+            ) as lock:
+                lock.write('future-package==1.0 ; sys_platform == "plan9"\n')
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(installed / "scripts" / "installation_health.py"),
+                ],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(
+            json.loads(completed.stdout)["status"],
+            "installation_incomplete",
+        )
+
     def test_repository_publishes_only_the_nested_installable_skill(self) -> None:
         self.assertFalse(Path(REPOSITORY_ROOT, "SKILL.md").exists())
 
@@ -347,7 +1028,7 @@ class SkillDistributionTests(unittest.TestCase):
                     "limitations",
                     "unavailable_fields",
                     "fixture-only",
-                    "missing_optional_dependency",
+                    "installation_incomplete",
                     "security_identity",
                     "next trading day",
                     "next 5 trading days",
@@ -410,17 +1091,31 @@ class SkillDistributionTests(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, entry)
 
-    def test_installation_docs_scope_mootdx_to_intraday_capability(self) -> None:
+    def test_installation_docs_default_locked_dependency_and_separate_health(
+        self,
+    ) -> None:
         for readme_name in ("README.md", "README_en.md"):
             readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
             with self.subTest(readme=readme_name):
                 self.assertIn("mootdx==0.11.7", readme)
-                self.assertIn("capability-scoped", readme)
+                self.assertIn("scripts/install.py", readme)
+                self.assertIn("installation_health.py", readme)
+                self.assertIn("installation_incomplete", readme)
                 self.assertIn("intraday", readme)
+                self.assertIn("pip check", readme)
                 if readme_name == "README.md":
+                    self.assertIn("最小实际运行闭包", readme)
                     self.assertIn("silent source switch", readme)
                 else:
-                    self.assertIn("never silently switches source", readme)
+                    self.assertIn("minimum actual runtime closure", readme)
+                    self.assertIn("never triggers a silent switch", readme)
+
+        chinese = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
+        english = Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8")
+        for readme in (chinese, english):
+            self.assertIn("bluefocus-f10.json", readme)
+            self.assertIn("installation_incomplete", readme)
+            self.assertNotIn("optional `mootdx` dependency", readme)
 
     def test_skill_entry_remains_a_concise_router(self) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")

@@ -9,6 +9,10 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _runtime_path import add_bundled_runtime  # noqa: E402
+
+add_bundled_runtime()
+
 from a_share_research.cli import main  # noqa: E402
 
 if __name__ == "__main__":

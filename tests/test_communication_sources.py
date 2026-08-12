@@ -519,7 +519,7 @@ class CommunicationSourceOperationTests(unittest.TestCase):
         self.assertEqual(batch.observations, ())
         self.assertFalse(batch.complete)
         self.assertEqual(len(batch.source_errors), 1)
-        self.assertEqual(batch.source_errors[0].code, "missing_optional_dependency")
+        self.assertEqual(batch.source_errors[0].code, "installation_incomplete")
         self.assertEqual(batch.source_errors[0].details, {"dependency": "mootdx"})
 
     def test_mootdx_f10_rejects_invalid_category_sets_before_creating_client(

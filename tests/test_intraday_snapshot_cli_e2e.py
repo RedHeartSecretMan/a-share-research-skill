@@ -209,7 +209,7 @@ class IntradaySnapshotCliE2ETests(unittest.TestCase):
             },
         )
         self.assertEqual(result["status"], "blocked")
-        self.assertIn("missing_optional_dependency", self.codes(result))
+        self.assertIn("installation_incomplete", self.codes(result))
 
     def test_real_entrypoint_applies_source_policy_without_network(self) -> None:
         self.test_source_policy_rejection_blocks_before_source_collection()

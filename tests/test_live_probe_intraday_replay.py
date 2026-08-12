@@ -121,7 +121,7 @@ class IntradayReplayLiveProbeTests(unittest.TestCase):
                         "daily_boundary": {"status": "unavailable"},
                         "source_operations": [],
                         "source_errors": [],
-                        "limitations": [{"code": "missing_optional_dependency"}],
+                        "limitations": [{"code": "installation_incomplete"}],
                         "conflicts": [],
                     }
                 ),

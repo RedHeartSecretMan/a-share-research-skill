@@ -37,7 +37,7 @@ _OPERATIONS = {
     "exchange_intraday_replay_daily@1",
 }
 _CODES = {
-    "missing_optional_dependency",
+    "installation_incomplete",
     "intraday_replay_source_contract_not_satisfied",
     "intraday_replay_source_failure",
     "completed_trading_calendar_unverified",

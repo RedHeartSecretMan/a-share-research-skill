@@ -83,21 +83,20 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 <skills-directory>/a-share-research/
 ├── SKILL.md
 ├── agents/openai.yaml
+├── requirements.lock
 ├── references/
 └── scripts/
 ```
 
-核心运行时仅需要 Python 3.12 或更高版本的标准库，不需要安装项目包。下文以 `<python>` 表示已经确认版本不低于 3.12 的解释器：Windows 通常使用 `py -3.12`，macOS 和 Linux 优先使用 `python3.12`；只有在 `python3 --version` 已确认满足要求时才使用 `python3`。完整调用约定见 [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md)。
-
-F10 上市公司资料检索、`intraday_market_signal` 盘中快照和 `intraday_replay` 分时复盘是按需启用、但需要额外依赖的能力。它们声明的是 capability-scoped optional dependency（按能力范围锁定的可选依赖），需要时在运行对应 Skill 的同一个 Python 环境中安装发布审计验证过的版本：
+核心运行时需要 Python 3.12 或更高版本。下文以 `<python>` 表示已经确认版本不低于 3.12 的解释器：Windows 通常使用 `py -3.12`，macOS 和 Linux 优先使用 `python3.12`；只有在 `python3 --version` 已确认满足要求时才使用 `python3`。复制完整目录后执行一次标准安装步骤；安装器从随 Skill 交付的锁定清单把核心运行依赖安装到该副本自己的 `.runtime`，无需按任务补包，并在结束前自动执行依赖加载与 operation 健康检查：
 
 ```text
-<python> -m pip install "mootdx==0.11.7"
+<python> <skill-root>/scripts/install.py
 ```
 
-标准库核心安装不包含 `mootdx`。缺少它时，只有请求 F10、`intraday_market_signal` 或 `intraday_replay`（以及明确依赖它们的步骤）会显式返回 `missing_optional_dependency` / `blocked`，其他研究能力不受影响；运行时不得静默切换来源、伪造空数据或扩大阻断范围。维护者 live probe 使用临时 home，不写入项目全局配置。
+成功安装以退出码 0 和 JSON `status: "complete"` 结束。也可随时执行 `<python> <skill-root>/scripts/installation_health.py` 复查；依赖缺失、版本不符或无法加载时返回非零退出码和 `status: "installation_incomplete"`。`mootdx==0.11.7` 是当前唯一直接的核心正式 operation 依赖；`requirements.lock` 精确锁定 F10、盘中快照和分时复盘三项正式 operations 的最小实际运行闭包以及各平台适用项，而不是 `mootdx` 未发布或 lazy utility/CLI 的全部 declared closure。安装器使用该完整最小闭包且不在安装时解析额外依赖；上游包的通用 `pip check` 语义不能代替本 Skill 的正式 operation 安装健康。安装健康只证明 artifact-local 软件文件、版本和 module/operation 可加载，不探测或承诺来源可访问性、凭据、付费权限或 evidence adoption 资格；这些事实继续由每次请求的来源策略和研究结果表达。
 
-`mootdx` 的 F10、`intraday_market_signal` 与 `intraday_replay` 接入各自受能力范围和版本 pin 约束；它提供的其他行情接口不会因“同属一个库”就自动成为默认来源或 fallback。每个来源操作都必须分别完成身份、时点、单位、失败语义和许可资格审查，确认能改善证据链后才会接入；盘中任务只接受当前北京时间交易日的一只规范 SSE/SZSE A 股，来源不足时失败关闭，不进行 silent source switch。
+`mootdx` 只为已发布的 F10、`intraday_market_signal` 与 `intraday_replay` operations 进入默认安装；它提供的其他候选行情接口不会因“同属一个库”进入默认来源、依赖范围或 fallback。每个来源 operation 仍必须分别完成身份、时点、单位、失败语义和许可资格审查；来源不足时失败关闭，不进行 silent source switch。完整调用约定见 [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md)。
 
 ## CLI
 
@@ -326,7 +325,7 @@ mypy skill/a-share-research/scripts
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
-`intraday-market-snapshot.json` 记录 v0.2.0 发布日的请求形态。以后运行前必须先复制它，并把 `as_of` 改成当次运行的北京时间当前日期；历史日期、非交易日和非适用会话会按契约返回 `blocked`。`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证需要可选 `mootdx` 依赖的 F10 能力，未安装依赖时应得到显式阻断结果。
+`intraday-market-snapshot.json` 记录 v0.2.0 发布日的请求形态。以后运行前必须先复制它，并把 `as_of` 改成当次运行的北京时间当前日期；历史日期、非交易日和非适用会话会按契约返回 `blocked`。`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证默认安装的 `mootdx==0.11.7` F10 operation；软件缺失或错版应由安装健康报告 `installation_incomplete`，来源访问失败仍由研究结果表达。
 
 市场信号 8 个场景的 2026-08-02 实际执行结果与环境限制记录在 [联网 smoke 记录](docs/research/market-signals-smoke-2026-08-02.md)。
 

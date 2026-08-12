@@ -24,6 +24,10 @@ from .content_contract import (
     valid_f10_profile_categories,
 )
 from .identity_sources import HttpResponse, TransportError
+from .installation_health import (
+    MOOTDX_RUNTIME_DEPENDENCY,
+    dependency_available,
+)
 from .source_throttle import (
     EASTMONEY_REQUEST_GATE,
     RequestGate,
@@ -518,15 +522,17 @@ class MootdxF10Operation:
             )
         try:
             client = self._client_factory()
-        except (ImportError, ModuleNotFoundError):
+        except (ImportError, ModuleNotFoundError, _InstallationIncomplete):
             return SourceBatch(
                 operation_id=self.operation_id,
                 source_errors=(
                     SourceFailure(
                         self.operation_id,
-                        "missing_optional_dependency",
-                        "The optional mootdx dependency is not installed.",
-                        {"dependency": "mootdx"},
+                        "installation_incomplete",
+                        "The locked core mootdx dependency installation is incomplete.",
+                        {
+                            "dependency": MOOTDX_RUNTIME_DEPENDENCY.distribution,
+                        },
                     ),
                 ),
                 complete=False,
@@ -535,7 +541,7 @@ class MootdxF10Operation:
             return _failed_batch(
                 self.operation_id,
                 "upstream_unavailable",
-                "The optional mootdx F10 client could not be created.",
+                "The mootdx F10 client could not be created.",
             )
 
         exchange, code = canonical
@@ -622,8 +628,17 @@ class MootdxF10Operation:
 
 
 def _default_mootdx_client() -> Any:
+    if not dependency_available(
+        MOOTDX_RUNTIME_DEPENDENCY.distribution,
+        MOOTDX_RUNTIME_DEPENDENCY.required_version,
+    ):
+        raise _InstallationIncomplete
     quotes_module = importlib.import_module("mootdx.quotes")
     return quotes_module.Quotes.factory(market="std")
+
+
+class _InstallationIncomplete(Exception):
+    """Keep dependency health separate from source-access failure."""
 
 
 def _china_now() -> datetime:
