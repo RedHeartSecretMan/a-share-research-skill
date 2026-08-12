@@ -457,6 +457,7 @@ class IdentityResearchPlan:
     exchange_hint: str | None
     obligations: tuple[OperationObligation, ...]
     dependencies: tuple[ResearchDependency, ...]
+    execution: Mapping[str, object]
     precondition_reason: str | None = None
     plan_id: str = "security_identity"
     version: str = "1.0"
@@ -470,6 +471,8 @@ class IdentityResearchPlan:
             raise ValueError("identity plan requires operation obligations")
         if self.exchange_hint not in {None, "SSE", "SZSE"}:
             raise ValueError("identity plan exchange hint is invalid")
+        if not isinstance(self.execution, Mapping):
+            raise ValueError("identity plan execution material is invalid")
         for obligation in self.obligations:
             if {
                 item.use for item in obligation.evidence_uses
@@ -640,6 +643,64 @@ def _require_exact_disposition_contract(
 ) -> None:
     if operation.get("field_dispositions") != [item.to_dict() for item in expected]:
         raise ValueError(f"{domain} field disposition contract is invalid")
+
+
+def _operation_obligation_from_public(value: object) -> OperationObligation:
+    if not isinstance(value, dict):
+        raise ValueError("research plan operation obligation must be an object")
+    _require_exact_keys(
+        value,
+        {
+            "capability_id",
+            "operation_id",
+            "source_role",
+            "experimental",
+            "exchange",
+            "evidence_uses",
+        },
+        path="research plan operation obligation",
+    )
+    evidence_uses = value.get("evidence_uses")
+    if not isinstance(evidence_uses, list):
+        raise ValueError("operation evidence uses must be an array")
+    declared_uses: set[str] = set()
+    typed_evidence_uses: list[EvidenceUsePolicy] = []
+    for evidence_use in evidence_uses:
+        if not isinstance(evidence_use, dict):
+            raise ValueError("operation evidence use must be an object")
+        _require_exact_keys(
+            evidence_use,
+            {"use", "role"},
+            path="operation evidence use",
+        )
+        use = evidence_use.get("use")
+        role = evidence_use.get("role")
+        if use not in _IDENTITY_EVIDENCE_USES or role not in _EVIDENCE_ROLES:
+            raise ValueError("operation evidence use is unsupported")
+        declared_uses.add(cast(str, use))
+        typed_evidence_uses.append(
+            EvidenceUsePolicy(cast(EvidenceUse, use), cast(EvidenceRole, role))
+        )
+    capability_id = value.get("capability_id")
+    operation_id = value.get("operation_id")
+    if not isinstance(capability_id, str) or not isinstance(operation_id, str):
+        raise ValueError("operation obligation identity is invalid")
+    if (
+        not isinstance(value.get("source_role"), str)
+        or not isinstance(value.get("experimental"), bool)
+        or value.get("exchange") not in {None, "SSE", "SZSE"}
+        or declared_uses != _IDENTITY_EVIDENCE_USES
+        or len(declared_uses) != len(evidence_uses)
+    ):
+        raise ValueError("operation obligation contract is invalid")
+    return OperationObligation(
+        capability_id=capability_id,
+        operation_id=operation_id,
+        source_role=cast(str, value["source_role"]),
+        experimental=cast(bool, value["experimental"]),
+        exchange=cast(str | None, value["exchange"]),
+        evidence_uses=tuple(typed_evidence_uses),
+    )
 
 
 def _require_known_operation_capability(
@@ -940,77 +1001,46 @@ class UnifiedResearchResult:
                 "version",
                 "task_type",
                 "capabilities",
+                "execution",
                 "operation_obligations",
                 "research_dependencies",
             },
             path="research plan",
         )
+        execution_material = plan.get("execution")
+        if not isinstance(execution_material, dict):
+            raise ValueError("research plan execution material is invalid")
+        from .capability_execution import validate_capability_execution_material
+        from .identity_sources import build_default_identity_operations
+
+        canonical_operations = build_default_identity_operations(_NoIoHttpTransport())
         operation_obligations = plan.get("operation_obligations")
         if not isinstance(operation_obligations, list):
             raise ValueError("research plan operation obligations must be an array")
+        try:
+            raw_obligations = tuple(
+                _operation_obligation_from_public(item)
+                for item in operation_obligations
+            )
+            validate_capability_execution_material(
+                version=cast(str, plan.get("version")),
+                material=execution_material,
+                obligations=raw_obligations,
+                canonical_operations=canonical_operations,
+            )
+        except ValueError as error:
+            raise ValueError(
+                "research plan execution contradicts source authority"
+            ) from error
+        mode = execution_material.get("mode")
+        if mode not in {"standard", "fast"}:
+            raise ValueError("research plan execution contradicts source authority")
         planned_operations: set[tuple[str, str]] = set()
         planned_obligation_contracts: dict[tuple[str, str], OperationObligation] = {}
-        for obligation in operation_obligations:
-            if not isinstance(obligation, dict):
-                raise ValueError("research plan operation obligation must be an object")
-            _require_exact_keys(
-                obligation,
-                {
-                    "capability_id",
-                    "operation_id",
-                    "source_role",
-                    "experimental",
-                    "exchange",
-                    "evidence_uses",
-                },
-                path="research plan operation obligation",
-            )
-            evidence_uses = obligation.get("evidence_uses")
-            if not isinstance(evidence_uses, list):
-                raise ValueError("operation evidence uses must be an array")
-            declared_uses: set[str] = set()
-            typed_evidence_uses: list[EvidenceUsePolicy] = []
-            for evidence_use in evidence_uses:
-                if not isinstance(evidence_use, dict):
-                    raise ValueError("operation evidence use must be an object")
-                _require_exact_keys(
-                    evidence_use,
-                    {"use", "role"},
-                    path="operation evidence use",
-                )
-                use = evidence_use.get("use")
-                role = evidence_use.get("role")
-                if use not in _IDENTITY_EVIDENCE_USES or role not in _EVIDENCE_ROLES:
-                    raise ValueError("operation evidence use is unsupported")
-                declared_uses.add(cast(str, use))
-                typed_evidence_uses.append(
-                    EvidenceUsePolicy(
-                        cast(EvidenceUse, use),
-                        cast(EvidenceRole, role),
-                    )
-                )
-            capability_id = obligation.get("capability_id")
-            operation_id = obligation.get("operation_id")
-            if not isinstance(capability_id, str) or not isinstance(operation_id, str):
-                raise ValueError("operation obligation identity is invalid")
-            if (
-                not isinstance(obligation.get("source_role"), str)
-                or not isinstance(obligation.get("experimental"), bool)
-                or obligation.get("exchange") not in {None, "SSE", "SZSE"}
-                or declared_uses != _IDENTITY_EVIDENCE_USES
-                or len(declared_uses) != len(evidence_uses)
-            ):
-                raise ValueError("operation obligation contract is invalid")
-            owner = (capability_id, operation_id)
+        for obligation in raw_obligations:
+            owner = (obligation.capability_id, obligation.operation_id)
             planned_operations.add(owner)
-            planned_obligation_contracts[owner] = OperationObligation(
-                capability_id=capability_id,
-                operation_id=operation_id,
-                source_role=cast(str, obligation["source_role"]),
-                experimental=cast(bool, obligation["experimental"]),
-                exchange=cast(str | None, obligation["exchange"]),
-                evidence_uses=tuple(typed_evidence_uses),
-            )
+            planned_obligation_contracts[owner] = obligation
         if len(planned_operations) != len(operation_obligations):
             raise ValueError("research plan operation obligations must be unique")
         planned_capabilities = {item[0] for item in planned_operations}
@@ -1094,12 +1124,13 @@ class UnifiedResearchResult:
                         "operation registration contradicts its plan obligation"
                     )
                 owner = (capability_id, operation_id)
-                obligation = planned_obligation_contracts.get(owner)
+                registered_obligation = planned_obligation_contracts.get(owner)
                 if (
-                    obligation is None
-                    or registered_operation.get("source_role") != obligation.source_role
+                    registered_obligation is None
+                    or registered_operation.get("source_role")
+                    != registered_obligation.source_role
                     or registered_operation.get("experimental")
-                    is not obligation.experimental
+                    is not registered_obligation.experimental
                 ):
                     raise ValueError(
                         "operation registration contradicts its plan obligation"
@@ -1344,6 +1375,29 @@ class UnifiedResearchResult:
                     raise ValueError("operation coverage contradicts execution facts")
                 derived_operation_states.append(derived_coverage)
                 all_derived_operation_states.append(derived_coverage)
+                expected_operation = next(
+                    (
+                        item
+                        for item in cast(
+                            list[dict[str, object]], execution_material["operations"]
+                        )
+                        if item.get("capability_id") == capability_id
+                        and item.get("operation_id") == operation_id
+                    ),
+                    None,
+                )
+                if expected_operation is None:
+                    raise ValueError("execution plan omits an operation obligation")
+                tier = expected_operation.get("tier")
+                if mode == "fast" and tier != "core":
+                    if derived_coverage != "not_requested":
+                        raise ValueError(
+                            "fast execution ran an unrequested enhancement"
+                        )
+                elif tier in {"core", "standard_enrichment"} and (
+                    derived_coverage == "not_requested"
+                ):
+                    raise ValueError("execution omitted a requested operation")
             if capability_value.get("state") != _aggregate_capability_coverage(
                 derived_operation_states
             ):
@@ -6501,6 +6555,7 @@ def compile_identity_research_plan(
     as_of: str,
     exchange_hint: str | None,
     obligations: Sequence[OperationObligation],
+    execution: Mapping[str, object],
     precondition_reason: str | None = None,
 ) -> IdentityResearchPlan:
     """Compile the one versioned identity plan consumed by the pure fold."""
@@ -6516,6 +6571,7 @@ def compile_identity_research_plan(
         exchange_hint=exchange_hint,
         obligations=tuple(obligations),
         dependencies=_IDENTITY_RESEARCH_DEPENDENCIES,
+        execution=execution,
         precondition_reason=precondition_reason,
     )
 
@@ -6631,6 +6687,49 @@ def fold_identity_research_result(
         code = _identity_payload(record).get("code")
         if isinstance(code, str):
             considered_corroborating_by_code.setdefault(code, []).append(record)
+    execution_operations = plan.execution.get("operations")
+    if not isinstance(execution_operations, list):
+        raise ValueError("identity execution plan operations are invalid")
+    execution_by_operation = {
+        item.get("operation_id"): item
+        for item in execution_operations
+        if isinstance(item, dict)
+    }
+    supporting_request_limits = tuple(
+        execution_by_operation[item.operation_id].get("max_requests_per_plan")
+        for item in plan.obligations
+        if item.evidence_role("security_identity") == "supporting"
+        and item.operation_id in execution_by_operation
+    )
+    if not supporting_request_limits or any(
+        not isinstance(item, int) or isinstance(item, bool) or item < 1
+        for item in supporting_request_limits
+    ):
+        raise ValueError("identity execution request limits are invalid")
+    followup_candidate_limit = min(
+        cast(int, item) - 1 for item in supporting_request_limits
+    )
+    distinct_corroborating_candidates = {
+        (
+            identity.get("exchange")
+            if identity.get("exchange") in {"SSE", "SZSE"}
+            else None,
+            identity.get("code"),
+        )
+        for record in corroborating_records
+        for identity in [_identity_payload(record)]
+        if isinstance(identity.get("code"), str) and identity.get("exchange") != "BSE"
+    }
+    initially_attributable_codes = {
+        identity.get("code")
+        for record in support_records
+        for identity in [_identity_payload(record)]
+        if identity.get("code")
+        in {candidate[1] for candidate in distinct_corroborating_candidates}
+    }
+    candidate_boundary_exceeded = len(distinct_corroborating_candidates) > max(
+        followup_candidate_limit, len(initially_attributable_codes)
+    )
 
     candidates: list[
         tuple[dict[str, object], tuple[dict[str, object], ...], bool, bool]
@@ -6784,7 +6883,7 @@ def fold_identity_research_result(
                 tuple(str(item["id"]) for item in observation_records),
             )
         )
-    elif len(candidates) > 1:
+    elif candidate_boundary_exceeded or len(candidates) > 1:
         status = "blocked"
         reason_payloads.append(
             _status_reason(
@@ -6915,6 +7014,7 @@ def fold_identity_research_result(
             "version": plan.version,
             "task_type": plan.task_type,
             "capabilities": capability_ids,
+            "execution": dict(plan.execution),
             "operation_obligations": [item.to_dict() for item in plan.obligations],
             "research_dependencies": [item.to_dict() for item in plan.dependencies],
         },

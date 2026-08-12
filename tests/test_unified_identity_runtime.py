@@ -16,9 +16,11 @@ SKILL_ROOT = REPOSITORY_ROOT / "skill" / "a-share-research"
 IDENTITY_FIXTURES = REPOSITORY_ROOT / "tests" / "fixtures" / "identity_sources"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
+from a_share_research.capability_execution import (  # noqa: E402
+    OperationExecutionPolicy,
+)
 from a_share_research.identity_resolution import (  # noqa: E402
     build_security_identity_research_result,
-    execute_security_identity_research,
 )
 from a_share_research.identity_sources import (  # noqa: E402
     HttpResponse,
@@ -130,10 +132,71 @@ def deterministic_identity_observation(
     }
 
 
+def deterministic_execution_material(
+    obligations: tuple[OperationObligation, ...],
+) -> dict[str, object]:
+    """Complete execution material for lower-level fold fixtures."""
+
+    return {
+        "mode": "standard",
+        "total_budget_seconds": "1",
+        "operations": [
+            {
+                "capability_id": item.capability_id,
+                "operation_id": item.operation_id,
+                "provider_id": item.operation_id,
+                "tier": "core",
+                "timeout_seconds": "1",
+                "minimum_interval_seconds": "0",
+                "rate_limit_backoffs": [],
+                "max_requests_per_plan": 1,
+            }
+            for item in obligations
+        ],
+    }
+
+
+def policy_blocked_identity_result() -> UnifiedResearchResult:
+    class UnusedAdapter:
+        obligation = deterministic_identity_obligation(
+            "fixture_identity@1",
+            security_role="supporting",
+            source_role="authoritative_disclosure",
+            exchange="SSE",
+        )
+        field_dispositions = ()
+        execution_backend = "in_process"
+        execution_policy = OperationExecutionPolicy(
+            provider_id="fixture_provider",
+            tier="core",
+            timeout_seconds=1.0,
+            rate_limit_backoffs=(),
+        )
+
+        def execute(
+            self,
+            request: IdentityOperationRequest,
+            timeout_seconds: float,
+        ) -> OperationOutcome:
+            raise AssertionError("policy-blocked requests must not execute")
+
+    return build_security_identity_research_result(
+        identity_request(allow_experimental=False),
+        (UnusedAdapter(),),  # type: ignore[arg-type]
+    )
+
+
 def invoke_installed_identity(
     request_payload: dict[str, object],
     *,
     fixture_routes: dict[str, str] | None = None,
+    fixture_route_bodies: dict[str, object] | None = None,
+    fixture_delays: dict[str, float] | None = None,
+    fixture_timeouts: dict[str, float] | None = None,
+    fixture_backoffs: dict[str, tuple[float, ...]] | None = None,
+    fixture_max_requests: dict[str, int] | None = None,
+    fixture_child_only_markers: tuple[str, ...] = (),
+    fixture_wire_secret_operation_id: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_root = Path(temporary_directory)
@@ -145,20 +208,44 @@ def invoke_installed_identity(
         environment.pop("PYTHONHOME", None)
         environment.pop("PYTHONPATH", None)
         command = [sys.executable]
-        if fixture_routes is None:
+        if fixture_routes is None and fixture_route_bodies is None:
             command.append("-I")
         else:
             route_literals = {
                 marker: Path(IDENTITY_FIXTURES, filename).read_bytes()
-                for marker, filename in fixture_routes.items()
+                for marker, filename in (fixture_routes or {}).items()
             }
+            route_literals.update(
+                {
+                    marker: json.dumps(body).encode()
+                    for marker, body in (fixture_route_bodies or {}).items()
+                }
+            )
+            delay_literals = fixture_delays or {}
+            timeout_literals = fixture_timeouts or {}
+            backoff_literals = fixture_backoffs or {}
+            child_only_literals = fixture_child_only_markers
+            max_request_literals = fixture_max_requests or {}
+            wire_secret_operation_id = fixture_wire_secret_operation_id
             sitecustomize = temporary_root / "sitecustomize.py"
             sitecustomize.write_text(
                 "\n".join(
                     (
                         "from email.message import Message",
+                        "import os",
+                        "import sys",
+                        "import time",
                         "import urllib.request",
+                        f"sys.path.insert(0, {str(installed / 'scripts')!r})",
                         f"routes = {route_literals!r}",
+                        f"delays = {delay_literals!r}",
+                        f"timeouts = {timeout_literals!r}",
+                        f"backoffs = {backoff_literals!r}",
+                        f"child_only = {child_only_literals!r}",
+                        f"max_requests = {max_request_literals!r}",
+                        f"wire_secret_operation_id = {wire_secret_operation_id!r}",
+                        "if 'ASR_FIXTURE_PARENT_PID' not in os.environ: os.environ['ASR_FIXTURE_PARENT_PID'] = str(os.getpid())",
+                        "parent_pid = int(os.environ['ASR_FIXTURE_PARENT_PID'])",
                         "class FixtureResponse:",
                         "    status = 200",
                         "    def __init__(self, body):",
@@ -170,10 +257,35 @@ def invoke_installed_identity(
                         "    def read(self, limit=-1): return self.body[:limit]",
                         "class FixtureOpener:",
                         "    def open(self, request, timeout):",
+                        "        if os.getpid() == parent_pid and any(marker in request.full_url for marker in child_only): raise AssertionError('route requires isolated worker')",
+                        "        delay = next((value for marker, value in delays.items() if marker in request.full_url), 0.0)",
+                        "        time.sleep(delay)",
                         "        body = next((value for marker, value in routes.items() if marker in request.full_url), None)",
                         "        if body is None: raise AssertionError('unexpected identity source')",
                         "        return FixtureResponse(body)",
                         "urllib.request.build_opener = lambda: FixtureOpener()",
+                        "if timeouts or backoffs or max_requests:",
+                        "    from a_share_research.capability_execution import OperationExecutionPolicy",
+                        "    from a_share_research.identity_sources import build_default_identity_operations",
+                        "    for operation in build_default_identity_operations(None):",
+                        "        operation_id = operation.obligation.operation_id",
+                        "        if operation_id not in timeouts and operation_id not in backoffs and operation_id not in max_requests: continue",
+                        "        policy = operation.operation.execution_policy",
+                        "        type(operation.operation).execution_policy = OperationExecutionPolicy(provider_id=policy.provider_id, tier=policy.tier, timeout_seconds=timeouts.get(operation_id, policy.timeout_seconds), minimum_interval_seconds=policy.minimum_interval_seconds, rate_limit_backoffs=backoffs.get(operation_id, policy.rate_limit_backoffs), max_requests_per_plan=max_requests.get(operation_id, policy.max_requests_per_plan))",
+                        "if wire_secret_operation_id:",
+                        "    from dataclasses import replace",
+                        "    from a_share_research.identity_sources import ProductionIdentityOperationAdapter",
+                        "    original_adapter_execute = ProductionIdentityOperationAdapter.execute",
+                        "    def execute_with_secret(self, request, timeout_seconds):",
+                        "        outcome = original_adapter_execute(self, request, timeout_seconds)",
+                        "        if outcome.operation_id == wire_secret_operation_id:",
+                        "            observations = [dict(item) for item in outcome.observations]",
+                        "            observations[0]['password'] = 'SECRET_VALUE'",
+                        "            diagnostics = dict(outcome.diagnostics)",
+                        "            diagnostics['api_key'] = 'SECRET_VALUE'",
+                        "            return replace(outcome, observations=tuple(observations), diagnostics=diagnostics)",
+                        "        return outcome",
+                        "    ProductionIdentityOperationAdapter.execute = execute_with_secret",
                     )
                 ),
                 encoding="utf-8",
@@ -580,6 +692,7 @@ class UnifiedIdentityPublicSeamTests(unittest.TestCase):
                 "www.szse.cn": "szse_empty.json",
                 "www.cninfo.com.cn": "cninfo_stocks.json",
             },
+            fixture_child_only_markers=("productid=600519",),
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -667,6 +780,78 @@ class UnifiedIdentityPublicSeamTests(unittest.TestCase):
 
 
 class OperationOutcomeAdapterTests(unittest.TestCase):
+    def test_public_serializer_rejects_rehashed_execution_policy_tampering(
+        self,
+    ) -> None:
+        class NeverTransport:
+            def get(self, url: str, headers: dict[str, str]) -> object:
+                raise AssertionError("policy-blocked request must not use transport")
+
+        cases = {
+            "provider": ("provider_id", "forged-provider"),
+            "tier": ("tier", "standard_enrichment"),
+            "request_bound": ("max_requests_per_plan", 1),
+        }
+        for name, (field, forged) in cases.items():
+            with self.subTest(name=name):
+                result = build_security_identity_research_result(
+                    identity_request(allow_experimental=False),
+                    build_default_identity_operations(NeverTransport()),  # type: ignore[arg-type]
+                )
+                execution = result.plan["execution"]
+                assert isinstance(execution, dict)
+                operations = execution["operations"]
+                assert isinstance(operations, list)
+                operation = operations[0]
+                assert isinstance(operation, dict)
+                operation[field] = forged
+                with self.assertRaisesRegex(ValueError, "source authority"):
+                    result.to_dict()
+
+        result = build_security_identity_research_result(
+            identity_request(allow_experimental=False),
+            build_default_identity_operations(NeverTransport()),  # type: ignore[arg-type]
+        )
+        execution = result.plan["execution"]
+        assert isinstance(execution, dict)
+        execution["total_budget_seconds"] = "1.000"
+        with self.assertRaisesRegex(ValueError, "source authority"):
+            result.to_dict()
+
+    def test_public_serialization_accepts_one_qualified_custom_operation(self) -> None:
+        class CustomAdapter:
+            obligation = deterministic_identity_obligation(
+                "fixture_identity@1",
+                security_role="supporting",
+                source_role="authoritative_disclosure",
+                exchange="SSE",
+            )
+            field_dispositions = ()
+            execution_backend = "in_process"
+            execution_policy = OperationExecutionPolicy(
+                provider_id="fixture_provider",
+                tier="core",
+                timeout_seconds=1.0,
+                rate_limit_backoffs=(),
+            )
+
+            def execute(
+                self,
+                request: IdentityOperationRequest,
+                timeout_seconds: float,
+            ) -> OperationOutcome:
+                raise AssertionError("policy-blocked requests must not execute")
+
+        result = build_security_identity_research_result(
+            identity_request(allow_experimental=False),
+            (CustomAdapter(),),
+        ).to_dict()
+
+        self.assertEqual(
+            list(result["coverage"]["security_identity_resolution"]["operations"]),
+            ["fixture_identity@1"],
+        )
+
     def test_sse_adapter_fails_closed_on_an_undeclared_actual_field(self) -> None:
         payload = {
             "result": [
@@ -881,17 +1066,19 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
                 "complete",
             ),
         )
+        obligations = (
+            deterministic_identity_obligation(
+                operation_id,
+                security_role="supporting",
+                source_role="authoritative_disclosure",
+                exchange="SSE",
+            ),
+        )
         plan = compile_identity_research_plan(
             as_of="2026-08-10",
             exchange_hint=None,
-            obligations=(
-                deterministic_identity_obligation(
-                    operation_id,
-                    security_role="supporting",
-                    source_role="authoritative_disclosure",
-                    exchange="SSE",
-                ),
-            ),
+            obligations=obligations,
+            execution=deterministic_execution_material(obligations),
         )
         for execution, observations, source_errors, expected in cases:
             with self.subTest(expected=expected):
@@ -903,8 +1090,8 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
                     source_errors=source_errors,
                 )
                 self.assertEqual(outcome.coverage, expected)
-                result = fold_identity_research_result(plan, (outcome,)).to_dict()
-                operation_coverage = result["coverage"]["security_identity_resolution"][
+                result = fold_identity_research_result(plan, (outcome,))
+                operation_coverage = result.coverage["security_identity_resolution"][
                     "operations"
                 ][operation_id]
                 self.assertEqual(operation_coverage["state"], expected)
@@ -939,6 +1126,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             as_of="2026-08-10",
             exchange_hint="SSE",
             obligations=obligations,
+            execution=deterministic_execution_material(obligations),
         )
         outcomes = (
             OperationOutcome(
@@ -971,19 +1159,17 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             ),
         )
 
-        result = fold_identity_research_result(plan, outcomes).to_dict()
+        result = fold_identity_research_result(plan, outcomes)
 
-        self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["observations"]), 2)
-        self.assertEqual(len(result["claims"]), 1)
+        self.assertEqual(result.status, "limited")
+        self.assertEqual(len(result.observations), 2)
+        self.assertEqual(len(result.claims), 1)
         sibling_observation = next(
-            item
-            for item in result["observations"]
-            if item["operation_id"] == sibling_id
+            item for item in result.observations if item["operation_id"] == sibling_id
         )
         sibling_adoptions = [
             item
-            for item in result["claims"][0]["evidence_adoptions"]
+            for item in result.claims[0]["evidence_adoptions"]
             if item["observation_id"] == sibling_observation["id"]
         ]
         self.assertEqual(len(sibling_adoptions), 3)
@@ -1019,6 +1205,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             as_of="2026-08-10",
             exchange_hint="SSE",
             obligations=obligations,
+            execution=deterministic_execution_material(obligations),
         )
         malformed_sibling = deterministic_identity_observation(
             sibling_id,
@@ -1053,19 +1240,17 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             ),
         )
 
-        result = fold_identity_research_result(plan, outcomes).to_dict()
+        result = fold_identity_research_result(plan, outcomes)
 
-        self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["observations"]), 2)
-        self.assertEqual(len(result["claims"]), 1)
+        self.assertEqual(result.status, "limited")
+        self.assertEqual(len(result.observations), 2)
+        self.assertEqual(len(result.claims), 1)
         sibling_observation = next(
-            item
-            for item in result["observations"]
-            if item["operation_id"] == sibling_id
+            item for item in result.observations if item["operation_id"] == sibling_id
         )
         sibling_adoptions = [
             item
-            for item in result["claims"][0]["evidence_adoptions"]
+            for item in result.claims[0]["evidence_adoptions"]
             if item["observation_id"] == sibling_observation["id"]
         ]
         self.assertEqual(len(sibling_adoptions), 3)
@@ -1106,6 +1291,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
                     core=False,
                 ),
             ),
+            execution=deterministic_execution_material((obligation,)),
         )
         outcome = OperationOutcome(
             capability_id="security_identity_resolution",
@@ -1122,11 +1308,11 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             ),
         )
 
-        result = fold_identity_research_result(plan, (outcome,)).to_dict()
+        result = fold_identity_research_result(plan, (outcome,))
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(len(result["observations"]), 1)
-        self.assertEqual(result["claims"], [])
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(len(result.observations), 1)
+        self.assertEqual(result.claims, ())
 
     def test_szse_adapter_marks_observable_incomplete_pagination_partial(
         self,
@@ -1246,6 +1432,12 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
                     source_role=source_role,
                     exchange=exchange,
                 )
+                self.execution_policy = OperationExecutionPolicy(
+                    provider_id=operation_id.replace("@", "-"),
+                    tier="core",
+                    timeout_seconds=1.0,
+                    rate_limit_backoffs=(),
+                )
                 self.identity = identity
 
             def execute(
@@ -1306,22 +1498,35 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             ),
         )
 
-        execution = execute_security_identity_research(request, operations)
-        result = execution.result.to_dict()
+        outcomes = tuple(
+            operation.execute(
+                IdentityOperationRequest(
+                    query="600519",
+                    as_of=str(request["as_of"]),
+                ),
+                timeout_seconds=operation.execution_policy.timeout_seconds,
+            )
+            for operation in operations
+        )
+        obligations = tuple(operation.obligation for operation in operations)
+        plan = compile_identity_research_plan(
+            as_of=str(request["as_of"]),
+            exchange_hint=None,
+            obligations=obligations,
+            execution=deterministic_execution_material(obligations),
+        )
+        result = fold_identity_research_result(plan, outcomes)
 
-        self.assertEqual(result["status"], "limited")
-        self.assertEqual(execution.material.status, "limited")
-        assert execution.material.canonical_identity is not None
-        self.assertEqual(execution.material.canonical_identity.exchange, "SSE")
-        self.assertEqual(execution.material.canonical_identity.code, "600519")
-        self.assertEqual(execution.material.canonical_identity.name, "贵州茅台")
+        self.assertEqual(result.status, "limited")
+        task_view = result.task_views["security_identity"]
+        self.assertEqual(task_view["status"], "limited")
         self.assertEqual(
-            {item.code for item in execution.material.limitations},
+            {item["code"] for item in result.limitations},
             {"experimental_identity_sources"},
         )
-        self.assertEqual(len(result["claims"]), 1)
+        self.assertEqual(len(result.claims), 1)
         self.assertEqual(
-            set(result["coverage"]["security_identity_resolution"]["operations"]),
+            set(result.coverage["security_identity_resolution"]["operations"]),
             {"fixture_authoritative_identity@1", "fixture_dictionary_identity@1"},
         )
 
@@ -1381,106 +1586,23 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             )
 
     def test_public_serialization_rechecks_operation_ownership(self) -> None:
-        result = UnifiedResearchResult(
-            status="blocked",
-            research_anchor={"as_of": "2026-08-10", "timezone": "Asia/Shanghai"},
-            plan={
-                "id": "security_identity",
-                "version": "1.0",
-                "task_type": "security_identity",
-                "capabilities": ["security_identity_resolution"],
-                "operation_obligations": [
-                    deterministic_identity_obligation(
-                        "fixture_identity@1",
-                        security_role="supporting",
-                        source_role="authoritative_disclosure",
-                        exchange="SSE",
-                    ).to_dict()
-                ],
-                "research_dependencies": [
-                    {
-                        "consumer_id": "security_identity_claim",
-                        "evidence_use": "security_identity",
-                        "minimum_supporting_observations": 1,
-                        "core": True,
-                    }
-                ],
-            },
-            capability_registry={
-                "security_identity_resolution": {
-                    "id": "security_identity_resolution",
-                    "version": "1.0",
-                    "granularity": "one_security_identity_claim",
-                    "operations": [
-                        {
-                            "id": "fixture_identity@1",
-                            "source_role": "authoritative_disclosure",
-                            "experimental": True,
-                        }
-                    ],
-                }
-            },
-            coverage={
-                "security_identity_resolution": {
-                    "state": "complete",
-                    "operations": {
-                        "fixture_identity@1": {
-                            "capability_id": "security_identity_resolution",
-                            "operation_id": "fixture_identity@1",
-                            "execution_state": "succeeded",
-                            "state": "complete",
-                            "query_complete": True,
-                            "observation_ids": ["observation-sibling"],
-                            "source_error_ids": [],
-                            "field_dispositions": [],
-                            "diagnostics": {},
-                        }
-                    },
-                }
-            },
-            observations=(
+        result = policy_blocked_identity_result()
+        capability = result.coverage["security_identity_resolution"]
+        assert isinstance(capability, dict)
+        operations = capability["operations"]
+        assert isinstance(operations, dict)
+        operation = operations["fixture_identity@1"]
+        assert isinstance(operation, dict)
+        operation["observation_ids"] = ["observation-sibling"]
+        object.__setattr__(
+            result,
+            "observations",
+            (
                 {
                     "id": "observation-sibling",
                     "capability_id": "security_identity_resolution",
                     "operation_id": "sibling_identity@1",
                     "payload": {"source_operation": "sibling_identity@1"},
-                },
-            ),
-            claims=(),
-            calculations=(),
-            conflicts=(),
-            limitations=(
-                {
-                    "id": "limitation-one",
-                    "code": "blocked",
-                    "message": "blocked",
-                    "references": [],
-                },
-            ),
-            source_errors=(),
-            task_views={
-                "security_identity": {
-                    "status": "blocked",
-                    "observation_ids": ["observation-sibling"],
-                    "claim_ids": [],
-                    "calculation_ids": [],
-                    "conflict_ids": [],
-                    "limitation_ids": ["limitation-one"],
-                    "source_error_ids": [],
-                    "brief_id": "brief-one",
-                }
-            },
-            briefs=(
-                {
-                    "id": "brief-one",
-                    "status": "blocked",
-                    "summary": "blocked",
-                    "observation_ids": ["observation-sibling"],
-                    "claim_ids": [],
-                    "calculation_ids": [],
-                    "conflict_ids": [],
-                    "limitation_ids": ["limitation-one"],
-                    "source_error_ids": [],
                 },
             ),
         )
@@ -1491,26 +1613,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
     def test_public_serialization_rejects_forged_aggregate_and_supported_status(
         self,
     ) -> None:
-        class UnusedAdapter:
-            obligation = deterministic_identity_obligation(
-                "fixture_identity@1",
-                security_role="supporting",
-                source_role="authoritative_disclosure",
-                exchange="SSE",
-            )
-            field_dispositions = ()
-
-            def execute(
-                self,
-                request: IdentityOperationRequest,
-                timeout_seconds: float,
-            ) -> OperationOutcome:
-                raise AssertionError("policy-blocked requests must not execute")
-
-        result = build_security_identity_research_result(
-            identity_request(allow_experimental=False),
-            (UnusedAdapter(),),
-        )
+        result = policy_blocked_identity_result()
         capability = result.coverage["security_identity_resolution"]
         assert isinstance(capability, dict)
         capability["state"] = "complete"
@@ -1528,26 +1631,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
     def test_public_serialization_rejects_status_without_core_consumer(
         self,
     ) -> None:
-        class UnusedAdapter:
-            obligation = deterministic_identity_obligation(
-                "fixture_identity@1",
-                security_role="supporting",
-                source_role="authoritative_disclosure",
-                exchange="SSE",
-            )
-            field_dispositions = ()
-
-            def execute(
-                self,
-                request: IdentityOperationRequest,
-                timeout_seconds: float,
-            ) -> OperationOutcome:
-                raise AssertionError("policy-blocked requests must not execute")
-
-        result = build_security_identity_research_result(
-            identity_request(allow_experimental=False),
-            (UnusedAdapter(),),
-        )
+        result = policy_blocked_identity_result()
         object.__setattr__(result, "status", "supported")
         task_view = result.task_views["security_identity"]
         assert isinstance(task_view, dict)
@@ -1560,26 +1644,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             result.to_dict()
 
     def test_public_serialization_rejects_deleted_operation_registry(self) -> None:
-        class UnusedAdapter:
-            obligation = deterministic_identity_obligation(
-                "fixture_identity@1",
-                security_role="supporting",
-                source_role="authoritative_disclosure",
-                exchange="SSE",
-            )
-            field_dispositions = ()
-
-            def execute(
-                self,
-                request: IdentityOperationRequest,
-                timeout_seconds: float,
-            ) -> OperationOutcome:
-                raise AssertionError("policy-blocked requests must not execute")
-
-        result = build_security_identity_research_result(
-            identity_request(allow_experimental=False),
-            (UnusedAdapter(),),
-        )
+        result = policy_blocked_identity_result()
         registry = result.capability_registry
         assert isinstance(registry, dict)
         registry.clear()
@@ -1588,26 +1653,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             result.to_dict()
 
     def test_public_serialization_rejects_unknown_response_fields(self) -> None:
-        class UnusedAdapter:
-            obligation = deterministic_identity_obligation(
-                "fixture_identity@1",
-                security_role="supporting",
-                source_role="authoritative_disclosure",
-                exchange="SSE",
-            )
-            field_dispositions = ()
-
-            def execute(
-                self,
-                request: IdentityOperationRequest,
-                timeout_seconds: float,
-            ) -> OperationOutcome:
-                raise AssertionError("policy-blocked requests must not execute")
-
-        result = build_security_identity_research_result(
-            identity_request(allow_experimental=False),
-            (UnusedAdapter(),),
-        )
+        result = policy_blocked_identity_result()
         brief = result.briefs[0]
         assert isinstance(brief, dict)
         brief["legacy_evidence"] = []
@@ -1618,26 +1664,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
     def test_public_serialization_rejects_unknown_research_anchor_fields(
         self,
     ) -> None:
-        class UnusedAdapter:
-            obligation = deterministic_identity_obligation(
-                "fixture_identity@1",
-                security_role="supporting",
-                source_role="authoritative_disclosure",
-                exchange="SSE",
-            )
-            field_dispositions = ()
-
-            def execute(
-                self,
-                request: IdentityOperationRequest,
-                timeout_seconds: float,
-            ) -> OperationOutcome:
-                raise AssertionError("policy-blocked requests must not execute")
-
-        result = build_security_identity_research_result(
-            identity_request(allow_experimental=False),
-            (UnusedAdapter(),),
-        )
+        result = policy_blocked_identity_result()
         anchor = result.research_anchor
         assert isinstance(anchor, dict)
         anchor["legacy_time"] = "00:00:00"

@@ -6,11 +6,12 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from typing import Protocol
+from typing import Literal, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener
 
+from .capability_execution import OperationExecutionPolicy
 from .research_result import (
     EvidenceUsePolicy,
     FieldDisposition,
@@ -281,6 +282,13 @@ class SseStockListOperation:
         EvidenceUsePolicy("issuer_relationship", "conditional_supporting"),
     )
     endpoint = "https://query.sse.com.cn/commonQuery.do"
+    execution_policy = OperationExecutionPolicy(
+        provider_id="sse",
+        tier="core",
+        timeout_seconds=19.5,
+        rate_limit_backoffs=(1.0,),
+        max_requests_per_plan=3,
+    )
     field_contract = IdentityFieldContract(
         dispositions=(
             FieldDisposition(
@@ -425,6 +433,13 @@ class SzseStockListOperation:
         EvidenceUsePolicy("issuer_relationship", "conditional_supporting"),
     )
     endpoint = "https://www.szse.cn/api/report/ShowReport/data"
+    execution_policy = OperationExecutionPolicy(
+        provider_id="szse",
+        tier="core",
+        timeout_seconds=19.5,
+        rate_limit_backoffs=(1.0,),
+        max_requests_per_plan=3,
+    )
     field_contract = IdentityFieldContract(
         dispositions=(
             FieldDisposition(
@@ -541,6 +556,10 @@ class CninfoSecurityDictionaryOperation:
         EvidenceUsePolicy("issuer_relationship", "not_applicable"),
     )
     endpoint = "https://www.cninfo.com.cn/new/data/szse_stock.json"
+    execution_policy = OperationExecutionPolicy(
+        provider_id="cninfo",
+        tier="standard_enrichment",
+    )
     field_contract = IdentityFieldContract(
         dispositions=(
             FieldDisposition(
@@ -641,6 +660,12 @@ class IdentityOperationAdapter(Protocol):
     @property
     def field_dispositions(self) -> tuple[FieldDisposition, ...]: ...
 
+    @property
+    def execution_policy(self) -> OperationExecutionPolicy: ...
+
+    @property
+    def execution_backend(self) -> Literal["isolated_worker", "in_process"]: ...
+
     def execute(
         self, request: IdentityOperationRequest, timeout_seconds: float
     ) -> OperationOutcome: ...
@@ -652,6 +677,7 @@ class _ObservingOperation(Protocol):
     exchange_scope: str | None
     evidence_uses: tuple[EvidenceUsePolicy, ...]
     field_contract: IdentityFieldContract
+    execution_policy: OperationExecutionPolicy
 
     def query(self, query: str, transport: HttpTransport) -> IdentityQueryResult: ...
 
@@ -686,6 +712,18 @@ class ProductionIdentityOperationAdapter:
     @property
     def field_dispositions(self) -> tuple[FieldDisposition, ...]:
         return self.operation.field_contract.dispositions
+
+    @property
+    def execution_policy(self) -> OperationExecutionPolicy:
+        return self.operation.execution_policy
+
+    @property
+    def execution_backend(self) -> Literal["isolated_worker", "in_process"]:
+        return (
+            "isolated_worker"
+            if type(self.transport) is UrlLibTransport
+            else "in_process"
+        )
 
     def execute(
         self, request: IdentityOperationRequest, timeout_seconds: float

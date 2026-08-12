@@ -482,7 +482,10 @@ def _validate_request_envelope(request: dict[str, Any]) -> None:
             raise ValueError("security_identity subject has an invalid shape")
         if not isinstance(subject["clue"], str) or not subject["clue"].strip():
             raise ValueError("security_identity subject requires a non-empty clue")
-        if request["parameters"]:
+        parameters = request["parameters"]
+        if set(parameters) not in (set(), {"completeness_mode"}):
             raise ValueError("security_identity parameters contain unknown fields")
+        if parameters.get("completeness_mode", "standard") not in {"standard", "fast"}:
+            raise ValueError("security_identity completeness_mode is unsupported")
         if request["window"] is not None:
             raise ValueError("security_identity window must be null")

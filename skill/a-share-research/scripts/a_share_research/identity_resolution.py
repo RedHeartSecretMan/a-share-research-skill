@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Mapping, cast
 
+from .capability_execution import (
+    BoundedOperationRequest,
+    PlannedOperation,
+    _spawn_attempt,
+    compile_capability_execution_plan,
+    execute_capability_plan,
+)
 from .identity_sources import (
     CninfoSecurityDictionaryOperation,
     HttpTransport,
@@ -90,6 +97,11 @@ def execute_security_identity_research(
     source_policy = request["source_policy"]
     if not isinstance(source_policy, dict):
         raise ValueError("research source_policy must be a JSON object")
+    if any(
+        operation.execution_backend not in {"isolated_worker", "in_process"}
+        for operation in operations
+    ):
+        raise ValueError("identity adapter execution backend is unsupported")
 
     precondition_reason: str | None = None
     execution_state: OperationExecutionState = "skipped_research_dependency"
@@ -101,10 +113,17 @@ def execute_security_identity_research(
     elif exchange_hint == "BSE" or _is_known_bse_code(clue):
         precondition_reason = "unsupported_exchange"
 
+    parameters = cast(dict[str, object], request["parameters"])
+    execution_plan = compile_capability_execution_plan(
+        version="1.0",
+        completeness_mode=cast(str, parameters.get("completeness_mode", "standard")),
+        operations=operations,
+    )
     plan = compile_identity_research_plan(
         as_of=str(request["as_of"]),
         exchange_hint=exchange_hint if exchange_hint in {"SSE", "SZSE"} else None,
         obligations=tuple(operation.obligation for operation in operations),
+        execution=execution_plan.to_public_dict(),
         precondition_reason=precondition_reason,
     )
     if precondition_reason is not None:
@@ -112,7 +131,16 @@ def execute_security_identity_research(
             OperationOutcome(
                 capability_id=operation.obligation.capability_id,
                 operation_id=operation.obligation.operation_id,
-                execution=OperationExecution(execution_state),
+                execution=OperationExecution(
+                    execution_state
+                    if execution_plan.is_scheduled(
+                        (
+                            operation.obligation.capability_id,
+                            operation.obligation.operation_id,
+                        )
+                    )
+                    else "not_requested"
+                ),
                 field_dispositions=operation.field_dispositions,
             )
             for operation in operations
@@ -123,15 +151,51 @@ def execute_security_identity_research(
         query=clue,
         as_of=str(request["as_of"]),
     )
-    outcomes = tuple(
-        operation.execute(operation_request, timeout_seconds=20.0)
-        for operation in operations
-    )
-    outcomes = _discover_official_identity_from_dictionary(
-        as_of=str(request["as_of"]),
-        plan=plan,
-        operations=operations,
-        outcomes=outcomes,
+    adapters = {
+        operation.obligation.operation_id: operation for operation in operations
+    }
+
+    def run_attempt(
+        operation: PlannedOperation,
+        request: BoundedOperationRequest,
+        timeout_seconds: float,
+        budget_limited: bool,
+    ) -> OperationOutcome:
+        adapter = adapters.get(operation.obligation.operation_id)
+        if adapter is None:
+            raise ValueError("execution plan selected an unknown identity adapter")
+        if adapter.execution_backend == "isolated_worker":
+            return _spawn_attempt(operation, request, timeout_seconds, budget_limited)
+        if adapter.execution_backend != "in_process":
+            raise ValueError("identity adapter execution backend is unsupported")
+        return adapter.execute(
+            IdentityOperationRequest(
+                query=cast(str, request.payload["query"]),
+                as_of=cast(str, request.payload["as_of"]),
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+
+    def plan_followups(
+        outcomes: tuple[OperationOutcome, ...],
+    ) -> tuple[tuple[tuple[str, str], BoundedOperationRequest], ...]:
+        return _plan_official_identity_followups(
+            as_of=str(request["as_of"]),
+            plan=plan,
+            outcomes=outcomes,
+        )
+
+    outcomes = execute_capability_plan(
+        execution_plan,
+        BoundedOperationRequest(
+            kind="security_identity",
+            payload={
+                "query": operation_request.query,
+                "as_of": operation_request.as_of,
+            },
+        ),
+        attempt_runner=run_attempt,
+        followup_planner=plan_followups,
     )
     return _complete_identity_execution(plan, outcomes)
 
@@ -240,13 +304,12 @@ def _optional_text(value: object, path: str) -> str | None:
     return value
 
 
-def _discover_official_identity_from_dictionary(
+def _plan_official_identity_followups(
     *,
     as_of: str,
     plan: IdentityResearchPlan,
-    operations: tuple[IdentityOperationAdapter, ...],
     outcomes: tuple[OperationOutcome, ...],
-) -> tuple[OperationOutcome, ...]:
+) -> tuple[tuple[tuple[str, str], BoundedOperationRequest], ...]:
     by_operation = {outcome.operation_id: outcome for outcome in outcomes}
     supporting_ids = {
         item.operation_id
@@ -268,47 +331,72 @@ def _discover_official_identity_from_dictionary(
         for identity in [_outcome_identity_payload(observation)]
         if isinstance(identity.get("code"), str)
     }
-    adapters = {
-        operation.obligation.operation_id: operation for operation in operations
+    public_execution_operations = plan.execution.get("operations")
+    if not isinstance(public_execution_operations, list):
+        raise ValueError("identity execution plan operations are invalid")
+    request_limits = {
+        item.get("operation_id"): item.get("max_requests_per_plan")
+        for item in public_execution_operations
+        if isinstance(item, dict)
     }
-    for corroborating_id in corroborating_ids:
-        corroborating = by_operation.get(corroborating_id)
-        if corroborating is None:
-            continue
-        for observation in corroborating.observations:
-            identity = _outcome_identity_payload(observation)
-            code = identity.get("code")
-            exchange = identity.get("exchange")
-            if not isinstance(code, str) or code in official_codes or exchange == "BSE":
-                continue
-            target_ids = tuple(
-                item.operation_id
-                for item in plan.obligations
-                if item.operation_id in supporting_ids
-                and (exchange not in {"SSE", "SZSE"} or item.exchange == exchange)
+    supporting_limits = tuple(
+        request_limits.get(operation_id) for operation_id in supporting_ids
+    )
+    if not supporting_limits or any(
+        not isinstance(item, int) or isinstance(item, bool) or item < 1
+        for item in supporting_limits
+    ):
+        raise ValueError("identity follow-up request limits are invalid")
+    candidate_limit = min(cast(int, item) - 1 for item in supporting_limits)
+    candidate_keys = sorted(
+        {
+            (
+                exchange if exchange in {"SSE", "SZSE"} else None,
+                code,
             )
-            for operation_id in target_ids:
-                previous = by_operation.get(operation_id)
-                adapter = adapters.get(operation_id)
-                if previous is None or adapter is None:
-                    continue
-                if previous.execution.state == "failed":
-                    continue
-                discovered = adapter.execute(
-                    IdentityOperationRequest(query=code, as_of=as_of),
-                    timeout_seconds=20.0,
+            for corroborating_id in corroborating_ids
+            for corroborating in (
+                [by_operation[corroborating_id]]
+                if corroborating_id in by_operation
+                else []
+            )
+            for observation in corroborating.observations
+            for identity in [_outcome_identity_payload(observation)]
+            for code in [identity.get("code")]
+            for exchange in [identity.get("exchange")]
+            if isinstance(code, str)
+            and code not in official_codes
+            and exchange != "BSE"
+        },
+        key=lambda item: (item[0] or "", item[1]),
+    )
+    followups: list[tuple[tuple[str, str], BoundedOperationRequest]] = []
+    for exchange, code in candidate_keys[:candidate_limit]:
+        target_ids = tuple(
+            item.operation_id
+            for item in plan.obligations
+            if item.operation_id in supporting_ids
+            and (exchange not in {"SSE", "SZSE"} or item.exchange == exchange)
+        )
+        for operation_id in target_ids:
+            previous = by_operation.get(operation_id)
+            if previous is None:
+                continue
+            if previous.execution.state == "failed":
+                continue
+            followups.append(
+                (
+                    (
+                        previous.capability_id,
+                        operation_id,
+                    ),
+                    BoundedOperationRequest(
+                        kind="security_identity",
+                        payload={"query": code, "as_of": as_of},
+                    ),
                 )
-                by_operation[operation_id] = _merge_identity_outcomes(
-                    previous,
-                    discovered,
-                )
-                official_codes.update(
-                    candidate.get("code")
-                    for item in discovered.observations
-                    for candidate in [_outcome_identity_payload(item)]
-                    if isinstance(candidate.get("code"), str)
-                )
-    return tuple(by_operation[item.operation_id] for item in plan.obligations)
+            )
+    return tuple(followups)
 
 
 def _outcome_identity_payload(observation: object) -> dict[str, object]:
@@ -316,52 +404,6 @@ def _outcome_identity_payload(observation: object) -> dict[str, object]:
         return {}
     identity = observation.get("observation")
     return identity if isinstance(identity, dict) else {}
-
-
-def _merge_identity_outcomes(
-    previous: OperationOutcome,
-    discovered: OperationOutcome,
-) -> OperationOutcome:
-    if (
-        previous.capability_id != discovered.capability_id
-        or previous.operation_id != discovered.operation_id
-    ):
-        raise ValueError("cannot merge outcomes from sibling operations")
-    observations = tuple((*previous.observations, *discovered.observations))
-    source_errors = tuple((*previous.source_errors, *discovered.source_errors))
-    if source_errors:
-        execution = OperationExecution("failed")
-    else:
-        execution = OperationExecution(
-            "succeeded",
-            query_complete=(
-                previous.execution.query_complete is True
-                and discovered.execution.query_complete is True
-            ),
-        )
-    attempts = _diagnostic_integer(previous.diagnostics.get("attempts")) + (
-        _diagnostic_integer(discovered.diagnostics.get("attempts"))
-    )
-    timeout_seconds = discovered.diagnostics.get(
-        "timeout_seconds",
-        previous.diagnostics.get("timeout_seconds", 20.0),
-    )
-    return OperationOutcome(
-        capability_id=previous.capability_id,
-        operation_id=previous.operation_id,
-        execution=execution,
-        observations=observations,
-        source_errors=source_errors,
-        field_dispositions=previous.field_dispositions,
-        diagnostics={
-            "attempts": attempts,
-            "timeout_seconds": timeout_seconds,
-        },
-    )
-
-
-def _diagnostic_integer(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _same_security(
