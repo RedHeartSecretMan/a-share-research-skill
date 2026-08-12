@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -152,6 +153,8 @@ def _content_operations() -> list[object]:
         base_url_env="FIXTURE_IWENCAI_BASE_URL",
         trace_id_factory=lambda: "fixed-workflow-trace",
     )
+    if os.environ.get("FIXTURE_WORKFLOW_REPORT_BLOCKED") == "1":
+        return [iwencai]
     return [eastmoney, iwencai]
 
 

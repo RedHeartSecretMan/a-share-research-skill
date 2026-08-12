@@ -46,7 +46,7 @@ def build_market_trend_result(
     request: dict[str, Any],
     transport: HttpTransport,
     now: datetime | None = None,
-) -> UnifiedResearchResult | dict[str, Any]:
+) -> UnifiedResearchResult:
     """Build one unadjusted, cross-checked completed-session trend result."""
 
     research_now = now or datetime.now(CHINA_STANDARD_TIME)

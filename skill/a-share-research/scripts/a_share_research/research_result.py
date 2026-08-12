@@ -785,6 +785,11 @@ class UnifiedResearchResult:
         ):
             raise ValueError("research anchor is invalid")
         plan = cast(dict[str, object], result["plan"])
+        if plan.get("task_type") == "research_workflow":
+            from .research_workflows import validate_workflow_research_result
+
+            validate_workflow_research_result(result)
+            return
         if plan.get("task_type") != "security_identity":
             self._validate_direct_task_ownership(result)
             return
@@ -2939,13 +2944,17 @@ def _validate_research_content_domain_facts(
             "published_from",
             "published_to",
             "material_types",
+            "query",
             "limit",
+            "verify_documents",
         }:
             raise ValueError("research content query scope is invalid")
         published_from = candidate_scope.get("published_from")
         published_to = candidate_scope.get("published_to")
         material_types = candidate_scope.get("material_types")
+        query = candidate_scope.get("query")
         limit = candidate_scope.get("limit")
+        verify_documents = candidate_scope.get("verify_documents")
         try:
             from_date = date.fromisoformat(cast(str, published_from))
             to_date = date.fromisoformat(cast(str, published_to))
@@ -2962,9 +2971,15 @@ def _validate_research_content_domain_facts(
             or not material_types
             or any(not isinstance(item, str) or not item for item in material_types)
             or len(set(material_types)) != len(material_types)
+            or not isinstance(query, list)
+            or any(
+                not isinstance(item, str) or not item or item != item.strip()
+                for item in query
+            )
             or isinstance(limit, bool)
             or not isinstance(limit, int)
             or not 1 <= limit <= 100
+            or not isinstance(verify_documents, bool)
             or payload.get("material_type") not in material_types
         ):
             raise ValueError("research content query scope is invalid")
@@ -5341,6 +5356,27 @@ def _valuation_owned_facts(
 
 
 def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
+    claims = cast(list[dict[str, object]], result["claims"])
+    allowed_claims = {
+        "security_valuation_diagnostics",
+        "security_valuation_metrics",
+    }
+    if any(item.get("kind") not in allowed_claims for item in claims):
+        raise ValueError("valuation claim kind is invalid")
+    allowed_calculations = {
+        "forecast_eps_growth",
+        "forward_pe",
+        "market_capitalization",
+        "pb_mrq",
+        "pe_digestion_years",
+        "pe_ttm",
+        "peg",
+    }
+    if any(
+        item.get("kind") not in allowed_calculations
+        for item in cast(list[dict[str, object]], result["calculations"])
+    ):
+        raise ValueError("valuation calculation kind is invalid")
     claim = _claim_by_kind(result, "security_valuation_metrics")
     if claim is None:
         return
@@ -5376,6 +5412,33 @@ def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
 
 
 def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
+    claims = cast(list[dict[str, object]], result["claims"])
+    allowed_claims = {
+        "valuation_compare_diagnostics",
+        "valuation_compare_members",
+    }
+    if any(item.get("kind") not in allowed_claims for item in claims):
+        raise ValueError("comparison claim kind is invalid")
+    valuation_kinds = {
+        "forecast_eps_growth",
+        "forward_pe",
+        "market_capitalization",
+        "pb_mrq",
+        "pe_digestion_years",
+        "pe_ttm",
+        "peg",
+    }
+    for calculation in cast(list[dict[str, object]], result["calculations"]):
+        kind = calculation.get("kind")
+        if not isinstance(kind, str) or "::" not in kind:
+            raise ValueError("comparison calculation kind is invalid")
+        member_id, member_kind = kind.split("::", 1)
+        if (
+            not member_id.startswith("member-")
+            or not member_id[7:].isdigit()
+            or member_kind not in valuation_kinds
+        ):
+            raise ValueError("comparison calculation kind is invalid")
     claim = _claim_by_kind(result, "valuation_compare_members")
     if claim is None:
         return

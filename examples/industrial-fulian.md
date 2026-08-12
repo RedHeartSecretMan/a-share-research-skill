@@ -10,7 +10,7 @@
 <python> <skill-root>/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
 ```
 
-`new_security_research@1.0` 只编排现有研究任务，不另开取数捷径。身份步骤先把名称解析为规范证券标识；身份阻断时跳过七个依赖步骤，其他单步阻断时仍继续执行兄弟步骤。每一步都保留完整 ResearchTask、结果、证据、冲突、来源错误和限制。
+`new_security_research@1.0` 只编排现有研究任务，不另开取数捷径。身份步骤先把名称解析为规范证券标识；身份阻断时才把七个真实依赖步骤标为 `skipped_research_dependency`，其他单步阻断时仍继续执行兄弟步骤并保留已经完成的事实。公共输出使用唯一的 14 字段正式研究结果：`plan.request_scope` 和固定步骤保留工作流契约，每个步骤通过正式 leaf plan、capability registry、coverage 和稳定 ID 引用顶层 observations、claims、calculations、conflicts、limitations、source_errors 与 briefs；不嵌套完整 leaf result 或 ResearchTask。
 
 ## `2026-08-03` 公共入口真实来源 Smoke 状态
 

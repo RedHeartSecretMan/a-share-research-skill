@@ -504,7 +504,9 @@ class DirectResearchContentPublicSeamTests(unittest.TestCase):
                     "published_from": "2026-07-01",
                     "published_to": "2026-08-02",
                     "material_types": ["research_report"],
+                    "query": ["研究"],
                     "limit": 20,
+                    "verify_documents": False,
                 },
             )
         material_claims = [
@@ -713,6 +715,19 @@ class DirectResearchContentPublicSeamTests(unittest.TestCase):
             [item["payload"]["title"] for item in materials],
             ["Inside-window report", "Outside-window report"],
         )
+        for item in materials:
+            self.assertEqual(
+                item["payload"]["query_scope"],
+                {
+                    "as_of": "2026-08-02",
+                    "published_from": "2026-07-01",
+                    "published_to": "2026-08-02",
+                    "material_types": ["research_report"],
+                    "query": ["window-ownership"],
+                    "limit": 20,
+                    "verify_documents": False,
+                },
+            )
         coverage = result["coverage"]["research_content_materials"]["operations"]
         self.assertEqual(
             coverage["window_ownership_reports@1"]["observation_ids"],

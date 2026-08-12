@@ -141,6 +141,7 @@ def main(
     | None = None,
 ) -> int:
     arguments = _parser().parse_args(argv)
+    result: UnifiedResearchResult | dict[str, Any]
     try:
         if arguments.command == "run":
             result = research(

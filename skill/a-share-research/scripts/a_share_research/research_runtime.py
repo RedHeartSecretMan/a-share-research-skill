@@ -124,9 +124,7 @@ class ResearchRuntime:
             else tuple(intraday_replay_daily_operations)
         )
 
-    def research(
-        self, request: dict[str, Any]
-    ) -> UnifiedResearchResult | dict[str, Any]:
+    def research(self, request: dict[str, Any]) -> UnifiedResearchResult:
         """Execute one versioned research task."""
 
         _validate_request_envelope(request)
@@ -137,7 +135,7 @@ class ResearchRuntime:
             )
         return self._dispatch_validated(request, allow_workflow=True)
 
-    def _run_leaf_task(self, request: dict[str, Any]) -> dict[str, Any]:
+    def _run_leaf_task(self, request: dict[str, Any]) -> UnifiedResearchResult:
         """Run an internally compiled leaf task through this Runtime."""
 
         _validate_request_envelope(request)
@@ -147,20 +145,19 @@ class ResearchRuntime:
             return build_security_identity_research_result(
                 request,
                 build_default_identity_operations(self._identity_transport),
-            ).to_dict()
-        result = self._dispatch_validated(request, allow_workflow=False)
-        return result.to_dict() if isinstance(result, UnifiedResearchResult) else result
+            )
+        return self._dispatch_validated(request, allow_workflow=False)
 
     def _dispatch_validated(
         self,
         request: dict[str, Any],
         *,
         allow_workflow: bool,
-    ) -> UnifiedResearchResult | dict[str, Any]:
+    ) -> UnifiedResearchResult:
         """Dispatch an envelope that has already passed common validation."""
 
         task_type = request["task_type"]
-        result: UnifiedResearchResult | dict[str, Any]
+        result: UnifiedResearchResult
         if task_type == "research_workflow":
             if not allow_workflow:
                 raise ValueError("nested research_workflow tasks are not allowed")
@@ -360,14 +357,8 @@ class ResearchRuntime:
                     daily_operations=replay_daily_operations or (),
                 )
         else:
-            result = _blocked_result(
-                request,
-                code="unsupported_task_type",
-                message=f"Research task type is not supported: {task_type}",
-            )
-        if isinstance(result, UnifiedResearchResult):
-            return result
-        return _complete_result(result, task_type)
+            raise ValueError(f"Research task type is not supported: {task_type}")
+        return result
 
     def _dependency_available(self, dependency: str, version: str) -> bool:
         if self._available_optional_dependencies is not None:
@@ -397,7 +388,7 @@ def research(
     intraday_replay_operations: Collection[IntradayReplaySourceOperation] | None = None,
     intraday_replay_daily_operations: Collection[IntradayReplayDailySourceOperation]
     | None = None,
-) -> UnifiedResearchResult | dict[str, Any]:
+) -> UnifiedResearchResult:
     """Run a task through the public research module interface."""
 
     return ResearchRuntime(
@@ -489,38 +480,3 @@ def _validate_request_envelope(request: dict[str, Any]) -> None:
             raise ValueError("security_identity parameters contain unknown fields")
         if request["window"] is not None:
             raise ValueError("security_identity window must be null")
-
-
-def _blocked_result(
-    request: dict[str, Any],
-    *,
-    code: str,
-    message: str,
-    limitation_details: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    limitation = {"code": code, "message": message}
-    if limitation_details:
-        limitation.update(limitation_details)
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked",
-        "subjects": request["subjects"],
-        "evidence": [],
-        "conflicts": [],
-        "source_errors": [],
-        "degradations": [],
-        "limitations": [limitation],
-    }
-
-
-def _complete_result(result: dict[str, Any], task_type: str) -> dict[str, Any]:
-    completed = {
-        **result,
-        "task_type": task_type,
-    }
-    completed.setdefault("evidence", [])
-    completed.setdefault("conflicts", [])
-    completed.setdefault("source_errors", [])
-    completed.setdefault("degradations", [])
-    completed.setdefault("limitations", [])
-    return completed

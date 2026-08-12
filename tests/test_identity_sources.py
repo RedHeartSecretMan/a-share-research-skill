@@ -338,8 +338,8 @@ class IdentityResolutionCliTests(unittest.TestCase):
             ["sse_stock_list@1", "cninfo_security_dictionary@1"],
         )
 
-    def test_run_returns_explicit_blocked_result_for_unknown_task(self) -> None:
-        result = self.run_task(
+    def test_run_rejects_unknown_task_without_a_legacy_result(self) -> None:
+        completed = self.invoke_task(
             {
                 "schema_version": "1.0",
                 "task_type": "vendor_magic_endpoint",
@@ -355,14 +355,13 @@ class IdentityResolutionCliTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(result["schema_version"], "1.0")
-        self.assertEqual(result["task_type"], "vendor_magic_endpoint")
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["evidence"], [])
-        self.assertEqual(result["conflicts"], [])
-        self.assertEqual(result["source_errors"], [])
-        self.assertEqual(result["degradations"], [])
-        self.assertEqual(result["limitations"][0]["code"], "unsupported_task_type")
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, "")
+        self.assertEqual(
+            completed.stderr,
+            "error: invalid research task: Research task type is not supported: "
+            "vendor_magic_endpoint\n",
+        )
 
     def test_run_blocks_before_using_disallowed_experimental_sources(self) -> None:
         result = self.run_task(
