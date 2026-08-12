@@ -115,6 +115,80 @@ def stock_payload(days: int, *, code: str = "601138") -> dict[str, object]:
 
 
 class NorthboundFlowTests(unittest.TestCase):
+    def test_provider_proven_zero_rows_is_a_complete_empty_result(self) -> None:
+        transport = FixedTransport(
+            [
+                response(
+                    {
+                        "success": True,
+                        "result": {"pages": 1, "count": 0, "data": []},
+                    }
+                )
+            ]
+        )
+
+        batch = EastmoneyNorthboundFlowOperation(
+            transport, request_gate=DiagnosticGate()
+        ).collect(
+            query(
+                "northbound_flow",
+                observed_from="2024-08-16",
+                observed_to="2024-08-16",
+                query_subject=None,
+            )
+        )
+
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(batch.source_errors, ())
+        self.assertTrue(batch.complete)
+
+    def test_declared_pagination_proves_whether_the_bounded_query_is_complete(
+        self,
+    ) -> None:
+        transport = FixedTransport(
+            [
+                response(
+                    {
+                        "success": True,
+                        "result": {
+                            "pages": 2,
+                            "count": 2,
+                            "data": [
+                                {
+                                    "TRADE_DATE": "2024-08-16 00:00:00",
+                                    "MUTUAL_TYPE": "001",
+                                    "NET_DEAL_AMT": "12.34",
+                                }
+                            ],
+                        },
+                    }
+                )
+            ]
+        )
+
+        batch = EastmoneyNorthboundFlowOperation(
+            transport, request_gate=DiagnosticGate()
+        ).collect(
+            query(
+                "northbound_flow",
+                observed_from="2024-08-16",
+                observed_to="2024-08-16",
+                limit=1,
+                query_subject=None,
+            )
+        )
+
+        with self.subTest(contract="raw pagination fields"):
+            self.assertIn("result.pages", EastmoneyNorthboundFlowOperation.raw_fields)
+            self.assertIn("result.count", EastmoneyNorthboundFlowOperation.raw_fields)
+        with self.subTest(contract="bounded completion"):
+            self.assertEqual(len(batch.observations), 1)
+            self.assertFalse(batch.complete)
+            self.assertEqual(
+                [item.code for item in batch.source_errors],
+                ["pagination_incomplete"],
+            )
+
     def test_post_august_2024_net_buy_request_fails_closed_without_http(self) -> None:
         transport = FixedTransport([])
 
@@ -142,6 +216,7 @@ class NorthboundFlowTests(unittest.TestCase):
                         "success": True,
                         "result": {
                             "pages": 1,
+                            "count": 1,
                             "data": [
                                 {
                                     "TRADE_DATE": "2024-08-16 00:00:00",
@@ -185,6 +260,7 @@ class NorthboundFlowTests(unittest.TestCase):
                         "success": True,
                         "result": {
                             "pages": 1,
+                            "count": 1,
                             "data": [
                                 {
                                     "TRADE_DATE": "2024-08-16 00:00:00",
@@ -219,6 +295,7 @@ class NorthboundFlowTests(unittest.TestCase):
                         "success": True,
                         "result": {
                             "pages": 1,
+                            "count": 1,
                             "data": [
                                 {
                                     "TRADE_DATE": "2024-08-16 00:00:00",
@@ -295,6 +372,30 @@ class StockFundFlowTests(unittest.TestCase):
         params = parse_qs(urlsplit(transport.get_calls[0][0]).query)
         self.assertEqual(params["secid"], ["1.601138"])
         self.assertEqual(params["lmt"], ["5"])
+        self.assertEqual(set(params["fields1"][0].split(",")), {"f1", "f2", "f3", "f7"})
+        self.assertEqual(
+            set(params["fields2"][0].split(",")),
+            {"f51", "f52", "f53", "f54", "f55", "f56", "f57"},
+        )
+        self.assertEqual(
+            set(EastmoneyStockFundFlowOperation.raw_fields),
+            {
+                "data.code",
+                "data.market",
+                "data.klines[]",
+                "f1",
+                "f2",
+                "f3",
+                "f7",
+                "f51",
+                "f52",
+                "f53",
+                "f54",
+                "f55",
+                "f56",
+                "f57",
+            },
+        )
 
     def test_ten_day_period_is_supported(self) -> None:
         transport = FixedTransport([response(stock_payload(10))])
@@ -380,6 +481,84 @@ class StockFundFlowTests(unittest.TestCase):
 
 
 class BoardFundFlowTests(unittest.TestCase):
+    def test_provider_proven_zero_rows_is_a_complete_empty_result(self) -> None:
+        transport = FixedTransport([response({"data": {"total": 0, "diff": []}})])
+
+        batch = EastmoneyBoardFundFlowOperation(transport).collect(
+            query(
+                "board_fund_flow",
+                observed_from="2026-08-02",
+                observed_to="2026-08-02",
+                query_subject=None,
+                parameters={"period": "today", "board_type": "industry"},
+            )
+        )
+
+        self.assertEqual(batch.observations, ())
+        self.assertEqual(batch.source_errors, ())
+        self.assertTrue(batch.complete)
+
+    def test_raw_inventory_exactly_covers_every_period_request_variant(self) -> None:
+        requested_by_period = {
+            "today": {
+                "f12",
+                "f14",
+                "f124",
+                "f3",
+                "f62",
+                "f184",
+                "f204",
+                "f66",
+                "f72",
+                "f78",
+                "f84",
+            },
+            "5d": {"f12", "f14", "f124", "f109", "f164", "f165", "f257"},
+            "10d": {"f12", "f14", "f124", "f160", "f174", "f175"},
+        }
+        operation: EastmoneyBoardFundFlowOperation | None = None
+        for period, expected_fields in requested_by_period.items():
+            with self.subTest(period=period):
+                row = {field: "1" for field in expected_fields}
+                row.update({"f12": "BK1", "f14": "测试板块", "f124": 1785427200})
+                transport = FixedTransport(
+                    [response({"data": {"total": 1, "diff": [row]}})]
+                )
+                operation = EastmoneyBoardFundFlowOperation(
+                    transport, request_gate=DiagnosticGate()
+                )
+
+                batch = operation.collect(
+                    query(
+                        "board_fund_flow",
+                        observed_from=(
+                            "2026-07-31" if period == "today" else "2026-07-01"
+                        ),
+                        observed_to="2026-07-31",
+                        limit=1,
+                        query_subject=None,
+                        parameters={"board_type": "industry", "period": period},
+                    )
+                )
+
+                self.assertEqual(batch.source_errors, ())
+                request_fields = set(
+                    parse_qs(urlsplit(transport.get_calls[0][0]).query)["fields"][
+                        0
+                    ].split(",")
+                )
+                self.assertEqual(request_fields, expected_fields)
+
+        assert operation is not None
+        self.assertEqual(
+            set(operation.raw_fields),
+            {
+                "data.total",
+                "data.diff[]",
+                *(field for fields in requested_by_period.values() for field in fields),
+            },
+        )
+
     def test_decimal_metrics_do_not_pass_through_binary_float(self) -> None:
         transport = FixedTransport(
             [
@@ -551,7 +730,7 @@ class BoardFundFlowTests(unittest.TestCase):
 
     def test_empty_or_invalid_board_schema_is_explicit(self) -> None:
         for payload, expected_code in (
-            ({"data": {"total": 0, "diff": []}}, "empty_response"),
+            ({"data": {"total": 0, "diff": []}}, None),
             (
                 {"data": {"total": 1, "diff": [{"f12": "BK1", "f14": "板块"}]}},
                 "unknown_schema",
@@ -571,7 +750,11 @@ class BoardFundFlowTests(unittest.TestCase):
                         parameters={"board_type": "industry", "period": "today"},
                     )
                 )
-                self.assertEqual(batch.source_errors[0].code, expected_code)
+                if expected_code is None:
+                    self.assertEqual(batch.source_errors, ())
+                    self.assertTrue(batch.complete)
+                else:
+                    self.assertEqual(batch.source_errors[0].code, expected_code)
 
     def test_board_flow_rejects_a_provider_date_mismatch(self) -> None:
         transport = FixedTransport(

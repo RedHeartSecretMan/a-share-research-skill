@@ -29,11 +29,21 @@ class CapitalEventsCliE2ETests(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
         self.assertEqual(len(completed.stdout.strip().splitlines()), 1)
         result = json.loads(completed.stdout)
-        self.assertEqual(result["task_type"], "capital_events")
+        self.assertEqual(result["plan"]["task_type"], "capital_events")
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["subjects"][0]["security"]["code"], "600519")
-        self.assertEqual(result["brief"]["data_type_counts"], {"margin_trading": 3})
-        first = result["observations"][0]
+        observations = [
+            item["payload"]
+            for item in result["observations"]
+            if item["capability_id"] == "capital_event_observations"
+        ]
+        self.assertEqual(observations[0]["subject"]["security"]["code"], "600519")
+        coverage = next(
+            item["payload"]
+            for item in result["calculations"]
+            if item["kind"] == "capital_event_coverage"
+        )
+        self.assertEqual(coverage["observation_count"], 3)
+        first = observations[0]
         self.assertEqual(first["metrics"]["financing_balance"], "18000000000.1200")
         self.assertEqual(first["units"]["financing_balance"], "CNY")
         self.assertEqual(

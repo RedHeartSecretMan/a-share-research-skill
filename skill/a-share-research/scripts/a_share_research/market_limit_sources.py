@@ -46,6 +46,35 @@ class EastmoneyLimitStateOperation:
 
     operation_id = "eastmoney_limit_state@1"
     supported_signal_types = frozenset({"limit_state"})
+    raw_fields: tuple[str, ...] = (
+        "data.tc",
+        "data.pool[]",
+        "c",
+        "n",
+        "m",
+        "p",
+        "zdp",
+        "hs",
+        "amount",
+        "ltsz",
+        "ztp",
+        "zf",
+        "zs",
+        "pe",
+        "fba",
+        "lbc",
+        "days",
+        "oc",
+        "ylbc",
+        "fbt",
+        "lbt",
+        "yfbt",
+        "fund",
+        "zbc",
+        "hybk",
+        "zttj.days",
+        "zttj.ct",
+    )
 
     def __init__(
         self,
@@ -235,18 +264,14 @@ class EastmoneyLimitStateOperation:
                         break
                     seen_current_states[security_key] = state
             if duplicate_conflict:
-                return SignalSourceBatch(
-                    operation_id=self.operation_id,
-                    coverage={"limit_state": SignalCoverage(state="indeterminate")},
-                    source_errors=(
-                        SignalSourceFailure(
-                            self.operation_id,
-                            "duplicate_source_conflict",
-                            "Duplicate provider securities disagree within mutually exclusive limit pools.",
-                        ),
-                    ),
-                    degradations=tuple(degradations),
+                errors.append(
+                    SignalSourceFailure(
+                        self.operation_id,
+                        "duplicate_source_conflict",
+                        "Duplicate provider securities disagree within mutually exclusive limit pools.",
+                    )
                 )
+                continue
             completed_states += 1
             totals += total
             observations.extend(unique_normalized.values())
@@ -283,6 +308,24 @@ class ThsLimitReasonOperation:
     operation_id = "ths_limit_reason@1"
     supported_signal_types = frozenset({"limit_state"})
     endpoint = "https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool"
+    raw_fields: tuple[str, ...] = (
+        "status_code",
+        "data.info[]",
+        "data.total",
+        "data.count",
+        "code",
+        "name",
+        "reason_type",
+        "latest",
+        "change_rate",
+        "first_limit_up_time",
+        "limit_up_suc_rate",
+        "open_num",
+        "order_amount",
+        "limit_up_type",
+        "high_days",
+        "is_again_limit",
+    )
 
     def __init__(
         self,
@@ -492,11 +535,14 @@ def _normalize_eastmoney_rows(
             ("last_seal_time", "lbt"),
             ("previous_first_seal_time", "yfbt"),
         ):
-            if row.get(source_key) is not None:
-                formatted = _clock_text(row[source_key])
-                if formatted is None:
-                    return None
-                dimensions[key] = formatted
+            raw_value = row.get(source_key)
+            if raw_value is None:
+                dimensions[key] = None
+                continue
+            formatted = _clock_text(raw_value)
+            if formatted is None:
+                return None
+            dimensions[key] = formatted
         statistic = row.get("zttj")
         if statistic is not None:
             if not isinstance(statistic, dict):

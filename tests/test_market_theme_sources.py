@@ -182,10 +182,13 @@ class ThsStrongStockThemeTests(unittest.TestCase):
             market_request("strong_stock_theme", "2026-07-31"),
             [operation],
             NoIdentityTransport(),
-        )
+        ).to_dict()
 
         self.assertEqual(result["status"], "limited")
         self.assertEqual(len(result["observations"]), 1)
+        self.assertEqual(
+            result["observations"][0]["payload"]["identity_scope"], "security"
+        )
         self.assertNotIn(
             "unknown_schema", [item["code"] for item in result["source_errors"]]
         )
@@ -485,7 +488,7 @@ class EastmoneyIndustryRotationTests(unittest.TestCase):
             market_request("industry_rotation", "2026-07-31"),
             [operation],
             NoIdentityTransport(),
-        )
+        ).to_dict()
 
         self.assertEqual(len(result["observations"]), 1)
         self.assertNotIn(
@@ -689,11 +692,11 @@ class ThsMarketHeatTests(unittest.TestCase):
             market_request("market_heat", "2026-08-02"),
             [operation],
             NoIdentityTransport(),
-        )
+        ).to_dict()
 
         self.assertEqual(len(result["observations"]), 1)
         self.assertEqual(
-            result["observations"][0]["attributions"][0]["provenance"],
+            result["observations"][0]["payload"]["attributions"][0]["provenance"],
             "market_signal",
         )
         self.assertNotIn(

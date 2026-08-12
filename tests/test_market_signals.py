@@ -23,10 +23,39 @@ from a_share_research.market_signal_contract import (  # noqa: E402
 from a_share_research.market_signal_registry import (  # noqa: E402
     build_default_market_signal_operations,
 )
-from a_share_research.market_signals import build_market_signals_result  # noqa: E402
+from a_share_research.market_signals import (  # noqa: E402
+    build_market_signals_result as _build_market_signals_result,
+)
 from a_share_research.research_runtime import ResearchRuntime  # noqa: E402
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
+
+
+def build_market_signals_result(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _build_market_signals_result(*args, **kwargs).to_dict()
+
+
+def market_signal_observations(result: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item["payload"]
+        for item in result["observations"]
+        if item["capability_id"] == "market_signal_observations"
+    ]
+
+
+def market_signal_coverage(result: dict[str, Any], signal_type: str) -> dict[str, Any]:
+    return next(
+        item["payload"]
+        for item in result["calculations"]
+        if item["kind"] == "market_signal_coverage"
+        and item["payload"]["signal_type"] == signal_type
+    )
+
+
+def market_signal_calculation(result: dict[str, Any], kind: str) -> dict[str, Any]:
+    return next(
+        item["payload"] for item in result["calculations"] if item["kind"] == kind
+    )
 
 
 def signal_request(
@@ -98,6 +127,7 @@ def observation(
         dimensions={
             "market_scope": "mainland_a_share",
             "provider_security_code": provider_security_code,
+            "provider_security_name": "蓝色光标",
             **({"pool_state": pool_state} if pool_state is not None else {}),
         },
         locator_uri="https://example.test/signals/1",
@@ -108,8 +138,14 @@ def observation(
 class FixedOperation:
     operation_id = "fixed_signal@1"
     supported_signal_types = frozenset(
-        {"strong_stock_theme", "limit_state", "market_heat"}
+        {
+            "strong_stock_theme",
+            "security_board_membership",
+            "limit_state",
+            "market_heat",
+        }
     )
+    raw_fields = ("data.info[]", "code", "name", "reason_type")
 
     def __init__(self, batch: SignalSourceBatch) -> None:
         self._batch = batch
@@ -188,15 +224,19 @@ class MarketSignalsContractTests(unittest.TestCase):
             )
         )
 
-        result = ResearchRuntime(
-            identity_transport=NoIdentityTransport(),
-            market_signal_operations=[operation],
-        ).research(signal_request(["strong_stock_theme"]))
+        result = (
+            ResearchRuntime(
+                identity_transport=NoIdentityTransport(),
+                market_signal_operations=[operation],
+            )
+            .research(signal_request(["strong_stock_theme"]))
+            .to_dict()
+        )
 
-        self.assertEqual(result["task_type"], "market_signals")
+        self.assertEqual(result["plan"]["task_type"], "market_signals")
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["observations"][0]["attributions"][0]["provenance"],
+            market_signal_observations(result)[0]["attributions"][0]["provenance"],
             "editorial_annotation",
         )
 
@@ -219,11 +259,11 @@ class MarketSignalsContractTests(unittest.TestCase):
             signal_request(["limit_state"]), [operation], NoIdentityTransport()
         )
 
-        self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["observations"], [])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(market_signal_observations(result), [])
         self.assertEqual(result["source_errors"], [])
         self.assertEqual(
-            result["brief"]["coverage"]["limit_state"]["state"],
+            market_signal_coverage(result, "limit_state")["state"],
             "observed_empty",
         )
 
@@ -243,12 +283,10 @@ class MarketSignalsContractTests(unittest.TestCase):
             signal_request(["market_heat"]), [operation], NoIdentityTransport()
         )
 
-        fallback_limitations = [
-            item
-            for item in result["limitations"]
-            if item["code"] == "no_qualified_independent_fallback"
-        ]
-        self.assertEqual(fallback_limitations[0]["signal_types"], ["market_heat"])
+        self.assertIn(
+            "no_qualified_independent_fallback",
+            [item["code"] for item in result["limitations"]],
+        )
 
     def test_identity_blocked_result_keeps_stable_brief_shape(self) -> None:
         result = build_market_signals_result(
@@ -256,12 +294,23 @@ class MarketSignalsContractTests(unittest.TestCase):
                 ["security_board_membership"],
                 subjects=[{"clue": "300999"}],
             ),
-            [],
+            [
+                FixedOperation(
+                    SignalSourceBatch(
+                        operation_id="fixed_signal@1",
+                        coverage={
+                            "security_board_membership": SignalCoverage(
+                                state="indeterminate"
+                            )
+                        },
+                    )
+                )
+            ],
             FixtureIdentityTransport(bluefocus=False),
         )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["brief"]["aggregates"], {})
+        self.assertEqual(market_signal_observations(result), [])
 
     def test_empty_from_one_source_and_failure_from_another_is_partial(self) -> None:
         empty_operation = FixedOperation(
@@ -298,7 +347,9 @@ class MarketSignalsContractTests(unittest.TestCase):
             NoIdentityTransport(),
         )
 
-        self.assertEqual(result["brief"]["coverage"]["limit_state"]["state"], "partial")
+        self.assertEqual(
+            market_signal_coverage(result, "limit_state")["state"], "partial"
+        )
 
     def test_invalid_attribution_provenance_fails_closed(self) -> None:
         invalid = observation(attributions=(attribution(provenance="provider_guess"),))
@@ -358,7 +409,7 @@ class MarketSignalsContractTests(unittest.TestCase):
             NoIdentityTransport(),
         )
 
-        self.assertEqual(len(result["observations"]), 2)
+        self.assertEqual(len(market_signal_observations(result)), 2)
         self.assertIn(
             "cross_source_signal_disagreement",
             [item["code"] for item in result["conflicts"]],
@@ -500,7 +551,7 @@ class MarketSignalsContractTests(unittest.TestCase):
             signal_request(["limit_state"]), [operation], NoIdentityTransport()
         )
 
-        sentiment = result["brief"]["aggregates"]["limit_state_sentiment"]
+        sentiment = market_signal_calculation(result, "limit_state_sentiment")
         self.assertEqual(sentiment["limit_up_count"], "2")
         self.assertEqual(sentiment["limit_break_count"], "1")
         self.assertEqual(sentiment["limit_down_count"], "1")
@@ -533,8 +584,8 @@ class MarketSignalsContractTests(unittest.TestCase):
             NoIdentityTransport(),
         )
 
-        self.assertEqual(len(result["observations"]), 1)
-        self.assertEqual(len(result["evidence"]), 1)
+        self.assertEqual(len(market_signal_observations(result)), 2)
+        self.assertEqual(len(result["observations"]), 2)
 
     def test_monitoring_intersection_is_derived_from_canonical_basis_evidence(
         self,
@@ -556,14 +607,22 @@ class MarketSignalsContractTests(unittest.TestCase):
                 "end": "2026-08-31",
                 "frequency": "monitoring_window",
             },
-            dimensions={"market_scope": "mainland_a_share"},
+            dimensions={
+                "market_scope": "mainland_a_share",
+                "provider_security_code": "300058",
+                "provider_security_name": "蓝色光标",
+            },
             limitations=(),
         )
         severe = replace(
             observation(signal_type="severe_abnormal_movement"),
             subject=subject,
-            rule={"rule_code": "SZSE-SEVERE-01"},
-            dimensions={"market_scope": "mainland_a_share"},
+            rule={"code": "SZSE-SEVERE-01"},
+            dimensions={
+                "market_scope": "mainland_a_share",
+                "provider_security_code": "300058",
+                "provider_security_name": "蓝色光标",
+            },
             limitations=(),
         )
 
@@ -571,6 +630,7 @@ class MarketSignalsContractTests(unittest.TestCase):
             supported_signal_types = frozenset(
                 {"focus_monitoring", "severe_abnormal_movement"}
             )
+            raw_fields = ("data[]", "e")
 
         operation = MonitoringOperation(
             SignalSourceBatch(
@@ -594,13 +654,107 @@ class MarketSignalsContractTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["observations"]), 1)
-        intersection = result["observations"][0]
+        observations = market_signal_observations(result)
+        self.assertEqual(len(observations), 3)
+        intersection = next(
+            item
+            for item in observations
+            if item["signal_type"] == "monitoring_intersection"
+        )
         self.assertEqual(intersection["signal_type"], "monitoring_intersection")
         basis_ids = intersection["attributions"][0]["basis_evidence_ids"]
-        evidence_ids = {item["id"] for item in result["evidence"]}
+        evidence_ids = {item["id"] for item in result["observations"]}
         self.assertEqual(len(basis_ids), 2)
         self.assertTrue(set(basis_ids).issubset(evidence_ids))
+
+    def test_unrelated_heat_failure_does_not_partial_monitoring_intersection(
+        self,
+    ) -> None:
+        subject = {
+            "security": {
+                "exchange": "SZSE",
+                "code": "300058",
+                "type": "A_SHARE",
+            },
+            "name": "蓝色光标",
+            "issuer": {},
+        }
+        focus = replace(
+            observation(signal_type="focus_monitoring"),
+            subject=subject,
+            period={
+                "start": "2026-07-01",
+                "end": "2026-08-31",
+                "frequency": "monitoring_window",
+            },
+            dimensions={
+                "market_scope": "mainland_a_share",
+                "provider_security_code": "300058",
+                "provider_security_name": "蓝色光标",
+            },
+            limitations=(),
+        )
+        severe = replace(
+            observation(signal_type="severe_abnormal_movement"),
+            subject=subject,
+            rule={"code": "SZSE-SEVERE-01"},
+            dimensions={
+                "market_scope": "mainland_a_share",
+                "provider_security_code": "300058",
+                "provider_security_name": "蓝色光标",
+            },
+            limitations=(),
+        )
+
+        class MonitoringOperation(FixedOperation):
+            supported_signal_types = frozenset(
+                {"focus_monitoring", "severe_abnormal_movement"}
+            )
+            raw_fields = ("data[]", "e")
+
+        class FailedHeatOperation:
+            operation_id = "failed_heat@1"
+            supported_signal_types = frozenset({"market_heat"})
+            raw_fields = ("data[]", "rate")
+
+            def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
+                return SignalSourceBatch(
+                    operation_id=self.operation_id,
+                    coverage={"market_heat": SignalCoverage(state="indeterminate")},
+                    source_errors=(
+                        SignalSourceFailure(
+                            self.operation_id,
+                            "upstream_unavailable",
+                            "The unrelated heat source is unavailable.",
+                        ),
+                    ),
+                )
+
+        result = build_market_signals_result(
+            signal_request(["monitoring_intersection", "market_heat"]),
+            [
+                MonitoringOperation(
+                    SignalSourceBatch(
+                        operation_id="fixed_signal@1",
+                        observations=(focus, severe),
+                        coverage={
+                            "focus_monitoring": SignalCoverage(
+                                state="observed_nonempty", provider_total=1
+                            ),
+                            "severe_abnormal_movement": SignalCoverage(
+                                state="observed_nonempty", provider_total=1
+                            ),
+                        },
+                    )
+                ),
+                FailedHeatOperation(),
+            ],
+            NoIdentityTransport(),
+        )
+
+        intersection = market_signal_coverage(result, "monitoring_intersection")
+        self.assertEqual(intersection["state"], "observed_nonempty")
+        self.assertEqual(intersection["observation_count"], 1)
 
     def test_intersection_with_partial_basis_keeps_observation_but_is_partial(
         self,
@@ -622,14 +776,22 @@ class MarketSignalsContractTests(unittest.TestCase):
                 "end": "2026-08-31",
                 "frequency": "monitoring_window",
             },
-            dimensions={"market_scope": "mainland_a_share"},
+            dimensions={
+                "market_scope": "mainland_a_share",
+                "provider_security_code": "300058",
+                "provider_security_name": "蓝色光标",
+            },
             limitations=(),
         )
         severe = replace(
             observation(signal_type="severe_abnormal_movement"),
             subject=subject,
             rule={"rule_code": "SZSE-SEVERE-01"},
-            dimensions={"market_scope": "mainland_a_share"},
+            dimensions={
+                "market_scope": "mainland_a_share",
+                "provider_security_code": "300058",
+                "provider_security_name": "蓝色光标",
+            },
             limitations=(),
         )
 
@@ -657,9 +819,9 @@ class MarketSignalsContractTests(unittest.TestCase):
             NoIdentityTransport(),
         )
 
-        self.assertEqual(len(result["observations"]), 1)
+        self.assertEqual(len(market_signal_observations(result)), 3)
         self.assertEqual(
-            result["brief"]["coverage"]["monitoring_intersection"]["state"],
+            market_signal_coverage(result, "monitoring_intersection")["state"],
             "partial",
         )
 
@@ -691,9 +853,9 @@ class MarketSignalsContractTests(unittest.TestCase):
             NoIdentityTransport(),
         )
 
-        derived_coverage = errored_result["brief"]["coverage"][
-            "monitoring_intersection"
-        ]
+        derived_coverage = market_signal_coverage(
+            errored_result, "monitoring_intersection"
+        )
         self.assertEqual(derived_coverage["state"], "partial")
         self.assertNotIn("provider_total", derived_coverage["sources"][0])
 
@@ -739,17 +901,28 @@ class MarketSignalsContractTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["brief"]["coverage"]["monitoring_intersection"]["state"],
+            market_signal_coverage(result, "monitoring_intersection")["state"],
             "observed_nonempty",
         )
         self.assertEqual(
-            result["observations"][0]["subject"]["security"],
+            next(
+                item
+                for item in market_signal_observations(result)
+                if item["signal_type"] == "monitoring_intersection"
+            )["subject"]["security"],
             {"exchange": "SZSE", "code": "300058", "type": "A_SHARE"},
         )
         self.assertGreaterEqual(
-            len(result["observations"][0]["attributions"][0]["basis_evidence_ids"]),
+            len(
+                next(
+                    item
+                    for item in market_signal_observations(result)
+                    if item["signal_type"] == "monitoring_intersection"
+                )["attributions"][0]["basis_evidence_ids"]
+            ),
             3,
         )
+        self.assertNotIn("https://", str(result))
 
     def test_unresolved_provider_overlap_remains_blocked(self) -> None:
         focus = replace(
@@ -762,6 +935,7 @@ class MarketSignalsContractTests(unittest.TestCase):
             dimensions={
                 "market_scope": "provider_watchlist",
                 "provider_security_code": "300999",
+                "provider_security_name": "provider_300999",
             },
         )
         severe = replace(
@@ -771,6 +945,7 @@ class MarketSignalsContractTests(unittest.TestCase):
             dimensions={
                 "market_scope": "provider_anomaly_pool",
                 "provider_security_code": "300999",
+                "provider_security_name": "provider_300999",
             },
         )
 
@@ -809,6 +984,7 @@ class MarketSignalsContractTests(unittest.TestCase):
         class FocusOperation:
             operation_id = "focus_signal@1"
             supported_signal_types = frozenset({"focus_monitoring"})
+            raw_fields = ("result.data[]", "STKCODE", "VALIDATESTARTDATE")
 
             def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
                 self.query = query
@@ -824,6 +1000,7 @@ class MarketSignalsContractTests(unittest.TestCase):
         class AnomalyOperation:
             operation_id = "anomaly_signal@1"
             supported_signal_types = frozenset({"severe_abnormal_movement"})
+            raw_fields = ("data[]", "c", "date", "e")
 
             def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
                 self.query = query
@@ -848,7 +1025,7 @@ class MarketSignalsContractTests(unittest.TestCase):
         self.assertEqual(focus.query.observed_to, "2026-08-02")
         self.assertEqual(anomaly.query.observed_to, "2026-07-31")
         self.assertEqual(
-            result["brief"]["coverage"]["monitoring_intersection"]["state"],
+            market_signal_coverage(result, "monitoring_intersection")["state"],
             "observed_empty",
         )
 
@@ -858,6 +1035,7 @@ class MarketSignalsContractTests(unittest.TestCase):
         class FocusOnlyOperation:
             operation_id = "focus_only@1"
             supported_signal_types = frozenset({"focus_monitoring"})
+            raw_fields = ("result.data[]", "STKCODE", "VALIDATESTARTDATE")
 
             def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
                 return SignalSourceBatch(
@@ -877,7 +1055,7 @@ class MarketSignalsContractTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
-            result["brief"]["coverage"]["monitoring_intersection"]["state"],
+            market_signal_coverage(result, "monitoring_intersection")["state"],
             "indeterminate",
         )
 
@@ -886,6 +1064,7 @@ class MarketSignalsContractTests(unittest.TestCase):
             supported_signal_types = frozenset(
                 {"focus_monitoring", "severe_abnormal_movement"}
             )
+            raw_fields = ("data[]", "c", "date", "e")
 
             def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
                 return SignalSourceBatch(
@@ -912,7 +1091,7 @@ class MarketSignalsContractTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            errored_result["brief"]["coverage"]["monitoring_intersection"]["state"],
+            market_signal_coverage(errored_result, "monitoring_intersection")["state"],
             "partial",
         )
 

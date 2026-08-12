@@ -56,6 +56,15 @@ class EastmoneyNorthboundFlowOperation:
     operation_id = "eastmoney_northbound_flow@1"
     supported_data_types = frozenset({"northbound_flow"})
     endpoint = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    raw_fields: tuple[str, ...] = (
+        "success",
+        "result.pages",
+        "result.count",
+        "result.data[]",
+        "TRADE_DATE",
+        "MUTUAL_TYPE",
+        "NET_DEAL_AMT",
+    )
 
     def __init__(
         self,
@@ -105,10 +114,12 @@ class EastmoneyNorthboundFlowOperation:
                 url,
                 referer="https://data.eastmoney.com/",
             )
-            rows = _datacenter_rows(fetched.payload)
+            rows, pages, count = _datacenter_rows(fetched.payload)
             if not rows:
-                raise _CapitalFlowError(
-                    "empty_response", "The northbound source returned no observations."
+                return CapitalSourceBatch(
+                    operation_id=self.operation_id,
+                    degradations=fetched.degradations,
+                    limitations=("availability_time_unknown",),
                 )
             observations = tuple(
                 _northbound_observation(
@@ -120,12 +131,27 @@ class EastmoneyNorthboundFlowOperation:
                 )
                 for row in rows[: query.limit]
             )
+            complete = pages == 1 and count == len(rows)
             return CapitalSourceBatch(
                 operation_id=self.operation_id,
                 observations=observations,
+                source_errors=(
+                    ()
+                    if complete
+                    else (
+                        CapitalSourceFailure(
+                            self.operation_id,
+                            "pagination_incomplete",
+                            "The bounded pagination did not cover the source result.",
+                        ),
+                    )
+                ),
                 degradations=fetched.degradations,
-                limitations=("availability_time_unknown",),
-                complete=True,
+                limitations=(
+                    "availability_time_unknown",
+                    *(("result_truncated_to_limit",) if not complete else ()),
+                ),
+                complete=complete,
             )
         except _CapitalFlowError as error:
             return _failed(self.operation_id, error)
@@ -137,6 +163,22 @@ class EastmoneyStockFundFlowOperation:
     operation_id = "eastmoney_stock_fund_flow@1"
     supported_data_types = frozenset({"stock_fund_flow"})
     endpoint = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+    raw_fields: tuple[str, ...] = (
+        "data.code",
+        "data.market",
+        "data.klines[]",
+        "f1",
+        "f2",
+        "f3",
+        "f7",
+        "f51",
+        "f52",
+        "f53",
+        "f54",
+        "f55",
+        "f56",
+        "f57",
+    )
 
     def __init__(
         self,
@@ -252,6 +294,28 @@ class EastmoneyBoardFundFlowOperation:
     operation_id = "eastmoney_board_fund_flow@1"
     supported_data_types = frozenset({"board_fund_flow"})
     endpoint = "https://push2.eastmoney.com/api/qt/clist/get"
+    raw_fields: tuple[str, ...] = (
+        "data.total",
+        "data.diff[]",
+        "f12",
+        "f14",
+        "f124",
+        "f3",
+        "f62",
+        "f184",
+        "f204",
+        "f66",
+        "f72",
+        "f78",
+        "f84",
+        "f109",
+        "f164",
+        "f165",
+        "f257",
+        "f160",
+        "f174",
+        "f175",
+    )
     _board_filters = {
         "industry": "m:90+t:2",
         "concept": "m:90+t:3",
@@ -367,6 +431,12 @@ class EastmoneyBoardFundFlowOperation:
                         degradations=tuple(degradations),
                     )
                 if not rows:
+                    if page == 1 and total == 0:
+                        return CapitalSourceBatch(
+                            operation_id=self.operation_id,
+                            degradations=tuple(degradations),
+                            limitations=("availability_time_unknown",),
+                        )
                     if page == 1:
                         raise _CapitalFlowError(
                             "empty_response",
@@ -571,7 +641,9 @@ def _canonical_a_share(subject: dict[str, Any] | None) -> tuple[str, str]:
     return exchange, code
 
 
-def _datacenter_rows(payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+def _datacenter_rows(
+    payload: dict[str, Any],
+) -> tuple[tuple[dict[str, Any], ...], int, int]:
     if payload.get("success") is not True:
         raise _CapitalFlowError(
             "provider_error", "The northbound source reported an unsuccessful status."
@@ -582,11 +654,24 @@ def _datacenter_rows(payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
             "unknown_schema", "The northbound response has an unknown schema."
         )
     rows = result["data"]
+    pages = result.get("pages")
+    count = result.get("count")
+    if (
+        isinstance(pages, bool)
+        or not isinstance(pages, int)
+        or pages < 1
+        or isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < len(rows)
+    ):
+        raise _CapitalFlowError(
+            "unknown_schema", "The northbound pagination metadata is invalid."
+        )
     if any(not isinstance(row, dict) for row in rows):
         raise _CapitalFlowError(
             "unknown_schema", "A northbound response row has an unknown schema."
         )
-    return tuple(rows)
+    return tuple(rows), pages, count
 
 
 def _northbound_observation(

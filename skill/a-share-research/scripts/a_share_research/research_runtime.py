@@ -14,7 +14,10 @@ from .capital_contract import (
     CapitalHttpTransport,
     CapitalSourceOperation,
 )
-from .capital_events import build_capital_events_result
+from .capital_events import (
+    build_capital_events_blocked_result,
+    build_capital_events_result,
+)
 from .capital_registry import build_default_capital_operations
 from .content_contract import (
     ContentHttpTransport,
@@ -49,7 +52,10 @@ from .market_signal_contract import (
     MarketSignalHttpTransport,
     MarketSignalSourceOperation,
 )
-from .market_signals import build_market_signals_result
+from .market_signals import (
+    build_market_signals_blocked_result,
+    build_market_signals_result,
+)
 from .research_content import (
     build_research_content_blocked_result,
     build_research_content_result,
@@ -214,46 +220,38 @@ class ResearchRuntime:
                     self._content_transport,
                 )
         elif task_type == "capital_events":
+            capital_operations = self._capital_operations
+            if capital_operations is None:
+                capital_operations = build_default_capital_operations(
+                    self._capital_transport
+                )
             if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
+                result = build_capital_events_blocked_result(
                     request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "capital_events currently requires experimental source "
-                        "operations"
-                    ),
+                    capital_operations,
                 )
             else:
-                capital_operations = self._capital_operations
-                if capital_operations is None:
-                    capital_operations = build_default_capital_operations(
-                        self._capital_transport
-                    )
                 result = build_capital_events_result(
                     request,
                     capital_operations,
                     self._identity_transport,
                 )
         elif task_type == "market_signals":
+            market_signal_operations = self._market_signal_operations
+            if market_signal_operations is None:
+                from .market_signal_registry import (
+                    build_default_market_signal_operations,
+                )
+
+                market_signal_operations = build_default_market_signal_operations(
+                    self._market_signal_transport
+                )
             if not request["source_policy"]["allow_experimental"]:
-                result = _blocked_result(
+                result = build_market_signals_blocked_result(
                     request,
-                    code="source_policy_not_satisfied",
-                    message=(
-                        "market_signals currently requires experimental source "
-                        "operations"
-                    ),
+                    market_signal_operations,
                 )
             else:
-                market_signal_operations = self._market_signal_operations
-                if market_signal_operations is None:
-                    from .market_signal_registry import (
-                        build_default_market_signal_operations,
-                    )
-
-                    market_signal_operations = build_default_market_signal_operations(
-                        self._market_signal_transport
-                    )
                 result = build_market_signals_result(
                     request,
                     market_signal_operations,

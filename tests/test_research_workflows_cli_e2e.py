@@ -322,6 +322,73 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
                 )
                 self.assertNotIn("evidence", step["result"])
                 continue
+            if step["step_id"] in {
+                "board_membership",
+                "fund_flow",
+                "dragon_tiger",
+                "lockup",
+                "margin_trading",
+            }:
+                self.assertEqual(
+                    set(step["result"]),
+                    {
+                        "schema_version",
+                        "status",
+                        "research_anchor",
+                        "plan",
+                        "capability_registry",
+                        "coverage",
+                        "observations",
+                        "claims",
+                        "calculations",
+                        "conflicts",
+                        "limitations",
+                        "source_errors",
+                        "task_views",
+                        "briefs",
+                    },
+                )
+                expected_task_type = (
+                    "market_signals"
+                    if step["step_id"] == "board_membership"
+                    else "capital_events"
+                )
+                expected_capability = (
+                    "market_signal_observations"
+                    if step["step_id"] == "board_membership"
+                    else "capital_event_observations"
+                )
+                expected_claim = (
+                    "market_signal_observation"
+                    if step["step_id"] == "board_membership"
+                    else "capital_event_observation"
+                )
+                self.assertEqual(
+                    step["result"]["plan"]["task_type"], expected_task_type
+                )
+                owned_observation_ids = {
+                    item["id"]
+                    for item in step["result"]["observations"]
+                    if item["capability_id"] == expected_capability
+                }
+                self.assertTrue(owned_observation_ids)
+                task_claims = [
+                    item
+                    for item in step["result"]["claims"]
+                    if item["kind"] == expected_claim
+                ]
+                self.assertTrue(task_claims)
+                self.assertTrue(
+                    all(
+                        claim["observation_ids"]
+                        and set(claim["observation_ids"]).issubset(
+                            owned_observation_ids
+                        )
+                        for claim in task_claims
+                    )
+                )
+                self.assertIsInstance(step["result"]["source_errors"], list)
+                continue
             for field in (
                 "evidence",
                 "conflicts",
@@ -352,7 +419,7 @@ class ResearchWorkflowsCliE2ETests(unittest.TestCase):
             self.assertIsInstance(result[field], list)
             for projected in result[field]:
                 self.assertEqual(set(projected), {"step_id", "item"})
-        self.assertTrue(result["evidence"])
+        self.assertEqual(result["evidence"], [])
         self.assertTrue(result["limitations"])
         self.assertTrue(
             any(

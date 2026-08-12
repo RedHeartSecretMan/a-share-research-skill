@@ -50,6 +50,15 @@ class EastmoneyFocusMonitoringOperation:
     operation_id = "eastmoney_focus_monitoring@1"
     supported_signal_types = frozenset({"focus_monitoring"})
     endpoint = "https://mobappconfig.securities.eastmoney.com/emcfg/stock_monitor.json"
+    raw_fields: tuple[str, ...] = (
+        "response[]",
+        "MARKET",
+        "STKCODE",
+        "STKNAME",
+        "VALIDATESTARTDATE",
+        "VALIDATEENDDATE",
+        "LINK_URL",
+    )
 
     def __init__(
         self,
@@ -159,6 +168,24 @@ class EastmoneySevereAbnormalMovementOperation:
     operation_id = "eastmoney_severe_abnormal_movement@1"
     supported_signal_types = frozenset({"severe_abnormal_movement"})
     endpoint = "https://dycalchis.eastmoney.com/price-anomaly/list"
+    raw_fields: tuple[str, ...] = (
+        "result",
+        "pages",
+        "count",
+        "data[]",
+        "date",
+        "open",
+        "m",
+        "c",
+        "n",
+        "s",
+        "e",
+        "o",
+        "d",
+        "a",
+        "x",
+        "t",
+    )
     _common_parameters = {
         "team": "h5",
         "product": "EastMoney",
@@ -188,15 +215,15 @@ class EastmoneySevereAbnormalMovementOperation:
     def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
         if "severe_abnormal_movement" not in query.signal_types:
             return SignalSourceBatch(operation_id=self.operation_id)
+        observations: list[MarketSignalObservation] = []
+        diagnostics: list[RequestGateDiagnostic] = []
+        expected_pages: int | None = None
+        pages_collected = 0
         try:
             requested_day = _latest_pool_day(query)
-            observations: list[MarketSignalObservation] = []
             seen_rows: dict[tuple[str, ...], dict[str, Any]] = {}
-            diagnostics: list[RequestGateDiagnostic] = []
-            expected_pages: int | None = None
             expected_response_day: str | None = None
             expected_open_code: str | None = None
-            pages_collected = 0
             pagination_termination: str | None = None
             for page in range(1, self._max_pages + 1):
                 url = self._page_url(page)
@@ -254,6 +281,14 @@ class EastmoneySevereAbnormalMovementOperation:
                     )
                 if not rows:
                     if page == 1:
+                        if pages > 1:
+                            raise _MonitoringError(
+                                "pagination_incomplete",
+                                "The provider returned an empty first page before its declared end.",
+                                degradations=_gate_degradations(
+                                    self.operation_id, tuple(diagnostics)
+                                ),
+                            )
                         return SignalSourceBatch(
                             operation_id=self.operation_id,
                             coverage={
@@ -358,6 +393,32 @@ class EastmoneySevereAbnormalMovementOperation:
                 limitations=("result_truncated_to_limit",) if limited else (),
             )
         except _MonitoringError as error:
+            if observations and error.code in {
+                "pagination_incomplete",
+                "upstream_unavailable",
+            }:
+                return SignalSourceBatch(
+                    operation_id=self.operation_id,
+                    observations=tuple(observations[: query.limit]),
+                    coverage={
+                        "severe_abnormal_movement": SignalCoverage(
+                            state="partial",
+                            provider_total=None,
+                            pages_collected=pages_collected,
+                            pages_expected=expected_pages,
+                            details={"pagination_termination": "source_error"},
+                        )
+                    },
+                    source_errors=(
+                        SignalSourceFailure(
+                            self.operation_id, error.code, str(error), error.details
+                        ),
+                    ),
+                    degradations=error.degradations,
+                    limitations=("result_truncated_to_limit",)
+                    if len(observations) > query.limit
+                    else (),
+                )
             return _failed(self.operation_id, "severe_abnormal_movement", error)
 
     def _page_url(self, page: int) -> str:

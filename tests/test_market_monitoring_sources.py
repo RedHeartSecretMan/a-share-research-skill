@@ -11,7 +11,7 @@ from tests.skill_imports import add_skill_scripts_to_path
 
 add_skill_scripts_to_path()
 
-from a_share_research.identity_sources import HttpResponse  # noqa: E402
+from a_share_research.identity_sources import HttpResponse, TransportError  # noqa: E402
 from a_share_research.market_monitoring_sources import (  # noqa: E402
     EastmoneyFocusMonitoringOperation,
     EastmoneySevereAbnormalMovementOperation,
@@ -137,6 +137,20 @@ def public_request(
 
 
 class FocusMonitoringSourceTests(unittest.TestCase):
+    def test_raw_inventory_matches_the_top_level_row_array_schema(self) -> None:
+        self.assertEqual(
+            set(EastmoneyFocusMonitoringOperation.raw_fields),
+            {
+                "response[]",
+                "MARKET",
+                "STKCODE",
+                "STKNAME",
+                "VALIDATESTARTDATE",
+                "VALIDATEENDDATE",
+                "LINK_URL",
+            },
+        )
+
     def test_current_snapshot_preserves_active_and_scheduled_windows(
         self,
     ) -> None:
@@ -295,6 +309,7 @@ class FocusMonitoringSourceTests(unittest.TestCase):
                                 "STKNAME": "天普股份",
                                 "VALIDATESTARTDATE": "2026-07-30",
                                 "VALIDATEENDDATE": "2026-08-12",
+                                "LINK_URL": "https://wap.18.cn/app/detail/818/3265",
                             }
                         ]
                     )
@@ -307,18 +322,74 @@ class FocusMonitoringSourceTests(unittest.TestCase):
             public_request("focus_monitoring", day="2026-08-02"),
             [operation],
             NoIdentityTransport(),
-        )
+        ).to_dict()
+
+        self.assertNotIn("https://", str(result))
 
         self.assertEqual(len(result["observations"]), 1)
         self.assertNotIn(
             "unknown_schema", [item["code"] for item in result["source_errors"]]
         )
         self.assertEqual(
-            result["observations"][0]["metrics"]["watchlist_membership"], "1"
+            result["observations"][0]["payload"]["metrics"]["watchlist_membership"],
+            "1",
         )
 
 
 class SevereAbnormalMovementSourceTests(unittest.TestCase):
+    def test_later_transport_failure_retains_the_completed_page(self) -> None:
+        transport = FixedTransport(
+            [
+                response(
+                    anomaly_payload(
+                        [anomaly_row("300001"), anomaly_row("300002")], pages=2
+                    )
+                ),
+                TransportError("upstream_unavailable", "page two offline"),
+            ]
+        )
+
+        batch = EastmoneySevereAbnormalMovementOperation(
+            transport, page_size=2, request_gate=ImmediateGate()
+        ).collect(
+            query(
+                "severe_abnormal_movement",
+                day="2026-07-31",
+                as_of="2026-08-02",
+            )
+        )
+
+        self.assertEqual(len(batch.observations), 2)
+        self.assertEqual(batch.coverage["severe_abnormal_movement"].state, "partial")
+        self.assertEqual(
+            [item.code for item in batch.source_errors], ["upstream_unavailable"]
+        )
+
+    def test_first_empty_page_with_more_declared_pages_is_not_observed_empty(
+        self,
+    ) -> None:
+        transport = FixedTransport([response(anomaly_payload([], pages=2))])
+
+        batch = EastmoneySevereAbnormalMovementOperation(
+            transport,
+            page_size=2,
+            max_pages=1,
+            request_gate=ImmediateGate(),
+        ).collect(
+            query(
+                "severe_abnormal_movement",
+                day="2026-07-31",
+                as_of="2026-08-02",
+            )
+        )
+
+        self.assertNotEqual(
+            batch.coverage["severe_abnormal_movement"].state, "observed_empty"
+        )
+        self.assertEqual(
+            [item.code for item in batch.source_errors], ["pagination_incomplete"]
+        )
+
     def test_pagination_deduplicates_and_preserves_raw_rule_codes(self) -> None:
         first = anomaly_row("688001", board=6, rule_code=4)
         second = anomaly_row("300688")
@@ -393,9 +464,9 @@ class SevereAbnormalMovementSourceTests(unittest.TestCase):
 
         self.assertEqual(batch.source_errors[0].code, "pagination_incomplete")
         self.assertEqual(len(transport.get_calls), 2)
-        self.assertEqual(batch.observations, ())
+        self.assertEqual(len(batch.observations), 3)
         coverage = batch.coverage["severe_abnormal_movement"]
-        self.assertEqual(coverage.state, "indeterminate")
+        self.assertEqual(coverage.state, "partial")
 
     def test_early_empty_page_is_incomplete_not_a_sentinel(self) -> None:
         batch = EastmoneySevereAbnormalMovementOperation(
@@ -420,8 +491,9 @@ class SevereAbnormalMovementSourceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(batch.observations, ())
+        self.assertEqual(len(batch.observations), 2)
         self.assertEqual(batch.source_errors[0].code, "pagination_incomplete")
+        self.assertEqual(batch.coverage["severe_abnormal_movement"].state, "partial")
 
     def test_successful_empty_page_is_an_explicit_provider_empty_pool(self) -> None:
         batch = EastmoneySevereAbnormalMovementOperation(
@@ -539,10 +611,10 @@ class SevereAbnormalMovementSourceTests(unittest.TestCase):
             public_request("severe_abnormal_movement", day="2026-07-31"),
             [operation],
             NoIdentityTransport(),
-        )
+        ).to_dict()
 
         self.assertEqual(len(result["observations"]), 1)
-        item = result["observations"][0]
+        item = result["observations"][0]["payload"]
         self.assertEqual(
             item["period"],
             {

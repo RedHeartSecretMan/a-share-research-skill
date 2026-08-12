@@ -262,6 +262,18 @@ class ThsStrongStockThemeOperation:
 
     operation_id = "ths_strong_stock_theme@1"
     supported_signal_types = frozenset({"strong_stock_theme"})
+    raw_fields: tuple[str, ...] = (
+        "errocode",
+        "data[]",
+        "code",
+        "name",
+        "reason",
+        "zhangfu",
+        "close",
+        "huanshou",
+        "chengjiaoe",
+        "market",
+    )
 
     def __init__(
         self,
@@ -421,6 +433,15 @@ class EastmoneySecurityBoardMembershipOperation:
 
     operation_id = "eastmoney_security_board_membership@1"
     supported_signal_types = frozenset({"security_board_membership"})
+    raw_fields: tuple[str, ...] = (
+        "data.total",
+        "data.secid",
+        "data.diff[]",
+        "f12",
+        "f14",
+        "f3",
+        "f128",
+    )
 
     def __init__(
         self,
@@ -640,6 +661,18 @@ class EastmoneyIndustryRotationOperation:
 
     operation_id = "eastmoney_industry_rotation@1"
     supported_signal_types = frozenset({"industry_rotation"})
+    raw_fields: tuple[str, ...] = (
+        "data.total",
+        "data.diff[]",
+        "f12",
+        "f14",
+        "f3",
+        "f104",
+        "f105",
+        "f124",
+        "f140",
+        "f136",
+    )
 
     def __init__(
         self,
@@ -953,6 +986,17 @@ class ThsMarketHeatOperation:
 
     operation_id = "ths_market_heat@1"
     supported_signal_types = frozenset({"market_heat"})
+    raw_fields: tuple[str, ...] = (
+        "data.stock_list[]",
+        "order",
+        "code",
+        "name",
+        "tag.concept_tag",
+        "tag.popularity_tag",
+        "rate",
+        "rise_and_fall",
+        "hot_rank_chg",
+    )
 
     def __init__(
         self,

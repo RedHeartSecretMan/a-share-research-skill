@@ -124,6 +124,71 @@ def query(
 
 
 class CompanyCapitalSourceTests(unittest.TestCase):
+    def test_provider_proven_zero_rows_is_a_complete_empty_result(self) -> None:
+        for operation_type, data_type in (
+            (EastmoneyMarginTradingOperation, "margin_trading"),
+            (EastmoneyShareholderCountOperation, "shareholder_count"),
+            (EastmoneyDividendOperation, "dividend"),
+        ):
+            with self.subTest(operation=operation_type.operation_id):
+                transport = FixtureTransport(
+                    responses=[
+                        inline_response(
+                            {
+                                "success": True,
+                                "code": 0,
+                                "result": {"pages": 1, "count": 0, "data": []},
+                            }
+                        )
+                    ]
+                )
+                batch = operation_type(transport, request_gate=no_wait_gate()).collect(
+                    query(data_type)
+                )
+                self.assertEqual(batch.observations, ())
+                self.assertEqual(batch.source_errors, ())
+                self.assertTrue(batch.complete)
+
+    def test_requests_only_the_adapter_declared_row_fields(self) -> None:
+        cases = (
+            (EastmoneyMarginTradingOperation, "margin_trading"),
+            (EastmoneyShareholderCountOperation, "shareholder_count"),
+            (EastmoneyDividendOperation, "dividend"),
+        )
+        envelope_fields = {
+            "success",
+            "code",
+            "result.pages",
+            "result.count",
+            "result.data[]",
+        }
+        for operation_type, data_type in cases:
+            with self.subTest(operation=operation_type.operation_id):
+                transport = FixtureTransport(
+                    responses=[
+                        inline_response(
+                            {
+                                "success": True,
+                                "code": 0,
+                                "result": {"pages": 1, "count": 0, "data": []},
+                            }
+                        )
+                    ]
+                )
+                operation_type(transport, request_gate=no_wait_gate()).collect(
+                    query(data_type)
+                )
+                requested = parse_qs(urlsplit(transport.urls[0]).query)["columns"][
+                    0
+                ].split(",")
+                expected = [
+                    field
+                    for field in operation_type.raw_fields
+                    if field not in envelope_fields
+                ]
+                self.assertEqual(requested, expected)
+                self.assertNotEqual(requested, ["ALL"])
+
     def test_margin_trading_maps_daily_metrics_with_precision_and_pagination(
         self,
     ) -> None:

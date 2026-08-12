@@ -280,7 +280,7 @@ def _parse_page(response: HttpResponse) -> _Page:
         raise _OperationError("unknown_schema", "The source data schema is invalid.")
     if not data:
         if count == 0:
-            raise _OperationError("empty_response", "The source returned no rows.")
+            return _Page((), pages, count)
         raise _OperationError(
             "unknown_schema", "The source pagination returned an empty data page."
         )
@@ -300,6 +300,7 @@ class _EastmoneyCompanyCapitalOperation:
     sort_column: str
     period_kind: str
     period_frequency: str
+    raw_fields: tuple[str, ...]
     requires_complete_pagination_for_fallback_dates = False
 
     def __init__(
@@ -369,6 +370,11 @@ class _EastmoneyCompanyCapitalOperation:
                 elif page.pages != expected_pages:
                     raise _OperationError(
                         "unknown_schema", "The source pagination metadata changed."
+                    )
+                if page.count == 0:
+                    return CapitalSourceBatch(
+                        operation_id=self.operation_id,
+                        degradations=tuple(degradations),
                     )
                 saw_older = False
                 for row_index, row in enumerate(page.rows):
@@ -497,9 +503,21 @@ class _EastmoneyCompanyCapitalOperation:
         )
 
     def _url(self, code: str, page: int) -> str:
+        columns = ",".join(
+            field
+            for field in self.raw_fields
+            if field
+            not in {
+                "success",
+                "code",
+                "result.pages",
+                "result.count",
+                "result.data[]",
+            }
+        )
         query = {
             "reportName": self.report_name,
-            "columns": "ALL",
+            "columns": columns,
             "filter": f'({self.identity_field}="{code}")',
             "pageNumber": str(page),
             "pageSize": str(self._page_size),
@@ -574,6 +592,22 @@ class EastmoneyMarginTradingOperation(_EastmoneyCompanyCapitalOperation):
     sort_column = "DATE"
     period_kind = "trading_day"
     period_frequency = "daily"
+    raw_fields: tuple[str, ...] = (
+        "success",
+        "code",
+        "result.pages",
+        "result.count",
+        "result.data[]",
+        "SCODE",
+        "DATE",
+        "RZYE",
+        "RZMRE",
+        "RZCHE",
+        "RQYE",
+        "RQMCL",
+        "RQCHL",
+        "RZRQYE",
+    )
 
     def _map(
         self, row: dict[str, Any]
@@ -634,6 +668,20 @@ class EastmoneyShareholderCountOperation(_EastmoneyCompanyCapitalOperation):
     sort_column = "END_DATE"
     period_kind = "reporting_period_end"
     period_frequency = "quarterly"
+    raw_fields: tuple[str, ...] = (
+        "success",
+        "code",
+        "result.pages",
+        "result.count",
+        "result.data[]",
+        "SECURITY_CODE",
+        "END_DATE",
+        "PRE_END_DATE",
+        "HOLDER_NUM",
+        "HOLDER_NUM_CHANGE",
+        "HOLDER_NUM_RATIO",
+        "AVG_FREE_SHARES",
+    )
 
     def _map(
         self, row: dict[str, Any]
@@ -691,6 +739,23 @@ class EastmoneyDividendOperation(_EastmoneyCompanyCapitalOperation):
     period_kind = "distribution_event"
     period_frequency = "event"
     requires_complete_pagination_for_fallback_dates = True
+    raw_fields: tuple[str, ...] = (
+        "success",
+        "code",
+        "result.pages",
+        "result.count",
+        "result.data[]",
+        "SECURITY_CODE",
+        "EX_DIVIDEND_DATE",
+        "PLAN_NOTICE_DATE",
+        "REPORT_DATE",
+        "PRETAX_BONUS_RMB",
+        "BONUS_RATIO",
+        "TRANSFER_RATIO",
+        "ASSIGN_PROGRESS",
+        "EQUITY_RECORD_DATE",
+        "PAY_CASH_DATE",
+    )
 
     def _observed_on(self, row: dict[str, Any]) -> str:
         ex_date = _optional_date(row.get("EX_DIVIDEND_DATE"), "EX_DIVIDEND_DATE")

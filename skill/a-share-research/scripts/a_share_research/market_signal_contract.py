@@ -140,6 +140,7 @@ class MarketSignalSourceOperation(Protocol):
 
     operation_id: str
     supported_signal_types: frozenset[str]
+    raw_fields: tuple[str, ...]
 
     def collect(self, query: MarketSignalQuery) -> SignalSourceBatch: ...
 

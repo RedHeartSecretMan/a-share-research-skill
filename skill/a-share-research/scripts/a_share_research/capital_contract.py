@@ -212,6 +212,7 @@ class CapitalSourceOperation(Protocol):
 
     operation_id: str
     supported_data_types: frozenset[str]
+    raw_fields: tuple[str, ...]
 
     def collect(self, query: CapitalQuery) -> CapitalSourceBatch: ...
 

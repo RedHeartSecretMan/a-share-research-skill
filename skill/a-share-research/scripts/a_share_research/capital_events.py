@@ -16,167 +16,787 @@ from .capital_contract import (
     CapitalSourceFailure,
     CapitalSourceOperation,
 )
-from .identity_resolution import resolve_security_identity
-from .identity_sources import HttpTransport
+from .identity_resolution import (
+    execute_security_identity_research,
+)
+from .identity_sources import (
+    HttpTransport,
+    build_default_identity_operations,
+)
+from .research_result import (
+    DirectTaskCalculation,
+    DirectTaskClaim,
+    DirectTaskConflict,
+    DirectTaskLimitation,
+    DirectTaskPlan,
+    EvidenceUsePolicy,
+    FieldDisposition,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+    ResearchDependency,
+    UnifiedResearchResult,
+    fold_direct_task_research_result,
+    safe_public_locator,
+)
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 SUBJECT_FREE_DATA_TYPES = frozenset(
     {"northbound_flow", "board_fund_flow", "market_dragon_tiger"}
 )
 SUBJECT_REQUIRED_DATA_TYPES = CAPITAL_DATA_TYPES.difference(SUBJECT_FREE_DATA_TYPES)
+_CAPITAL_CAPABILITY = "capital_event_observations"
+_CAPITAL_EVIDENCE_USE = "capital_event_observation"
+
+
+def build_capital_events_blocked_result(
+    request: dict[str, Any],
+    operations: Collection[CapitalSourceOperation],
+) -> UnifiedResearchResult:
+    """Return the formal result when policy prevents capital acquisition."""
+
+    query = _normalize_query(request)
+    operation_list = tuple(operations)
+    _validate_capital_operations(operation_list)
+    applicable = {
+        operation.operation_id
+        for operation in operation_list
+        if operation.supported_data_types.intersection(query.data_types)
+    }
+    if not applicable:
+        raise ValueError("capital_events has no applicable source operation")
+    return fold_direct_task_research_result(
+        DirectTaskPlan(
+            task_type="capital_events",
+            as_of=str(request["as_of"]),
+            obligations=tuple(_capital_obligation(item) for item in operation_list),
+            dependencies=(
+                ResearchDependency(
+                    consumer_id="capital_event_observation",
+                    evidence_use=_CAPITAL_EVIDENCE_USE,
+                    minimum_supporting_observations=1,
+                    core=True,
+                ),
+            ),
+        ),
+        tuple(
+            OperationOutcome(
+                capability_id=_CAPITAL_CAPABILITY,
+                operation_id=operation.operation_id,
+                execution=OperationExecution(
+                    "skipped_policy"
+                    if operation.operation_id in applicable
+                    else "not_requested"
+                ),
+                field_dispositions=_capital_dispositions(operation),
+            )
+            for operation in operation_list
+        ),
+        limitations=(
+            DirectTaskLimitation(
+                "source_policy_not_satisfied",
+                "capital_events currently requires experimental source operations",
+            ),
+        ),
+        summary="Capital-event acquisition was blocked by source policy.",
+    )
+
+
+def _capital_obligation(operation: CapitalSourceOperation) -> OperationObligation:
+    return OperationObligation(
+        capability_id=_CAPITAL_CAPABILITY,
+        operation_id=operation.operation_id,
+        source_role="declared_per_observation",
+        experimental=True,
+        exchange=None,
+        evidence_uses=(EvidenceUsePolicy(_CAPITAL_EVIDENCE_USE, "supporting"),),
+    )
+
+
+def _sanitize_identity_outcomes(
+    outcomes: tuple[OperationOutcome, ...],
+) -> tuple[OperationOutcome, ...]:
+    sanitized: list[OperationOutcome] = []
+    for outcome in outcomes:
+        observations: list[dict[str, object]] = []
+        for index, payload in enumerate(outcome.observations):
+            copied = json.loads(json.dumps(payload, ensure_ascii=False))
+            if not isinstance(copied, dict):
+                raise ValueError("identity observation must be a JSON object")
+            locator = copied.get("locator")
+            if isinstance(locator, dict) and "uri" in locator:
+                locator["uri"] = safe_public_locator(
+                    locator.get("uri"),
+                    "identity:"
+                    + hashlib.sha256(outcome.operation_id.encode()).hexdigest()[:12]
+                    + f":{index}",
+                )
+            observations.append(copied)
+        sanitized.append(
+            OperationOutcome(
+                outcome.capability_id,
+                outcome.operation_id,
+                outcome.execution,
+                tuple(observations),
+                outcome.source_errors,
+                outcome.field_dispositions,
+                outcome.diagnostics,
+            )
+        )
+    return tuple(sanitized)
+
+
+def _validate_capital_operations(
+    operations: tuple[CapitalSourceOperation, ...],
+) -> None:
+    operation_ids = [item.operation_id for item in operations]
+    if not operation_ids or len(operation_ids) != len(set(operation_ids)):
+        raise ValueError("capital operation IDs must be non-empty and unique")
+    for operation in operations:
+        _capital_dispositions(operation)
+
+
+def _capital_dispositions(
+    operation: CapitalSourceOperation,
+) -> tuple[FieldDisposition, ...]:
+    raw_fields = getattr(operation, "raw_fields", None)
+    if (
+        not isinstance(raw_fields, tuple)
+        or not raw_fields
+        or any(not isinstance(item, str) or not item for item in raw_fields)
+        or len(raw_fields) != len(set(raw_fields))
+    ):
+        raise ValueError(
+            "capital operation raw_fields must be a unique non-empty tuple of text"
+        )
+    return tuple(
+        _capital_field_disposition(operation.operation_id, item) for item in raw_fields
+    )
+
+
+def _capital_field_disposition(operation_id: str, field: str) -> FieldDisposition:
+    if field in {"result.data[]", "data.klines[]", "data.diff[]"}:
+        return FieldDisposition(
+            field,
+            "excluded",
+            None,
+            "Provider collection containers are not retained in public output.",
+        )
+    if field in {"success", "code", "result.pages", "result.count", "data.total"}:
+        return FieldDisposition(
+            field,
+            "cross_check_only",
+            f"coverage.{_CAPITAL_CAPABILITY}.operations.{operation_id}.query_complete",
+        )
+    if field in {"f1", "f2", "f7", "f57"}:
+        return FieldDisposition(
+            field,
+            "excluded",
+            None,
+            "The requested provider metadata field is not retained.",
+        )
+    if field in {"data.code", "data.market", "SCODE", "SECURITY_CODE"}:
+        return FieldDisposition(
+            field,
+            "cross_check_only",
+            "observations[].payload.subject",
+        )
+    if field == "SECURITY_NAME_ABBR":
+        return FieldDisposition(
+            field,
+            "normalized",
+            "observations[].payload.dimensions",
+        )
+    if field in {"f12", "f14"}:
+        return FieldDisposition(
+            field,
+            "normalized",
+            "observations[].payload.dimensions."
+            + ("board_code" if field == "f12" else "board_name"),
+        )
+    if field in {
+        "TRADE_DATE",
+        "DATE",
+        "END_DATE",
+        "FREE_DATE",
+        "f51",
+        "f124",
+    }:
+        return FieldDisposition(
+            field, "normalized", "observations[].payload.observed_on"
+        )
+    metric_destinations = {
+        "NET_DEAL_AMT": "net_buy_amount",
+        "f52": "main_net_inflow",
+        "f53": "small_order_net_inflow",
+        "f54": "medium_order_net_inflow",
+        "f55": "large_order_net_inflow",
+        "f56": "super_large_order_net_inflow",
+        "f62": "main_net_inflow",
+        "f164": "main_net_inflow",
+        "f174": "main_net_inflow",
+        "f184": "main_net_inflow_ratio",
+        "f165": "main_net_inflow_ratio",
+        "f175": "main_net_inflow_ratio",
+        "f109": "price_change_ratio",
+        "f160": "price_change_ratio",
+        "f66": "super_large_order_net_inflow",
+        "f72": "large_order_net_inflow",
+        "f78": "medium_order_net_inflow",
+        "f84": "small_order_net_inflow",
+        "RZYE": "financing_balance",
+        "RZMRE": "financing_buy_amount",
+        "RZCHE": "financing_repayment_amount",
+        "RQYE": "securities_lending_balance",
+        "RQMCL": "securities_lending_sell_volume",
+        "RQCHL": "securities_lending_repayment_volume",
+        "RZRQYE": "margin_balance",
+        "HOLDER_NUM": "shareholder_count",
+        "HOLDER_NUM_CHANGE": "shareholder_count_change",
+        "HOLDER_NUM_RATIO": "shareholder_count_change_ratio",
+        "AVG_FREE_SHARES": "average_shares_per_holder",
+        "PRETAX_BONUS_RMB": "cash_dividend_per_10_shares_before_tax",
+        "BONUS_RATIO": "bonus_shares_per_10_shares",
+        "TRANSFER_RATIO": "transfer_shares_per_10_shares",
+        "BILLBOARD_NET_AMT": "net_buy_amount",
+        "TURNOVERRATE": "turnover_rate",
+        "CLOSE_PRICE": "close_price",
+        "CHANGE_RATE": "change_rate",
+        "BILLBOARD_BUY_AMT": "buy_amount",
+        "BILLBOARD_SELL_AMT": "sell_amount",
+        "DEAL_PRICE": "deal_price",
+        "DEAL_VOLUME": "deal_volume",
+        "DEAL_AMT": "deal_amount",
+        "FREE_SHARES": "released_shares",
+        "ABLE_FREE_SHARES": "tradable_shares",
+        "FREE_RATIO": "total_share_ratio",
+    }
+    if field == "f3":
+        metric_destinations[field] = "provider_change_rate"
+    metric = metric_destinations.get(field)
+    if metric is not None:
+        return FieldDisposition(
+            field,
+            "normalized",
+            "observations[].payload.metrics",
+        )
+    dimension_destinations = {
+        "MUTUAL_TYPE": "connect_channel",
+        "f204": "leader",
+        "f257": "leader",
+        "PRE_END_DATE": "previous_period_end",
+        "EX_DIVIDEND_DATE": "ex_dividend_date",
+        "PLAN_NOTICE_DATE": "plan_notice_date",
+        "REPORT_DATE": "report_period_end",
+        "ASSIGN_PROGRESS": "implementation_status",
+        "EQUITY_RECORD_DATE": "record_date",
+        "PAY_CASH_DATE": "cash_payment_date",
+        "EXPLANATION": "reason",
+        "OPERATEDEPT_NAME": "buy_seats",
+        "OPERATEDEPT_CODE": "buy_seats",
+        "BUY": "buy_seats",
+        "SELL": "sell_seats",
+        "NET": "buy_seats",
+        "BUYER_NAME": "buyer_department",
+        "SELLER_NAME": "seller_department",
+        "FREE_SHARES_TYPE": "lockup_type",
+    }
+    dimension = dimension_destinations.get(field)
+    if dimension is not None:
+        return FieldDisposition(
+            field,
+            "normalized",
+            "observations[].payload.dimensions",
+        )
+    raise ValueError(f"capital operation has unknown raw field(s): {field}")
+
+
+def _capital_skipped_outcome(
+    operation: CapitalSourceOperation,
+    state: str,
+) -> OperationOutcome:
+    return OperationOutcome(
+        capability_id=_CAPITAL_CAPABILITY,
+        operation_id=operation.operation_id,
+        execution=OperationExecution(state),  # type: ignore[arg-type]
+        field_dispositions=_capital_dispositions(operation),
+    )
+
+
+def _capital_failed_outcome(
+    operation: CapitalSourceOperation,
+    failure: CapitalSourceFailure,
+) -> OperationOutcome:
+    return _capital_outcome(operation, (), (failure,), False)
+
+
+def _capital_outcome(
+    operation: CapitalSourceOperation,
+    observations: tuple[dict[str, object], ...],
+    errors: tuple[CapitalSourceFailure, ...],
+    query_complete: bool,
+    diagnostics: dict[str, object] | None = None,
+) -> OperationOutcome:
+    unique_errors = tuple(
+        {
+            (
+                item.source_operation,
+                item.code,
+                item.message,
+                item.details.get("data_type"),
+            ): item
+            for item in errors
+        }.values()
+    )
+    return OperationOutcome(
+        capability_id=_CAPITAL_CAPABILITY,
+        operation_id=operation.operation_id,
+        execution=(
+            OperationExecution("failed")
+            if unique_errors
+            else OperationExecution("succeeded", query_complete=query_complete)
+        ),
+        observations=observations,
+        source_errors=tuple(
+            {
+                "source_operation": operation.operation_id,
+                "code": item.code,
+                "message": item.message,
+                **(
+                    {"details": {"data_type": item.details["data_type"]}}
+                    if isinstance(item.details.get("data_type"), str)
+                    else {}
+                ),
+            }
+            for item in unique_errors
+        ),
+        field_dispositions=_capital_dispositions(operation),
+        diagnostics=diagnostics or {},
+    )
+
+
+def _capital_observation_key(
+    observation: CapitalObservation,
+    index: int,
+) -> str:
+    return (
+        f"{observation.source_operation}:{_observation_identity(observation)}:{index}"
+    )
+
+
+def _capital_observation_payload(
+    observation: CapitalObservation,
+    index: int,
+    query: CapitalQuery,
+) -> dict[str, object]:
+    key = _capital_observation_key(observation, index)
+    source_facts: dict[str, object] = {
+        "data_type": observation.data_type,
+        "subject": observation.subject,
+        "observed_on": observation.observed_on,
+        "available_at": observation.available_at,
+        "retrieved_at": observation.retrieved_at.isoformat(),
+        "period": observation.period,
+        "metrics": observation.metrics,
+        "units": observation.units,
+        "directions": observation.directions,
+        "dimensions": observation.dimensions,
+        "limitations": list(observation.limitations),
+    }
+    return {
+        "id": key,
+        "kind": "capital_event_observation",
+        "data_type": observation.data_type,
+        "source_operation": observation.source_operation,
+        "source_role": observation.source_role,
+        "subject": observation.subject,
+        "observed_on": observation.observed_on,
+        "available_at": observation.available_at,
+        "retrieved_at": observation.retrieved_at.isoformat(),
+        "period": observation.period,
+        "metrics": observation.metrics,
+        "units": observation.units,
+        "directions": observation.directions,
+        "dimensions": observation.dimensions,
+        "locator": {
+            "uri": safe_public_locator(
+                observation.locator_uri,
+                f"capital:{hashlib.sha256(observation.source_operation.encode()).hexdigest()[:12]}:{index}",
+            )
+        },
+        "limitations": list(observation.limitations),
+        "query_scope": {
+            "as_of": query.as_of,
+            "observed_from": query.observed_from,
+            "observed_to": query.observed_to,
+            "data_types": list(query.data_types),
+            "limit": query.limit,
+        },
+        "claim_eligibility": "experimental_observation_only",
+        "source_facts": source_facts,
+    }
+
+
+def _limit_capital_observations(
+    observations: list[tuple[CapitalObservation, str]],
+    limit: int,
+) -> list[tuple[CapitalObservation, str]]:
+    counts: dict[str, int] = {}
+    selected: list[tuple[CapitalObservation, str]] = []
+    for item in observations:
+        data_type = item[0].data_type
+        if counts.get(data_type, 0) >= limit:
+            continue
+        counts[data_type] = counts.get(data_type, 0) + 1
+        selected.append(item)
+    return selected
+
+
+def _capital_conflicts(
+    observations: list[tuple[CapitalObservation, str]],
+) -> tuple[DirectTaskConflict, ...]:
+    grouped: dict[tuple[str, str, str, str], list[tuple[CapitalObservation, str]]] = {}
+    for item in observations:
+        observation = item[0]
+        group = (
+            observation.data_type,
+            observation.observed_on,
+            json.dumps(observation.subject, sort_keys=True, ensure_ascii=False),
+            json.dumps(observation.period, sort_keys=True, ensure_ascii=False),
+        )
+        grouped.setdefault(group, []).append(item)
+    conflicts: list[DirectTaskConflict] = []
+    for items in grouped.values():
+        signatures = {
+            json.dumps(
+                {
+                    "metrics": item.metrics,
+                    "units": item.units,
+                    "directions": item.directions,
+                    "dimensions": item.dimensions,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            for item, _ in items
+        }
+        if len(items) > 1 and len(signatures) > 1:
+            conflicts.append(
+                DirectTaskConflict(
+                    "capital_observation_conflict",
+                    "Capital observations conflict for the same identity and period.",
+                    tuple(key for _, key in items),
+                )
+            )
+    return tuple(conflicts)
 
 
 def build_capital_events_result(
     request: dict[str, Any],
     operations: Collection[CapitalSourceOperation],
     identity_transport: HttpTransport,
-) -> dict[str, Any]:
-    """Collect and normalize capital-event evidence under one public task."""
+) -> UnifiedResearchResult:
+    """Collect operation-owned capital observations into the formal result."""
 
     query = _normalize_query(request)
-    identity = _resolve_subject(request, identity_transport)
-    if identity["status"] == "blocked":
-        return _blocked_identity_result(request, query, identity)
-    if identity["subjects"]:
-        query = replace(query, subject=identity["subjects"][0])
+    operation_list = tuple(operations)
+    _validate_capital_operations(operation_list)
+    identity_obligations: tuple[OperationObligation, ...] = ()
+    identity_outcomes: tuple[OperationOutcome, ...] = ()
+    identity_claims: tuple[DirectTaskClaim, ...] = ()
+    identity_dependencies: tuple[ResearchDependency, ...] = ()
+    identity_limitations: tuple[DirectTaskLimitation, ...] = ()
+    identity_blocked = False
+    if query.subject is not None:
+        clue = query.subject.get("clue")
+        if not isinstance(clue, str) or not clue.strip():
+            raise ValueError("capital_events subject requires a non-empty clue")
+        identity_request: dict[str, object] = {
+            **request,
+            "task_type": "security_identity",
+            "subjects": [{"clue": clue.strip()}],
+            "window": None,
+            "parameters": {},
+        }
+        identity_execution = execute_security_identity_research(
+            identity_request,
+            build_default_identity_operations(identity_transport),
+        )
+        identity_obligations = identity_execution.plan.obligations
+        identity_outcomes = _sanitize_identity_outcomes(identity_execution.outcomes)
+        identity_limitations = tuple(
+            DirectTaskLimitation(item.code, item.message)
+            for item in identity_execution.material.limitations
+        )
+        canonical = identity_execution.material.canonical_identity
+        identity_blocked = (
+            identity_execution.material.status == "blocked" or canonical is None
+        )
+        if canonical is not None and not identity_blocked:
+            canonical_subject = {
+                "security": {
+                    "exchange": canonical.exchange,
+                    "code": canonical.code,
+                    "type": canonical.security_type,
+                },
+                "name": canonical.name,
+                "issuer": {
+                    "name": canonical.issuer_name,
+                    "identifier": canonical.issuer_identifier,
+                    "security_relationship": canonical.issuer_relationship,
+                },
+            }
+            query = replace(query, subject=canonical_subject)
+            identity_claims = (
+                DirectTaskClaim(
+                    "capital_events_subject_identity",
+                    "security_identity",
+                    identity_execution.material.observation_keys,
+                    canonical_subject,
+                ),
+            )
+            identity_dependencies = (
+                ResearchDependency(
+                    "capital_events_subject_identity",
+                    "security_identity",
+                    1,
+                    True,
+                ),
+            )
 
-    source_errors: list[dict[str, Any]] = []
-    degradations: list[dict[str, Any]] = []
-    observations: list[CapitalObservation] = []
-    batch_limitations: set[str] = set()
+    outcomes: list[OperationOutcome] = []
+    owned: list[tuple[CapitalObservation, str]] = []
     coverage_batches: dict[str, list[tuple[str, int, bool, bool]]] = {
         data_type: [] for data_type in query.data_types
     }
-    for operation in operations:
-        applicable_types = operation.supported_data_types.intersection(query.data_types)
-        if not applicable_types:
+    limitation_codes: set[str] = {"experimental_capital_event_sources"}
+    for operation in operation_list:
+        applicable = operation.supported_data_types.intersection(query.data_types)
+        if not applicable:
+            outcomes.append(_capital_skipped_outcome(operation, "not_requested"))
             continue
-        batch = operation.collect(query)
+        if identity_blocked:
+            outcomes.append(
+                _capital_skipped_outcome(operation, "skipped_research_dependency")
+            )
+            continue
+        try:
+            batch = operation.collect(query)
+        except Exception:
+            failure = CapitalSourceFailure(
+                operation.operation_id,
+                "operation_failure",
+                "The source operation failed without a safe diagnostic.",
+            )
+            outcomes.append(_capital_failed_outcome(operation, failure))
+            for data_type in applicable:
+                coverage_batches[data_type].append(
+                    (operation.operation_id, 0, False, True)
+                )
+            continue
+        if (
+            batch.operation_id != operation.operation_id
+            or any(
+                item.source_operation != operation.operation_id
+                for item in batch.observations
+            )
+            or any(
+                item.source_operation != operation.operation_id
+                for item in batch.source_errors
+            )
+            or any(
+                item.source_operation != operation.operation_id
+                for item in batch.degradations
+            )
+            or (
+                bool(batch.mode_acquisitions)
+                and set(batch.mode_acquisitions) != set(applicable)
+            )
+            or any(
+                data_type != acquisition.data_type
+                or acquisition.operation_id != operation.operation_id
+                or any(
+                    item.data_type != data_type
+                    or item.source_operation != operation.operation_id
+                    for item in acquisition.observations
+                )
+                or any(
+                    item.source_operation != operation.operation_id
+                    for item in (
+                        *acquisition.source_errors,
+                        *acquisition.degradations,
+                    )
+                )
+                for data_type, acquisition in batch.mode_acquisitions.items()
+            )
+        ):
+            failure = CapitalSourceFailure(
+                operation.operation_id,
+                "operation_owner_mismatch",
+                "The source batch contradicted its operation owner.",
+            )
+            outcomes.append(_capital_failed_outcome(operation, failure))
+            for data_type in applicable:
+                coverage_batches[data_type].append(
+                    (operation.operation_id, 0, False, True)
+                )
+            continue
+        if any(
+            isinstance(item.details.get("data_type"), str)
+            and item.details["data_type"] not in applicable
+            for item in (*batch.source_errors, *batch.degradations)
+        ):
+            failure = CapitalSourceFailure(
+                operation.operation_id,
+                "operation_scope_mismatch",
+                "The source batch contradicted its requested data-type scope.",
+            )
+            outcomes.append(_capital_failed_outcome(operation, failure))
+            for data_type in applicable:
+                coverage_batches[data_type].append(
+                    (operation.operation_id, 0, False, True)
+                )
+            continue
         valid, schema_errors = _validate_observations(
-            batch.operation_id,
+            operation.operation_id,
             batch.observations,
             query,
         )
-        valid_in_window = [item for item in valid if _within_window(item, query)]
-        has_errors = bool(schema_errors or batch.source_errors)
-        for data_type in query.data_types:
-            if data_type not in applicable_types:
-                continue
+        operation_owned = [
+            (item, _capital_observation_key(item, index))
+            for index, item in enumerate(valid)
+        ]
+        owned.extend(operation_owned)
+        errors = (*schema_errors, *batch.source_errors)
+        has_errors = bool(errors)
+        in_window = [item for item in valid if _within_window(item, query)]
+        mode_diagnostics: dict[str, object] = {}
+        if batch.mode_acquisitions:
+            mode_diagnostics["mode_acquisitions"] = {
+                data_type: {
+                    "complete": acquisition.complete,
+                    "source_error_codes": [
+                        item.code for item in acquisition.source_errors
+                    ]
+                    + [
+                        item.code
+                        for item in schema_errors
+                        if item.details.get("data_type") == data_type
+                    ],
+                }
+                for data_type, acquisition in batch.mode_acquisitions.items()
+            }
+        for data_type in applicable:
+            acquisition = batch.mode_acquisitions.get(data_type)
+            if acquisition is None:
+                query_complete = batch.complete
+                type_has_errors = has_errors
+            else:
+                query_complete = acquisition.complete
+                type_has_errors = bool(
+                    acquisition.source_errors
+                    or any(
+                        item.details.get("data_type") == data_type
+                        for item in schema_errors
+                    )
+                )
             coverage_batches[data_type].append(
                 (
-                    batch.operation_id,
-                    sum(item.data_type == data_type for item in valid_in_window),
-                    batch.complete,
-                    has_errors,
+                    operation.operation_id,
+                    sum(item.data_type == data_type for item in in_window),
+                    query_complete,
+                    type_has_errors,
                 )
             )
-        observations.extend(valid)
-        source_errors.extend(item.to_result() for item in schema_errors)
-        source_errors.extend(item.to_result() for item in batch.source_errors)
-        degradations.extend(item.to_result() for item in batch.degradations)
-        batch_limitations.update(batch.limitations)
-
-    accepted = [item for item in observations if _within_window(item, query)]
-    deduplicated = _deduplicate(accepted)
-    deduplicated_counts: dict[str, int] = {}
-    for item in deduplicated:
-        data_type = item["data_type"]
-        deduplicated_counts[data_type] = deduplicated_counts.get(data_type, 0) + 1
-    selected = _limit_per_type(deduplicated, query.limit)
-    type_counts: dict[str, int] = {}
-    for item in selected:
-        data_type = item["data_type"]
-        type_counts[data_type] = type_counts.get(data_type, 0) + 1
-    coverage = _coverage_by_data_type(
-        query.data_types,
-        type_counts,
-        coverage_batches,
-    )
-
-    limitation_codes = batch_limitations | {
-        code for item in accepted for code in item.limitations
-    }
-    limitations: list[dict[str, Any]] = [
-        {
-            "code": "experimental_capital_event_sources",
-            "message": (
-                "Capital-event observations currently use experimental source "
-                "operations and cannot independently establish a supported claim."
-            ),
-        }
-    ]
-    limitations.extend(
-        {"code": code, "message": _limitation_message(code)}
-        for code in sorted(limitation_codes)
-    )
-    truncated_types = sorted(
-        data_type
-        for data_type, count in deduplicated_counts.items()
-        if count > query.limit
-    )
-    if truncated_types:
-        limitations.append(
-            {
-                "code": "result_truncated_to_limit",
-                "message": (
-                    "The public result contains only the requested number of "
-                    "observations for at least one data type."
+        outcomes.append(
+            _capital_outcome(
+                operation,
+                tuple(
+                    _capital_observation_payload(item, index, query)
+                    for index, item in enumerate(valid)
                 ),
-                "data_types": truncated_types,
-            }
+                errors,
+                batch.complete,
+                mode_diagnostics,
+            )
         )
-    missing_types = sorted(
-        data_type
-        for data_type, item in coverage.items()
-        if item["state"] == "indeterminate"
-    )
-    if missing_types:
-        limitations.append(
-            {
-                "code": "requested_data_type_unavailable",
-                "message": (
-                    "At least one requested capital-event type produced no usable "
-                    "observation; this does not prove the event or flow did not exist."
-                ),
-                "data_types": missing_types,
-            }
-        )
-    limitations.extend(identity["limitations"])
-    if not selected and missing_types:
-        limitations.append(
-            {
-                "code": "capital_events_unavailable",
-                "message": (
-                    "No contract-complete capital-event observation was established "
-                    "for the requested window."
-                ),
-            }
-        )
+        limitation_codes.update(batch.limitations)
+        limitation_codes.update(item.code for item in batch.degradations)
+        limitation_codes.update(code for item in valid for code in item.limitations)
 
-    evidence_observations = _limit_per_type(
-        _deduplicate_observations(accepted),
+    selected = _limit_capital_observations(
+        [(item, key) for item, key in owned if _within_window(item, query)],
         query.limit,
     )
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked" if missing_types else "limited",
-        "subjects": identity["subjects"],
-        "observations": selected,
-        "brief": {
-            "observation_count": len(selected),
-            "data_types": list(query.data_types),
-            "data_type_counts": type_counts,
-            "coverage": coverage,
-        },
-        "evidence": [
-            *identity["evidence"],
-            *[_to_evidence(item) for item in evidence_observations],
-        ],
-        "conflicts": identity["conflicts"],
-        "source_errors": [*identity["source_errors"], *source_errors],
-        "degradations": degradations,
-        "limitations": limitations,
+    if len(selected) < sum(_within_window(item, query) for item, _ in owned):
+        limitation_codes.add("result_truncated_to_limit")
+    counts = {
+        data_type: sum(item.data_type == data_type for item, _ in selected)
+        for data_type in query.data_types
     }
+    coverage = _coverage_by_data_type(query.data_types, counts, coverage_batches)
+    claims = tuple(
+        DirectTaskClaim(
+            "capital_event_observation",
+            _CAPITAL_EVIDENCE_USE,
+            (key,),
+            {
+                "data_type": item.data_type,
+                "claim_eligibility": "experimental_observation_only",
+                "issuer_fact": item.source_role == "authoritative_disclosure",
+            },
+        )
+        for item, key in selected
+    )
+    calculations = tuple(
+        DirectTaskCalculation(
+            "capital_event_coverage",
+            _CAPITAL_EVIDENCE_USE,
+            tuple(key for item, key in selected if item.data_type == data_type),
+            {"data_type": data_type, **coverage[data_type]},
+        )
+        for data_type in query.data_types
+    )
+    conflicts = _capital_conflicts(selected)
+    limitations = [
+        DirectTaskLimitation(code, _limitation_message(code))
+        for code in sorted(limitation_codes)
+    ]
+    if any(item["state"] == "indeterminate" for item in coverage.values()):
+        limitations.append(
+            DirectTaskLimitation(
+                "requested_data_type_unavailable",
+                "At least one requested capital-event type produced no usable observation.",
+            )
+        )
+    return fold_direct_task_research_result(
+        DirectTaskPlan(
+            task_type="capital_events",
+            as_of=str(request["as_of"]),
+            obligations=(
+                *identity_obligations,
+                *(tuple(_capital_obligation(item) for item in operation_list)),
+            ),
+            dependencies=(
+                *identity_dependencies,
+                ResearchDependency(
+                    "capital_event_observation",
+                    _CAPITAL_EVIDENCE_USE,
+                    1,
+                    True,
+                ),
+            ),
+        ),
+        (*identity_outcomes, *tuple(outcomes)),
+        claims=(*identity_claims, *claims),
+        calculations=calculations,
+        conflicts=conflicts,
+        limitations=(*identity_limitations, *limitations),
+        summary=(
+            f"Capital events retained {len(owned)} operation-owned observation(s); "
+            f"{len(selected)} entered business-window adoption."
+        ),
+    )
 
 
 def _coverage_by_data_type(
@@ -191,6 +811,7 @@ def _coverage_by_data_type(
         complete_source = any(
             complete and not has_errors for _, _, complete, has_errors in contributions
         )
+        has_failed_source = any(has_errors for _, _, _, has_errors in contributions)
         complete_nonempty_source = any(
             count > 0 and complete and not has_errors
             for _, count, complete, has_errors in contributions
@@ -198,7 +819,7 @@ def _coverage_by_data_type(
         if observation_count:
             state = "observed_nonempty" if complete_nonempty_source else "partial"
         elif complete_source:
-            state = "observed_empty"
+            state = "partial" if has_failed_source else "observed_empty"
         else:
             state = "indeterminate"
         coverage[data_type] = {
@@ -272,61 +893,6 @@ def _normalize_query(request: dict[str, Any]) -> CapitalQuery:
     )
 
 
-def _resolve_subject(
-    request: dict[str, Any], transport: HttpTransport
-) -> dict[str, Any]:
-    subjects = request["subjects"]
-    if not subjects:
-        return {
-            "status": "limited",
-            "subjects": [],
-            "evidence": [],
-            "conflicts": [],
-            "source_errors": [],
-            "limitations": [],
-        }
-    subject = subjects[0]
-    clue = subject.get("clue") if isinstance(subject, dict) else None
-    if not isinstance(clue, str) or not clue.strip():
-        raise ValueError("capital_events subject requires a non-empty clue")
-    resolved = resolve_security_identity(clue.strip(), request["as_of"], transport)
-    candidates_value = resolved.get("candidates", [])
-    candidates = candidates_value if isinstance(candidates_value, list) else []
-    if resolved["status"] == "blocked" or len(candidates) != 1:
-        return {
-            "status": "blocked",
-            "subjects": [],
-            "evidence": resolved.get("evidence", []),
-            "conflicts": resolved.get("conflicts", []),
-            "source_errors": resolved.get("source_errors", []),
-            "limitations": resolved.get("limitations", []),
-        }
-    candidate = candidates[0]
-    if not isinstance(candidate, dict) or not isinstance(
-        candidate.get("security"), dict
-    ):
-        raise ValueError("identity result does not contain a canonical security")
-    security = candidate["security"]
-    return {
-        "status": resolved["status"],
-        "subjects": [
-            {
-                "security": {
-                    "exchange": security["exchange"],
-                    "code": security["code"],
-                    "type": security["type"],
-                },
-                "name": candidate["name"],
-                "issuer": candidate["issuer"],
-            }
-        ],
-        "evidence": resolved.get("evidence", []),
-        "conflicts": resolved.get("conflicts", []),
-        "source_errors": resolved.get("source_errors", []),
-        "limitations": resolved.get("limitations", []),
-    }
-
-
 def _validate_observations(
     operation_id: str,
     observations: tuple[CapitalObservation, ...],
@@ -397,6 +963,7 @@ def _validate_observations(
                     ),
                     {
                         "as_of": query.as_of,
+                        "data_type": observation.data_type,
                         "retrieved_on": observation.retrieved_at.astimezone(
                             CHINA_STANDARD_TIME
                         )
@@ -414,7 +981,10 @@ def _validate_observations(
                     operation_id,
                     "unknown_schema",
                     "A source observation is outside the public capital-event contract.",
-                    {"invalid_fields": sorted(set(invalid_fields))},
+                    {
+                        "data_type": observation.data_type,
+                        "invalid_fields": sorted(set(invalid_fields)),
+                    },
                 )
             )
             continue
@@ -484,33 +1054,6 @@ def _availability_error(
     return None if is_valid else "unknown_schema"
 
 
-def _deduplicate(
-    observations: list[CapitalObservation],
-) -> list[dict[str, Any]]:
-    return [_to_result(item) for item in _deduplicate_observations(observations)]
-
-
-def _deduplicate_observations(
-    observations: list[CapitalObservation],
-) -> list[CapitalObservation]:
-    selected: dict[str, CapitalObservation] = {}
-    for item in observations:
-        selected.setdefault(_observation_identity(item), item)
-    return list(selected.values())
-
-
-def _limit_per_type(items: list[Any], limit: int) -> list[Any]:
-    counts: dict[str, int] = {}
-    selected: list[Any] = []
-    for item in items:
-        data_type = item["data_type"] if isinstance(item, dict) else item.data_type
-        if counts.get(data_type, 0) >= limit:
-            continue
-        counts[data_type] = counts.get(data_type, 0) + 1
-        selected.append(item)
-    return selected
-
-
 def _observation_identity(observation: CapitalObservation) -> str:
     payload = {
         "data_type": observation.data_type,
@@ -528,78 +1071,6 @@ def _observation_identity(observation: CapitalObservation) -> str:
         payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")
     )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
-def _to_result(observation: CapitalObservation) -> dict[str, Any]:
-    return {
-        "data_type": observation.data_type,
-        "source_operation": observation.source_operation,
-        "source_role": observation.source_role,
-        "claim_eligibility": "experimental_observation_only",
-        "subject": observation.subject,
-        "observed_on": observation.observed_on,
-        "available_at": observation.available_at,
-        "retrieved_at": observation.retrieved_at.isoformat(),
-        "period": observation.period,
-        "metrics": observation.metrics,
-        "units": observation.units,
-        "directions": observation.directions,
-        "dimensions": observation.dimensions,
-        "locator": {"uri": observation.locator_uri},
-        "limitations": list(observation.limitations),
-    }
-
-
-def _to_evidence(observation: CapitalObservation) -> dict[str, Any]:
-    identity = _observation_identity(observation)
-    return {
-        "id": f"capital-{identity}",
-        "source_role": observation.source_role,
-        "source_operation": observation.source_operation,
-        "experimental": True,
-        "subject": observation.subject,
-        "observation": {
-            "kind": observation.data_type,
-            "observed_on": observation.observed_on,
-            "period": observation.period,
-            "metrics": observation.metrics,
-            "units": observation.units,
-            "directions": observation.directions,
-            "dimensions": observation.dimensions,
-        },
-        "evidence_time": observation.observed_on,
-        "available_at": observation.available_at,
-        "retrieved_at": observation.retrieved_at.isoformat(),
-        "locator": {"uri": observation.locator_uri},
-        "limitations": list(observation.limitations),
-    }
-
-
-def _blocked_identity_result(
-    request: dict[str, Any], query: CapitalQuery, identity: dict[str, Any]
-) -> dict[str, Any]:
-    coverage = _coverage_by_data_type(
-        query.data_types,
-        {},
-        {data_type: [] for data_type in query.data_types},
-    )
-    return {
-        "schema_version": request["schema_version"],
-        "status": "blocked",
-        "subjects": [],
-        "observations": [],
-        "brief": {
-            "observation_count": 0,
-            "data_types": list(query.data_types),
-            "data_type_counts": {},
-            "coverage": coverage,
-        },
-        "evidence": identity["evidence"],
-        "conflicts": identity["conflicts"],
-        "source_errors": identity["source_errors"],
-        "degradations": [],
-        "limitations": identity["limitations"],
-    }
 
 
 def _explicit_date(value: object, field: str) -> str:

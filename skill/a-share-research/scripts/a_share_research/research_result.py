@@ -254,6 +254,34 @@ def _require_exact_keys(
         raise ValueError(f"{path} does not match the strict result schema")
 
 
+def _validate_public_source_error(
+    value: Mapping[str, object],
+) -> Mapping[str, object]:
+    expected = {"id", "capability_id", "operation_id", "code", "message"}
+    details = value.get("details")
+    if details is not None:
+        expected.add("details")
+    _require_exact_keys(value, expected, path="source error")
+    if details is None:
+        return {}
+    if not isinstance(details, Mapping) or len(details) != 1:
+        raise ValueError("source error scope material is invalid")
+    data_type = details.get("data_type")
+    signal_types = details.get("signal_types")
+    if isinstance(data_type, str) and data_type:
+        _require_exact_keys(details, {"data_type"}, path="source error details")
+        return details
+    if (
+        isinstance(signal_types, list)
+        and signal_types
+        and all(isinstance(item, str) and item for item in signal_types)
+        and len(signal_types) == len(set(signal_types))
+    ):
+        _require_exact_keys(details, {"signal_types"}, path="source error details")
+        return details
+    raise ValueError("source error scope material is invalid")
+
+
 def _validate_diagnostic_keys(value: object) -> None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
@@ -522,6 +550,52 @@ def _validate_inner_source_operation(value: object, owner: str) -> None:
     elif isinstance(value, (list, tuple)):
         for nested in value:
             _validate_inner_source_operation(nested, owner)
+
+
+def _validate_disposition_destination(
+    destination: str,
+    owner: tuple[str, str],
+    observation_ids: Sequence[str],
+    observations_by_id: Mapping[str, Mapping[str, object]],
+) -> None:
+    coverage_destination = f"coverage.{owner[0]}.operations.{owner[1]}.query_complete"
+    if destination == coverage_destination:
+        return
+    prefix = "observations[].payload."
+    if not destination.startswith(prefix):
+        raise ValueError("field disposition destination is unsupported")
+    path = destination.removeprefix(prefix).split(".")
+    if not path or any(not segment for segment in path):
+        raise ValueError("field disposition destination is invalid")
+    if not observation_ids:
+        return
+    for observation_id in observation_ids:
+        record = observations_by_id.get(observation_id)
+        if record is None:
+            raise ValueError("field disposition destination owner is missing")
+        values: list[object] = [record.get("payload")]
+        for segment in path:
+            collection = segment.endswith("[]")
+            key = segment.removesuffix("[]")
+            nested_values: list[object] = []
+            for value in values:
+                if not isinstance(value, Mapping) or key not in value:
+                    continue
+                nested = value[key]
+                if collection:
+                    if isinstance(nested, list):
+                        nested_values.extend(nested)
+                else:
+                    nested_values.append(nested)
+            if not nested_values:
+                break
+            values = nested_values
+        else:
+            return
+    raise ValueError(
+        "field disposition destination does not resolve: "
+        f"{owner[0]}/{owner[1]} -> {destination}"
+    )
 
 
 @dataclass(frozen=True)
@@ -996,17 +1070,7 @@ class UnifiedResearchResult:
 
         source_error_owners: dict[str, tuple[str, str]] = {}
         for source_error in source_errors:
-            _require_exact_keys(
-                source_error,
-                {
-                    "id",
-                    "capability_id",
-                    "operation_id",
-                    "code",
-                    "message",
-                },
-                path="source error",
-            )
+            details = _validate_public_source_error(source_error)
             error_id = source_error.get("id")
             error_capability_id = source_error.get("capability_id")
             error_operation_id = source_error.get("operation_id")
@@ -1023,6 +1087,19 @@ class UnifiedResearchResult:
                 error_capability_id,
                 error_operation_id,
             )
+            if details and not (
+                (
+                    plan.get("task_type") == "capital_events"
+                    and error_capability_id == "capital_event_observations"
+                    and "data_type" in details
+                )
+                or (
+                    plan.get("task_type") == "market_signals"
+                    and error_capability_id == "market_signal_observations"
+                    and "signal_types" in details
+                )
+            ):
+                raise ValueError("source error scope is invalid for this task")
 
         coverage = cast(dict[str, object], result["coverage"])
         if set(coverage) != planned_capabilities:
@@ -1495,6 +1572,7 @@ class UnifiedResearchResult:
         observations = cast(list[dict[str, object]], result["observations"])
         source_errors = cast(list[dict[str, object]], result["source_errors"])
         observation_owners: dict[str, tuple[str, str]] = {}
+        observations_by_id: dict[str, Mapping[str, object]] = {}
         for observation in observations:
             _require_exact_keys(
                 observation,
@@ -1525,13 +1603,10 @@ class UnifiedResearchResult:
             if observation_id != stable_result_id("observation", payload):
                 raise ValueError("observation ID contradicts its canonical payload")
             observation_owners[observation_id] = observation_owner
+            observations_by_id[observation_id] = observation
         source_error_owners: dict[str, tuple[str, str]] = {}
         for error in source_errors:
-            _require_exact_keys(
-                error,
-                {"id", "capability_id", "operation_id", "code", "message"},
-                path="source error",
-            )
+            details = _validate_public_source_error(error)
             error_id = error.get("id")
             error_capability = error.get("capability_id")
             error_operation = error.get("operation_id")
@@ -1545,11 +1620,25 @@ class UnifiedResearchResult:
             error_owner = (error_capability, error_operation)
             if error_owner not in obligations:
                 raise ValueError("source-error ownership is invalid")
+            if details and not (
+                (
+                    task_type == "capital_events"
+                    and error_capability == "capital_event_observations"
+                    and "data_type" in details
+                )
+                or (
+                    task_type == "market_signals"
+                    and error_capability == "market_signal_observations"
+                    and "signal_types" in details
+                )
+            ):
+                raise ValueError("source error scope is invalid for this task")
             payload = {
                 "capability_id": error_owner[0],
                 "operation_id": error_owner[1],
                 "code": error.get("code"),
                 "message": error.get("message"),
+                **({"details": details} if details else {}),
             }
             if error_id != stable_result_id("source-error", payload):
                 raise ValueError("source-error ID contradicts its canonical payload")
@@ -1619,12 +1708,22 @@ class UnifiedResearchResult:
                     if not isinstance(field_name, str) or field_name in seen_fields:
                         raise ValueError("field disposition contract is invalid")
                     seen_fields.add(field_name)
-                    FieldDisposition(
+                    typed_disposition = FieldDisposition(
                         field_name,
                         cast(Disposition, disposition.get("disposition")),
                         cast(str | None, disposition.get("destination")),
                         cast(str | None, disposition.get("reason")),
                     )
+                    if (task_type, capability_id) in {
+                        ("capital_events", "capital_event_observations"),
+                        ("market_signals", "market_signal_observations"),
+                    } and typed_disposition.destination is not None:
+                        _validate_disposition_destination(
+                            typed_disposition.destination,
+                            owner,
+                            cast(list[str], observation_ids),
+                            observations_by_id,
+                        )
                 execution = OperationExecution(
                     cast(OperationExecutionState, operation.get("execution_state")),
                     query_complete=cast(bool | None, operation.get("query_complete")),
@@ -1965,6 +2064,796 @@ def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) 
         _validate_intraday_replay_domain_facts(result)
     elif task_type == "research_content":
         _validate_research_content_domain_facts(result)
+    elif task_type == "capital_events":
+        _validate_capital_event_domain_facts(result)
+    elif task_type == "market_signals":
+        _validate_market_signal_domain_facts(result)
+
+
+def _validate_capital_event_domain_facts(
+    result: Mapping[str, object],
+) -> None:
+    observations = cast(list[dict[str, object]], result["observations"])
+    source_errors = cast(list[dict[str, object]], result["source_errors"])
+    capital_records: list[tuple[str, dict[str, object]]] = []
+    for record in observations:
+        if record.get("capability_id") != "capital_event_observations":
+            continue
+        payload = _record_payload(record)
+        expected = {
+            "id",
+            "kind",
+            "data_type",
+            "source_operation",
+            "source_role",
+            "subject",
+            "observed_on",
+            "available_at",
+            "retrieved_at",
+            "period",
+            "metrics",
+            "units",
+            "directions",
+            "dimensions",
+            "locator",
+            "limitations",
+            "query_scope",
+            "claim_eligibility",
+            "source_facts",
+        }
+        if (
+            set(payload) != expected
+            or payload.get("kind") != "capital_event_observation"
+        ):
+            raise ValueError("capital domain fact schema is invalid")
+        if payload.get("source_operation") != record.get("operation_id"):
+            raise ValueError("capital domain fact owner is invalid")
+        source_facts = payload.get("source_facts")
+        if not isinstance(source_facts, dict):
+            raise ValueError("capital retained source facts are invalid")
+        source_fact_fields = {
+            "data_type",
+            "subject",
+            "observed_on",
+            "available_at",
+            "retrieved_at",
+            "period",
+            "metrics",
+            "units",
+            "directions",
+            "dimensions",
+            "limitations",
+        }
+        if set(source_facts) != source_fact_fields or any(
+            payload.get(field) != source_facts.get(field)
+            for field in source_fact_fields
+        ):
+            raise ValueError("capital retained domain facts contradict source facts")
+        metrics = payload.get("metrics")
+        units = payload.get("units")
+        directions = payload.get("directions")
+        if (
+            not isinstance(metrics, dict)
+            or not isinstance(units, dict)
+            or not isinstance(directions, dict)
+            or set(metrics) != set(units)
+            or set(metrics) != set(directions)
+        ):
+            raise ValueError("capital retained metric contract is invalid")
+        scope = payload.get("query_scope")
+        if (
+            not isinstance(scope, dict)
+            or scope.get("as_of")
+            != cast(dict[str, object], result["research_anchor"]).get("as_of")
+            or not isinstance(scope.get("observed_from"), str)
+            or not isinstance(scope.get("observed_to"), str)
+            or not isinstance(scope.get("data_types"), list)
+            or payload.get("data_type") not in scope["data_types"]
+        ):
+            raise ValueError("capital retained query scope is invalid")
+        capital_records.append((cast(str, record["id"]), payload))
+
+    claims = cast(list[dict[str, object]], result["claims"])
+    capital_claims = [
+        item for item in claims if item.get("kind") == "capital_event_observation"
+    ]
+    records_by_id = dict(capital_records)
+    expected_adopted: set[str] = set()
+    counts: dict[str, int] = {}
+    for observation_id, payload in capital_records:
+        scope = cast(dict[str, object], payload["query_scope"])
+        observed_on = payload.get("observed_on")
+        data_type = cast(str, payload["data_type"])
+        limit = scope.get("limit")
+        if (
+            isinstance(observed_on, str)
+            and isinstance(scope.get("observed_from"), str)
+            and isinstance(scope.get("observed_to"), str)
+            and cast(str, scope["observed_from"])
+            <= observed_on
+            <= cast(str, scope["observed_to"])
+            and isinstance(limit, int)
+            and not isinstance(limit, bool)
+            and counts.get(data_type, 0) < limit
+        ):
+            counts[data_type] = counts.get(data_type, 0) + 1
+            expected_adopted.add(observation_id)
+    actual_adopted: set[str] = set()
+    for claim in capital_claims:
+        observation_ids = claim.get("observation_ids")
+        claim_payload = claim.get("payload")
+        if (
+            not isinstance(observation_ids, list)
+            or len(observation_ids) != 1
+            or observation_ids[0] not in records_by_id
+            or not isinstance(claim_payload, dict)
+        ):
+            raise ValueError("capital adopted domain fact is invalid")
+        source = records_by_id[cast(str, observation_ids[0])]
+        expected_payload = {
+            "data_type": source["data_type"],
+            "claim_eligibility": "experimental_observation_only",
+            "issuer_fact": source["source_role"] == "authoritative_disclosure",
+        }
+        if claim_payload != expected_payload:
+            raise ValueError("capital adopted domain fact contradicts observation")
+        actual_adopted.add(cast(str, observation_ids[0]))
+    if actual_adopted != expected_adopted:
+        raise ValueError("capital adoption does not match the business window")
+    capability = cast(dict[str, object], result["coverage"]).get(
+        "capital_event_observations"
+    )
+    operations = capability.get("operations") if isinstance(capability, dict) else None
+    if not isinstance(operations, dict):
+        raise ValueError("capital calculation ownership is invalid")
+    capital_calculations = [
+        item
+        for item in cast(list[dict[str, object]], result["calculations"])
+        if item.get("kind") == "capital_event_coverage"
+    ]
+    calculation_types: set[str] = set()
+    for calculation in capital_calculations:
+        calculation_payload = calculation.get("payload")
+        input_ids = calculation.get("input_ids")
+        if not isinstance(calculation_payload, dict) or not isinstance(input_ids, list):
+            raise ValueError("capital coverage calculation is invalid")
+        calculation_data_type = calculation_payload.get("data_type")
+        source_operations = calculation_payload.get("source_operations")
+        if (
+            not isinstance(calculation_data_type, str)
+            or calculation_data_type in calculation_types
+            or not isinstance(source_operations, list)
+            or any(not isinstance(item, str) for item in source_operations)
+            or len(source_operations) != len(set(source_operations))
+            or any(item not in operations for item in source_operations)
+        ):
+            raise ValueError("capital coverage calculation ownership is invalid")
+        calculation_types.add(calculation_data_type)
+        expected_inputs = [
+            observation_id
+            for observation_id, source in capital_records
+            if source["data_type"] == calculation_data_type
+            and observation_id in expected_adopted
+        ]
+        retained_owners = {
+            cast(str, source["source_operation"])
+            for _, source in capital_records
+            if source["data_type"] == calculation_data_type
+        }
+        if input_ids != expected_inputs or not retained_owners.issubset(
+            set(source_operations)
+        ):
+            raise ValueError("capital coverage calculation inputs are invalid")
+        states: list[object] = []
+        for operation_id in source_operations:
+            operation = cast(dict[str, object], operations[operation_id])
+            state = operation.get("state")
+            diagnostics = operation.get("diagnostics")
+            mode_acquisitions = (
+                diagnostics.get("mode_acquisitions")
+                if isinstance(diagnostics, dict)
+                else None
+            )
+            mode = (
+                mode_acquisitions.get(calculation_data_type)
+                if isinstance(mode_acquisitions, dict)
+                else None
+            )
+            if mode is not None:
+                if not isinstance(mode, dict):
+                    raise ValueError("capital mode acquisition material is invalid")
+                _require_exact_keys(
+                    mode,
+                    {"complete", "source_error_codes"},
+                    path="capital mode acquisition material",
+                )
+                complete = mode.get("complete")
+                error_codes = mode.get("source_error_codes")
+                if (
+                    not isinstance(complete, bool)
+                    or not isinstance(error_codes, list)
+                    or any(
+                        not isinstance(item, str) or not item for item in error_codes
+                    )
+                ):
+                    raise ValueError("capital mode acquisition material is invalid")
+                scoped_error_codes = sorted(
+                    {
+                        cast(str, error["code"])
+                        for error in source_errors
+                        if error.get("operation_id") == operation_id
+                        and isinstance(error.get("details"), dict)
+                        and cast(dict[str, object], error["details"]).get("data_type")
+                        == calculation_data_type
+                    }
+                )
+                if sorted(set(error_codes)) != scoped_error_codes:
+                    raise ValueError(
+                        "capital mode source material contradicts public outcomes"
+                    )
+                if not complete and not scoped_error_codes:
+                    raise ValueError(
+                        "capital mode incomplete state lacks public source material"
+                    )
+                operation_has_inputs = any(
+                    source["data_type"] == calculation_data_type
+                    and source["source_operation"] == operation_id
+                    and observation_id in expected_adopted
+                    for observation_id, source in capital_records
+                )
+                if complete and not error_codes:
+                    state = (
+                        "observed_nonempty"
+                        if operation_has_inputs
+                        else "observed_empty"
+                    )
+                else:
+                    state = "partial" if operation_has_inputs else "indeterminate"
+            states.append(state)
+        if expected_inputs:
+            state = (
+                "partial"
+                if any(item in {"partial", "failed"} for item in states)
+                else "observed_nonempty"
+            )
+        elif "observed_empty" in states:
+            state = (
+                "partial"
+                if any(item in {"partial", "failed"} for item in states)
+                else "observed_empty"
+            )
+        elif any(item in {"partial", "failed"} for item in states):
+            state = (
+                "partial"
+                if any(item == "observed_empty" for item in states)
+                else "indeterminate"
+            )
+        elif states and all(item == "observed_empty" for item in states):
+            state = "observed_empty"
+        else:
+            state = "indeterminate"
+        if calculation_payload != {
+            "data_type": calculation_data_type,
+            "state": state,
+            "observation_count": len(expected_inputs),
+            "source_operations": source_operations,
+        }:
+            raise ValueError("capital coverage calculation contradicts outcomes")
+    for error in source_errors:
+        details = error.get("details")
+        if (
+            isinstance(details, dict)
+            and details.get("data_type") not in calculation_types
+        ):
+            raise ValueError("capital source-error scope type is not declared")
+
+
+def _validate_market_signal_domain_facts(
+    result: Mapping[str, object],
+) -> None:
+    observations = cast(list[dict[str, object]], result["observations"])
+    source_errors = cast(list[dict[str, object]], result["source_errors"])
+    observations_by_id = {
+        cast(str, item["id"]): item
+        for item in observations
+        if isinstance(item.get("id"), str)
+    }
+    signal_records: dict[str, dict[str, object]] = {}
+    layer_by_observation: dict[str, list[str]] = {}
+    for record in observations:
+        if record.get("capability_id") != "market_signal_observations":
+            continue
+        payload = _record_payload(record)
+        expected = {
+            "id",
+            "kind",
+            "signal_type",
+            "source_operation",
+            "source_role",
+            "subject",
+            "identity_scope",
+            "source_document_id",
+            "observed_on",
+            "observed_at",
+            "available_at",
+            "retrieved_at",
+            "period",
+            "metrics",
+            "units",
+            "directions",
+            "rule",
+            "attributions",
+            "dimensions",
+            "locator",
+            "limitations",
+            "query_scope",
+            "claim_eligibility",
+            "issuer_fact",
+            "certain_causality",
+            "source_facts",
+        }
+        if (
+            set(payload) != expected
+            or payload.get("kind") != "market_signal_observation"
+        ):
+            raise ValueError("market signal domain fact schema is invalid")
+        if (
+            payload.get("source_operation") != record.get("operation_id")
+            or payload.get("issuer_fact") is not False
+            or payload.get("certain_causality") is not False
+            or payload.get("claim_eligibility") != "experimental_observation_only"
+        ):
+            raise ValueError("market signal domain fact layering is invalid")
+        source_facts = payload.get("source_facts")
+        fact_fields = {
+            "signal_type",
+            "subject",
+            "source_document_id",
+            "observed_on",
+            "observed_at",
+            "available_at",
+            "retrieved_at",
+            "period",
+            "metrics",
+            "units",
+            "directions",
+            "rule",
+            "attributions",
+            "dimensions",
+            "limitations",
+        }
+        if (
+            not isinstance(source_facts, dict)
+            or set(source_facts) != fact_fields
+            or any(
+                payload.get(field) != source_facts.get(field) for field in fact_fields
+            )
+        ):
+            raise ValueError("market signal retained facts contradict source facts")
+        attributions = payload.get("attributions")
+        if not isinstance(attributions, list):
+            raise ValueError("market signal attributions are invalid")
+        observation_id = cast(str, record["id"])
+        operation_id = cast(str, record["operation_id"])
+        layers: list[str] = []
+        for attribution in attributions:
+            if not isinstance(attribution, dict) or set(attribution) != {
+                "text",
+                "provenance",
+                "layer",
+                "source_operation",
+                "source_document_id",
+                "locator",
+                "basis_evidence_ids",
+                "method_id",
+            }:
+                raise ValueError("market signal attribution is invalid")
+            provenance = attribution.get("provenance")
+            expected_layer = (
+                {
+                    "editorial_annotation": "source_editorial",
+                    "market_signal": "source_market_signal",
+                    "model_inference": "model_inference",
+                }.get(provenance)
+                if isinstance(provenance, str)
+                else None
+            )
+            if expected_layer is None or attribution.get("layer") != expected_layer:
+                raise ValueError("market signal attribution layer is invalid")
+            basis_ids = attribution.get("basis_evidence_ids")
+            method_id = attribution.get("method_id")
+            if (
+                not isinstance(basis_ids, list)
+                or any(
+                    not isinstance(item, str)
+                    or item not in observations_by_id
+                    or item == observation_id
+                    for item in basis_ids
+                )
+                or len(basis_ids) != len(set(basis_ids))
+                or (method_id is not None and not isinstance(method_id, str))
+            ):
+                raise ValueError("market signal attribution basis is invalid")
+            if (
+                operation_id != "market_signal_coordinator@1"
+                and provenance == "model_inference"
+            ):
+                raise ValueError("source attribution cannot become model inference")
+            if operation_id == "market_signal_coordinator@1":
+                basis_signal_types = {
+                    cast(
+                        dict[str, object], observations_by_id[item].get("payload", {})
+                    ).get("signal_type")
+                    for item in basis_ids
+                }
+                if method_id != "deterministic_monitoring_intersection@1" or not {
+                    "focus_monitoring",
+                    "severe_abnormal_movement",
+                }.issubset(basis_signal_types):
+                    raise ValueError(
+                        "derived market signal attribution basis is invalid"
+                    )
+            if expected_layer not in layers:
+                layers.append(expected_layer)
+        if not layers:
+            layers.append("source_market_signal")
+        scope = payload.get("query_scope")
+        if (
+            not isinstance(scope, dict)
+            or scope.get("as_of")
+            != cast(dict[str, object], result["research_anchor"]).get("as_of")
+            or not isinstance(scope.get("observed_from"), str)
+            or not isinstance(scope.get("observed_to"), str)
+            or not isinstance(scope.get("signal_types"), list)
+            or payload.get("signal_type") not in scope["signal_types"]
+            or not isinstance(scope.get("requested_signal_types"), list)
+        ):
+            raise ValueError("market signal retained query scope is invalid")
+        signal_records[observation_id] = payload
+        layer_by_observation[observation_id] = layers
+
+    claims = cast(list[dict[str, object]], result["claims"])
+    actual: set[tuple[str, str]] = set()
+    for claim in claims:
+        if claim.get("kind") != "market_signal_observation":
+            continue
+        observation_ids = claim.get("observation_ids")
+        claim_payload = claim.get("payload")
+        if (
+            not isinstance(observation_ids, list)
+            or len(observation_ids) != 1
+            or observation_ids[0] not in signal_records
+            or not isinstance(claim_payload, dict)
+        ):
+            raise ValueError("market signal adopted fact is invalid")
+        observation_id = cast(str, observation_ids[0])
+        layer = claim_payload.get("layer")
+        source = signal_records[observation_id]
+        if layer not in layer_by_observation[observation_id] or claim_payload != {
+            "signal_type": source["signal_type"],
+            "layer": layer,
+            "issuer_fact": False,
+            "certain_causality": False,
+            "claim_eligibility": "experimental_observation_only",
+        }:
+            raise ValueError("market signal adopted fact contradicts its layer")
+        actual.add((observation_id, cast(str, layer)))
+    expected_claims: set[tuple[str, str]] = set()
+    counts: dict[str, int] = {}
+    for observation_id, source in signal_records.items():
+        scope = cast(dict[str, object], source["query_scope"])
+        signal_types = scope.get("requested_signal_types")
+        signal_type = source.get("signal_type")
+        observed_on = source.get("observed_on")
+        limit = scope.get("limit")
+        if (
+            isinstance(signal_types, list)
+            and signal_type in signal_types
+            and isinstance(signal_type, str)
+            and isinstance(observed_on, str)
+            and isinstance(scope.get("observed_from"), str)
+            and isinstance(scope.get("observed_to"), str)
+            and cast(str, scope["observed_from"])
+            <= observed_on
+            <= cast(str, scope["observed_to"])
+            and isinstance(limit, int)
+            and not isinstance(limit, bool)
+            and counts.get(signal_type, 0) < limit
+        ):
+            counts[signal_type] = counts.get(signal_type, 0) + 1
+            expected_claims.update(
+                (observation_id, layer)
+                for layer in layer_by_observation[observation_id]
+            )
+    if actual != expected_claims:
+        raise ValueError("market signal adoption does not match retained observations")
+    capability = cast(dict[str, object], result["coverage"]).get(
+        "market_signal_observations"
+    )
+    operations = capability.get("operations") if isinstance(capability, dict) else None
+    if not isinstance(operations, dict):
+        raise ValueError("market signal calculation ownership is invalid")
+    declared_signal_material = {
+        signal_type
+        for operation in operations.values()
+        if isinstance(operation, dict)
+        for diagnostics in (operation.get("diagnostics"),)
+        if isinstance(diagnostics, dict)
+        for signal_coverage in (diagnostics.get("signal_coverage"),)
+        if isinstance(signal_coverage, dict)
+        for signal_type in signal_coverage
+    }
+    market_calculations = [
+        item
+        for item in cast(list[dict[str, object]], result["calculations"])
+        if item.get("kind") == "market_signal_coverage"
+    ]
+    calculation_types: set[str] = set()
+    for calculation in market_calculations:
+        calculation_payload = calculation.get("payload")
+        input_ids = calculation.get("input_ids")
+        if not isinstance(calculation_payload, dict) or not isinstance(input_ids, list):
+            raise ValueError("market signal coverage calculation is invalid")
+        calculation_signal_type = calculation_payload.get("signal_type")
+        sources = calculation_payload.get("sources")
+        if (
+            not isinstance(calculation_signal_type, str)
+            or calculation_signal_type in calculation_types
+            or not isinstance(sources, list)
+            or any(not isinstance(item, dict) for item in sources)
+        ):
+            raise ValueError("market signal coverage calculation ownership is invalid")
+        calculation_types.add(calculation_signal_type)
+        expected_inputs = [
+            observation_id
+            for observation_id, source in signal_records.items()
+            if source["signal_type"] == calculation_signal_type
+            and any(claimed_id == observation_id for claimed_id, _ in expected_claims)
+        ]
+        if input_ids != expected_inputs:
+            raise ValueError("market signal coverage calculation inputs are invalid")
+        source_operations = [item.get("source_operation") for item in sources]
+        if any(
+            not isinstance(item, str) or item not in operations
+            for item in source_operations
+        ) or len(source_operations) != len(set(source_operations)):
+            raise ValueError("market signal coverage calculation ownership is invalid")
+        retained_owners = {
+            source["source_operation"]
+            for source in signal_records.values()
+            if source["signal_type"] == calculation_signal_type
+        }
+        if not retained_owners.issubset(set(source_operations)):
+            raise ValueError("market signal coverage calculation drops an owner")
+        source_states: list[str] = []
+        scoped_source_errors: list[bool] = []
+        for source in sources:
+            source_state = source.get("state")
+            source_operation_id = cast(str, source["source_operation"])
+            operation = cast(dict[str, object], operations[source_operation_id])
+            operation_state = operation.get("state")
+            if source_state not in {
+                "observed_nonempty",
+                "observed_empty",
+                "partial",
+                "indeterminate",
+            }:
+                raise ValueError("market signal source coverage state is invalid")
+            diagnostics = operation.get("diagnostics")
+            signal_coverage = (
+                diagnostics.get("signal_coverage")
+                if isinstance(diagnostics, dict)
+                else None
+            )
+            material = (
+                signal_coverage.get(calculation_signal_type)
+                if isinstance(signal_coverage, dict)
+                else None
+            )
+            if not isinstance(material, dict):
+                raise ValueError("market signal source material is invalid")
+            _require_exact_keys(
+                material,
+                {"state", "source_error_codes"},
+                path="market signal source material",
+            )
+            material_state = material.get("state")
+            material_error_codes = material.get("source_error_codes")
+            if (
+                material_state
+                not in {
+                    "observed_nonempty",
+                    "observed_empty",
+                    "partial",
+                    "indeterminate",
+                }
+                or not isinstance(material_error_codes, list)
+                or any(
+                    not isinstance(item, str) or not item
+                    for item in material_error_codes
+                )
+            ):
+                raise ValueError("market signal source material is invalid")
+            public_error_codes = sorted(
+                {
+                    cast(str, error["code"])
+                    for error in source_errors
+                    if error.get("operation_id") == source_operation_id
+                    and isinstance(error.get("details"), dict)
+                    and calculation_signal_type
+                    in cast(
+                        list[object],
+                        cast(dict[str, object], error["details"]).get(
+                            "signal_types", []
+                        ),
+                    )
+                }
+            )
+            if sorted(set(material_error_codes)) != public_error_codes:
+                raise ValueError(
+                    "market signal source material contradicts public outcomes"
+                )
+            source_has_inputs = any(
+                source["source_operation"] == source_operation_id
+                and source["signal_type"] == calculation_signal_type
+                and observation_id in expected_inputs
+                for observation_id, source in signal_records.items()
+            )
+            if (
+                (source_has_inputs and material_state == "observed_empty")
+                or (not source_has_inputs and material_state == "observed_nonempty")
+                or (
+                    not public_error_codes
+                    and operation_state in {"complete", "observed_empty"}
+                    and material_state
+                    != ("observed_nonempty" if source_has_inputs else "observed_empty")
+                )
+                or source_state != material_state
+            ):
+                raise ValueError(
+                    "market signal source material contradicts retained facts"
+                )
+            source_states.append(cast(str, source_state))
+            scoped_source_errors.append(bool(public_error_codes))
+        retained_count = len(expected_inputs)
+        has_errors = any(scoped_source_errors)
+        if retained_count:
+            state = (
+                "partial"
+                if not source_states
+                or any(item in {"partial", "indeterminate"} for item in source_states)
+                or has_errors
+                else "observed_nonempty"
+            )
+        elif has_errors:
+            state = (
+                "partial"
+                if any(
+                    item in {"observed_nonempty", "observed_empty", "partial"}
+                    for item in source_states
+                )
+                else "indeterminate"
+            )
+        elif "partial" in source_states:
+            state = "partial"
+        elif "observed_empty" in source_states and not any(
+            item in {"indeterminate", "observed_nonempty"} for item in source_states
+        ):
+            state = "observed_empty"
+        elif "observed_empty" in source_states and "indeterminate" in source_states:
+            state = "partial"
+        else:
+            state = "indeterminate"
+        expected_payload = {
+            "signal_type": calculation_signal_type,
+            "state": state,
+            "observation_count": retained_count,
+            "sources": sources,
+        }
+        if calculation_payload != expected_payload:
+            raise ValueError("market signal coverage calculation contradicts outcomes")
+    for error in source_errors:
+        details = error.get("details")
+        if isinstance(details, dict) and not set(
+            cast(list[str], details.get("signal_types", []))
+        ).issubset(declared_signal_material):
+            raise ValueError("market signal source-error scope type is not declared")
+    sentiment_calculations = [
+        item
+        for item in cast(list[dict[str, object]], result["calculations"])
+        if item.get("kind") == "limit_state_sentiment"
+    ]
+    if len(sentiment_calculations) > 1:
+        raise ValueError("market sentiment calculation must be unique")
+    for calculation in sentiment_calculations:
+        sentiment_payload = calculation.get("payload")
+        input_ids = calculation.get("input_ids")
+        if not isinstance(sentiment_payload, dict) or not isinstance(input_ids, list):
+            raise ValueError("market sentiment calculation is invalid")
+        sentiment_operation_id = sentiment_payload.get("source_operation")
+        if (
+            not isinstance(sentiment_operation_id, str)
+            or sentiment_operation_id not in operations
+        ):
+            raise ValueError("market sentiment calculation owner is invalid")
+        basis_ids = [
+            observation_id
+            for observation_id, source in signal_records.items()
+            if source.get("signal_type") == "limit_state"
+            and source.get("source_operation") == sentiment_operation_id
+            and isinstance(source.get("dimensions"), dict)
+            and cast(dict[str, object], source["dimensions"]).get("pool_state")
+            in {"limit_up", "limit_break", "limit_down"}
+        ]
+        if len(input_ids) != len(set(input_ids)) or set(input_ids) != set(basis_ids):
+            raise ValueError("market sentiment calculation inputs are invalid")
+        counts = {
+            state: sum(
+                cast(dict[str, object], signal_records[item]["dimensions"]).get(
+                    "pool_state"
+                )
+                == state
+                for item in basis_ids
+            )
+            for state in ("limit_break", "limit_down", "limit_up")
+        }
+        ladder: dict[str, int] = {}
+        for observation_id in basis_ids:
+            source = signal_records[observation_id]
+            dimensions = cast(dict[str, object], source["dimensions"])
+            if dimensions.get("pool_state") != "limit_up":
+                continue
+            metrics = source.get("metrics")
+            raw_height = (
+                metrics.get("consecutive_limit_days")
+                if isinstance(metrics, dict)
+                else None
+            )
+            if not isinstance(raw_height, str):
+                raise ValueError("market sentiment calculation basis is invalid")
+            try:
+                height = int(raw_height)
+            except ValueError as error:
+                raise ValueError(
+                    "market sentiment calculation basis is invalid"
+                ) from error
+            if height < 1 or str(height) != raw_height:
+                raise ValueError("market sentiment calculation basis is invalid")
+            ladder[str(height)] = ladder.get(str(height), 0) + 1
+        denominator = counts["limit_up"] + counts["limit_break"]
+        break_rate = (
+            str((Decimal(counts["limit_break"]) / Decimal(denominator)) * Decimal(100))
+            if denominator
+            else None
+        )
+        maximum = max((int(value) for value in ladder), default=None)
+        expected_payload = {
+            "source_operation": sentiment_operation_id,
+            "limit_up_count": str(counts["limit_up"]),
+            "limit_break_count": str(counts["limit_break"]),
+            "limit_down_count": str(counts["limit_down"]),
+            "break_rate": break_rate,
+            "max_consecutive_limit_days": (
+                str(maximum) if maximum is not None else None
+            ),
+            "consecutive_limit_ladder": {
+                key: str(ladder[key]) for key in sorted(ladder, key=int)
+            },
+            "formula": "(limit_break/(limit_up+limit_break))*100",
+            "units": {
+                "limit_up_count": "security_count",
+                "limit_break_count": "security_count",
+                "limit_down_count": "security_count",
+                "break_rate": "percent",
+                "max_consecutive_limit_days": "trading_day_count",
+                "consecutive_limit_ladder": (
+                    "security_count_by_consecutive_trading_day"
+                ),
+            },
+            "basis_evidence_ids": input_ids,
+        }
+        if sentiment_payload != expected_payload:
+            raise ValueError("market sentiment calculation contradicts observations")
 
 
 def _validate_research_content_domain_facts(
@@ -4601,6 +5490,7 @@ def fold_direct_task_research_result(
                 "operation_id": outcome.operation_id,
                 "code": error["code"],
                 "message": error["message"],
+                **({"details": error["details"]} if "details" in error else {}),
             }
             error_id = stable_result_id("source-error", error_payload)
             source_errors.append({"id": error_id, **error_payload})
@@ -5000,6 +5890,7 @@ def fold_identity_research_result(
                 "operation_id": outcome.operation_id,
                 "code": error["code"],
                 "message": error["message"],
+                **({"details": error["details"]} if "details" in error else {}),
             }
             error_id = stable_result_id("source-error", error_payload)
             source_errors.append({"id": error_id, **error_payload})

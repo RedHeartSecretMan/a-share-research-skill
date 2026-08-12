@@ -90,6 +90,60 @@ def eastmoney_row() -> dict[str, object]:
 
 
 class EastmoneyLimitStateTests(unittest.TestCase):
+    def test_later_pool_conflict_retains_the_completed_pool(self) -> None:
+        row = eastmoney_row()
+        batch = EastmoneyLimitStateOperation(
+            FixedTransport(
+                [
+                    response({"data": {"tc": 1, "pool": [row]}}),
+                    response({"data": {"tc": 1, "pool": [row]}}),
+                ]
+            ),
+            request_gate=DiagnosticGate(),
+        ).collect(query(states=["limit_up", "limit_break"]))
+
+        self.assertEqual(len(batch.observations), 1)
+        self.assertEqual(batch.observations[0].dimensions["pool_state"], "limit_up")
+        self.assertEqual(batch.coverage["limit_state"].state, "partial")
+        self.assertEqual(
+            [item.code for item in batch.source_errors],
+            ["duplicate_source_conflict"],
+        )
+
+    def test_raw_inventory_covers_every_parsed_pool_field(self) -> None:
+        self.assertEqual(
+            set(EastmoneyLimitStateOperation.raw_fields),
+            {
+                "data.tc",
+                "data.pool[]",
+                "c",
+                "n",
+                "m",
+                "p",
+                "zdp",
+                "hs",
+                "amount",
+                "ltsz",
+                "fund",
+                "ztp",
+                "zf",
+                "zs",
+                "pe",
+                "fba",
+                "lbc",
+                "zbc",
+                "days",
+                "oc",
+                "ylbc",
+                "fbt",
+                "lbt",
+                "yfbt",
+                "hybk",
+                "zttj.days",
+                "zttj.ct",
+            },
+        )
+
     def test_normalizes_limit_up_with_explicit_units_date_and_completeness(
         self,
     ) -> None:

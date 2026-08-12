@@ -141,6 +141,56 @@ def multi_mode_query(data_types: tuple[str, ...]) -> CapitalQuery:
 
 
 class EastmoneyTradingEventOperationTests(unittest.TestCase):
+    def test_every_mode_requests_explicit_declared_columns(self) -> None:
+        cases = (
+            ("block_trade", [response("block_trade.json")]),
+            (
+                "dragon_tiger",
+                [
+                    response("dragon_records.json"),
+                    response("dragon_buy_seats.json"),
+                    response("dragon_sell_seats.json"),
+                ],
+            ),
+            ("lockup", [response("lockup.json")]),
+            (
+                "market_dragon_tiger",
+                [
+                    response("market_dragon_page_1.json"),
+                    response("market_dragon_page_2.json"),
+                ],
+            ),
+        )
+        metadata = {"success", "code", "result.pages", "result.count", "result.data[]"}
+        expected = set(EastmoneyTradingEventOperation.raw_fields).difference(metadata)
+
+        for data_type, responses in cases:
+            with self.subTest(data_type=data_type):
+                transport = FixedTransport(responses)
+                EastmoneyTradingEventOperation(
+                    transport,
+                    request_gate=no_wait_gate(),
+                ).collect(
+                    query(
+                        data_type,
+                        observed_from=(
+                            "2026-08-01"
+                            if data_type == "market_dragon_tiger"
+                            else "2026-07-01"
+                        ),
+                        observed_to=(
+                            "2026-08-01"
+                            if data_type == "market_dragon_tiger"
+                            else "2026-08-02"
+                        ),
+                    )
+                )
+                self.assertTrue(transport.calls)
+                for url, _headers in transport.calls:
+                    columns = parse_qs(urlsplit(url).query)["columns"]
+                    self.assertNotEqual(columns, ["ALL"])
+                    self.assertEqual(set(columns[0].split(",")), expected)
+
     def test_later_lockup_http_failure_preserves_completed_block_trade_mode(
         self,
     ) -> None:

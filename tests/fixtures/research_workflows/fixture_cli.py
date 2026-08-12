@@ -51,6 +51,13 @@ class WorkflowCapitalOperation:
     supported_data_types = frozenset(
         {"stock_fund_flow", "dragon_tiger", "lockup", "margin_trading"}
     )
+    raw_fields = (
+        "data.klines[]",
+        "result.data[]",
+        "SECURITY_CODE",
+        "TRADE_DATE",
+        "FREE_DATE",
+    )
 
     def collect(self, query: CapitalQuery) -> CapitalSourceBatch:
         dates = {
@@ -87,8 +94,9 @@ class WorkflowCapitalOperation:
 class WorkflowBoardMembershipOperation:
     """Return one subject-bound board-membership market observation."""
 
-    operation_id = "fixed_workflow_board_membership@1"
+    operation_id = "eastmoney_security_board_membership@1"
     supported_signal_types = frozenset({"security_board_membership"})
+    raw_fields = ("data.diff[]", "f12", "f14", "f3", "f128")
 
     def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
         item = replace(
@@ -98,10 +106,21 @@ class WorkflowBoardMembershipOperation:
                 provider_security_code="601138",
             ),
             subject=query.subject,
+            observed_on="2026-08-02",
+            period={
+                "start": "2026-08-02",
+                "end": "2026-08-02",
+                "frequency": "trading_day",
+            },
+            metrics={"board_change_rate": "1.25"},
+            units={"board_change_rate": "percent"},
+            directions={"board_change_rate": "positive_is_gain"},
             dimensions={
                 "market_scope": "mainland_a_share",
                 "provider_security_code": "601138",
+                "board_code": "BK0727",
                 "board_name": "消费电子",
+                "lead_stock": "工业富联",
             },
             limitations=(),
         )

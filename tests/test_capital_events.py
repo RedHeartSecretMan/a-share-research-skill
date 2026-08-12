@@ -17,7 +17,9 @@ from a_share_research.capital_contract import (  # noqa: E402
     CapitalSourceBatch,
     CapitalSourceFailure,
 )
-from a_share_research.capital_events import build_capital_events_result  # noqa: E402
+from a_share_research.capital_events import (  # noqa: E402
+    build_capital_events_result as _build_capital_events_result,
+)
 from a_share_research.capital_registry import (  # noqa: E402
     build_default_capital_operations,
 )
@@ -25,6 +27,36 @@ from a_share_research.identity_sources import HttpResponse  # noqa: E402
 from a_share_research.research_runtime import ResearchRuntime  # noqa: E402
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
+
+
+def build_capital_events_result(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _build_capital_events_result(*args, **kwargs).to_dict()
+
+
+def capital_observations(result: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item["payload"]
+        for item in result["observations"]
+        if item["capability_id"] == "capital_event_observations"
+    ]
+
+
+def capital_coverage(result: dict[str, Any], data_type: str) -> dict[str, Any]:
+    return next(
+        item["payload"]
+        for item in result["calculations"]
+        if item["kind"] == "capital_event_coverage"
+        and item["payload"]["data_type"] == data_type
+    )
+
+
+def adopted_capital_observation_ids(result: dict[str, Any]) -> set[str]:
+    return {
+        observation_id
+        for claim in result["claims"]
+        if claim["kind"] == "capital_event_observation"
+        for observation_id in claim["observation_ids"]
+    }
 
 
 def capital_request(
@@ -57,6 +89,7 @@ class FixedCapitalOperation:
     supported_data_types = frozenset(
         {"market_dragon_tiger", "lockup", "stock_fund_flow", "board_fund_flow"}
     )
+    raw_fields = ("result.data[]", "TRADE_DATE", "NET_DEAL_AMT")
 
     def __init__(self, observations: tuple[CapitalObservation, ...]) -> None:
         self._observations = observations
@@ -188,20 +221,25 @@ class CapitalEventsTests(unittest.TestCase):
                 ["stock_fund_flow", "margin_trading"],
                 subjects=[{"clue": "不存在的证券"}],
             ),
-            [],
+            [FixedCapitalOperation(())],
             BluefocusIdentityTransport(),
         )
 
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(
-            result["brief"]["coverage"],
+            {
+                data_type: capital_coverage(result, data_type)
+                for data_type in ("stock_fund_flow", "margin_trading")
+            },
             {
                 "stock_fund_flow": {
+                    "data_type": "stock_fund_flow",
                     "state": "indeterminate",
                     "observation_count": 0,
                     "source_operations": [],
                 },
                 "margin_trading": {
+                    "data_type": "margin_trading",
                     "state": "indeterminate",
                     "observation_count": 0,
                     "source_operations": [],
@@ -215,6 +253,7 @@ class CapitalEventsTests(unittest.TestCase):
         class CompleteEmptyNorthboundOperation:
             operation_id = "complete_empty_northbound@1"
             supported_data_types = frozenset({"northbound_flow"})
+            raw_fields = ("result.data[]", "TRADE_DATE", "NET_DEAL_AMT")
 
             def collect(self, query: CapitalQuery) -> CapitalSourceBatch:
                 return CapitalSourceBatch(
@@ -233,8 +272,9 @@ class CapitalEventsTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            result["brief"]["coverage"]["northbound_flow"],
+            capital_coverage(result, "northbound_flow"),
             {
+                "data_type": "northbound_flow",
                 "state": "observed_empty",
                 "observation_count": 0,
                 "source_operations": ["complete_empty_northbound@1"],
@@ -250,6 +290,7 @@ class CapitalEventsTests(unittest.TestCase):
         class FailedMarginOperation:
             operation_id = "failed_margin@1"
             supported_data_types = frozenset({"margin_trading"})
+            raw_fields = ("result.data[]", "TRADE_DATE", "RZYE")
 
             def collect(self, query: CapitalQuery) -> CapitalSourceBatch:
                 return CapitalSourceBatch(
@@ -274,21 +315,25 @@ class CapitalEventsTests(unittest.TestCase):
             BluefocusIdentityTransport(),
         )
 
-        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["status"], "limited")
         self.assertEqual(
-            [item["data_type"] for item in result["observations"]],
+            [item["data_type"] for item in capital_observations(result)],
             ["stock_fund_flow"],
         )
-        self.assertEqual(result["brief"]["data_type_counts"], {"stock_fund_flow": 1})
         self.assertEqual(
-            result["brief"]["coverage"],
+            {
+                data_type: capital_coverage(result, data_type)
+                for data_type in ("stock_fund_flow", "margin_trading")
+            },
             {
                 "stock_fund_flow": {
+                    "data_type": "stock_fund_flow",
                     "state": "partial",
                     "observation_count": 1,
                     "source_operations": ["fixed_capital@1"],
                 },
                 "margin_trading": {
+                    "data_type": "margin_trading",
                     "state": "indeterminate",
                     "observation_count": 0,
                     "source_operations": ["failed_margin@1"],
@@ -296,19 +341,12 @@ class CapitalEventsTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            [
-                (item["source_operation"], item["code"])
-                for item in result["source_errors"]
-            ],
+            [(item["operation_id"], item["code"]) for item in result["source_errors"]],
             [("failed_margin@1", "upstream_unavailable")],
         )
-        self.assertEqual(
-            next(
-                item["data_types"]
-                for item in result["limitations"]
-                if item["code"] == "requested_data_type_unavailable"
-            ),
-            ["margin_trading"],
+        self.assertIn(
+            "requested_data_type_unavailable",
+            _limitation_codes(result),
         )
 
     def test_unknown_availability_rejects_observation_retrieved_after_research_day(
@@ -331,7 +369,7 @@ class CapitalEventsTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["observations"], [])
+        self.assertEqual(capital_observations(result), [])
         self.assertIn(
             "availability_time_unknown_outside_research_date",
             [error["code"] for error in result["source_errors"]],
@@ -347,18 +385,23 @@ class CapitalEventsTests(unittest.TestCase):
         )
         request["parameters"]["limit"] = 3
 
-        result = ResearchRuntime(
-            identity_transport=transport,
-            capital_transport=transport,
-        ).research(request)
+        result = (
+            ResearchRuntime(
+                identity_transport=transport,
+                capital_transport=transport,
+            )
+            .research(request)
+            .to_dict()
+        )
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["brief"]["observation_count"], 3)
+        observations = capital_observations(result)
+        self.assertEqual(len(observations), 3)
         self.assertEqual(
-            result["observations"][0]["metrics"]["financing_balance"],
+            observations[0]["metrics"]["financing_balance"],
             "18000000000.1200",
         )
-        self.assertEqual(result["observations"][0]["units"]["financing_balance"], "CNY")
+        self.assertEqual(observations[0]["units"]["financing_balance"], "CNY")
 
     def test_default_registry_covers_every_public_data_type(self) -> None:
         operations = build_default_capital_operations(BluefocusIdentityTransport())
@@ -386,13 +429,17 @@ class CapitalEventsTests(unittest.TestCase):
     def test_runtime_routes_injected_capital_operation(self) -> None:
         operation = FixedCapitalOperation((observation(),))
 
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            capital_operations=[operation],
-        ).research(capital_request(["market_dragon_tiger"]))
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                capital_operations=[operation],
+            )
+            .research(capital_request(["market_dragon_tiger"]))
+            .to_dict()
+        )
 
-        self.assertEqual(result["task_type"], "capital_events")
-        self.assertEqual(result["brief"]["observation_count"], 1)
+        self.assertEqual(result["plan"]["task_type"], "capital_events")
+        self.assertEqual(len(capital_observations(result)), 1)
 
     def test_runtime_blocks_capital_task_when_experimental_sources_are_forbidden(
         self,
@@ -400,10 +447,14 @@ class CapitalEventsTests(unittest.TestCase):
         request = capital_request(["market_dragon_tiger"])
         request["source_policy"]["allow_experimental"] = False
 
-        result = ResearchRuntime(
-            identity_transport=BluefocusIdentityTransport(),
-            capital_operations=[],
-        ).research(request)
+        result = (
+            ResearchRuntime(
+                identity_transport=BluefocusIdentityTransport(),
+                capital_operations=[FixedCapitalOperation(())],
+            )
+            .research(request)
+            .to_dict()
+        )
 
         self.assertEqual(result["status"], "blocked")
         self.assertIn("source_policy_not_satisfied", _limitation_codes(result))
@@ -421,13 +472,14 @@ class CapitalEventsTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(result["observations"]), 1)
-        self.assertEqual(result["observations"][0]["units"], {"net_buy_amount": "CNY"})
+        observations = capital_observations(result)
+        self.assertEqual(len(observations), 2)
+        self.assertEqual(observations[0]["units"], {"net_buy_amount": "CNY"})
         self.assertEqual(
-            result["observations"][0]["directions"],
+            observations[0]["directions"],
             {"net_buy_amount": "positive_is_net_buy"},
         )
-        evidence_ids = [item["id"] for item in result["evidence"]]
+        evidence_ids = [item["id"] for item in result["observations"]]
         self.assertEqual(len(evidence_ids), len(set(evidence_ids)))
         self.assertIn("pagination_incomplete", _limitation_codes(result))
 
@@ -458,7 +510,10 @@ class CapitalEventsTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [item["dimensions"]["net_buy_rank"] for item in result["observations"]],
+            [
+                item["dimensions"]["net_buy_rank"]
+                for item in capital_observations(result)
+            ],
             [1, 2],
         )
 
@@ -475,8 +530,9 @@ class CapitalEventsTests(unittest.TestCase):
             BluefocusIdentityTransport(),
         )
 
-        self.assertEqual(len(result["observations"]), 1)
-        self.assertIsNone(result["observations"][0]["subject"])
+        observations = capital_observations(result)
+        self.assertEqual(len(observations), 1)
+        self.assertIsNone(observations[0]["subject"])
         self.assertIn("security_exchange_unverified", _limitation_codes(result))
 
     def test_market_ranking_rejects_shape_only_canonical_security(self) -> None:
@@ -500,8 +556,8 @@ class CapitalEventsTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["observations"], [])
-        self.assertIn("subject", result["source_errors"][0]["invalid_fields"])
+        self.assertEqual(capital_observations(result), [])
+        self.assertEqual(result["source_errors"][0]["code"], "unknown_schema")
 
     def test_market_wide_observation_requires_machine_readable_scope(self) -> None:
         item = replace(observation(), dimensions={"provider_security_code": "300058"})
@@ -513,7 +569,7 @@ class CapitalEventsTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertIn("market_scope", result["source_errors"][0]["invalid_fields"])
+        self.assertEqual(result["source_errors"][0]["code"], "unknown_schema")
 
     def test_rolling_board_period_accepts_unknown_start_with_exact_lookback(
         self,
@@ -541,10 +597,9 @@ class CapitalEventsTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "limited")
-        self.assertIsNone(result["observations"][0]["period"]["start"])
-        self.assertEqual(
-            result["observations"][0]["period"]["lookback_trading_days"], "5"
-        )
+        observations = capital_observations(result)
+        self.assertIsNone(observations[0]["period"]["start"])
+        self.assertEqual(observations[0]["period"]["lookback_trading_days"], "5")
         self.assertIn("period_start_not_exposed", _limitation_codes(result))
 
     def test_unknown_period_start_is_rejected_outside_exact_board_exception(
@@ -590,7 +645,7 @@ class CapitalEventsTests(unittest.TestCase):
                 )
 
                 self.assertEqual(result["status"], "blocked")
-                self.assertIn("period", result["source_errors"][0]["invalid_fields"])
+                self.assertEqual(result["source_errors"][0]["code"], "unknown_schema")
 
     def test_public_limit_discloses_truncated_observation_type(self) -> None:
         first = observation(observed_on="2026-07-31")
@@ -604,7 +659,8 @@ class CapitalEventsTests(unittest.TestCase):
             BluefocusIdentityTransport(),
         )
 
-        self.assertEqual(len(result["observations"]), 1)
+        self.assertEqual(len(capital_observations(result)), 2)
+        self.assertEqual(len(adopted_capital_observation_ids(result)), 1)
         self.assertIn("result_truncated_to_limit", _limitation_codes(result))
 
     def test_unknown_enum_and_metric_contract_are_isolated(self) -> None:
@@ -620,10 +676,10 @@ class CapitalEventsTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["observations"], [])
+        self.assertEqual(capital_observations(result), [])
         self.assertEqual(
             [error["code"] for error in result["source_errors"]],
-            ["unknown_schema", "unknown_schema", "unknown_schema"],
+            ["unknown_schema"],
         )
 
     def test_subject_task_resolves_identity_and_passes_canonical_subject(self) -> None:
@@ -640,8 +696,14 @@ class CapitalEventsTests(unittest.TestCase):
             BluefocusIdentityTransport(),
         )
 
-        self.assertEqual(result["subjects"][0]["security"]["code"], "300058")
+        identity_claim = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "capital_events_subject_identity"
+        )
+        self.assertEqual(identity_claim["payload"]["security"]["code"], "300058")
         self.assertEqual(operation.query.subject["security"]["exchange"], "SZSE")
+        self.assertNotIn("https://", str(result))
 
     def test_future_lockup_window_is_bounded_to_ninety_days(self) -> None:
         item = observation(data_type="lockup", observed_on="2026-10-30")
@@ -658,7 +720,7 @@ class CapitalEventsTests(unittest.TestCase):
             BluefocusIdentityTransport(),
         )
 
-        self.assertEqual(len(result["observations"]), 1)
+        self.assertEqual(len(capital_observations(result)), 1)
         with self.assertRaisesRegex(ValueError, "90 days"):
             build_capital_events_result(
                 capital_request(

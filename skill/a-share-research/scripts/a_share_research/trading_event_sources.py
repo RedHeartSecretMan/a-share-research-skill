@@ -80,8 +80,15 @@ def _row_error_with_prior_pages(
     )
 
 
-def _failure(operation_id: str, error: _SourceError) -> CapitalSourceFailure:
-    return CapitalSourceFailure(operation_id, error.code, str(error))
+def _failure(
+    operation_id: str, data_type: str, error: _SourceError
+) -> CapitalSourceFailure:
+    return CapitalSourceFailure(
+        operation_id,
+        error.code,
+        str(error),
+        {"data_type": data_type},
+    )
 
 
 def _gate_degradation(
@@ -102,6 +109,38 @@ class EastmoneyTradingEventOperation:
     operation_id = "eastmoney_trading_events@1"
     supported_data_types = frozenset(
         {"dragon_tiger", "market_dragon_tiger", "lockup", "block_trade"}
+    )
+    raw_fields: tuple[str, ...] = (
+        "success",
+        "code",
+        "result.pages",
+        "result.count",
+        "result.data[]",
+        "SECURITY_CODE",
+        "SECURITY_NAME_ABBR",
+        "TRADE_DATE",
+        "EXPLANATION",
+        "BILLBOARD_NET_AMT",
+        "TURNOVERRATE",
+        "CLOSE_PRICE",
+        "CHANGE_RATE",
+        "BILLBOARD_BUY_AMT",
+        "BILLBOARD_SELL_AMT",
+        "OPERATEDEPT_NAME",
+        "OPERATEDEPT_CODE",
+        "BUY",
+        "SELL",
+        "NET",
+        "DEAL_PRICE",
+        "DEAL_VOLUME",
+        "DEAL_AMT",
+        "BUYER_NAME",
+        "SELLER_NAME",
+        "FREE_DATE",
+        "FREE_SHARES_TYPE",
+        "FREE_SHARES",
+        "ABLE_FREE_SHARES",
+        "FREE_RATIO",
     )
 
     def __init__(
@@ -152,7 +191,7 @@ class EastmoneyTradingEventOperation:
                     data_type=data_type,
                     operation_id=self.operation_id,
                     observations=error.observations,
-                    source_errors=(_failure(self.operation_id, error),),
+                    source_errors=(_failure(self.operation_id, data_type, error),),
                     degradations=degradations,
                     complete=False,
                 )
@@ -905,6 +944,7 @@ class EastmoneyTradingEventOperation:
         for page in range(1, self._max_pages + 1):
             url = _report_url(
                 report_name,
+                raw_fields=self.raw_fields,
                 filter_value=filter_value,
                 sort_columns=sort_columns,
                 sort_types=sort_types,
@@ -996,16 +1036,25 @@ class EastmoneyTradingEventOperation:
 def _report_url(
     report_name: str,
     *,
+    raw_fields: tuple[str, ...],
     filter_value: str,
     sort_columns: str,
     sort_types: str,
     page: int,
     page_size: int,
 ) -> str:
+    metadata_fields = {
+        "success",
+        "code",
+        "result.pages",
+        "result.count",
+        "result.data[]",
+    }
+    columns = ",".join(field for field in raw_fields if field not in metadata_fields)
     query = urlencode(
         {
             "reportName": report_name,
-            "columns": "ALL",
+            "columns": columns,
             "filter": filter_value,
             "pageNumber": str(page),
             "pageSize": str(page_size),

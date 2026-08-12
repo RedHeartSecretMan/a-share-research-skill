@@ -29,10 +29,19 @@ class MarketSignalsCliE2ETests(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
         self.assertEqual(len(completed.stdout.strip().splitlines()), 1)
         result = json.loads(completed.stdout)
-        self.assertEqual(result["task_type"], "market_signals")
+        self.assertEqual(result["plan"]["task_type"], "market_signals")
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(result["brief"]["signal_type_counts"], {"limit_state": 3})
-        sentiment = result["brief"]["aggregates"]["limit_state_sentiment"]
+        coverage = next(
+            item["payload"]
+            for item in result["calculations"]
+            if item["kind"] == "market_signal_coverage"
+        )
+        self.assertEqual(coverage["observation_count"], 3)
+        sentiment = next(
+            item["payload"]
+            for item in result["calculations"]
+            if item["kind"] == "limit_state_sentiment"
+        )
         self.assertEqual(sentiment["limit_up_count"], "1")
         self.assertEqual(sentiment["limit_break_count"], "1")
         self.assertEqual(sentiment["limit_down_count"], "0")
@@ -40,7 +49,8 @@ class MarketSignalsCliE2ETests(unittest.TestCase):
         reasons = [
             attribution
             for item in result["observations"]
-            for attribution in item["attributions"]
+            if item["capability_id"] == "market_signal_observations"
+            for attribution in item["payload"]["attributions"]
         ]
         self.assertEqual(reasons[0]["provenance"], "editorial_annotation")
         self.assertEqual(reasons[0]["text"], "AI营销+算力")
