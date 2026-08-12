@@ -513,6 +513,188 @@ class SkillDistributionTests(unittest.TestCase):
             result["limitations"][0]["code"], "source_policy_not_satisfied"
         )
 
+    def test_installed_copy_rejects_repository_maintenance_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+
+            for command in ("close", "validate-bundle", "valuation"):
+                with self.subTest(command=command):
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            "-I",
+                            str(installed / "scripts" / "entrypoint.py"),
+                            command,
+                            "--help",
+                        ],
+                        cwd=temporary_root,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+
+                    self.assertEqual(completed.returncode, 2, completed.stdout)
+                    self.assertEqual(completed.stdout, "")
+                    self.assertIn(f"invalid choice: '{command}'", completed.stderr)
+                    self.assertNotIn(str(REPOSITORY_ROOT), completed.stderr)
+
+    def test_installed_copy_rejects_abbreviated_public_options(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            request = temporary_root / "research-task.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "task_type": "security_identity",
+                        "subjects": [{"clue": "600519"}],
+                        "as_of": "2026-08-01",
+                        "window": None,
+                        "parameters": {},
+                        "source_policy": {
+                            "allow_experimental": False,
+                            "allow_credentials": False,
+                            "allow_fallback": False,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            output = temporary_root / "result.json"
+            cases = (
+                ("--req", "/no/such/path"),
+                ("--r", str(request)),
+                ("--out", str(output), "--request", str(request)),
+            )
+
+            for arguments in cases:
+                with self.subTest(arguments=arguments):
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            "-I",
+                            str(installed / "scripts" / "entrypoint.py"),
+                            "run",
+                            *arguments,
+                        ],
+                        cwd=temporary_root,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+
+                    self.assertEqual(completed.returncode, 2, completed.stderr)
+                    self.assertEqual(completed.stdout, "")
+                    self.assertIn("error:", completed.stderr)
+                    self.assertNotIn("Traceback", completed.stderr)
+                    self.assertNotIn(str(REPOSITORY_ROOT), completed.stderr)
+                    self.assertFalse(output.exists())
+
+    def test_installed_copy_reports_output_write_failure_with_nonzero_exit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            request = temporary_root / "research-task.json"
+            request.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "task_type": "security_identity",
+                        "subjects": [{"clue": "600519"}],
+                        "as_of": "2026-08-01",
+                        "window": None,
+                        "parameters": {},
+                        "source_policy": {
+                            "allow_experimental": False,
+                            "allow_credentials": False,
+                            "allow_fallback": False,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            command = [
+                sys.executable,
+                "-I",
+                str(installed / "scripts" / "entrypoint.py"),
+                "run",
+                "--request",
+                str(request),
+            ]
+            stdout_only = subprocess.run(
+                command,
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            successful_output = temporary_root / "result.json"
+            persisted = subprocess.run(
+                [*command, "--output", str(successful_output)],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            output = temporary_root / "existing-directory"
+            output.mkdir()
+
+            completed = subprocess.run(
+                [*command, "--output", str(output)],
+                cwd=temporary_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(stdout_only.returncode, 0, stdout_only.stderr)
+            self.assertEqual(stdout_only.stderr, "")
+            expected_result = json.loads(stdout_only.stdout)
+            self.assertEqual(persisted.returncode, 0, persisted.stderr)
+            self.assertEqual(persisted.stderr, "")
+            self.assertEqual(persisted.stdout, stdout_only.stdout)
+            self.assertEqual(
+                json.loads(successful_output.read_text(encoding="utf-8")),
+                expected_result,
+            )
+            self.assertEqual(completed.returncode, 1, completed.stderr)
+            self.assertEqual(completed.stdout.count("\n"), 1)
+            self.assertEqual(completed.stdout, stdout_only.stdout)
+            self.assertEqual(json.loads(completed.stdout), expected_result)
+            self.assertEqual(
+                set(expected_result),
+                {
+                    "schema_version",
+                    "status",
+                    "research_anchor",
+                    "plan",
+                    "capability_registry",
+                    "coverage",
+                    "observations",
+                    "claims",
+                    "calculations",
+                    "conflicts",
+                    "limitations",
+                    "source_errors",
+                    "task_views",
+                    "briefs",
+                },
+            )
+            self.assertTrue(output.is_dir())
+            self.assertEqual(list(output.iterdir()), [])
+            self.assertTrue(completed.stderr.startswith("error: cannot write result:"))
+            self.assertNotIn("Traceback", completed.stderr)
+            self.assertNotIn(str(REPOSITORY_ROOT), completed.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

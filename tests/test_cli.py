@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-CLI = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts" / "entrypoint.py"
+CLI = REPOSITORY_ROOT / "tests" / "maintenance_entrypoint.py"
 MINIMAL_BUNDLE = REPOSITORY_ROOT / "tests" / "fixtures" / "minimal_evidence_bundle"
 
 
@@ -3098,7 +3098,9 @@ class CliContractTests(unittest.TestCase):
                 json.loads(completed.stdout),
             )
 
-    def test_output_write_failure_keeps_valid_stdout_result(self) -> None:
+    def test_output_write_failure_is_nonzero_and_keeps_valid_stdout_result(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as output_directory:
             completed = self.run_cli(
                 "valuation",
@@ -3110,7 +3112,7 @@ class CliContractTests(unittest.TestCase):
                 output_directory,
             )
 
-        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.returncode, 1)
         self.assertEqual(json.loads(completed.stdout)["status"], "limited")
         self.assertIn("error: cannot write result", completed.stderr)
 

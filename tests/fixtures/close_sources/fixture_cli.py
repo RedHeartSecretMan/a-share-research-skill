@@ -12,7 +12,7 @@ FIXTURES = Path(__file__).resolve().parent
 SCRIPTS = FIXTURES.parents[2] / "skill" / "a-share-research" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from a_share_research.cli import main  # noqa: E402
+from a_share_research.cli import _maintenance_main  # noqa: E402
 from a_share_research.identity_sources import HttpResponse  # noqa: E402
 
 
@@ -102,4 +102,4 @@ if __name__ == "__main__":
         keyword_arguments["research_now"] = datetime(
             2026, 2, 23, 10, 30, tzinfo=timezone(timedelta(hours=8))
         )
-    raise SystemExit(main(sys.argv[1:], **keyword_arguments))
+    raise SystemExit(_maintenance_main(sys.argv[1:], **keyword_arguments))

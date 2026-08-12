@@ -10,7 +10,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from a_share_research.cli import main  # noqa: E402
+from a_share_research.cli import _maintenance_main  # noqa: E402
 
 if __name__ == "__main__":
-    raise SystemExit(main(["close", *sys.argv[1:]]))
+    raise SystemExit(_maintenance_main(["close", *sys.argv[1:]]))

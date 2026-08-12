@@ -59,13 +59,19 @@ def _canonical_security(value: str) -> str:
     return value
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="a_share_research")
+def _public_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="a_share_research", allow_abbrev=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run = subparsers.add_parser("run")
+    run = subparsers.add_parser("run", allow_abbrev=False)
     run.add_argument("--request", type=Path, required=True)
     run.add_argument("--output", type=Path)
+    return parser
+
+
+def _maintenance_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="a_share_research_maintenance")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
     close = subparsers.add_parser("close")
     close.add_argument("--security", type=_canonical_security, required=True)
@@ -120,8 +126,8 @@ def _load_research_request(request_path: Path) -> dict[str, Any]:
     return loaded
 
 
-def main(
-    argv: Sequence[str] | None = None,
+def _execute(
+    arguments: argparse.Namespace,
     *,
     identity_transport: HttpTransport | None = None,
     research_now: datetime | None = None,
@@ -140,7 +146,6 @@ def main(
     intraday_replay_daily_operations: Collection[IntradayReplayDailySourceOperation]
     | None = None,
 ) -> int:
-    arguments = _parser().parse_args(argv)
     result: UnifiedResearchResult | dict[str, Any]
     try:
         if arguments.command == "run":
@@ -207,10 +212,69 @@ def main(
         separators=(",", ":"),
     )
     output = getattr(arguments, "output", None)
+    exit_code = 0
     if output is not None:
         try:
             output.write_text(f"{serialized}\n", encoding="utf-8")
         except OSError as error:
             print(f"error: cannot write result: {error}", file=sys.stderr)
+            exit_code = 1
     print(serialized)
-    return 0
+    return exit_code
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    identity_transport: HttpTransport | None = None,
+    research_now: datetime | None = None,
+    available_optional_dependencies: Collection[str] | None = None,
+    content_operations: Collection[ContentSourceOperation] | None = None,
+    content_transport: ContentHttpTransport | None = None,
+    capital_operations: Collection[CapitalSourceOperation] | None = None,
+    capital_transport: CapitalHttpTransport | None = None,
+    market_signal_operations: Collection[MarketSignalSourceOperation] | None = None,
+    market_signal_transport: MarketSignalHttpTransport | None = None,
+    etf_option_operations: Collection[OptionSourceOperation] | None = None,
+    etf_option_transport: HttpTransport | None = None,
+    intraday_operations: Collection[IntradaySourceOperation] | None = None,
+    intraday_transport: HttpTransport | None = None,
+    intraday_replay_operations: Collection[IntradayReplaySourceOperation] | None = None,
+    intraday_replay_daily_operations: Collection[IntradayReplayDailySourceOperation]
+    | None = None,
+) -> int:
+    """Run the sole public ``run --request`` command."""
+
+    return _execute(
+        _public_parser().parse_args(argv),
+        identity_transport=identity_transport,
+        research_now=research_now,
+        available_optional_dependencies=available_optional_dependencies,
+        content_operations=content_operations,
+        content_transport=content_transport,
+        capital_operations=capital_operations,
+        capital_transport=capital_transport,
+        market_signal_operations=market_signal_operations,
+        market_signal_transport=market_signal_transport,
+        etf_option_operations=etf_option_operations,
+        etf_option_transport=etf_option_transport,
+        intraday_operations=intraday_operations,
+        intraday_transport=intraday_transport,
+        intraday_replay_operations=intraday_replay_operations,
+        intraday_replay_daily_operations=intraday_replay_daily_operations,
+    )
+
+
+def _maintenance_main(
+    argv: Sequence[str] | None = None,
+    *,
+    identity_transport: HttpTransport | None = None,
+    research_now: datetime | None = None,
+) -> int:
+    """Run repository-only maintenance commands outside the public entrypoint."""
+
+    return _execute(
+        _maintenance_parser().parse_args(argv),
+        identity_transport=identity_transport,
+        research_now=research_now,
+    )
