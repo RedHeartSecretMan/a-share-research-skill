@@ -30,6 +30,9 @@ SNAPSHOT_FIXTURE = (
 REPLAY_FIXTURE = (
     REPOSITORY_ROOT / "tests" / "fixtures" / "intraday_replay" / "fixture_cli.py"
 )
+QUALIFICATION_PATH = (
+    REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-operation-qualification.json"
+)
 UNIFIED_RESULT_KEYS = {
     "schema_version",
     "status",
@@ -139,7 +142,7 @@ def invoke_copied_installed(
                                 available_optional_dependencies={{'mootdx==0.11.7'}},
                                 intraday_operations=operations,
                             )
-                        daily = (replay.FixtureIntradayReplayDailyOperation(),)
+                        daily = (replay.fixture_intraday_replay_daily_operation(),)
                         return original_research(
                             request,
                             research_now=replay._research_now(),
@@ -398,6 +401,42 @@ class DirectIntradayPublicSeamTests(unittest.TestCase):
             )
         )
 
+    def test_copied_installed_snapshot_excludes_tencent_provider_values(self) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_market_signal", allow_experimental=True),
+            fixture=True,
+            fixture_environment={
+                "A_SHARE_INTRADAY_SCENARIO": "tencent_provider_values"
+            },
+        )
+
+        operation = result["coverage"]["intraday_market_snapshot"]["operations"][
+            "tencent_intraday_snapshot@1"
+        ]
+        dispositions = {item["field"]: item for item in operation["field_dispositions"]}
+        provider_fields = {"qt[39]", "qt[44]", "qt[45]", "qt[46]"}
+        self.assertEqual(
+            {
+                field: {
+                    "disposition": dispositions[field]["disposition"],
+                    "destination": dispositions[field]["destination"],
+                }
+                for field in provider_fields
+            },
+            {
+                field: {"disposition": "excluded", "destination": None}
+                for field in provider_fields
+            },
+        )
+        serialized = json.dumps(result, sort_keys=True)
+        for provider_value in (
+            "920039.39",
+            "920044.44",
+            "920045.45",
+            "920046.46",
+        ):
+            self.assertNotIn(provider_value, serialized)
+
     def test_snapshot_raw_dispositions_are_stable_across_execution_states(self) -> None:
         policy = invoke_copied_installed(
             intraday_request("intraday_market_signal", allow_experimental=False)
@@ -526,6 +565,252 @@ class DirectIntradayPublicSeamTests(unittest.TestCase):
         )
         self.assertEqual(contract["timestamp_timezone"], "Asia/Shanghai")
         self.assertEqual(contract["session_contract"], "cn_a_share_regular_v1")
+
+    def test_copied_installed_replay_exercises_formal_exchange_daily_owner_contract(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_replay", allow_experimental=True),
+            fixture=True,
+            fixture_environment={
+                "A_SHARE_INTRADAY_REPLAY_SCENARIO": "formal_exchange_daily"
+            },
+        )
+
+        daily_obligations = [
+            item
+            for item in result["plan"]["operation_obligations"]
+            if item["capability_id"] == "intraday_replay_daily_boundary"
+        ]
+        self.assertEqual(
+            daily_obligations,
+            [
+                {
+                    **daily_obligations[0],
+                    "operation_id": "exchange_intraday_replay_daily@1",
+                    "producer_operation_id": "exchange_intraday_replay_daily@1",
+                    "source_role": "daily_boundary_cross_check",
+                    "evidence_uses": [
+                        {"use": "intraday_replay_core", "role": "not_applicable"},
+                        {"use": "intraday_daily_boundary", "role": "supporting"},
+                    ],
+                }
+            ],
+        )
+        operations = result["coverage"]["intraday_replay_daily_boundary"]["operations"]
+        self.assertEqual(set(operations), {"exchange_intraday_replay_daily@1"})
+        operation = operations["exchange_intraday_replay_daily@1"]
+        self.assertEqual(
+            (operation["execution_state"], operation["state"]),
+            ("succeeded", "complete"),
+        )
+        self.assertEqual(
+            operation["field_dispositions"],
+            [
+                {
+                    "field": "date",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.trading_date",
+                },
+                {
+                    "field": "open",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.open_price",
+                },
+                {
+                    "field": "high",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.high_price",
+                },
+                {
+                    "field": "low",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.low_price",
+                },
+                {
+                    "field": "close",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.close_price",
+                },
+                {
+                    "field": "volume",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.volume",
+                },
+                {
+                    "field": "amount",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.amount",
+                },
+            ],
+        )
+        owned = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "exchange_intraday_replay_daily@1"
+        ]
+        self.assertEqual(
+            {item["id"] for item in owned}, set(operation["observation_ids"])
+        )
+        self.assertEqual(len(owned), 1)
+        contract = owned[0]["payload"]["contract"]
+        self.assertEqual(
+            {
+                key: contract[key]
+                for key in (
+                    "operation_id",
+                    "security",
+                    "trading_date",
+                    "retrieved_at",
+                    "price_adjustment",
+                    "price_unit",
+                    "volume_unit",
+                    "amount_unit",
+                    "open_price",
+                    "high_price",
+                    "low_price",
+                    "close_price",
+                    "volume",
+                    "amount",
+                    "previous_trading_date",
+                    "previous_close",
+                    "previous_close_basis",
+                )
+            },
+            {
+                "operation_id": "exchange_intraday_replay_daily@1",
+                "security": "SSE:600519",
+                "trading_date": "2026-08-03",
+                "retrieved_at": "2026-08-04T16:00:00+08:00",
+                "price_adjustment": "unadjusted",
+                "price_unit": "CNY/share",
+                "volume_unit": "shares",
+                "amount_unit": "CNY",
+                "open_price": "10.10",
+                "high_price": "10.25",
+                "low_price": "10.09",
+                "close_price": "10.22",
+                "volume": "300",
+                "amount": "3059.00",
+                "previous_trading_date": "2026-07-31",
+                "previous_close": "10.00",
+                "previous_close_basis": "actual_unadjusted",
+            },
+        )
+        validate_serialized(result)
+        forged = deepcopy(result)
+        forged_operation = forged["coverage"]["intraday_replay_daily_boundary"][
+            "operations"
+        ]["exchange_intraday_replay_daily@1"]
+        next(
+            item
+            for item in forged_operation["field_dispositions"]
+            if item["field"] == "amount"
+        )["destination"] = "observations.payload.contract.volume"
+        rehash_direct_plan(forged)
+        with self.assertRaisesRegex(ValueError, "field disposition contract"):
+            validate_serialized(forged)
+        qualification = next(
+            item
+            for item in json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))[
+                "operations"
+            ]
+            if item["producer_operation_id"] == "exchange_intraday_replay_daily@1"
+        )
+        self.assertEqual(
+            {
+                "disposition": qualification["disposition"],
+                "qualification": qualification["rate_limit_policy"]["qualification"],
+                "selector": qualification["offline_contract_selector"],
+                "gap_issues": qualification["gap_issues"],
+            },
+            {
+                "disposition": "integrated",
+                "qualification": "qualified_by_issue_59",
+                "selector": (
+                    "tests/test_direct_intraday_runtime.py#"
+                    "test_copied_installed_replay_exercises_formal_exchange_daily_owner_contract"
+                ),
+                "gap_issues": [],
+            },
+        )
+
+    def test_copied_installed_suspended_exchange_daily_dispositions_match_output(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_replay", allow_experimental=True),
+            fixture=True,
+            fixture_environment={
+                "A_SHARE_INTRADAY_REPLAY_SCENARIO": "formal_exchange_suspended"
+            },
+        )
+
+        operation = result["coverage"]["intraday_replay_daily_boundary"]["operations"][
+            "exchange_intraday_replay_daily@1"
+        ]
+        self.assertEqual(
+            (operation["execution_state"], operation["state"]),
+            ("succeeded", "complete"),
+        )
+        dispositions = {item["field"]: item for item in operation["field_dispositions"]}
+        self.assertEqual(
+            {field: dispositions[field] for field in ("date", "volume", "amount")},
+            {
+                "date": {
+                    "field": "date",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.trading_date",
+                },
+                "volume": {
+                    "field": "volume",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.volume",
+                },
+                "amount": {
+                    "field": "amount",
+                    "disposition": "normalized",
+                    "destination": "observations.payload.contract.amount",
+                },
+            },
+        )
+        for field in ("open", "high", "low", "close"):
+            self.assertEqual(
+                dispositions[field],
+                {
+                    "field": field,
+                    "disposition": "excluded",
+                    "destination": None,
+                    "reason": (
+                        "The suspended replay-date price is parsed for schema "
+                        "validity but is not retained in the daily-boundary contract."
+                    ),
+                },
+            )
+        observation = next(
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "exchange_intraday_replay_daily@1"
+        )
+        contract = observation["payload"]["contract"]
+        self.assertEqual(contract["trading_status"], "suspended")
+        self.assertEqual((contract["volume"], contract["amount"]), ("0", "0.00"))
+        for field in ("open_price", "high_price", "low_price", "close_price"):
+            self.assertNotIn(field, contract)
+        validate_serialized(result)
+
+        forged = deepcopy(result)
+        forged_operation = forged["coverage"]["intraday_replay_daily_boundary"][
+            "operations"
+        ]["exchange_intraday_replay_daily@1"]
+        next(
+            item
+            for item in forged_operation["field_dispositions"]
+            if item["field"] == "amount"
+        )["destination"] = "observations.payload.contract.volume"
+        rehash_direct_plan(forged)
+        with self.assertRaisesRegex(ValueError, "field disposition contract"):
+            validate_serialized(forged)
 
     def test_intraday_locators_are_sanitized_before_public_outcomes(self) -> None:
         snapshot = invoke_copied_installed(

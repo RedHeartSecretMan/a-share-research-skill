@@ -221,7 +221,7 @@
     },
     {
       "producer_operation_id": "eastmoney_forward_adjusted_daily_line@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "completed_trading_date_not_after_as_of",
         "adjustment": "forward_adjusted_series"
@@ -237,20 +237,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_market_series.py#MarketTrendProcessTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_forward_adjusted_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/adjusted_series_sources.py#EastmoneyForwardAdjustedDailyLineOperation",
         "skill/a-share-research/scripts/a_share_research/market_series.py#build_market_trend_result",
         "tests/test_market_series.py#MarketTrendProcessTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_operation_release_matrix.py#test_issue_59_forward_adjusted_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_industry_rotation@1",
@@ -659,7 +658,7 @@
     },
     {
       "producer_operation_id": "exchange_intraday_replay_daily@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "completed_trading_date_daily_boundary",
         "timezone": "Asia/Shanghai"
@@ -675,20 +674,20 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "single_security_single_day"
       },
-      "offline_contract_selector": "tests/test_intraday_replay_registry.py#ExchangeReplayDailyBoundaryTests",
+      "offline_contract_selector": "tests/test_direct_intraday_runtime.py#test_copied_installed_replay_exercises_formal_exchange_daily_owner_contract",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/intraday_replay_registry.py#ExchangeReplayDailyBoundaryOperation",
         "skill/a-share-research/scripts/a_share_research/intraday_replay_contract.py#IntradayReplayDailySourceBatch",
+        "tests/test_intraday_replay_registry.py#test_szse_daily_amount_and_volume_are_independent_boundary_operands",
         "tests/test_intraday_replay_registry.py#ExchangeReplayDailyBoundaryTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_intraday_runtime.py#test_copied_installed_replay_exercises_formal_exchange_daily_owner_contract",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "iwencai_content_search@1",
@@ -754,7 +753,7 @@
     },
     {
       "producer_operation_id": "mootdx_intraday_replay@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "completed_trading_date_with_session_contract",
         "timezone": "Asia/Shanghai"
@@ -781,15 +780,14 @@
         "tests/test_intraday_replay_mootdx.py#test_qualified_pages_normalize_units_and_keep_recent_calendar",
         "tests/test_intraday_replay_mootdx.py#MootdxReplayAdapterTests",
         "tests/test_direct_intraday_runtime.py#test_copied_installed_replay_exercises_formal_mootdx_owner_contract",
+        "tests/test_operation_release_matrix.py#test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention",
         "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "sina_etf_option_snapshot@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "trading_date_observed_at_and_expiry_date",
         "timezone": "Asia/Shanghai"
@@ -803,20 +801,22 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "bounded_batch"
       },
-      "offline_contract_selector": "tests/test_etf_option_sources.py#SinaEtfOptionSnapshotTests",
+      "offline_contract_selector": "tests/test_direct_etf_options_runtime.py#test_copied_installed_success_retains_all_acquisition_facts_by_owner",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/etf_option_sources.py#SinaEtfOptionSnapshotOperation",
         "skill/a-share-research/scripts/a_share_research/etf_option_contract.py#OptionSourceBatch",
+        "tests/test_etf_option_sources.py#test_collects_gbk_call_put_quotes_and_provider_analytics",
         "tests/test_etf_option_sources.py#SinaEtfOptionSnapshotTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_etf_options_runtime.py#test_copied_installed_success_retains_all_acquisition_facts_by_owner",
+        "tests/test_direct_etf_options_runtime.py#test_copied_installed_partial_analytics_retains_quotes_atm_and_sibling",
+        "tests/test_operation_release_matrix.py#test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "sina_financial_statements@1",
@@ -882,7 +882,7 @@
     },
     {
       "producer_operation_id": "sse_daily_line@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "completed_trading_date_not_after_as_of",
         "retrieval_time": "retrieved_at_with_timezone"
@@ -898,24 +898,24 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_close_sources.py#CloseSourceOperationTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/close_sources.py#SseDailyLineOperation",
         "skill/a-share-research/scripts/a_share_research/close_sources.py#DailyBarObservation",
+        "tests/test_close_sources.py#test_matching_sse_and_tencent_close_is_an_honest_limited_result",
         "tests/test_close_sources.py#CloseSourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "sse_etf_list@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "listing_date_and_retrieved_at",
         "market_boundary": "SSE_ETF_universe"
@@ -929,24 +929,25 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_market_series.py#EtfMarketProcessTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/etf_market.py#SseEtfListOperation",
         "skill/a-share-research/scripts/a_share_research/etf_market.py#EtfIdentityObservation",
-        "tests/test_market_series.py#EtfMarketProcessTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_market_series.py#test_510050_completed_quote_cross_checks_identity_price_and_volume",
+        "tests/test_market_series.py#test_etf_price_conflict_blocks_the_quote",
+        "tests/test_direct_market_valuation_runtime.py#test_etf_partial_failure_retains_successful_sibling_observations",
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "sse_etf_snapshot@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "trading_date_and_observed_at",
         "timezone": "Asia/Shanghai"
@@ -962,20 +963,21 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_market_series.py#EtfMarketProcessTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/etf_market.py#SseEtfSnapshotOperation",
         "skill/a-share-research/scripts/a_share_research/etf_market.py#EtfSnapshotObservation",
-        "tests/test_market_series.py#EtfMarketProcessTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_market_series.py#test_510050_completed_quote_cross_checks_identity_price_and_volume",
+        "tests/test_market_series.py#test_etf_price_conflict_blocks_the_quote",
+        "tests/test_direct_market_valuation_runtime.py#test_etf_partial_failure_retains_successful_sibling_observations",
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "sse_stock_list@1",
@@ -1042,7 +1044,7 @@
     },
     {
       "producer_operation_id": "szse_daily_line@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "completed_trading_date_not_after_as_of",
         "retrieval_time": "retrieved_at_with_timezone"
@@ -1058,20 +1060,21 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_close_sources.py#CloseSourceOperationTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/close_sources.py#SzseDailyLineOperation",
         "skill/a-share-research/scripts/a_share_research/close_sources.py#DailyBarObservation",
+        "tests/test_close_sources.py#test_szse_daily_line_normalizes_bars_units_and_owner_evidence",
+        "tests/test_close_sources.py#test_matching_szse_and_tencent_close_uses_the_same_contract",
         "tests/test_close_sources.py#CloseSourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "szse_stock_list@1",
@@ -1107,7 +1110,7 @@
     },
     {
       "producer_operation_id": "tencent_daily_line@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "completed_trading_date_not_after_as_of",
         "retrieval_time": "retrieved_at_with_timezone"
@@ -1123,24 +1126,26 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_close_sources.py#CloseSourceOperationTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/close_sources.py#TencentDailyLineOperation",
         "skill/a-share-research/scripts/a_share_research/close_sources.py#DailyBarObservation",
+        "tests/test_close_sources.py#test_matching_sse_and_tencent_close_is_an_honest_limited_result",
+        "tests/test_close_sources.py#test_matching_szse_and_tencent_close_uses_the_same_contract",
         "tests/test_close_sources.py#CloseSourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_market_valuation_runtime.py#test_copied_installed_tencent_provider_values_are_explicitly_excluded",
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "tencent_forward_adjusted_daily_line@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "completed_trading_date_not_after_as_of",
         "adjustment": "forward_adjusted_series"
@@ -1156,20 +1161,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_59",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_market_series.py#MarketTrendProcessTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_forward_adjusted_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/adjusted_series_sources.py#TencentForwardAdjustedDailyLineOperation",
         "skill/a-share-research/scripts/a_share_research/market_series.py#build_market_trend_result",
         "tests/test_market_series.py#MarketTrendProcessTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_operation_release_matrix.py#test_issue_59_forward_adjusted_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        59
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "tencent_intraday_snapshot@1",

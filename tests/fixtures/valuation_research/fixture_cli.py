@@ -179,13 +179,17 @@ class ValuationFixtureTransport:
             code = query_security[2:]
             security = SECURITIES[code]
             price = security["price"]
-            quote = ["0"] * 31
+            quote = [""] * 47
             quote[1] = security["name"]
             quote[2] = code
             quote[3] = price
             quote[4] = price
             quote[6] = "10000"
             quote[30] = "20260731161450"
+            quote[39] = "910039.39"
+            quote[44] = "910044.44"
+            quote[45] = "910045.45"
+            quote[46] = "910046.46"
             body = _json_response(
                 {
                     "code": 0,

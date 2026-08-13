@@ -28,6 +28,9 @@ from tests.test_direct_intraday_runtime import (  # noqa: E402
     intraday_request,
     invoke_copied_installed,
 )
+from tests.test_direct_market_valuation_runtime import (  # noqa: E402
+    invoke_copied_installed as invoke_copied_market,
+)
 from tests.test_direct_research_workflow_runtime import (  # noqa: E402
     comparison_workflow_request,
 )
@@ -44,6 +47,409 @@ QUALIFICATION_PATH = (
 
 
 class OperationReleaseMatrixTests(unittest.TestCase):
+    def test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention(
+        self,
+    ) -> None:
+        issue_59_owners = {
+            "sse_daily_line@1",
+            "szse_daily_line@1",
+            "tencent_daily_line@1",
+            "eastmoney_forward_adjusted_daily_line@1",
+            "tencent_forward_adjusted_daily_line@1",
+            "sse_etf_list@1",
+            "sse_etf_snapshot@1",
+            "sina_etf_option_snapshot@1",
+            "mootdx_intraday_replay@1",
+            "exchange_intraday_replay_daily@1",
+        }
+        expected_issue_59_qualified = issue_59_owners - {"mootdx_intraday_replay@1"}
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        operations = {
+            item["producer_operation_id"]: item for item in payload["operations"]
+        }
+
+        self.assertEqual(len(operations), 44)
+        self.assertEqual(issue_59_owners & set(operations), issue_59_owners)
+        self.assertFalse(
+            {
+                operation_id
+                for operation_id in operations
+                if "index" in operation_id.casefold()
+            }
+        )
+        self.assertFalse(any(59 in item["gap_issues"] for item in operations.values()))
+        self.assertEqual(
+            {
+                operation_id
+                for operation_id, item in operations.items()
+                if item["rate_limit_policy"]["qualification"] == "qualified_by_issue_59"
+            },
+            expected_issue_59_qualified,
+        )
+        self.assertEqual(
+            {
+                operation_id
+                for operation_id in issue_59_owners
+                if operations[operation_id]["rate_limit_policy"]["qualification"]
+                == "qualified_by_issue_58"
+            },
+            {"mootdx_intraday_replay@1"},
+        )
+        self.assertTrue(
+            all(
+                operations[operation_id]["disposition"] == "integrated"
+                and operations[operation_id]["gap_issues"] == []
+                for operation_id in issue_59_owners
+            )
+        )
+        sina = operations["sina_etf_option_snapshot@1"]
+        self.assertEqual(
+            sina["offline_contract_selector"],
+            (
+                "tests/test_direct_etf_options_runtime.py#"
+                "test_copied_installed_success_retains_all_acquisition_facts_by_owner"
+            ),
+        )
+        self.assertTrue(
+            {
+                "tests/test_etf_option_sources.py#test_collects_gbk_call_put_quotes_and_provider_analytics",
+                "tests/test_etf_option_sources.py#SinaEtfOptionSnapshotTests",
+                (
+                    "tests/test_direct_etf_options_runtime.py#"
+                    "test_copied_installed_success_retains_all_acquisition_facts_by_owner"
+                ),
+                "docs/specs/0007-implementation-amendment-a.md#A-08a",
+            }.issubset(sina["evidence_references"])
+        )
+        mootdx = operations["mootdx_intraday_replay@1"]
+        self.assertEqual(
+            mootdx["offline_contract_selector"],
+            (
+                "tests/test_intraday_replay_mootdx.py#"
+                "test_qualified_pages_normalize_units_and_keep_recent_calendar"
+            ),
+        )
+        self.assertIn(
+            (
+                "tests/test_direct_intraday_runtime.py#"
+                "test_copied_installed_replay_exercises_formal_mootdx_owner_contract"
+            ),
+            mootdx["evidence_references"],
+        )
+
+    def test_issue_59_daily_and_etf_owners_have_installed_public_qualification(
+        self,
+    ) -> None:
+        as_of = "2026-08-02"
+        policy = {
+            "allow_experimental": True,
+            "allow_credentials": False,
+            "allow_fallback": False,
+        }
+        unadjusted = invoke_copied_market(
+            {
+                "schema_version": "1.0",
+                "task_type": "market_trend",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": as_of,
+                "window": {"trading_days": 10},
+                "parameters": {"adjustment": "unadjusted"},
+                "source_policy": policy,
+            },
+            market_fixtures=True,
+            fixture_research_now="2026-08-02T10:30:00+08:00",
+        )
+        etf = invoke_copied_market(
+            {
+                "schema_version": "1.0",
+                "task_type": "etf_market",
+                "subjects": [{"clue": "510050"}],
+                "as_of": as_of,
+                "window": None,
+                "parameters": {},
+                "source_policy": policy,
+            },
+            market_fixtures=True,
+            fixture_research_now="2026-08-02T10:30:00+08:00",
+        )
+        valuation = invoke_copied_market(
+            {
+                "schema_version": "1.0",
+                "task_type": "security_valuation",
+                "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
+                "as_of": as_of,
+                "window": None,
+                "parameters": {"target_pe": "30"},
+                "source_policy": {**policy, "allow_fallback": True},
+            },
+            valuation_fixtures=True,
+            fixture_research_now="2026-08-02T18:30:00+08:00",
+        )
+        for result in (unadjusted, etf, valuation):
+            self.assertEqual(result["status"], "limited")
+
+        owner_proofs = {
+            "sse_daily_line@1": (valuation, "valuation_close"),
+            "szse_daily_line@1": (unadjusted, "market_trend_series"),
+            "tencent_daily_line@1": (unadjusted, "market_trend_series"),
+            "sse_etf_list@1": (etf, "etf_market_quote"),
+            "sse_etf_snapshot@1": (etf, "etf_market_quote"),
+        }
+        expected_plan_roles = {
+            "sse_daily_line@1": ("market_observation", "supporting"),
+            "szse_daily_line@1": ("authoritative_disclosure", "supporting"),
+            "tencent_daily_line@1": ("market_observation", "corroborating"),
+            "sse_etf_list@1": ("authoritative_disclosure", "supporting"),
+            "sse_etf_snapshot@1": ("market_observation", "supporting"),
+        }
+        expected_fields = {
+            "sse_daily_line@1": {
+                "date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "amount",
+            },
+            "szse_daily_line@1": {f"row[{index}]" for index in range(9)},
+            "tencent_daily_line@1": {
+                *(f"day[{index}]" for index in range(7)),
+                "qt[2]",
+                "qt[3]",
+                "qt[4]",
+                "qt[6]",
+                "qt[30]",
+                "qt[31]",
+                "qt[32]",
+                "qt[33]",
+                "qt[34]",
+                "qt[39]",
+                "qt[44]",
+                "qt[45]",
+                "qt[46]",
+            },
+            "sse_etf_list@1": {
+                "fundCode",
+                "fundAbbr",
+                "secNameFull",
+                "companyName",
+                "listingDate",
+                "fundType",
+                "subClass",
+            },
+            "sse_etf_snapshot@1": {
+                "name",
+                "cpxxextendname",
+                "open",
+                "high",
+                "low",
+                "last",
+                "prev_close",
+                "chg_rate",
+                "volume",
+                "amount",
+                "tradephase",
+                "code",
+                "date",
+                "time",
+            },
+        }
+        observations_by_owner = {}
+        for owner, (result, capability) in owner_proofs.items():
+            obligation = next(
+                item
+                for item in result["plan"]["operation_obligations"]
+                if item["producer_operation_id"] == owner
+                and item["capability_id"] == capability
+            )
+            self.assertEqual(obligation["operation_kind"], "external_source")
+            self.assertEqual(
+                (
+                    obligation["source_role"],
+                    obligation["evidence_uses"][0]["role"],
+                ),
+                expected_plan_roles[owner],
+            )
+            operation = result["coverage"][capability]["operations"][owner]
+            self.assertEqual(
+                (operation["execution_state"], operation["state"]),
+                ("succeeded", "complete"),
+            )
+            self.assertEqual(
+                {item["field"] for item in operation["field_dispositions"]},
+                expected_fields[owner],
+            )
+            owned = [
+                item for item in result["observations"] if item["operation_id"] == owner
+            ]
+            self.assertTrue(owned)
+            self.assertEqual(
+                {item["id"] for item in owned}, set(operation["observation_ids"])
+            )
+            observations_by_owner[owner] = owned
+
+        for owner in (
+            "sse_daily_line@1",
+            "szse_daily_line@1",
+            "tencent_daily_line@1",
+        ):
+            for observation in observations_by_owner[owner]:
+                payload = observation["payload"]
+                self.assertLessEqual(payload["observation"]["trading_date"], as_of)
+                self.assertTrue(payload["retrieved_at"].endswith("+08:00"))
+                if owner == "sse_daily_line@1":
+                    self.assertEqual(payload["basis"], "unadjusted_close")
+                    self.assertEqual(payload["observed_value"]["unit"], "CNY/share")
+                else:
+                    self.assertEqual(payload["basis"], "unadjusted_daily_ohlcv")
+                    self.assertEqual(
+                        payload["observed_value"]["unit"],
+                        {"price": "CNY/share", "volume": "shares"},
+                    )
+
+        etf_identity = observations_by_owner["sse_etf_list@1"][0]["payload"]
+        self.assertEqual(etf_identity["subject"]["security"], "SSE:510050")
+        self.assertEqual(etf_identity["basis"], "current_sse_etf_list_membership")
+        self.assertEqual(etf_identity["observed_value"]["unit"], "ETF identity")
+        self.assertEqual(etf_identity["evidence_time"], "2005-02-23")
+        etf_snapshot = observations_by_owner["sse_etf_snapshot@1"][0]["payload"]
+        self.assertEqual(etf_snapshot["subject"]["security"], "SSE:510050")
+        self.assertEqual(etf_snapshot["basis"], "sse_etf_market_snapshot")
+        self.assertEqual(
+            etf_snapshot["observed_value"]["unit"],
+            {
+                "price": "CNY/share",
+                "change_rate": "percent",
+                "volume": "shares",
+                "amount": "CNY",
+            },
+        )
+        self.assertLessEqual(etf_snapshot["observation"]["trading_date"], as_of)
+        self.assertTrue(etf_snapshot["evidence_time"].endswith("+08:00"))
+
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        qualified = {
+            item["producer_operation_id"]: item
+            for item in payload["operations"]
+            if item["producer_operation_id"] in owner_proofs
+        }
+        self.assertEqual(
+            {
+                owner: {
+                    "disposition": item["disposition"],
+                    "qualification": item["rate_limit_policy"]["qualification"],
+                    "selector": item["offline_contract_selector"],
+                    "gap_issues": item["gap_issues"],
+                }
+                for owner, item in qualified.items()
+            },
+            {
+                owner: {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_59",
+                    "selector": (
+                        "tests/test_operation_release_matrix.py#"
+                        "test_issue_59_daily_and_etf_owners_have_installed_public_qualification"
+                    ),
+                    "gap_issues": [],
+                }
+                for owner in owner_proofs
+            },
+        )
+
+    def test_issue_59_forward_adjusted_owners_have_installed_public_qualification(
+        self,
+    ) -> None:
+        as_of = "2026-08-02"
+        result = invoke_copied_market(
+            {
+                "schema_version": "1.0",
+                "task_type": "market_trend",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": as_of,
+                "window": {"trading_days": 10},
+                "parameters": {"adjustment": "forward_adjusted"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": False,
+                },
+            },
+            market_fixtures=True,
+            fixture_research_now="2026-08-02T10:30:00+08:00",
+        )
+        expected_owners = {
+            "eastmoney_forward_adjusted_daily_line@1",
+            "tencent_forward_adjusted_daily_line@1",
+        }
+
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(
+            {
+                item["producer_operation_id"]
+                for item in result["plan"]["operation_obligations"]
+                if item["capability_id"] == "market_trend_series"
+            },
+            expected_owners,
+        )
+        operations = result["coverage"]["market_trend_series"]["operations"]
+        self.assertEqual(set(operations), expected_owners)
+        self.assertTrue(
+            all(
+                operation["execution_state"] == "succeeded"
+                and operation["state"] == "complete"
+                for operation in operations.values()
+            )
+        )
+        source_observations = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] in expected_owners
+        ]
+        self.assertEqual(
+            {item["operation_id"] for item in source_observations}, expected_owners
+        )
+        self.assertTrue(
+            all(
+                item["payload"]["observation"]["adjustment"] == "forward_adjusted"
+                and item["payload"]["observation"]["trading_date"] <= as_of
+                and item["payload"]["observed_value"]["unit"]
+                == {"price": "CNY/share", "volume": "shares"}
+                for item in source_observations
+            )
+        )
+
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        qualified = {
+            item["producer_operation_id"]: item
+            for item in payload["operations"]
+            if item["producer_operation_id"] in expected_owners
+        }
+        self.assertEqual(
+            {
+                owner: {
+                    "disposition": item["disposition"],
+                    "qualification": item["rate_limit_policy"]["qualification"],
+                    "selector": item["offline_contract_selector"],
+                    "gap_issues": item["gap_issues"],
+                }
+                for owner, item in qualified.items()
+            },
+            {
+                owner: {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_59",
+                    "selector": (
+                        "tests/test_operation_release_matrix.py#"
+                        "test_issue_59_forward_adjusted_owners_have_installed_public_qualification"
+                    ),
+                    "gap_issues": [],
+                }
+                for owner in expected_owners
+            },
+        )
+
     def test_issue_58_qualification_closes_only_its_reviewed_domain_gaps(
         self,
     ) -> None:
@@ -82,7 +488,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             "tongdaxin_intraday_snapshot@1",
             "mootdx_intraday_replay@1",
         }
-        integrated_issue_58_owners = issue_58_owners - {"mootdx_intraday_replay@1"}
+        integrated_issue_58_owners = issue_58_owners
         self.assertFalse(
             any(58 in item["gap_issues"] for item in payload["operations"])
         )
@@ -130,13 +536,13 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                     "gap_issues": [],
                 },
                 "mootdx_intraday_replay@1": {
-                    "disposition": "experimental",
+                    "disposition": "integrated",
                     "qualification": "qualified_by_issue_58",
                     "selector": (
                         "tests/test_intraday_replay_mootdx.py#"
                         "test_qualified_pages_normalize_units_and_keep_recent_calendar"
                     ),
-                    "gap_issues": [59],
+                    "gap_issues": [],
                 },
                 "sse_stock_list@1": {
                     "disposition": "integrated",

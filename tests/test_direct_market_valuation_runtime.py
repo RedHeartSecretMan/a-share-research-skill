@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -22,8 +24,10 @@ from a_share_research.automatic_valuation import (  # noqa: E402
     build_security_valuation_result,
     build_valuation_comparison_result,
 )
+from a_share_research.cli import main as cli_main  # noqa: E402
 from a_share_research.close_observation import execute_close_research  # noqa: E402
 from a_share_research.etf_market import build_etf_market_result  # noqa: E402
+from a_share_research.identity_sources import HttpResponse  # noqa: E402
 from a_share_research.market_series import build_market_trend_result  # noqa: E402
 from a_share_research.research_result import (  # noqa: E402
     DirectTaskClaim,
@@ -70,6 +74,33 @@ def load_fixture_transport(path: Path, class_name: str) -> object:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return getattr(module, class_name)()
+
+
+class FutureAdjustedTransport:
+    def __init__(self, scenario: str = "future_sibling") -> None:
+        self._delegate = load_fixture_transport(MARKET_FIXTURE_CLI, "FixtureTransport")
+        self._scenario = scenario
+
+    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+        response = self._delegate.get(url, headers)
+        if "push2his.eastmoney.com" not in url:
+            return response
+        payload = json.loads(response.body)
+        future = "2026-08-03,14.40,14.60,14.80,14.20,1000,14500.00,1.00,1.00,1.00,1.00"
+        if self._scenario == "future_sibling":
+            payload["data"]["klines"].append(future)
+        elif self._scenario == "all_future":
+            payload["data"]["klines"] = [future]
+        elif self._scenario == "malformed_future":
+            payload["data"]["klines"].append("2026-08-03,14.40")
+        else:
+            raise AssertionError(self._scenario)
+        return HttpResponse(
+            status=response.status,
+            content_type=response.content_type,
+            body=json.dumps(payload).encode(),
+            retrieved_at=response.retrieved_at,
+        )
 
 
 def destination_exists(observation: dict[str, object], destination: str) -> bool:
@@ -199,6 +230,7 @@ def invoke_copied_installed(
     valuation_fixtures: bool = False,
     fail_url_contains: str | None = None,
     fixture_scenario: str | None = None,
+    fixture_research_now: str | None = None,
 ) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_root = Path(temporary_directory)
@@ -229,6 +261,27 @@ def invoke_copied_installed(
                     "transport = FailingTransport()",
                 )
                 if fail_url_contains is not None
+                else ()
+            )
+            clock_lines = (
+                (
+                    "from datetime import datetime",
+                    f"sys.path.insert(0, {str(installed / 'scripts')!r})",
+                    "import a_share_research.cli as cli",
+                    "import a_share_research.identity_sources as identity_sources",
+                    "class FixtureDateTime(datetime):",
+                    "    @classmethod",
+                    "    def now(cls, tz=None):",
+                    f"        value = datetime.fromisoformat({fixture_research_now!r})",
+                    "        return value if tz is None else value.astimezone(tz)",
+                    "identity_sources.datetime = FixtureDateTime",
+                    "original_research = cli.research",
+                    "def fixture_research(request, **kwargs):",
+                    f"    kwargs['research_now'] = datetime.fromisoformat({fixture_research_now!r})",
+                    "    return original_research(request, **kwargs)",
+                    "cli.research = fixture_research",
+                )
+                if fixture_research_now is not None
                 else ()
             )
             sitecustomize = temporary_root / "sitecustomize.py"
@@ -265,6 +318,7 @@ def invoke_copied_installed(
                         "    def open(self, request, timeout):",
                         "        return FixtureResponse(transport.get(request.full_url, dict(request.header_items())))",
                         "urllib.request.build_opener = lambda: FixtureOpener()",
+                        *clock_lines,
                     )
                 ),
                 encoding="utf-8",
@@ -364,6 +418,210 @@ def build_invariant_result(*, include_second_claim: bool = False):
 
 
 class DirectMarketValuationPublicSeamTests(unittest.TestCase):
+    def run_future_adjusted_public(
+        self, transport: FutureAdjustedTransport
+    ) -> dict[str, object]:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "market_trend",
+            "subjects": [{"clue": "蓝色光标"}],
+            "as_of": "2026-08-02",
+            "window": {"trading_days": 10},
+            "parameters": {"adjustment": "forward_adjusted"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            request_path = Path(temporary_directory, "request.json")
+            request_path.write_text(
+                json.dumps(request, ensure_ascii=False), encoding="utf-8"
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                return_code = cli_main(
+                    ["run", "--request", str(request_path)],
+                    identity_transport=transport,
+                    research_now=datetime(
+                        2026, 8, 2, 10, 30, tzinfo=timezone(timedelta(hours=8))
+                    ),
+                    available_optional_dependencies=set(),
+                )
+        self.assertEqual(return_code, 0, stderr.getvalue())
+        self.assertEqual(stderr.getvalue(), "")
+        loaded = json.loads(stdout.getvalue())
+        self.assertIsInstance(loaded, dict)
+        return loaded
+
+    def test_public_eastmoney_adjusted_owner_rejects_a_future_response_row(
+        self,
+    ) -> None:
+        result = self.run_future_adjusted_public(FutureAdjustedTransport())
+
+        self.assertEqual(result["status"], "limited")
+        eastmoney = result["coverage"]["market_trend_series"]["operations"][
+            "eastmoney_forward_adjusted_daily_line@1"
+        ]
+        self.assertEqual(
+            (eastmoney["execution_state"], eastmoney["state"]),
+            ("succeeded", "complete"),
+        )
+        eastmoney_dates = {
+            item["payload"]["observation"]["trading_date"]
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_forward_adjusted_daily_line@1"
+        }
+        self.assertIn("2026-07-31", eastmoney_dates)
+        self.assertNotIn("2026-08-03", eastmoney_dates)
+        tencent = result["coverage"]["market_trend_series"]["operations"][
+            "tencent_forward_adjusted_daily_line@1"
+        ]
+        self.assertEqual(
+            (tencent["execution_state"], tencent["state"]),
+            ("succeeded", "complete"),
+        )
+
+    def test_public_eastmoney_adjusted_owner_fails_when_every_row_is_future(
+        self,
+    ) -> None:
+        result = self.run_future_adjusted_public(FutureAdjustedTransport("all_future"))
+
+        eastmoney = result["coverage"]["market_trend_series"]["operations"][
+            "eastmoney_forward_adjusted_daily_line@1"
+        ]
+        self.assertEqual(
+            (eastmoney["execution_state"], eastmoney["state"]),
+            ("failed", "failed"),
+        )
+        self.assertEqual(
+            {
+                item["code"]
+                for item in result["source_errors"]
+                if item["operation_id"] == "eastmoney_forward_adjusted_daily_line@1"
+            },
+            {"empty_observation"},
+        )
+        self.assertFalse(
+            any(
+                item["operation_id"] == "eastmoney_forward_adjusted_daily_line@1"
+                for item in result["observations"]
+            )
+        )
+        self.assertEqual(
+            result["coverage"]["market_trend_series"]["operations"][
+                "tencent_forward_adjusted_daily_line@1"
+            ]["state"],
+            "complete",
+        )
+
+    def test_public_eastmoney_adjusted_owner_does_not_hide_future_schema_failure(
+        self,
+    ) -> None:
+        result = self.run_future_adjusted_public(
+            FutureAdjustedTransport("malformed_future")
+        )
+
+        eastmoney = result["coverage"]["market_trend_series"]["operations"][
+            "eastmoney_forward_adjusted_daily_line@1"
+        ]
+        self.assertEqual(
+            (eastmoney["execution_state"], eastmoney["state"]),
+            ("failed", "failed"),
+        )
+        self.assertEqual(
+            {
+                item["code"]
+                for item in result["source_errors"]
+                if item["operation_id"] == "eastmoney_forward_adjusted_daily_line@1"
+            },
+            {"unknown_schema"},
+        )
+        self.assertEqual(
+            result["coverage"]["market_trend_series"]["operations"][
+                "tencent_forward_adjusted_daily_line@1"
+            ]["state"],
+            "complete",
+        )
+
+    def test_copied_installed_tencent_provider_values_are_explicitly_excluded(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            {
+                "schema_version": "1.0",
+                "task_type": "security_valuation",
+                "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
+                "as_of": "2026-08-02",
+                "window": None,
+                "parameters": {"target_pe": "30"},
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            valuation_fixtures=True,
+            fixture_research_now="2026-08-02T18:30:00+08:00",
+        )
+
+        tencent = result["coverage"]["valuation_close"]["operations"][
+            "tencent_daily_line@1"
+        ]
+        dispositions = {item["field"]: item for item in tencent["field_dispositions"]}
+        provider_fields = {"qt[39]", "qt[44]", "qt[45]", "qt[46]"}
+        self.assertEqual(
+            {
+                field: {
+                    "disposition": dispositions[field]["disposition"],
+                    "destination": dispositions[field]["destination"],
+                }
+                for field in provider_fields
+            },
+            {
+                field: {"disposition": "excluded", "destination": None}
+                for field in provider_fields
+            },
+        )
+        tencent_observation_ids = {
+            item["id"]
+            for item in result["observations"]
+            if item["operation_id"] == "tencent_daily_line@1"
+        }
+        self.assertTrue(tencent_observation_ids)
+        self.assertTrue(
+            all(
+                tencent_observation_ids.isdisjoint(calculation["input_ids"])
+                for calculation in result["calculations"]
+            )
+        )
+        serialized = json.dumps(result, sort_keys=True)
+        for provider_value in (
+            "910039.39",
+            "910044.44",
+            "910045.45",
+            "910046.46",
+        ):
+            self.assertNotIn(provider_value, serialized)
+        calculations = {item["kind"]: item for item in result["calculations"]}
+        self.assertEqual(
+            calculations["market_capitalization"]["payload"],
+            {
+                "formula": "completed_unadjusted_close * effective_total_shares",
+                "operands": {"price": "56.700", "shares": "19844092284"},
+            },
+        )
+        self.assertEqual(
+            calculations["pe_ttm"]["payload"]["formula"],
+            "market_capitalization / ttm_attributable_profit",
+        )
+        self.assertEqual(
+            calculations["pb_mrq"]["payload"]["formula"],
+            "market_capitalization / mrq_attributable_equity",
+        )
+
     def test_known_identity_and_market_operations_reject_capability_rebinding(
         self,
     ) -> None:
@@ -645,6 +903,10 @@ class DirectMarketValuationPublicSeamTests(unittest.TestCase):
                 "qt[32]",
                 "qt[33]",
                 "qt[34]",
+                "qt[39]",
+                "qt[44]",
+                "qt[45]",
+                "qt[46]",
             },
             "eastmoney_forward_adjusted_daily_line@1": {
                 *(f"f{index}" for index in range(1, 7)),
@@ -821,6 +1083,10 @@ class DirectMarketValuationPublicSeamTests(unittest.TestCase):
                 "qt[32]",
                 "qt[33]",
                 "qt[34]",
+                "qt[39]",
+                "qt[44]",
+                "qt[45]",
+                "qt[46]",
             },
         }
         for operation_id, fields in daily_fields.items():

@@ -24,21 +24,57 @@ from .research_result import FieldDisposition
 
 def exchange_daily_field_dispositions(
     exchange: str,
+    *,
+    trading_status: str = "traded",
 ) -> tuple[FieldDisposition, ...]:
     """Return the selected exchange Adapter's actual response columns."""
 
+    destinations = (
+        {
+            "date": "trading_date",
+            "open": "open_price",
+            "high": "high_price",
+            "low": "low_price",
+            "close": "close_price",
+            "volume": "volume",
+            "amount": "amount",
+        }
+        if exchange == "SSE"
+        else {
+            "row[0]": "trading_date",
+            "row[1]": "open_price",
+            "row[2]": "close_price",
+            "row[3]": "low_price",
+            "row[4]": "high_price",
+            "row[7]": "volume",
+            "row[8]": "amount",
+        }
+    )
     source_dispositions = (
         SseDailyLineOperation.field_dispositions
         if exchange == "SSE"
         else SzseDailyLineOperation.field_dispositions
     )
+    price_fields = (
+        {"open", "high", "low", "close"}
+        if exchange == "SSE"
+        else {"row[1]", "row[2]", "row[3]", "row[4]"}
+    )
     return tuple(
         FieldDisposition(
             item.field,
-            item.disposition,
-            "observations.payload.contract" if item.destination is not None else None,
-            item.reason,
+            "excluded",
+            None,
+            "The suspended replay-date price is parsed for schema validity but is not retained in the daily-boundary contract.",
         )
+        if trading_status == "suspended" and item.field in price_fields
+        else FieldDisposition(
+            item.field,
+            "normalized",
+            f"observations.payload.contract.{destinations[item.field]}",
+        )
+        if item.field in destinations
+        else item
         for item in source_dispositions
     )
 

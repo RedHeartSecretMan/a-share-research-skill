@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import replace
@@ -15,6 +16,7 @@ SCRIPTS = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from a_share_research.cli import main  # noqa: E402
+from a_share_research.identity_sources import HttpResponse  # noqa: E402
 from a_share_research.intraday_replay_contract import (  # noqa: E402
     IntradayReplayDailySourceBatch,
     IntradayReplaySourceBatch,
@@ -24,6 +26,9 @@ from a_share_research.intraday_replay_contract import (  # noqa: E402
 from a_share_research.intraday_replay_mootdx import (  # noqa: E402
     MootdxIntradayReplayOperation,
     MootdxReplayContract,
+)
+from a_share_research.intraday_replay_registry import (  # noqa: E402
+    ExchangeReplayDailyBoundaryOperation,
 )
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
@@ -382,6 +387,7 @@ class FixtureIntradayReplayOperation:
             in {
                 "single_source_suspension",
                 "suspension_confirmed",
+                "formal_exchange_suspended",
             }
             else "traded"
         )
@@ -639,11 +645,65 @@ class FixtureIntradayReplayDailyOperation:
         )
 
 
+class _FormalExchangeDailyTransport:
+    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+        del headers
+        if "/v1/sh1/dayk/600519" not in url:
+            raise AssertionError(url)
+        scenario = os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO")
+        current = (
+            ["20260803", "10.10", "10.25", "10.09", "10.22", "0", "0.00"]
+            if scenario == "formal_exchange_suspended"
+            else [
+                "20260803",
+                "10.10",
+                "10.25",
+                "10.09",
+                "10.22",
+                "300",
+                "3059.00",
+            ]
+        )
+        return HttpResponse(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "code": "600519",
+                    "kline": [
+                        [
+                            "20260731",
+                            "10.00",
+                            "10.00",
+                            "10.00",
+                            "10.00",
+                            "100",
+                            "1000.00",
+                        ],
+                        current,
+                    ],
+                }
+            ).encode(),
+            retrieved_at=RETRIEVED_AT,
+        )
+
+
+def fixture_intraday_replay_daily_operation() -> object:
+    if os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO") in {
+        "formal_exchange_daily",
+        "formal_exchange_suspended",
+    }:
+        return ExchangeReplayDailyBoundaryOperation(_FormalExchangeDailyTransport())
+    return FixtureIntradayReplayDailyOperation()
+
+
 if __name__ == "__main__":
     scenario = os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO")
     daily_operations = (
         (
-            FixtureIntradayReplayDailyOperation(
+            fixture_intraday_replay_daily_operation()
+            if scenario in {"formal_exchange_daily", "formal_exchange_suspended"}
+            else FixtureIntradayReplayDailyOperation(
                 operation_id=(
                     "fixture_intraday_replay@1"
                     if scenario == "daily_same_operation"
@@ -666,6 +726,8 @@ if __name__ == "__main__":
             "ex_right_only",
             "single_source_suspension",
             "suspension_confirmed",
+            "formal_exchange_daily",
+            "formal_exchange_suspended",
         }
         else ()
     )

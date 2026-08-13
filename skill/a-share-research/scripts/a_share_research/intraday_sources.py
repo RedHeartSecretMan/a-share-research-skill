@@ -127,6 +127,30 @@ TENCENT_INTRADAY_FIELD_DISPOSITIONS = tuple(
         ("qt[32]", "cross_check_only", "observations.payload.prices.high", None),
         ("qt[33]", "cross_check_only", "observations.payload.prices.low", None),
         ("qt[34]", "cross_check_only", "observations.payload.trading_status", None),
+        (
+            "qt[39]",
+            "excluded",
+            None,
+            "The provider PE value has no approved use in the intraday observation.",
+        ),
+        (
+            "qt[44]",
+            "excluded",
+            None,
+            "The provider circulating market-cap value has no approved use in the intraday observation.",
+        ),
+        (
+            "qt[45]",
+            "excluded",
+            None,
+            "The provider total market-cap value has no approved use in the intraday observation.",
+        ),
+        (
+            "qt[46]",
+            "excluded",
+            None,
+            "The provider PB value has no approved use in the intraday observation.",
+        ),
     )
 )
 

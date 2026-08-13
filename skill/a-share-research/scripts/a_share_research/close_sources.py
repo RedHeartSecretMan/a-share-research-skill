@@ -661,6 +661,22 @@ class TencentDailyLineOperation:
             "qt[34]",
             "The optional previous-close basis is not retained in daily-bar evidence.",
         ),
+        _excluded(
+            "qt[39]",
+            "The provider PE value has no approved use in daily-line evidence and is not a deterministic valuation operand.",
+        ),
+        _excluded(
+            "qt[44]",
+            "The provider circulating market-cap value has no approved use in daily-line evidence and is not a deterministic valuation operand.",
+        ),
+        _excluded(
+            "qt[45]",
+            "The provider total market-cap value has no approved use in daily-line evidence and is not a deterministic valuation operand.",
+        ),
+        _excluded(
+            "qt[46]",
+            "The provider PB value has no approved use in daily-line evidence and is not a deterministic valuation operand.",
+        ),
     )
 
     def observe(

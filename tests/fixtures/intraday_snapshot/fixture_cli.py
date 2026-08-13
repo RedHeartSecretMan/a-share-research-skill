@@ -284,6 +284,12 @@ class FixtureTransport:
         quote[3] = current[2]
         quote[4] = previous[2]
         quote[6] = current[5]
+        if scenario == "tencent_provider_values":
+            quote.extend([""] * (47 - len(quote)))
+            quote[39] = "920039.39"
+            quote[44] = "920044.44"
+            quote[45] = "920045.45"
+            quote[46] = "920046.46"
         quote_times = {
             "opening_auction": "20260803092002",
             "midday_break": "20260803112955",

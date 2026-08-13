@@ -275,6 +275,9 @@ class EastmoneyForwardAdjustedDailyLineOperation:
             open_value, high_value, low_value, close_value = _ohlc(
                 row[1], row[3], row[4], row[2], self.operation_id
             )
+            volume_shares = _volume_shares(row[5], self.operation_id, lot_size=100)
+            if trading_date > as_of:
+                continue
             session_close = datetime.combine(
                 trading_date, time(15, 0), tzinfo=CHINA_STANDARD_TIME
             )
@@ -288,9 +291,7 @@ class EastmoneyForwardAdjustedDailyLineOperation:
                     high_value=high_value,
                     low_value=low_value,
                     close_value=close_value,
-                    volume_shares=_volume_shares(
-                        row[5], self.operation_id, lot_size=100
-                    ),
+                    volume_shares=volume_shares,
                     price_type="close",
                     trading_status="traded" if volume > 0 else "suspended",
                     evidence_time=session_close,
@@ -298,6 +299,12 @@ class EastmoneyForwardAdjustedDailyLineOperation:
                     retrieved_at=response.retrieved_at,
                     adjustment="forward_adjusted",
                 )
+            )
+        if not observations:
+            raise _error(
+                self.operation_id,
+                "empty_observation",
+                "Eastmoney returned no forward-adjusted observations on or before the research date.",
             )
         return observations
 

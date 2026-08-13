@@ -4288,12 +4288,42 @@ def _validate_intraday_replay_domain_facts(result: Mapping[str, object]) -> None
                 raise ValueError(
                     "intraday replay daily field disposition contract is invalid"
                 )
+            trading_status = "traded"
+            observation_ids = operation.get("observation_ids")
+            observations = result.get("observations")
+            if isinstance(observation_ids, list) and isinstance(observations, list):
+                owned_ids = set(observation_ids)
+                for observation in observations:
+                    if (
+                        isinstance(observation, Mapping)
+                        and observation.get("id") in owned_ids
+                    ):
+                        payload = observation.get("payload")
+                        contract = (
+                            payload.get("contract")
+                            if isinstance(payload, Mapping)
+                            else None
+                        )
+                        if (
+                            isinstance(contract, Mapping)
+                            and contract.get("trading_status") == "suspended"
+                        ):
+                            trading_status = "suspended"
             expected_contracts = (
-                (exchange_daily_field_dispositions(cast(str, exchange)),)
+                (
+                    exchange_daily_field_dispositions(
+                        cast(str, exchange),
+                        trading_status=trading_status,
+                    ),
+                )
                 if exchange in {"SSE", "SZSE"}
                 else (
-                    exchange_daily_field_dispositions("SSE"),
-                    exchange_daily_field_dispositions("SZSE"),
+                    exchange_daily_field_dispositions(
+                        "SSE", trading_status=trading_status
+                    ),
+                    exchange_daily_field_dispositions(
+                        "SZSE", trading_status=trading_status
+                    ),
                 )
             )
             if operation.get("field_dispositions") not in [

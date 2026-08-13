@@ -236,6 +236,8 @@ def _default_replay_field_dispositions() -> tuple[FieldDisposition, ...]:
 
 def _default_daily_field_dispositions(
     request: dict[str, Any],
+    *,
+    trading_status: str = "traded",
 ) -> tuple[FieldDisposition, ...]:
     subjects = request.get("subjects")
     if isinstance(subjects, list) and len(subjects) == 1:
@@ -248,7 +250,10 @@ def _default_daily_field_dispositions(
                     exchange_daily_field_dispositions,
                 )
 
-                return exchange_daily_field_dispositions(exchange)
+                return exchange_daily_field_dispositions(
+                    exchange,
+                    trading_status=trading_status,
+                )
     raise ValueError("intraday replay daily source requires a canonical exchange")
 
 
@@ -647,6 +652,22 @@ def build_intraday_replay_result(
                 normalized_batch.operation_id,
                 query,
             )
+            if daily_operation_id == _DEFAULT_DAILY_OPERATION:
+                from .intraday_replay_registry import (
+                    exchange_daily_field_dispositions,
+                )
+
+                daily_dispositions = exchange_daily_field_dispositions(
+                    query.exchange,
+                    trading_status=daily_batch.trading_status,
+                )
+            elif callable(daily_dispositions_value):
+                daily_dispositions = tuple(daily_dispositions_value(query))
+            elif not isinstance(daily_dispositions_value, tuple):
+                daily_dispositions = _default_daily_field_dispositions(
+                    request,
+                    trading_status=daily_batch.trading_status,
+                )
             outcomes.append(
                 _daily_outcome(
                     operation_id=daily_operation_id,
