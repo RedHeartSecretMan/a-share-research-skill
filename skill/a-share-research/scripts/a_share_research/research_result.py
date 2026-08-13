@@ -2564,6 +2564,11 @@ def _validate_capital_event_domain_facts(
     result: Mapping[str, object],
 ) -> None:
     _require_absent_evidence_storage_plan(result, domain="capital-event")
+    from .capital_contract import (
+        capital_observation_authority,
+        validate_capital_observation_authority,
+        validate_capital_observation_group_authority,
+    )
     from .capital_events import _capital_dispositions
     from .capital_registry import build_default_capital_operations
 
@@ -2600,6 +2605,7 @@ def _validate_capital_event_domain_facts(
     observations = cast(list[dict[str, object]], result["observations"])
     source_errors = cast(list[dict[str, object]], result["source_errors"])
     capital_records: list[tuple[str, dict[str, object]]] = []
+    formal_security_records: list[dict[str, object]] = []
     for record in observations:
         if record.get("capability_id") != "capital_event_observations":
             continue
@@ -2664,6 +2670,16 @@ def _validate_capital_event_domain_facts(
             or set(metrics) != set(directions)
         ):
             raise ValueError("capital retained metric contract is invalid")
+        data_type = payload.get("data_type")
+        if not isinstance(data_type, str):
+            raise ValueError("capital retained data type is invalid")
+        record_operation_id = record.get("operation_id")
+        if not isinstance(record_operation_id, str):
+            raise ValueError("capital owner authority is invalid")
+        validate_capital_observation_authority(record_operation_id, data_type, payload)
+        authority = capital_observation_authority(record_operation_id, data_type)
+        if authority is not None and authority.subject_scope == "security":
+            formal_security_records.append(payload)
         scope = payload.get("query_scope")
         if (
             not isinstance(scope, dict)
@@ -2677,7 +2693,31 @@ def _validate_capital_event_domain_facts(
             raise ValueError("capital retained query scope is invalid")
         capital_records.append((cast(str, record["id"]), payload))
 
+    capital_groups: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for _, payload in capital_records:
+        operation_id = cast(str, payload["source_operation"])
+        data_type = cast(str, payload["data_type"])
+        capital_groups.setdefault((operation_id, data_type), []).append(payload)
+    for (operation_id, data_type), payloads in capital_groups.items():
+        validate_capital_observation_group_authority(
+            operation_id,
+            data_type,
+            payloads,
+        )
+
     claims = cast(list[dict[str, object]], result["claims"])
+    if formal_security_records:
+        identity_subject = _validated_owned_identity_claim_payload(
+            observations,
+            claims,
+            claim_kind="capital_events_subject_identity",
+            domain="capital",
+        )
+        if any(
+            payload.get("subject") != identity_subject
+            for payload in formal_security_records
+        ):
+            raise ValueError("capital subject contradicts its owned identity")
     capital_claims = [
         item for item in claims if item.get("kind") == "capital_event_observation"
     ]
@@ -3798,64 +3838,20 @@ def _validate_research_content_domain_facts(
     if len(subjects) != 1:
         raise ValueError("research content material subjects are inconsistent")
     subject = materials[0][1].get("subject")
-    identity_claims = [
-        item
-        for item in claims
-        if item.get("kind") == "research_content_subject_identity"
-    ]
     if subject is None:
-        if identity_claims:
+        if any(
+            item.get("kind") == "research_content_subject_identity" for item in claims
+        ):
             raise ValueError("research content subject identity is unexpected")
-    elif len(identity_claims) != 1 or _record_payload(identity_claims[0]) != subject:
-        raise ValueError("research content subject identity is inconsistent")
     else:
-        identity_claim = identity_claims[0]
-        records_by_id = {str(item["id"]): item for item in observations}
-        subject_mapping = cast(dict[str, object], subject)
-        security = _nested_mapping(subject_mapping, "security")
-        issuer = _nested_mapping(subject_mapping, "issuer")
-        supporting_ids: set[str] = {
-            cast(str, adoption["observation_id"])
-            for adoption in cast(
-                list[dict[str, object]], identity_claim["evidence_adoptions"]
-            )
-            if isinstance(adoption.get("observation_id"), str)
-            and adoption.get("decision") == "adopted"
-            and adoption.get("role") == "supporting"
-        }
-        identity_proved = False
-        for observation_id in supporting_ids:
-            identity_record = records_by_id.get(observation_id)
-            if identity_record is None:
-                continue
-            provider_payload = _record_payload(identity_record)
-            observed_identity = provider_payload.get("observation")
-            if not isinstance(observed_identity, dict):
-                continue
-            relationship_verified = observed_identity.get(
-                "issuer_relationship_verified"
-            )
-            expected_relationship = issuer.get("security_relationship")
-            if (
-                observed_identity.get("exchange") == security.get("exchange")
-                and observed_identity.get("code") == security.get("code")
-                and observed_identity.get("security_type") == security.get("type")
-                and observed_identity.get("name") == subject_mapping.get("name")
-                and observed_identity.get("issuer_identifier")
-                == issuer.get("identifier")
-                and (
-                    expected_relationship == "verified"
-                    and relationship_verified is True
-                    or expected_relationship == "unverified"
-                    and relationship_verified is False
-                )
-            ):
-                identity_proved = True
-                break
-        if not identity_proved:
-            raise ValueError(
-                "research content subject identity lacks owned supporting facts"
-            )
+        identity_subject = _validated_owned_identity_claim_payload(
+            observations,
+            claims,
+            claim_kind="research_content_subject_identity",
+            domain="research content",
+        )
+        if identity_subject != subject:
+            raise ValueError("research content subject identity is inconsistent")
 
 
 def _research_content_identity_obligation(
@@ -5082,6 +5078,92 @@ def _record_payload(record: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("domain observation payload must be an object")
     return payload
+
+
+def _validated_owned_identity_claim_payload(
+    observations: Sequence[Mapping[str, object]],
+    claims: Sequence[Mapping[str, object]],
+    *,
+    claim_kind: str,
+    domain: str,
+) -> dict[str, object]:
+    """Return the unique identity claim only when owned support proves it."""
+
+    identity_claims = [item for item in claims if item.get("kind") == claim_kind]
+    if len(identity_claims) != 1:
+        raise ValueError(f"{domain} subject identity claim is not unique")
+    identity_claim = identity_claims[0]
+    subject = _record_payload(identity_claim)
+    security = _nested_mapping(subject, "security")
+    issuer = _nested_mapping(subject, "issuer")
+    issuer_name = issuer.get("name")
+    issuer_identifier = issuer.get("identifier")
+    if (
+        set(subject) != {"security", "name", "issuer"}
+        or set(security) != {"exchange", "code", "type"}
+        or set(issuer) != {"name", "identifier", "security_relationship"}
+        or security.get("exchange") not in {"SSE", "SZSE"}
+        or not isinstance(security.get("code"), str)
+        or not security["code"]
+        or security.get("type") != "A_SHARE"
+        or not isinstance(subject.get("name"), str)
+        or not subject["name"]
+        or (issuer_name is not None and not isinstance(issuer_name, str))
+        or issuer_name == ""
+        or (issuer_identifier is not None and not isinstance(issuer_identifier, str))
+        or issuer_identifier == ""
+        or issuer.get("security_relationship") not in {"verified", "unverified"}
+    ):
+        raise ValueError(f"{domain} subject identity claim is invalid")
+    records_by_id = {
+        cast(str, item["id"]): item
+        for item in observations
+        if isinstance(item.get("id"), str)
+    }
+    evidence_adoptions = identity_claim.get("evidence_adoptions")
+    if not isinstance(evidence_adoptions, list):
+        raise ValueError(f"{domain} subject identity lacks owned supporting facts")
+    supporting_ids = {
+        cast(str, adoption["observation_id"])
+        for adoption in evidence_adoptions
+        if isinstance(adoption, dict)
+        and isinstance(adoption.get("observation_id"), str)
+        and adoption.get("decision") == "adopted"
+        and adoption.get("role") == "supporting"
+    }
+    for observation_id in supporting_ids:
+        identity_record = records_by_id.get(observation_id)
+        if identity_record is None:
+            continue
+        provider_payload = _record_payload(identity_record)
+        observed_identity = provider_payload.get("observation")
+        provider_subject = provider_payload.get("subject")
+        if not isinstance(observed_identity, dict) or not isinstance(
+            provider_subject, dict
+        ):
+            continue
+        relationship_verified = observed_identity.get("issuer_relationship_verified")
+        expected_relationship = issuer.get("security_relationship")
+        exchange = observed_identity.get("exchange")
+        code = observed_identity.get("code")
+        if (
+            set(provider_subject) == {"security", "issuer"}
+            and exchange == security.get("exchange")
+            and code == security.get("code")
+            and provider_subject.get("security") == f"{exchange}:{code}"
+            and provider_subject.get("issuer") == issuer_name
+            and observed_identity.get("security_type") == security.get("type")
+            and observed_identity.get("name") == subject.get("name")
+            and observed_identity.get("issuer_identifier") == issuer_identifier
+            and (
+                expected_relationship == "verified"
+                and relationship_verified is True
+                or expected_relationship == "unverified"
+                and relationship_verified is False
+            )
+        ):
+            return subject
+    raise ValueError(f"{domain} subject identity lacks owned supporting facts")
 
 
 def _nested_mapping(value: object, *path: str) -> dict[str, object]:

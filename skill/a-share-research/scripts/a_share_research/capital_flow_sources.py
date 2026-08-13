@@ -16,6 +16,7 @@ from .capital_contract import (
     CapitalQuery,
     CapitalSourceBatch,
     CapitalSourceFailure,
+    capital_observation_authority,
 )
 from .identity_sources import HttpResponse, TransportError
 from .source_throttle import (
@@ -757,18 +758,24 @@ def _stock_observation(
         "large_order_net_inflow": large,
         "super_large_order_net_inflow": super_large,
     }
+    authority = capital_observation_authority(
+        EastmoneyStockFundFlowOperation.operation_id, "stock_fund_flow"
+    )
+    if authority is None:
+        raise AssertionError("stock fund-flow metric contract is missing")
+    units, directions = authority.metric_semantics(metrics)
     return CapitalObservation(
         data_type="stock_fund_flow",
         source_operation=EastmoneyStockFundFlowOperation.operation_id,
-        source_role="market_signal",
+        source_role=authority.source_role,
         subject=subject,
         observed_on=observed_on.isoformat(),
         available_at=None,
         retrieved_at=retrieved_at,
         period=period,
         metrics=metrics,
-        units={name: "CNY" for name in metrics},
-        directions={name: "positive_is_net_inflow" for name in metrics},
+        units=units,
+        directions=directions,
         dimensions={"frequency": "trading_day"},
         locator_uri=locator_uri,
         limitations=("availability_time_unknown",),
@@ -815,16 +822,6 @@ def _board_observation(
         "main_net_inflow_ratio": _decimal_text(row.get(pct_field)),
         "price_change_ratio": _decimal_text(row.get(change_field)),
     }
-    units = {
-        "main_net_inflow": "CNY",
-        "main_net_inflow_ratio": "PERCENT",
-        "price_change_ratio": "PERCENT",
-    }
-    directions = {
-        "main_net_inflow": "positive_is_net_inflow",
-        "main_net_inflow_ratio": "positive_is_net_inflow",
-        "price_change_ratio": "positive_is_gain",
-    }
     if period_name == "today":
         for metric, field in (
             ("super_large_order_net_inflow", "f66"),
@@ -834,8 +831,6 @@ def _board_observation(
         ):
             value = row.get(field)
             metrics[metric] = None if value is None else _decimal_text(value)
-            units[metric] = "CNY"
-            directions[metric] = "positive_is_net_inflow"
     leader = row.get(leader_field) if leader_field is not None else None
     if leader is not None and not isinstance(leader, str):
         raise _CapitalFlowError(
@@ -847,10 +842,16 @@ def _board_observation(
             "date_mismatch",
             "The board fund-flow snapshot date does not match the requested boundary.",
         )
+    authority = capital_observation_authority(
+        EastmoneyBoardFundFlowOperation.operation_id, "board_fund_flow"
+    )
+    if authority is None or authority.market_scope is None:
+        raise AssertionError("board fund-flow authority is missing")
+    units, directions = authority.metric_semantics(metrics)
     return CapitalObservation(
         data_type="board_fund_flow",
         source_operation=EastmoneyBoardFundFlowOperation.operation_id,
-        source_role="market_signal",
+        source_role=authority.source_role,
         subject=None,
         observed_on=provider_day.isoformat(),
         available_at=None,
@@ -861,7 +862,7 @@ def _board_observation(
         directions=directions,
         dimensions={
             "board_type": board_type,
-            "market_scope": "a_share_board_market",
+            "market_scope": authority.market_scope,
             "board_code": code,
             "board_name": name,
             "rank": rank,

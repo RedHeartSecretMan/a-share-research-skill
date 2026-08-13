@@ -638,6 +638,109 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             },
         )
 
+    def test_issue_63_closes_exact_reviewed_capital_event_gaps(self) -> None:
+        issue_63_owners = {
+            "eastmoney_board_fund_flow@1",
+            "eastmoney_dividend@1",
+            "eastmoney_margin_trading@1",
+            "eastmoney_shareholder_count@1",
+            "eastmoney_stock_fund_flow@1",
+            "eastmoney_trading_events@1",
+        }
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        ordered_owners = [
+            item["producer_operation_id"] for item in payload["operations"]
+        ]
+        operations = {
+            item["producer_operation_id"]: item for item in payload["operations"]
+        }
+
+        self.assertEqual(len(ordered_owners), 44)
+        self.assertEqual(len(operations), 44)
+        self.assertEqual(ordered_owners, sorted(ordered_owners))
+        self.assertEqual(issue_63_owners & set(operations), issue_63_owners)
+        self.assertFalse(any(63 in item["gap_issues"] for item in operations.values()))
+        self.assertEqual(
+            {
+                operation_id
+                for operation_id, item in operations.items()
+                if item["rate_limit_policy"]["qualification"] == "qualified_by_issue_63"
+            },
+            issue_63_owners,
+        )
+        direct_selector = "tests/test_direct_capital_market_signals_runtime.py#"
+        expected_selectors = {
+            "eastmoney_stock_fund_flow@1": (
+                direct_selector
+                + "test_issue_63_stock_flow_public_contract_rejects_direction_forgery"
+            ),
+            "eastmoney_board_fund_flow@1": (
+                direct_selector
+                + "test_issue_63_board_flow_public_contract_rejects_market_scope_forgery"
+            ),
+            "eastmoney_margin_trading@1": (
+                direct_selector
+                + "test_issue_63_margin_public_contract_rejects_unit_forgery"
+            ),
+            "eastmoney_shareholder_count@1": (
+                direct_selector
+                + "test_issue_63_company_capital_public_contract_rejects_role_forgery"
+            ),
+            "eastmoney_dividend@1": (
+                direct_selector
+                + "test_issue_63_company_capital_public_contract_rejects_role_forgery"
+            ),
+            "eastmoney_trading_events@1": (
+                direct_selector
+                + "test_issue_63_trading_events_public_contract_preserves_partial_and_empty"
+            ),
+        }
+        expected_lower_evidence = {
+            "eastmoney_stock_fund_flow@1": (
+                "tests/test_capital_flow_sources.py#StockFundFlowTests"
+            ),
+            "eastmoney_board_fund_flow@1": (
+                "tests/test_capital_flow_sources.py#BoardFundFlowTests"
+            ),
+            "eastmoney_margin_trading@1": (
+                "tests/test_company_capital_sources.py#CompanyCapitalSourceTests"
+            ),
+            "eastmoney_shareholder_count@1": (
+                "tests/test_company_capital_sources.py#CompanyCapitalSourceTests"
+            ),
+            "eastmoney_dividend@1": (
+                "tests/test_company_capital_sources.py#CompanyCapitalSourceTests"
+            ),
+            "eastmoney_trading_events@1": (
+                "tests/test_trading_event_sources.py#EastmoneyTradingEventOperationTests"
+            ),
+        }
+        for owner in issue_63_owners:
+            with self.subTest(owner=owner):
+                item = operations[owner]
+                self.assertEqual(item["disposition"], "integrated")
+                self.assertEqual(
+                    item["rate_limit_policy"]["qualification"],
+                    "qualified_by_issue_63",
+                )
+                self.assertEqual(
+                    item["offline_contract_selector"], expected_selectors[owner]
+                )
+                self.assertEqual(item["gap_issues"], [])
+                self.assertIn(
+                    "skill/a-share-research/scripts/a_share_research/"
+                    "capital_contract.py#CapitalObservationAuthority",
+                    item["evidence_references"],
+                )
+                self.assertIn(expected_selectors[owner], item["evidence_references"])
+                self.assertIn(
+                    expected_lower_evidence[owner], item["evidence_references"]
+                )
+                self.assertIn(
+                    "docs/specs/0007-implementation-amendment-a.md#A-08a",
+                    item["evidence_references"],
+                )
+
     def test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention(
         self,
     ) -> None:

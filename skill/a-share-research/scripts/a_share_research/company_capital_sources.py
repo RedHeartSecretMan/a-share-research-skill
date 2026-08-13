@@ -17,6 +17,7 @@ from .capital_contract import (
     CapitalQuery,
     CapitalSourceBatch,
     CapitalSourceFailure,
+    capital_observation_authority,
 )
 from .identity_sources import HttpResponse, TransportError
 from .source_throttle import (
@@ -543,10 +544,14 @@ class _EastmoneyCompanyCapitalOperation:
         locator: str,
     ) -> CapitalObservation:
         metrics, units, directions, dimensions, limitations = self._map(row)
+        data_type = next(iter(self.supported_data_types))
+        authority = capital_observation_authority(self.operation_id, data_type)
+        if authority is None:
+            raise AssertionError("company capital source-role contract is missing")
         return CapitalObservation(
-            data_type=next(iter(self.supported_data_types)),
+            data_type=data_type,
             source_operation=self.operation_id,
-            source_role="market_observation",
+            source_role=authority.source_role,
             subject=subject,
             observed_on=observed_on,
             available_at=None,
@@ -631,27 +636,15 @@ class EastmoneyMarginTradingOperation(_EastmoneyCompanyCapitalOperation):
             ),
             "margin_balance": _nullable_numeric(row.get("RZRQYE"), "RZRQYE"),
         }
+        authority = capital_observation_authority(self.operation_id, "margin_trading")
+        if authority is None:
+            raise AssertionError("margin-trading authority is missing")
+        units, directions = authority.metric_semantics(metrics)
         limitations = _metric_limitations(metrics)
         return (
             metrics,
-            {
-                "financing_balance": "CNY",
-                "financing_buy_amount": "CNY",
-                "financing_repayment_amount": "CNY",
-                "securities_lending_balance": "CNY",
-                "securities_lending_sell_volume": "share",
-                "securities_lending_repayment_volume": "share",
-                "margin_balance": "CNY",
-            },
-            {
-                "financing_balance": "higher_is_more_financing_exposure",
-                "financing_buy_amount": "inflow",
-                "financing_repayment_amount": "outflow",
-                "securities_lending_balance": "higher_is_more_short_exposure",
-                "securities_lending_sell_volume": "short_opening",
-                "securities_lending_repayment_volume": "short_covering",
-                "margin_balance": "higher_is_more_leverage_exposure",
-            },
+            units,
+            directions,
             {},
             limitations,
         )
@@ -704,20 +697,16 @@ class EastmoneyShareholderCountOperation(_EastmoneyCompanyCapitalOperation):
                 row.get("AVG_FREE_SHARES"), "AVG_FREE_SHARES"
             ),
         }
+        authority = capital_observation_authority(
+            self.operation_id, "shareholder_count"
+        )
+        if authority is None:
+            raise AssertionError("shareholder-count authority is missing")
+        units, directions = authority.metric_semantics(metrics)
         return (
             metrics,
-            {
-                "shareholder_count": "account",
-                "shareholder_count_change": "account",
-                "shareholder_count_change_ratio": "percent",
-                "average_shares_per_holder": "share_per_holder",
-            },
-            {
-                "shareholder_count": "higher_is_more_distributed",
-                "shareholder_count_change": "positive_is_increase",
-                "shareholder_count_change_ratio": "positive_is_increase",
-                "average_shares_per_holder": "higher_is_more_concentrated",
-            },
+            units,
+            directions,
             {
                 "previous_period_end": _optional_date(
                     row.get("PRE_END_DATE"), "PRE_END_DATE"
@@ -788,18 +777,14 @@ class EastmoneyDividendOperation(_EastmoneyCompanyCapitalOperation):
                 row.get("TRANSFER_RATIO"), "TRANSFER_RATIO"
             ),
         }
+        authority = capital_observation_authority(self.operation_id, "dividend")
+        if authority is None:
+            raise AssertionError("dividend authority is missing")
+        units, directions = authority.metric_semantics(metrics)
         return (
             metrics,
-            {
-                "cash_dividend_per_10_shares_before_tax": "CNY_per_10_shares",
-                "bonus_shares_per_10_shares": "share_per_10_shares",
-                "transfer_shares_per_10_shares": "share_per_10_shares",
-            },
-            {
-                "cash_dividend_per_10_shares_before_tax": "distribution_to_holder",
-                "bonus_shares_per_10_shares": "distribution_to_holder",
-                "transfer_shares_per_10_shares": "capitalization_to_holder",
-            },
+            units,
+            directions,
             {
                 "implementation_status": _required_text(
                     row.get("ASSIGN_PROGRESS"), "ASSIGN_PROGRESS"

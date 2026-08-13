@@ -43,6 +43,88 @@ UNIFIED_RESULT_KEYS = {
     "briefs",
 }
 
+ISSUE_63_BOOTSTRAP = (
+    REPOSITORY_ROOT
+    / "tests"
+    / "fixtures"
+    / "capital_events"
+    / "issue_63"
+    / "sitecustomize.py"
+).read_text(encoding="utf-8")
+
+
+def _issue_63_company_request() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "task_type": "capital_events",
+        "subjects": [{"clue": "贵州茅台"}],
+        "as_of": "2026-08-02",
+        "window": {
+            "observed_from": "2026-01-01",
+            "observed_to": "2026-08-02",
+        },
+        "parameters": {
+            "data_types": [
+                "margin_trading",
+                "shareholder_count",
+                "dividend",
+            ],
+            "limit": 20,
+        },
+        "source_policy": {
+            "allow_experimental": True,
+            "allow_credentials": False,
+            "allow_fallback": True,
+        },
+    }
+
+
+def _issue_63_stock_request() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "task_type": "capital_events",
+        "subjects": [{"clue": "贵州茅台"}],
+        "as_of": "2026-08-02",
+        "window": {
+            "observed_from": "2026-07-21",
+            "observed_to": "2026-07-25",
+        },
+        "parameters": {
+            "data_types": ["stock_fund_flow"],
+            "period": "5d",
+            "limit": 5,
+        },
+        "source_policy": {
+            "allow_experimental": True,
+            "allow_credentials": False,
+            "allow_fallback": True,
+        },
+    }
+
+
+def _issue_63_board_request() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "task_type": "capital_events",
+        "subjects": [],
+        "as_of": "2026-08-02",
+        "window": {
+            "observed_from": "2026-07-31",
+            "observed_to": "2026-07-31",
+        },
+        "parameters": {
+            "data_types": ["board_fund_flow"],
+            "board_type": "industry",
+            "period": "today",
+            "limit": 2,
+        },
+        "source_policy": {
+            "allow_experimental": True,
+            "allow_credentials": False,
+            "allow_fallback": True,
+        },
+    }
+
 
 def _rehash_direct_plan(result: dict[str, object]) -> None:
     plan = result["plan"]  # type: ignore[assignment]
@@ -132,7 +214,10 @@ def _request(task_type: str) -> dict[str, object]:
 
 
 def _invoke_copied_installed(
-    request: dict[str, object], *, bootstrap: str | None = None
+    request: dict[str, object],
+    *,
+    bootstrap: str | None = None,
+    environment_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         root = Path(temporary_directory)
@@ -147,6 +232,7 @@ def _invoke_copied_installed(
             (root / "sitecustomize.py").write_text(bootstrap, encoding="utf-8")
             command = [sys.executable]
             environment["PYTHONPATH"] = str(root)
+        environment.update(environment_overrides or {})
         completed = subprocess.run(
             [
                 *command,
@@ -480,6 +566,7 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
             CapitalObservation,
             CapitalQuery,
             CapitalSourceBatch,
+            capital_observation_authority,
         )
         from a_share_research.capital_events import build_capital_events_result
         from a_share_research.market_signal_contract import (
@@ -559,6 +646,9 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
         capital_dimensions["provider_security_code"] = "300058"
         for production in build_default_capital_operations(NoNetwork()):  # type: ignore[arg-type]
             data_type = capital_types[production.operation_id]
+            authority = capital_observation_authority(
+                production.operation_id, data_type
+            )
             subject_required = data_type not in {
                 "northbound_flow",
                 "board_fund_flow",
@@ -570,6 +660,7 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                 supported_data_types = frozenset({data_type})
                 raw_fields = production.raw_fields
                 fixture_data_type = data_type
+                fixture_authority = authority
 
                 def collect(self, query: CapitalQuery) -> CapitalSourceBatch:
                     query_subject = query.subject
@@ -578,27 +669,80 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                         if self.fixture_data_type == "market_dragon_tiger"
                         else ()
                     )
-                    item = CapitalObservation(
-                        data_type=self.fixture_data_type,
-                        source_operation=self.operation_id,
-                        source_role="market_observation",
-                        subject=query_subject,
-                        observed_on="2026-08-01",
-                        available_at="2026-08-01T18:00:00+08:00",
-                        retrieved_at=now,
-                        period={
-                            "start": "2026-08-01",
+                    metrics = capital_metrics
+                    units = {key: "unit" for key in metrics}
+                    directions = {key: "not_directional" for key in metrics}
+                    dimensions = dict(capital_dimensions)
+                    period: dict[str, str | None] = {
+                        "start": "2026-08-01",
+                        "end": "2026-08-01",
+                        "frequency": "daily",
+                    }
+                    source_role = "market_observation"
+                    if self.fixture_authority is not None:
+                        observation_variant = self.fixture_authority.variants[0]
+                        metrics = {key: "1" for key in observation_variant.metrics}
+                        units, directions = self.fixture_authority.metric_semantics(
+                            metrics
+                        )
+                        period_variant = observation_variant.period
+                        period = {
+                            "start": (
+                                None
+                                if period_variant.start_relation == "absent"
+                                else "2026-08-01"
+                            ),
                             "end": "2026-08-01",
-                            "frequency": "daily",
-                        },
-                        metrics=capital_metrics,
-                        units={key: "unit" for key in capital_metrics},
-                        directions={key: "not_directional" for key in capital_metrics},
-                        dimensions=capital_dimensions,
-                        locator_uri="https://provider.invalid/private",
-                        limitations=limitations,
+                            "frequency": period_variant.frequency,
+                        }
+                        if period_variant.kind is not None:
+                            period["kind"] = period_variant.kind
+                        if period_variant.marker is not None:
+                            period[period_variant.marker[0]] = period_variant.marker[1]
+                        dimensions.pop("market_scope", None)
+                        if self.fixture_authority.market_scope is not None:
+                            dimensions["market_scope"] = (
+                                self.fixture_authority.market_scope
+                            )
+                        source_role = self.fixture_authority.source_role
+                    observed_ons = ("2026-08-01",)
+                    if (
+                        self.fixture_authority is not None
+                        and self.fixture_authority.group_authority is not None
+                    ):
+                        marker = period[
+                            self.fixture_authority.group_authority.marker_key
+                        ]
+                        assert isinstance(marker, str)
+                        observed_ons = tuple(
+                            (now.date() - timedelta(days=offset)).isoformat()
+                            for offset in reversed(range(1, int(marker) + 1))
+                        )
+                        period["start"] = observed_ons[0]
+                        period["end"] = observed_ons[-1]
+                    observations = tuple(
+                        CapitalObservation(
+                            data_type=self.fixture_data_type,
+                            source_operation=self.operation_id,
+                            source_role=source_role,
+                            subject=query_subject,
+                            observed_on=observed_on,
+                            available_at="2026-08-01T18:00:00+08:00",
+                            retrieved_at=now,
+                            period=dict(period),
+                            metrics=metrics,
+                            units=units,
+                            directions=directions,
+                            dimensions=dimensions,
+                            locator_uri="https://provider.invalid/private",
+                            limitations=limitations,
+                        )
+                        for observed_on in observed_ons
                     )
-                    return CapitalSourceBatch(self.operation_id, observations=(item,))
+                    return CapitalSourceBatch(
+                        self.operation_id,
+                        observations=observations,
+                    )
 
             result = build_capital_events_result(
                 capital_request(
@@ -1786,6 +1930,458 @@ cli.research = fixture_research
                 )
                 self.assertEqual(calculation["payload"]["state"], "observed_nonempty")
                 self.assertGreater(calculation["payload"]["observation_count"], 0)
+
+    def test_issue_63_stock_flow_public_contract_rejects_direction_forgery(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_63_stock_request(), bootstrap=ISSUE_63_BOOTSTRAP
+        )
+
+        operation = result["coverage"]["capital_event_observations"]["operations"][
+            "eastmoney_stock_fund_flow@1"
+        ]
+        self.assertEqual(operation["state"], "complete")
+        self.assertEqual(len(operation["observation_ids"]), 5)
+        records = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_stock_fund_flow@1"
+        ]
+        self.assertEqual(
+            [item["payload"]["observed_on"] for item in records],
+            [
+                "2026-07-25",
+                "2026-07-24",
+                "2026-07-23",
+                "2026-07-22",
+                "2026-07-21",
+            ],
+        )
+        first = records[0]["payload"]
+        self.assertEqual(first["period"]["trading_days"], "5")
+        self.assertEqual(first["units"]["main_net_inflow"], "CNY")
+        self.assertEqual(
+            first["directions"]["main_net_inflow"], "positive_is_net_inflow"
+        )
+
+        first["directions"]["main_net_inflow"] = "positive_is_net_outflow"
+        first["source_facts"]["directions"]["main_net_inflow"] = (
+            "positive_is_net_outflow"
+        )
+        with self.assertRaisesRegex(ValueError, "capital.*direction"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_63_formal_owner_rejects_coherent_data_type_rebinding(self) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_63_stock_request(), bootstrap=ISSUE_63_BOOTSTRAP
+        )
+        records = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_stock_fund_flow@1"
+        ]
+        self.assertEqual(len(records), 5)
+        for record in records:
+            payload = record["payload"]
+            payload["data_type"] = "northbound_flow"
+            payload["source_facts"]["data_type"] = "northbound_flow"
+            payload["query_scope"]["data_types"] = ["northbound_flow"]
+        for claim in result["claims"]:
+            if claim["kind"] == "capital_event_observation":
+                claim["payload"]["data_type"] = "northbound_flow"
+        calculation = next(
+            item
+            for item in result["calculations"]
+            if item["kind"] == "capital_event_coverage"
+        )
+        calculation["payload"]["data_type"] = "northbound_flow"
+
+        with self.assertRaisesRegex(ValueError, "capital.*data type"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_63_security_owner_rejects_coherent_market_scope_forgery(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_63_stock_request(), bootstrap=ISSUE_63_BOOTSTRAP
+        )
+        payload = next(
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_stock_fund_flow@1"
+        )["payload"]
+        payload["dimensions"]["market_scope"] = "a_share_board_market"
+        payload["source_facts"]["dimensions"]["market_scope"] = "a_share_board_market"
+
+        with self.assertRaisesRegex(ValueError, "capital.*scope"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_63_formal_security_observations_require_owned_subject_identity(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        forged_subject = {
+            "security": {
+                "exchange": "SZSE",
+                "code": "000001",
+                "type": "A_SHARE",
+            },
+            "name": "平安银行",
+            "issuer": {
+                "name": "平安银行股份有限公司",
+                "identifier": None,
+                "security_relationship": "verified",
+            },
+        }
+        for forgery in (
+            "observation_subjects",
+            "identity_claim",
+            "unproved_issuer_name",
+        ):
+            with self.subTest(forgery=forgery):
+                result = _invoke_copied_installed(
+                    _issue_63_stock_request(), bootstrap=ISSUE_63_BOOTSTRAP
+                )
+                identity_claims = [
+                    item
+                    for item in result["claims"]
+                    if item["kind"] == "capital_events_subject_identity"
+                ]
+                self.assertEqual(len(identity_claims), 1)
+                self.assertEqual(
+                    identity_claims[0]["payload"]["security"],
+                    {"exchange": "SSE", "code": "600519", "type": "A_SHARE"},
+                )
+                records = [
+                    item
+                    for item in result["observations"]
+                    if item["operation_id"] == "eastmoney_stock_fund_flow@1"
+                ]
+                self.assertEqual(len(records), 5)
+                if forgery == "observation_subjects":
+                    for record in records:
+                        record["payload"]["subject"] = deepcopy(forged_subject)
+                        record["payload"]["source_facts"]["subject"] = deepcopy(
+                            forged_subject
+                        )
+                elif forgery == "identity_claim":
+                    identity_claims[0]["payload"] = deepcopy(forged_subject)
+                else:
+                    identity_claims[0]["payload"]["issuer"]["name"] = (
+                        "平安银行股份有限公司"
+                    )
+                    for record in records:
+                        record["payload"]["subject"]["issuer"]["name"] = (
+                            "平安银行股份有限公司"
+                        )
+                        record["payload"]["source_facts"]["subject"]["issuer"][
+                            "name"
+                        ] = "平安银行股份有限公司"
+
+                with self.assertRaisesRegex(ValueError, "capital.*identity"):
+                    validate_serialized(rehash_result(result))
+
+    def test_issue_63_public_contract_rejects_incoherent_period_variants(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        cases = (
+            {
+                "label": "board_today_metrics_with_rolling_period",
+                "owner": "eastmoney_board_fund_flow@1",
+                "request": _issue_63_board_request(),
+                "scenario": "board_flow",
+                "period": {
+                    "start": None,
+                    "end": "2026-07-31",
+                    "frequency": "rolling_5_trading_days",
+                    "lookback_trading_days": "5",
+                },
+                "replace_period": True,
+            },
+            {
+                "label": "stock_5d_marker_with_widened_observed_range",
+                "owner": "eastmoney_stock_fund_flow@1",
+                "request": _issue_63_stock_request(),
+                "scenario": "stock_flow",
+                "period": {"start": "2026-07-01"},
+                "replace_period": False,
+            },
+        )
+        for case in cases:
+            with self.subTest(case=case["label"]):
+                result = _invoke_copied_installed(
+                    case["request"],
+                    bootstrap=ISSUE_63_BOOTSTRAP,
+                    environment_overrides={
+                        "A_SHARE_ISSUE63_SCENARIO": case["scenario"]
+                    },
+                )
+                records = [
+                    item
+                    for item in result["observations"]
+                    if item["operation_id"] == case["owner"]
+                ]
+                self.assertTrue(records)
+                if case["owner"] == "eastmoney_board_fund_flow@1":
+                    self.assertEqual(len(records[0]["payload"]["metrics"]), 7)
+                for record in records:
+                    period = record["payload"]["period"]
+                    if case["replace_period"]:
+                        period.clear()
+                    period.update(case["period"])
+                    record["payload"]["source_facts"]["period"] = dict(period)
+
+                with self.assertRaisesRegex(ValueError, "capital.*period"):
+                    validate_serialized(rehash_result(result))
+
+    def test_issue_63_board_flow_public_contract_rejects_market_scope_forgery(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_63_board_request(),
+            bootstrap=ISSUE_63_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE63_SCENARIO": "board_flow"},
+        )
+
+        operation = result["coverage"]["capital_event_observations"]["operations"][
+            "eastmoney_board_fund_flow@1"
+        ]
+        self.assertEqual(operation["state"], "complete")
+        self.assertEqual(len(operation["observation_ids"]), 2)
+        records = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_board_fund_flow@1"
+        ]
+        self.assertEqual(
+            [item["payload"]["dimensions"]["board_type"] for item in records],
+            ["industry", "industry"],
+        )
+        self.assertEqual(
+            records[0]["payload"]["dimensions"]["market_scope"],
+            "a_share_board_market",
+        )
+        self.assertIsNone(records[0]["payload"]["subject"])
+
+        records[0]["payload"]["dimensions"]["market_scope"] = "single_security"
+        records[0]["payload"]["source_facts"]["dimensions"]["market_scope"] = (
+            "single_security"
+        )
+        with self.assertRaisesRegex(ValueError, "capital.*scope"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_63_company_capital_public_contract_rejects_role_forgery(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_63_company_request(),
+            bootstrap=ISSUE_63_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE63_SCENARIO": "company_capital"},
+        )
+
+        operations = result["coverage"]["capital_event_observations"]["operations"]
+        expected = {
+            "eastmoney_margin_trading@1": "margin_trading",
+            "eastmoney_shareholder_count@1": "shareholder_count",
+            "eastmoney_dividend@1": "dividend",
+        }
+        for operation_id, data_type in expected.items():
+            with self.subTest(operation_id=operation_id):
+                self.assertEqual(operations[operation_id]["state"], "complete")
+                self.assertTrue(
+                    any(
+                        item["operation_id"] == operation_id
+                        and item["payload"]["data_type"] == data_type
+                        for item in result["observations"]
+                    )
+                )
+
+        dividend_record = next(
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_dividend@1"
+        )
+        dividend = dividend_record["payload"]
+        self.assertEqual(dividend["source_role"], "market_observation")
+        dividend["source_role"] = "authoritative_disclosure"
+        next(
+            claim
+            for claim in result["claims"]
+            if dividend_record["id"] in claim["observation_ids"]
+        )["payload"]["issuer_fact"] = True
+        with self.assertRaisesRegex(ValueError, "capital.*role"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_63_margin_public_contract_rejects_unit_forgery(self) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_63_company_request(),
+            bootstrap=ISSUE_63_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE63_SCENARIO": "company_capital"},
+        )
+        margin = next(
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_margin_trading@1"
+        )["payload"]
+        self.assertEqual(margin["units"]["financing_balance"], "CNY")
+        self.assertEqual(
+            margin["directions"]["financing_buy_amount"],
+            "inflow",
+        )
+        margin["units"]["financing_balance"] = "share"
+        margin["source_facts"]["units"]["financing_balance"] = "share"
+        with self.assertRaisesRegex(ValueError, "capital.*unit"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_63_trading_events_public_contract_preserves_partial_and_empty(
+        self,
+    ) -> None:
+        partial_request = {
+            "schema_version": "1.0",
+            "task_type": "capital_events",
+            "subjects": [{"clue": "300058"}],
+            "as_of": "2026-08-02",
+            "window": {
+                "observed_from": "2026-07-01",
+                "observed_to": "2026-08-02",
+            },
+            "parameters": {
+                "data_types": ["block_trade", "lockup"],
+                "limit": 20,
+            },
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        partial = _invoke_copied_installed(
+            partial_request,
+            bootstrap=ISSUE_63_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE63_SCENARIO": "trading_partial"},
+        )
+        calculations = {
+            item["payload"]["data_type"]: item["payload"]
+            for item in partial["calculations"]
+            if item["kind"] == "capital_event_coverage"
+        }
+        self.assertEqual(calculations["block_trade"]["state"], "observed_nonempty")
+        self.assertEqual(calculations["block_trade"]["observation_count"], 2)
+        self.assertEqual(calculations["lockup"]["state"], "indeterminate")
+        retained = [
+            item
+            for item in partial["observations"]
+            if item["operation_id"] == "eastmoney_trading_events@1"
+        ]
+        self.assertEqual(len(retained), 2)
+        self.assertEqual(
+            {item["payload"]["data_type"] for item in retained}, {"block_trade"}
+        )
+        operation = partial["coverage"]["capital_event_observations"]["operations"][
+            "eastmoney_trading_events@1"
+        ]
+        self.assertEqual(
+            operation["diagnostics"]["mode_acquisitions"],
+            {
+                "block_trade": {"complete": True, "source_error_codes": []},
+                "lockup": {
+                    "complete": False,
+                    "source_error_codes": ["upstream_http_error"],
+                },
+            },
+        )
+        self.assertTrue(
+            any(
+                item["operation_id"] == "eastmoney_trading_events@1"
+                and item.get("details") == {"data_type": "lockup"}
+                for item in partial["source_errors"]
+            )
+        )
+
+        empty_request = {
+            "schema_version": "1.0",
+            "task_type": "capital_events",
+            "subjects": [],
+            "as_of": "2026-08-02",
+            "window": {
+                "observed_from": "2026-08-01",
+                "observed_to": "2026-08-01",
+            },
+            "parameters": {
+                "data_types": ["market_dragon_tiger"],
+                "limit": 20,
+            },
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        empty = _invoke_copied_installed(
+            empty_request,
+            bootstrap=ISSUE_63_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE63_SCENARIO": "trading_empty"},
+        )
+        calculation = next(
+            item
+            for item in empty["calculations"]
+            if item["kind"] == "capital_event_coverage"
+        )
+        self.assertEqual(calculation["payload"]["data_type"], "market_dragon_tiger")
+        self.assertEqual(calculation["payload"]["state"], "observed_empty")
+        self.assertEqual(calculation["payload"]["observation_count"], 0)
+        self.assertFalse(
+            any(
+                item["operation_id"] == "eastmoney_trading_events@1"
+                for item in empty["observations"]
+            )
+        )
+        self.assertFalse(
+            any(
+                item["operation_id"] == "eastmoney_trading_events@1"
+                for item in empty["source_errors"]
+            )
+        )
 
 
 if __name__ == "__main__":

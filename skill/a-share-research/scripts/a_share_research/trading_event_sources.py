@@ -17,6 +17,7 @@ from .capital_contract import (
     CapitalQuery,
     CapitalSourceBatch,
     CapitalSourceFailure,
+    capital_observation_authority,
 )
 from .identity_sources import HttpResponse, TransportError
 from .source_throttle import (
@@ -89,6 +90,18 @@ def _failure(
         str(error),
         {"data_type": data_type},
     )
+
+
+def _observation_semantics(
+    operation_id: str,
+    data_type: str,
+    metric_names: tuple[str, ...],
+) -> tuple[str, dict[str, str], dict[str, str]]:
+    authority = capital_observation_authority(operation_id, data_type)
+    if authority is None:
+        raise AssertionError("trading-event observation authority is missing")
+    units, directions = authority.metric_semantics(metric_names)
+    return authority.source_role, units, directions
 
 
 def _gate_degradation(
@@ -394,6 +407,17 @@ class EastmoneyTradingEventOperation:
         assert institution_buy is not None
         assert institution_sell is not None
         assert detailed_retrieved_at is not None
+        source_role, units, directions = _observation_semantics(
+            self.operation_id,
+            "dragon_tiger",
+            (
+                "net_buy_amount",
+                "turnover_rate",
+                "institution_buy_amount",
+                "institution_sell_amount",
+                "institution_net_amount",
+            ),
+        )
         observations: list[CapitalObservation] = []
         for fetched, observed_on, reason, net_buy, turnover_rate in normalized_records:
             is_latest = observed_on == latest_date
@@ -402,7 +426,7 @@ class EastmoneyTradingEventOperation:
                 CapitalObservation(
                     data_type="dragon_tiger",
                     source_operation=self.operation_id,
-                    source_role="market_signal",
+                    source_role=source_role,
                     subject=query.subject,
                     observed_on=observed_on,
                     available_at=None,
@@ -431,20 +455,8 @@ class EastmoneyTradingEventOperation:
                         if has_record_details
                         else None,
                     },
-                    units={
-                        "net_buy_amount": "CNY",
-                        "turnover_rate": "percent",
-                        "institution_buy_amount": "CNY",
-                        "institution_sell_amount": "CNY",
-                        "institution_net_amount": "CNY",
-                    },
-                    directions={
-                        "net_buy_amount": "positive_is_net_buy",
-                        "turnover_rate": "not_directional",
-                        "institution_buy_amount": "positive_is_buy",
-                        "institution_sell_amount": "positive_is_sell",
-                        "institution_net_amount": "positive_is_net_buy",
-                    },
+                    units=units,
+                    directions=directions,
                     dimensions={
                         "reason": reason,
                         "buy_seats": buy_seats[:5] if has_record_details else [],
@@ -583,6 +595,18 @@ class EastmoneyTradingEventOperation:
             except _SourceError as error:
                 raise _row_error_with_prior_pages(error, rows, fetched) from error
         normalized.sort(key=lambda item: item[4][2], reverse=True)
+        source_role, units, directions = _observation_semantics(
+            self.operation_id,
+            "market_dragon_tiger",
+            (
+                "close_price",
+                "change_rate",
+                "net_buy_amount",
+                "buy_amount",
+                "sell_amount",
+                "turnover_rate",
+            ),
+        )
         observations: list[CapitalObservation] = []
         for rank, (
             fetched,
@@ -596,7 +620,7 @@ class EastmoneyTradingEventOperation:
                 CapitalObservation(
                     data_type="market_dragon_tiger",
                     source_operation=self.operation_id,
-                    source_role="market_signal",
+                    source_role=source_role,
                     subject=None,
                     observed_on=observed_on,
                     available_at=None,
@@ -618,22 +642,8 @@ class EastmoneyTradingEventOperation:
                             else None
                         ),
                     },
-                    units={
-                        "close_price": "CNY/share",
-                        "change_rate": "percent",
-                        "net_buy_amount": "CNY",
-                        "buy_amount": "CNY",
-                        "sell_amount": "CNY",
-                        "turnover_rate": "percent",
-                    },
-                    directions={
-                        "close_price": "not_directional",
-                        "change_rate": "positive_is_price_increase",
-                        "net_buy_amount": "positive_is_net_buy",
-                        "buy_amount": "positive_is_buy",
-                        "sell_amount": "positive_is_sell",
-                        "turnover_rate": "not_directional",
-                    },
+                    units=units,
+                    directions=directions,
                     dimensions={
                         "market_scope": "eastmoney_all_market_billboard",
                         "reason": reason,
@@ -739,6 +749,17 @@ class EastmoneyTradingEventOperation:
             except _SourceError as error:
                 raise _row_error_with_prior_pages(error, rows, fetched) from error
         normalized.sort(key=lambda item: item[1], reverse=True)
+        source_role, units, directions = _observation_semantics(
+            self.operation_id,
+            "block_trade",
+            (
+                "deal_price",
+                "close_price",
+                "deal_volume",
+                "deal_amount",
+                "premium_rate",
+            ),
+        )
         observations: list[CapitalObservation] = []
         for (
             fetched,
@@ -755,7 +776,7 @@ class EastmoneyTradingEventOperation:
                 CapitalObservation(
                     data_type="block_trade",
                     source_operation=self.operation_id,
-                    source_role="market_observation",
+                    source_role=source_role,
                     subject=query.subject,
                     observed_on=observed_on,
                     available_at=None,
@@ -772,20 +793,8 @@ class EastmoneyTradingEventOperation:
                         "deal_amount": _decimal_text(amount),
                         "premium_rate": _decimal_text(premium),
                     },
-                    units={
-                        "deal_price": "CNY/share",
-                        "close_price": "CNY/share",
-                        "deal_volume": "share",
-                        "deal_amount": "CNY",
-                        "premium_rate": "percent",
-                    },
-                    directions={
-                        "deal_price": "not_directional",
-                        "close_price": "not_directional",
-                        "deal_volume": "positive_is_more_volume",
-                        "deal_amount": "positive_is_more_value",
-                        "premium_rate": ("positive_is_premium_negative_is_discount"),
-                    },
+                    units=units,
+                    directions=directions,
                     dimensions={
                         "buyer_department": buyer,
                         "seller_department": seller,
@@ -883,6 +892,11 @@ class EastmoneyTradingEventOperation:
             except _SourceError as error:
                 raise _row_error_with_prior_pages(error, rows, fetched) from error
         normalized.sort(key=lambda item: item[1])
+        source_role, units, directions = _observation_semantics(
+            self.operation_id,
+            "lockup",
+            ("released_shares", "tradable_shares", "total_share_ratio"),
+        )
         observations: list[CapitalObservation] = []
         for fetched, observed_on, lockup_type, released, tradable, ratio in normalized[
             : query.limit
@@ -891,7 +905,7 @@ class EastmoneyTradingEventOperation:
                 CapitalObservation(
                     data_type="lockup",
                     source_operation=self.operation_id,
-                    source_role="market_observation",
+                    source_role=source_role,
                     subject=query.subject,
                     observed_on=observed_on,
                     available_at=None,
@@ -906,16 +920,8 @@ class EastmoneyTradingEventOperation:
                         "tradable_shares": _decimal_text(tradable),
                         "total_share_ratio": _decimal_text(ratio),
                     },
-                    units={
-                        "released_shares": "10k_shares",
-                        "tradable_shares": "10k_shares",
-                        "total_share_ratio": "ratio",
-                    },
-                    directions={
-                        "released_shares": "positive_is_more_shares_released",
-                        "tradable_shares": "positive_is_more_tradable_shares",
-                        "total_share_ratio": ("positive_is_larger_share_base_fraction"),
-                    },
+                    units=units,
+                    directions=directions,
                     dimensions={
                         "lockup_type": lockup_type,
                         "event_phase": "history"

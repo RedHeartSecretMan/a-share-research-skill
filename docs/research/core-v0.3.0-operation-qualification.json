@@ -125,7 +125,7 @@
     },
     {
       "producer_operation_id": "eastmoney_board_fund_flow@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -139,24 +139,23 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_63",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_capital_flow_sources.py#BoardFundFlowTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_board_flow_public_contract_rejects_market_scope_forgery",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/capital_flow_sources.py#EastmoneyBoardFundFlowOperation",
-        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_board_flow_public_contract_rejects_market_scope_forgery",
         "tests/test_capital_flow_sources.py#BoardFundFlowTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        63
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_dividend@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -170,20 +169,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_63",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_company_capital_public_contract_rejects_role_forgery",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/company_capital_sources.py#EastmoneyDividendOperation",
-        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_company_capital_public_contract_rejects_role_forgery",
         "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        63
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_focus_monitoring@1",
@@ -312,7 +310,7 @@
     },
     {
       "producer_operation_id": "eastmoney_margin_trading@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -326,20 +324,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_63",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_margin_public_contract_rejects_unit_forgery",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/company_capital_sources.py#EastmoneyMarginTradingOperation",
-        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_margin_public_contract_rejects_unit_forgery",
         "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        63
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_market_flash@1",
@@ -496,7 +493,7 @@
     },
     {
       "producer_operation_id": "eastmoney_shareholder_count@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -510,24 +507,23 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_63",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_company_capital_public_contract_rejects_role_forgery",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/company_capital_sources.py#EastmoneyShareholderCountOperation",
-        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_company_capital_public_contract_rejects_role_forgery",
         "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        63
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_stock_fund_flow@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -541,20 +537,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_63",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_capital_flow_sources.py#StockFundFlowTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_stock_flow_public_contract_rejects_direction_forgery",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/capital_flow_sources.py#EastmoneyStockFundFlowOperation",
-        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_stock_flow_public_contract_rejects_direction_forgery",
         "tests/test_capital_flow_sources.py#StockFundFlowTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        63
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_stock_info@1",
@@ -620,7 +615,7 @@
     },
     {
       "producer_operation_id": "eastmoney_trading_events@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -634,20 +629,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_63",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_trading_event_sources.py#EastmoneyTradingEventOperationTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_trading_events_public_contract_preserves_partial_and_empty",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/trading_event_sources.py#EastmoneyTradingEventOperation",
-        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_trading_events_public_contract_preserves_partial_and_empty",
         "tests/test_trading_event_sources.py#EastmoneyTradingEventOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        63
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "exchange_intraday_replay_daily@1",
