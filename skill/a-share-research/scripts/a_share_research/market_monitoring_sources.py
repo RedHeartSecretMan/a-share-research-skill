@@ -17,6 +17,7 @@ from .market_signal_contract import (
     SignalCoverage,
     SignalSourceBatch,
     SignalSourceFailure,
+    market_signal_observation_authority,
 )
 from .source_throttle import (
     EASTMONEY_REQUEST_GATE,
@@ -298,6 +299,7 @@ class EastmoneySevereAbnormalMovementOperation:
                                     pages_collected=1,
                                     pages_expected=pages,
                                     details={
+                                        "collected_count": 0,
                                         "pagination_termination": "empty_first_page",
                                         "provider_market_open_code": open_code,
                                     },
@@ -386,7 +388,10 @@ class EastmoneySevereAbnormalMovementOperation:
                         provider_total=None,
                         pages_collected=pages_collected,
                         pages_expected=expected_pages,
-                        details={"pagination_termination": pagination_termination},
+                        details={
+                            "collected_count": len(observations),
+                            "pagination_termination": pagination_termination,
+                        },
                     )
                 },
                 degradations=_gate_degradations(self.operation_id, tuple(diagnostics)),
@@ -406,7 +411,10 @@ class EastmoneySevereAbnormalMovementOperation:
                             provider_total=None,
                             pages_collected=pages_collected,
                             pages_expected=expected_pages,
-                            details={"pagination_termination": "source_error"},
+                            details={
+                                "collected_count": len(observations),
+                                "pagination_termination": "source_error",
+                            },
                         )
                     },
                     source_errors=(
@@ -474,10 +482,22 @@ def _anomaly_observation(
     change_rate = _decimal_text(row.get("a"), "change rate")
     deviation = _decimal_text(row.get("x"), "cumulative deviation")
     target = _decimal_text(row.get("t"), "target change rate")
+    authority = market_signal_observation_authority(
+        EastmoneySevereAbnormalMovementOperation.operation_id,
+        "severe_abnormal_movement",
+    )
+    if authority is None:
+        raise AssertionError("severe-abnormal authority is missing")
+    metrics: dict[str, str | None] = {
+        "change_rate": change_rate,
+        "cumulative_deviation": deviation,
+        "target_change_rate": target,
+    }
+    units, directions = authority.metric_semantics(metrics)
     return MarketSignalObservation(
-        signal_type="severe_abnormal_movement",
+        signal_type=authority.signal_type,
         source_operation=EastmoneySevereAbnormalMovementOperation.operation_id,
-        source_role="market_signal",
+        source_role=authority.source_role,
         subject=None,
         source_document_id=(
             f"{response_day}:{provider_market}:{board}:{provider_code}:"
@@ -487,33 +507,17 @@ def _anomaly_observation(
         observed_at=None,
         available_at=None,
         retrieved_at=retrieved_at,
-        period={
-            "start": response_day,
-            "end": response_day,
-            "frequency": "trading_day",
-        },
-        metrics={
-            "change_rate": change_rate,
-            "cumulative_deviation": deviation,
-            "target_change_rate": target,
-        },
-        units={
-            "change_rate": "percent",
-            "cumulative_deviation": "percent",
-            "target_change_rate": "percent",
-        },
-        directions={
-            "change_rate": "positive_is_gain",
-            "cumulative_deviation": "positive_is_above_benchmark",
-            "target_change_rate": "positive_is_gain",
-        },
+        period=authority.period.payload(response_day, None),
+        metrics=metrics,
+        units=units,
+        directions=directions,
         rule={
             "scheme": "eastmoney_price_anomaly.e",
             "code": rule_code,
         },
         attributions=(),
         dimensions={
-            "market_scope": "provider_anomaly_pool",
+            "market_scope": authority.market_scope,
             "provider_market_code": provider_market,
             "provider_security_code": provider_code,
             "provider_security_name": provider_name,
@@ -622,40 +626,46 @@ def _monitor_observation(
         raise _MonitoringError(
             "unknown_schema", "A provider monitoring window is reversed."
         )
-    if as_of < start:
-        monitoring_state = "scheduled"
-    elif as_of <= end:
-        monitoring_state = "active"
-    else:
-        monitoring_state = "expired"
     link = row.get("LINK_URL")
     if link is not None and not isinstance(link, str):
         raise _MonitoringError(
             "unknown_schema", "The provider monitoring detail link is invalid."
         )
     normalized_link = link.strip() if isinstance(link, str) else ""
+    authority = market_signal_observation_authority(
+        EastmoneyFocusMonitoringOperation.operation_id, "focus_monitoring"
+    )
+    if authority is None:
+        raise AssertionError("focus-monitoring authority is missing")
+    if authority.period_state is None:
+        raise AssertionError("focus-monitoring period-state authority is missing")
+    period = authority.period.payload(
+        as_of,
+        None,
+        start=start,
+        end=end,
+    )
+    monitoring_state = authority.period_state.state(period, as_of)
+    metrics: dict[str, str | None] = {"watchlist_membership": "1"}
+    units, directions = authority.metric_semantics(metrics)
     return MarketSignalObservation(
-        signal_type="focus_monitoring",
+        signal_type=authority.signal_type,
         source_operation=EastmoneyFocusMonitoringOperation.operation_id,
-        source_role="market_signal",
+        source_role=authority.source_role,
         subject=None,
         source_document_id=(f"{provider_market}:{provider_code}:{start}:{end}"),
         observed_on=as_of,
         observed_at=None,
         available_at=None,
         retrieved_at=retrieved_at,
-        period={
-            "start": start,
-            "end": end,
-            "frequency": "calendar_date_window",
-        },
-        metrics={"watchlist_membership": "1"},
-        units={"watchlist_membership": "boolean_indicator"},
-        directions={"watchlist_membership": "descriptive"},
+        period=period,
+        metrics=metrics,
+        units=units,
+        directions=directions,
         rule=None,
         attributions=(),
         dimensions={
-            "market_scope": "provider_watchlist",
+            "market_scope": authority.market_scope,
             "provider_market_code": provider_market,
             "provider_security_code": provider_code,
             "provider_security_name": provider_name,

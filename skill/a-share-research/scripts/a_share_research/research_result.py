@@ -595,6 +595,16 @@ def validate_field_disposition_destination_contract(
     coverage_destination = f"coverage.{owner[0]}.operations.{owner[1]}.query_complete"
     if destination == coverage_destination:
         return
+    coverage_diagnostics = f"coverage.{owner[0]}.operations.{owner[1]}.diagnostics"
+    if destination.startswith(f"{coverage_diagnostics}."):
+        if owner[0] == "market_signal_observations":
+            from .market_signal_contract import (
+                is_market_signal_coverage_destination,
+            )
+
+            if is_market_signal_coverage_destination(owner[1], destination):
+                return
+        raise ValueError("field disposition destination is unsupported")
     collections = (
         ("observations[].payload", "observations", "observation_ids"),
         ("observations.payload", "observations", "observation_ids"),
@@ -625,9 +635,55 @@ def _validate_disposition_destination(
     empty_collection_fields: Mapping[str, frozenset[str]] | None = None,
 ) -> None:
     validate_field_disposition_destination_contract(destination, owner)
+
+    def resolves(value: object, remaining: Sequence[str]) -> bool:
+        if not remaining:
+            return True
+        if isinstance(value, list):
+            return any(resolves(item, remaining) for item in value)
+        if not isinstance(value, Mapping):
+            return False
+        segment, *tail = remaining
+        is_collection = segment.endswith("[]")
+        key = segment.removesuffix("[]")
+        if key not in value:
+            return False
+        nested = value[key]
+        if isinstance(nested, list) and not nested and tail:
+            allowed = (empty_collection_fields or {}).get(key)
+            return allowed is not None and len(tail) == 1 and tail[0] in allowed
+        if not is_collection:
+            return resolves(nested, tail)
+        if not isinstance(nested, list):
+            return False
+        if not tail:
+            return True
+        return any(resolves(item, tail) for item in nested)
+
     coverage_destination = f"coverage.{owner[0]}.operations.{owner[1]}.query_complete"
     if destination == coverage_destination:
         return
+    coverage_diagnostics = f"coverage.{owner[0]}.operations.{owner[1]}.diagnostics"
+    if destination.startswith(f"{coverage_diagnostics}."):
+        aggregate = result.get("coverage")
+        capability = aggregate.get(owner[0]) if isinstance(aggregate, Mapping) else None
+        operations = (
+            capability.get("operations") if isinstance(capability, Mapping) else None
+        )
+        operation = (
+            operations.get(owner[1]) if isinstance(operations, Mapping) else None
+        )
+        path = destination.removeprefix(f"{coverage_diagnostics}.").split(".")
+        if not observation_ids:
+            return
+        if isinstance(operation, Mapping) and resolves(
+            operation.get("diagnostics"), path
+        ):
+            return
+        raise ValueError(
+            "field disposition destination does not resolve: "
+            f"{owner[0]}/{owner[1]} -> {destination}"
+        )
     collections = (
         ("observations[].payload", "observations", "observation_ids"),
         ("observations.payload", "observations", "observation_ids"),
@@ -657,30 +713,6 @@ def _validate_disposition_destination(
             and bool(owned_ids.intersection(cast(list[str], record[reference_field])))
         )
     ]
-
-    def resolves(value: object, remaining: Sequence[str]) -> bool:
-        if not remaining:
-            return True
-        if isinstance(value, list):
-            return any(resolves(item, remaining) for item in value)
-        if not isinstance(value, Mapping):
-            return False
-        segment, *tail = remaining
-        is_collection = segment.endswith("[]")
-        key = segment.removesuffix("[]")
-        if key not in value:
-            return False
-        nested = value[key]
-        if isinstance(nested, list) and not nested and tail:
-            allowed = (empty_collection_fields or {}).get(key)
-            return allowed is not None and len(tail) == 1 and tail[0] in allowed
-        if not is_collection:
-            return resolves(nested, tail)
-        if not isinstance(nested, list):
-            return False
-        if not tail:
-            return True
-        return any(resolves(item, tail) for item in nested)
 
     if any(resolves(record.get("payload"), path) for record in records):
         return
@@ -2916,6 +2948,11 @@ def _validate_market_signal_domain_facts(
     result: Mapping[str, object],
 ) -> None:
     _require_absent_evidence_storage_plan(result, domain="market-signal")
+    from .market_signal_contract import (
+        market_signal_coverage_authority,
+        market_signal_observation_authority,
+        validate_market_signal_observation_authority,
+    )
     from .market_signal_registry import build_default_market_signal_operations
     from .market_signals import COORDINATOR_OPERATION_ID, _market_signal_dispositions
 
@@ -2970,6 +3007,7 @@ def _validate_market_signal_domain_facts(
     }
     signal_records: dict[str, dict[str, object]] = {}
     layer_by_observation: dict[str, list[str]] = {}
+    formal_security_records: list[dict[str, object]] = []
     for record in observations:
         if record.get("capability_id") != "market_signal_observations":
             continue
@@ -3045,6 +3083,13 @@ def _validate_market_signal_domain_facts(
             raise ValueError("market signal attributions are invalid")
         observation_id = cast(str, record["id"])
         operation_id = cast(str, record["operation_id"])
+        signal_type = payload.get("signal_type")
+        if not isinstance(signal_type, str):
+            raise ValueError("market signal type is invalid")
+        validate_market_signal_observation_authority(operation_id, signal_type, payload)
+        authority = market_signal_observation_authority(operation_id, signal_type)
+        if authority is not None and authority.subject_scope == "security":
+            formal_security_records.append(payload)
         layers: list[str] = []
         for attribution in attributions:
             if not isinstance(attribution, dict) or set(attribution) != {
@@ -3123,6 +3168,18 @@ def _validate_market_signal_domain_facts(
         layer_by_observation[observation_id] = layers
 
     claims = cast(list[dict[str, object]], result["claims"])
+    if formal_security_records:
+        identity_subject = _validated_owned_identity_claim_payload(
+            observations,
+            claims,
+            claim_kind="market_signals_subject_identity",
+            domain="market signal",
+        )
+        if any(
+            payload.get("subject") != identity_subject
+            for payload in formal_security_records
+        ):
+            raise ValueError("market signal subject contradicts its owned identity")
     actual: set[tuple[str, str]] = set()
     for claim in claims:
         if claim.get("kind") != "market_signal_observation":
@@ -3262,11 +3319,6 @@ def _validate_market_signal_domain_facts(
             )
             if not isinstance(material, dict):
                 raise ValueError("market signal source material is invalid")
-            _require_exact_keys(
-                material,
-                {"state", "source_error_codes"},
-                path="market signal source material",
-            )
             material_state = material.get("state")
             material_error_codes = material.get("source_error_codes")
             if (
@@ -3302,6 +3354,50 @@ def _validate_market_signal_domain_facts(
             if sorted(set(material_error_codes)) != public_error_codes:
                 raise ValueError(
                     "market signal source material contradicts public outcomes"
+                )
+            retained_owner_records = [
+                source
+                for source in signal_records.values()
+                if source["source_operation"] == source_operation_id
+                and source["signal_type"] == calculation_signal_type
+            ]
+            retained_owner_count = len(retained_owner_records)
+            retained_pool_states = tuple(
+                cast(dict[str, object], source["dimensions"]).get("pool_state")
+                for source in retained_owner_records
+                if isinstance(source.get("dimensions"), dict)
+            )
+            coverage_authority = market_signal_coverage_authority(
+                source_operation_id, calculation_signal_type
+            )
+            if coverage_authority is None:
+                _require_exact_keys(
+                    material,
+                    {"state", "source_error_codes"},
+                    path="market signal source material",
+                )
+            else:
+                owner_request_limits = {
+                    cast(dict[str, object], source["query_scope"])["limit"]
+                    for source in signal_records.values()
+                    if source["source_operation"] == source_operation_id
+                    and source["signal_type"] == calculation_signal_type
+                }
+                if len(owner_request_limits) > 1:
+                    raise ValueError(
+                        "market signal pool coverage request limit is inconsistent"
+                    )
+                request_limit = (
+                    cast(int, next(iter(owner_request_limits)))
+                    if owner_request_limits
+                    else None
+                )
+                coverage_authority.validate_public_material(
+                    material,
+                    observation_count=retained_owner_count,
+                    retained_pool_states=retained_pool_states,
+                    source_error_codes=public_error_codes,
+                    request_limit=request_limit,
                 )
             source_has_inputs = any(
                 source["source_operation"] == source_operation_id

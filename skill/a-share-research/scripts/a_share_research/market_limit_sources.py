@@ -19,6 +19,7 @@ from .market_signal_contract import (
     SignalSourceBatch,
     SignalSourceFailure,
     ThemeAttribution,
+    market_signal_observation_authority,
 )
 from .source_throttle import (
     EASTMONEY_REQUEST_GATE,
@@ -124,8 +125,18 @@ class EastmoneyLimitStateOperation:
         totals = 0
         completed_states = 0
         exact_duplicates = 0
+        completed_pool_states: list[str] = []
+        failed_pool_states: list[str] = []
+        pool_errors: list[dict[str, str]] = []
         seen_current_states: dict[tuple[str, str], str] = {}
+
+        def record_pool_failure(state: str, failure: SignalSourceFailure) -> None:
+            errors.append(failure)
+            failed_pool_states.append(state)
+            pool_errors.append({"pool_state": state, "error_code": failure.code})
+
         for state in selected_states:
+            state_exact_duplicates = 0
             endpoint, sort = _EASTMONEY_POOLS[state]
             params = {
                 "ut": EASTMONEY_TOKEN,
@@ -155,13 +166,15 @@ class EastmoneyLimitStateOperation:
                 cause = gate_error.cause
                 if not isinstance(cause, TransportError):
                     raise
-                errors.append(
-                    SignalSourceFailure(self.operation_id, cause.code, str(cause))
+                record_pool_failure(
+                    state,
+                    SignalSourceFailure(self.operation_id, cause.code, str(cause)),
                 )
                 continue
             except TransportError as error:
-                errors.append(
-                    SignalSourceFailure(self.operation_id, error.code, str(error))
+                record_pool_failure(
+                    state,
+                    SignalSourceFailure(self.operation_id, error.code, str(error)),
                 )
                 continue
             degradations.extend(
@@ -169,49 +182,54 @@ class EastmoneyLimitStateOperation:
             )
             payload = _json_object(response)
             if payload is None:
-                errors.append(
+                record_pool_failure(
+                    state,
                     SignalSourceFailure(
                         self.operation_id,
                         "unknown_schema",
                         "The Eastmoney limit-state response is not a JSON object.",
-                    )
+                    ),
                 )
                 continue
             data = payload.get("data")
             if data is None:
-                errors.append(
+                record_pool_failure(
+                    state,
                     SignalSourceFailure(
                         self.operation_id,
                         "non_trading_day_or_invalid_date",
                         "The provider returned null data and did not establish an empty trading-day pool.",
                         {"pool_state": state, "requested_date": query.observed_to},
-                    )
+                    ),
                 )
                 continue
             if not isinstance(data, dict) or not isinstance(data.get("pool"), list):
-                errors.append(
+                record_pool_failure(
+                    state,
                     SignalSourceFailure(
                         self.operation_id,
                         "unknown_schema",
                         "The Eastmoney limit-state pool does not match the expected schema.",
                         {"pool_state": state},
-                    )
+                    ),
                 )
                 continue
             total = data.get("tc")
             rows = data["pool"]
             if isinstance(total, bool) or not isinstance(total, int) or total < 0:
-                errors.append(
+                record_pool_failure(
+                    state,
                     SignalSourceFailure(
                         self.operation_id,
                         "unknown_schema",
                         "The Eastmoney limit-state response lacks a valid provider total.",
                         {"pool_state": state},
-                    )
+                    ),
                 )
                 continue
             if total != len(rows):
-                errors.append(
+                record_pool_failure(
+                    state,
                     SignalSourceFailure(
                         self.operation_id,
                         "pagination_incomplete",
@@ -221,7 +239,7 @@ class EastmoneyLimitStateOperation:
                             "provider_total": total,
                             "received": len(rows),
                         },
-                    )
+                    ),
                 )
                 continue
             normalized = _normalize_eastmoney_rows(
@@ -233,13 +251,14 @@ class EastmoneyLimitStateOperation:
                 operation_id=self.operation_id,
             )
             if normalized is None:
-                errors.append(
+                record_pool_failure(
+                    state,
                     SignalSourceFailure(
                         self.operation_id,
                         "unknown_schema",
                         "An Eastmoney limit-state row does not match the expected schema.",
                         {"pool_state": state},
-                    )
+                    ),
                 )
                 continue
             unique_normalized: dict[tuple[str, str, str], MarketSignalObservation] = {}
@@ -253,7 +272,7 @@ class EastmoneyLimitStateOperation:
                     if previous != observation:
                         duplicate_conflict = True
                         break
-                    exact_duplicates += 1
+                    state_exact_duplicates += 1
                     continue
                 unique_normalized[duplicate_key] = observation
                 if state in {"limit_up", "limit_break", "limit_down"}:
@@ -264,15 +283,18 @@ class EastmoneyLimitStateOperation:
                         break
                     seen_current_states[security_key] = state
             if duplicate_conflict:
-                errors.append(
+                record_pool_failure(
+                    state,
                     SignalSourceFailure(
                         self.operation_id,
                         "duplicate_source_conflict",
                         "Duplicate provider securities disagree within mutually exclusive limit pools.",
-                    )
+                    ),
                 )
                 continue
             completed_states += 1
+            completed_pool_states.append(state)
+            exact_duplicates += state_exact_duplicates
             totals += total
             observations.extend(unique_normalized.values())
 
@@ -293,7 +315,16 @@ class EastmoneyLimitStateOperation:
                     provider_total=totals if completed_states else None,
                     pages_collected=completed_states,
                     pages_expected=len(selected_states),
-                    details={"pool_states": list(selected_states)},
+                    details={
+                        "pool_states": list(selected_states),
+                        "completed_pool_states": sorted(completed_pool_states),
+                        "failed_pool_states": sorted(failed_pool_states),
+                        "pool_errors": sorted(
+                            pool_errors,
+                            key=lambda item: (item["pool_state"], item["error_code"]),
+                        ),
+                        "duplicate_count": exact_duplicates,
+                    },
                 )
             },
             source_errors=tuple(errors),
@@ -520,10 +551,12 @@ def _normalize_eastmoney_rows(
         metrics = _eastmoney_metrics(row, state)
         if metrics is None:
             return None
-        units = {key: _metric_unit(key) for key in metrics}
-        directions = {key: _metric_direction(key) for key in metrics}
+        authority = market_signal_observation_authority(operation_id, "limit_state")
+        if authority is None:
+            raise AssertionError("Eastmoney limit-state authority is missing")
+        units, directions = authority.metric_semantics(metrics)
         dimensions: dict[str, Any] = {
-            "market_scope": "provider_a_share_limit_pool",
+            "market_scope": authority.market_scope,
             "pool_state": state,
             "provider_security_code": code,
             "provider_security_name": name,
@@ -551,20 +584,16 @@ def _normalize_eastmoney_rows(
             dimensions["statistic_limit_count"] = statistic.get("ct")
         observations.append(
             MarketSignalObservation(
-                signal_type="limit_state",
+                signal_type=authority.signal_type,
                 source_operation=operation_id,
-                source_role="market_signal",
+                source_role=authority.source_role,
                 subject=None,
                 source_document_id=f"{state}:{observed_on}:{code}",
                 observed_on=observed_on,
                 observed_at=None,
                 available_at=response.retrieved_at.isoformat(),
                 retrieved_at=response.retrieved_at,
-                period={
-                    "start": observed_on,
-                    "end": observed_on,
-                    "frequency": "trading_day",
-                },
+                period=authority.period.payload(observed_on, None),
                 metrics=metrics,
                 units=units,
                 directions=directions,
@@ -670,38 +699,26 @@ def _normalize_ths_rows(
                 row.get("order_amount"), Decimal(1), optional=True
             ),
         }
+        authority = market_signal_observation_authority(operation_id, "limit_state")
+        if authority is None:
+            raise AssertionError("THS limit-reason authority is missing")
+        units, directions = authority.metric_semantics(metrics)
         document_id = f"limit_up:{observed_on}:{code}"
         observations.append(
             MarketSignalObservation(
-                signal_type="limit_state",
+                signal_type=authority.signal_type,
                 source_operation=operation_id,
-                source_role="market_signal",
+                source_role=authority.source_role,
                 subject=None,
                 source_document_id=document_id,
                 observed_on=observed_on,
                 observed_at=None,
                 available_at=response.retrieved_at.isoformat(),
                 retrieved_at=response.retrieved_at,
-                period={
-                    "start": observed_on,
-                    "end": observed_on,
-                    "frequency": "trading_day",
-                },
+                period=authority.period.payload(observed_on, None),
                 metrics=metrics,
-                units={
-                    "price": "CNY_per_share",
-                    "change_rate": "percent",
-                    "seal_success_rate": "ratio",
-                    "break_times": "count",
-                    "seal_fund": "CNY",
-                },
-                directions={
-                    "price": "not_directional",
-                    "change_rate": "positive_is_gain",
-                    "seal_success_rate": "higher_is_more_successful",
-                    "break_times": "higher_is_more_breaks",
-                    "seal_fund": "higher_is_more_seal_fund",
-                },
+                units=units,
+                directions=directions,
                 rule=None,
                 attributions=(
                     ThemeAttribution(
@@ -713,7 +730,7 @@ def _normalize_ths_rows(
                     ),
                 ),
                 dimensions={
-                    "market_scope": "provider_a_share_limit_pool",
+                    "market_scope": authority.market_scope,
                     "pool_state": "limit_up",
                     "provider_security_code": code,
                     "provider_security_name": name,
@@ -850,26 +867,3 @@ def _unix_clock_text(value: object, observed_on: str) -> str | None:
     if not time(9, 15) <= clock <= time(15, 30):
         return None
     return parsed.strftime("%H:%M:%S+08:00")
-
-
-def _metric_unit(metric: str) -> str:
-    if metric in {"price", "limit_price"}:
-        return "CNY_per_share"
-    if metric in {"amount", "float_market_cap", "seal_fund", "board_amount"}:
-        return "CNY"
-    if metric in {"change_rate", "turnover_rate", "amplitude", "speed"}:
-        return "percent"
-    if metric == "pe":
-        return "ratio"
-    return "count"
-
-
-def _metric_direction(metric: str) -> str:
-    return {
-        "change_rate": "positive_is_gain",
-        "turnover_rate": "higher_is_more_turnover",
-        "seal_fund": "higher_is_more_seal_fund",
-        "break_times": "higher_is_more_breaks",
-        "open_times": "higher_is_more_opens",
-        "speed": "positive_is_gain",
-    }.get(metric, "not_directional")

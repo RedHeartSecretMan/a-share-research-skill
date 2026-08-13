@@ -18,6 +18,7 @@ from .market_signal_contract import (
     SignalSourceBatch,
     SignalSourceFailure,
     ThemeAttribution,
+    market_signal_observation_authority,
 )
 from .source_throttle import (
     EASTMONEY_REQUEST_GATE,
@@ -350,52 +351,43 @@ class ThsStrongStockThemeOperation:
                     source_document_id=document_id,
                     locator_uri=locator_uri,
                 )
+                authority = market_signal_observation_authority(
+                    self.operation_id, "strong_stock_theme"
+                )
+                if authority is None:
+                    raise AssertionError("strong-stock theme authority is missing")
+                metrics = {
+                    "change_rate": _optional_decimal(
+                        value.get("zhangfu"), "change rate"
+                    ),
+                    "close_price": _optional_decimal(value.get("close"), "close price"),
+                    "turnover_rate": _optional_decimal(
+                        value.get("huanshou"), "turnover rate"
+                    ),
+                    "trading_amount": _optional_decimal(
+                        value.get("chengjiaoe"), "trading amount"
+                    ),
+                }
+                units, directions = authority.metric_semantics(metrics)
                 observations.append(
                     MarketSignalObservation(
-                        signal_type="strong_stock_theme",
+                        signal_type=authority.signal_type,
                         source_operation=self.operation_id,
-                        source_role="market_signal",
+                        source_role=authority.source_role,
                         subject=None,
                         source_document_id=document_id,
                         observed_on=observed_on,
                         observed_at=None,
                         available_at=None,
                         retrieved_at=response.retrieved_at,
-                        period={
-                            "start": observed_on,
-                            "end": observed_on,
-                            "frequency": "trading_day",
-                        },
-                        metrics={
-                            "change_rate": _optional_decimal(
-                                value.get("zhangfu"), "change rate"
-                            ),
-                            "close_price": _optional_decimal(
-                                value.get("close"), "close price"
-                            ),
-                            "turnover_rate": _optional_decimal(
-                                value.get("huanshou"), "turnover rate"
-                            ),
-                            "trading_amount": _optional_decimal(
-                                value.get("chengjiaoe"), "trading amount"
-                            ),
-                        },
-                        units={
-                            "change_rate": "percent",
-                            "close_price": "CNY_per_share",
-                            "turnover_rate": "percent",
-                            "trading_amount": "CNY",
-                        },
-                        directions={
-                            "change_rate": "positive_is_gain",
-                            "close_price": "not_directional",
-                            "turnover_rate": "not_directional",
-                            "trading_amount": "not_directional",
-                        },
+                        period=authority.period.payload(observed_on, None),
+                        metrics=metrics,
+                        units=units,
+                        directions=directions,
                         rule=None,
                         attributions=(attribution,),
                         dimensions={
-                            "market_scope": "mainland_a_share",
+                            "market_scope": authority.market_scope,
                             "provider_security_code": code,
                             "provider_security_name": name,
                             "provider_market": value.get("market"),
@@ -597,33 +589,36 @@ class EastmoneySecurityBoardMembershipOperation:
                 ]
                 if not fetched.response_echoed_security:
                     limitations.append("source_does_not_echo_subject_identity")
+                authority = market_signal_observation_authority(
+                    self.operation_id, signal_type
+                )
+                if authority is None:
+                    raise AssertionError("board-membership authority is missing")
+                metrics = {
+                    "board_change_rate": _optional_decimal(
+                        value.get("f3"), "board change rate"
+                    )
+                }
+                units, directions = authority.metric_semantics(metrics)
                 observations.append(
                     MarketSignalObservation(
                         signal_type=signal_type,
                         source_operation=self.operation_id,
-                        source_role="market_signal",
+                        source_role=authority.source_role,
                         subject=subject,
                         source_document_id=document_id,
                         observed_on=requested_on,
                         observed_at=None,
                         available_at=None,
                         retrieved_at=fetched.retrieved_at,
-                        period={
-                            "start": requested_on,
-                            "end": requested_on,
-                            "frequency": "snapshot",
-                        },
-                        metrics={
-                            "board_change_rate": _optional_decimal(
-                                value.get("f3"), "board change rate"
-                            )
-                        },
-                        units={"board_change_rate": "percent"},
-                        directions={"board_change_rate": "positive_is_gain"},
+                        period=authority.period.payload(requested_on, None),
+                        metrics=metrics,
+                        units=units,
+                        directions=directions,
                         rule=None,
                         attributions=(),
                         dimensions={
-                            "market_scope": "mainland_a_share",
+                            "market_scope": authority.market_scope,
                             "board_code": board_code,
                             "board_name": board_name,
                             "board_type": "unclassified",
@@ -908,40 +903,33 @@ class EastmoneyIndustryRotationOperation:
                     f"eastmoney-industry-rotation-{requested_on.replace('-', '')}-"
                     f"{int(provider_timestamp.timestamp())}-{board_code}"
                 )
+                authority = market_signal_observation_authority(
+                    self.operation_id, signal_type
+                )
+                if authority is None:
+                    raise AssertionError("industry-rotation authority is missing")
+                metrics = {
+                    "change_rate": format(change_rate, "f"),
+                    "up_count": str(up_count),
+                    "down_count": str(down_count),
+                    "leader_change_rate": leader_change,
+                }
+                units, directions = authority.metric_semantics(metrics)
                 observations.append(
                     MarketSignalObservation(
                         signal_type=signal_type,
                         source_operation=self.operation_id,
-                        source_role="market_signal",
+                        source_role=authority.source_role,
                         subject=None,
                         source_document_id=document_id,
                         observed_on=requested_on,
                         observed_at=observed_at_text,
                         available_at=None,
                         retrieved_at=fetched.retrieved_at,
-                        period={
-                            "start": requested_on,
-                            "end": requested_on,
-                            "frequency": "snapshot",
-                        },
-                        metrics={
-                            "change_rate": format(change_rate, "f"),
-                            "up_count": str(up_count),
-                            "down_count": str(down_count),
-                            "leader_change_rate": leader_change,
-                        },
-                        units={
-                            "change_rate": "percent",
-                            "up_count": "security_count",
-                            "down_count": "security_count",
-                            "leader_change_rate": "percent",
-                        },
-                        directions={
-                            "change_rate": "positive_is_gain",
-                            "up_count": "not_directional",
-                            "down_count": "not_directional",
-                            "leader_change_rate": "positive_is_gain",
-                        },
+                        period=authority.period.payload(requested_on, observed_at_text),
+                        metrics=metrics,
+                        units=units,
+                        directions=directions,
                         rule={
                             "code": "provider_change_rate_desc",
                             "sort_field": "change_rate",
@@ -954,7 +942,7 @@ class EastmoneyIndustryRotationOperation:
                             "board_code": board_code,
                             "board_name": board_name,
                             "leader": leader,
-                            "market_scope": "eastmoney_industry_boards",
+                            "market_scope": authority.market_scope,
                         },
                         locator_uri=fetched.locator_uri,
                         limitations=("availability_time_unknown",),
@@ -1144,51 +1132,48 @@ class ThsMarketHeatOperation:
                     )
                     for concept in concepts
                 )
+                authority = market_signal_observation_authority(
+                    self.operation_id, signal_type
+                )
+                if authority is None:
+                    raise AssertionError("market-heat authority is missing")
+                metrics = {
+                    "rank": str(rank),
+                    "heat": _optional_decimal(value.get("rate"), "heat"),
+                    "change_rate": _optional_decimal(
+                        value.get("rise_and_fall"), "change rate"
+                    ),
+                    "rank_change": _optional_decimal(
+                        value.get("hot_rank_chg"), "rank change"
+                    ),
+                }
+                units, directions = authority.metric_semantics(metrics)
                 observations.append(
                     MarketSignalObservation(
                         signal_type=signal_type,
                         source_operation=self.operation_id,
-                        source_role="market_signal",
+                        source_role=authority.source_role,
                         subject=None,
                         source_document_id=document_id,
                         observed_on=requested_on,
                         observed_at=None,
                         available_at=None,
                         retrieved_at=source_response.retrieved_at,
-                        period={
-                            "start": requested_on,
-                            "end": requested_on,
-                            "frequency": f"current_{period}_ranking",
-                        },
-                        metrics={
-                            "rank": str(rank),
-                            "heat": _optional_decimal(value.get("rate"), "heat"),
-                            "change_rate": _optional_decimal(
-                                value.get("rise_and_fall"), "change rate"
-                            ),
-                            "rank_change": _optional_decimal(
-                                value.get("hot_rank_chg"), "rank change"
-                            ),
-                        },
-                        units={
-                            "rank": "rank",
-                            "heat": "provider_score",
-                            "change_rate": "percent",
-                            "rank_change": "rank",
-                        },
-                        directions={
-                            "rank": "lower_is_more_popular",
-                            "heat": "higher_is_more_popular",
-                            "change_rate": "positive_is_gain",
-                            "rank_change": "provider_defined",
-                        },
+                        period=authority.period.payload(
+                            requested_on,
+                            None,
+                            frequency=f"current_{period}_ranking",
+                        ),
+                        metrics=metrics,
+                        units=units,
+                        directions=directions,
                         rule={
                             "code": "provider_popularity_rank",
                             "period": period,
                         },
                         attributions=attributions,
                         dimensions={
-                            "market_scope": "mainland_a_share",
+                            "market_scope": authority.market_scope,
                             "provider_security_code": code,
                             "provider_security_name": name,
                             "popularity_tag": popularity_tag,
@@ -1211,6 +1196,7 @@ class ThsMarketHeatOperation:
                         state=state,
                         pages_collected=1,
                         pages_expected=1,
+                        details={"collected_count": len(observations)},
                     )
                 },
                 degradations=_degradations(self.operation_id, diagnostics),

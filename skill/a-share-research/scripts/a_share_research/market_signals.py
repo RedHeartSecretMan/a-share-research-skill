@@ -25,6 +25,8 @@ from .market_signal_contract import (
     SignalCoverage,
     SignalSourceFailure,
     ThemeAttribution,
+    market_signal_coverage_authority,
+    market_signal_coverage_field_destination,
 )
 from .research_result import (
     DirectTaskCalculation,
@@ -226,6 +228,9 @@ def _market_signal_field_disposition(
     operation_id: str,
     field: str,
 ) -> FieldDisposition:
+    coverage_destination = market_signal_coverage_field_destination(operation_id, field)
+    if coverage_destination is not None:
+        return FieldDisposition(field, "cross_check_only", coverage_destination)
     if field in {
         "data[]",
         "data.diff[]",
@@ -409,6 +414,31 @@ def _market_signal_failed_outcome(
         (failure,),
         False,
         diagnostics,
+    )
+
+
+def _market_signal_public_coverage(
+    operation_id: str,
+    signal_type: str,
+    coverage: SignalCoverage,
+    *,
+    observation_count: int,
+    source_error_codes: Collection[str],
+    request_limit: int,
+    retained_pool_states: Collection[object] = (),
+) -> dict[str, object]:
+    authority = market_signal_coverage_authority(operation_id, signal_type)
+    if authority is None:
+        return {
+            "state": coverage.state,
+            "source_error_codes": sorted(set(source_error_codes)),
+        }
+    return authority.public_material(
+        coverage,
+        observation_count=observation_count,
+        retained_pool_states=retained_pool_states,
+        source_error_codes=source_error_codes,
+        request_limit=request_limit,
     )
 
 
@@ -994,8 +1024,14 @@ def build_market_signals_result(
                     diagnostics={
                         "signal_coverage": {
                             signal_type: {
-                                "state": "indeterminate",
-                                "source_error_codes": [failure.code],
+                                **_market_signal_public_coverage(
+                                    operation.operation_id,
+                                    signal_type,
+                                    SignalCoverage("indeterminate"),
+                                    observation_count=0,
+                                    source_error_codes=(failure.code,),
+                                    request_limit=operation_query.limit,
+                                )
                             }
                             for signal_type in sorted(relevant)
                         }
@@ -1037,8 +1073,14 @@ def build_market_signals_result(
                     diagnostics={
                         "signal_coverage": {
                             signal_type: {
-                                "state": "indeterminate",
-                                "source_error_codes": [failure.code],
+                                **_market_signal_public_coverage(
+                                    operation.operation_id,
+                                    signal_type,
+                                    SignalCoverage("indeterminate"),
+                                    observation_count=0,
+                                    source_error_codes=(failure.code,),
+                                    request_limit=operation_query.limit,
+                                )
                             }
                             for signal_type in sorted(relevant)
                         }
@@ -1082,8 +1124,14 @@ def build_market_signals_result(
                     diagnostics={
                         "signal_coverage": {
                             signal_type: {
-                                "state": "indeterminate",
-                                "source_error_codes": [failure.code],
+                                **_market_signal_public_coverage(
+                                    operation.operation_id,
+                                    signal_type,
+                                    SignalCoverage("indeterminate"),
+                                    observation_count=0,
+                                    source_error_codes=(failure.code,),
+                                    request_limit=operation_query.limit,
+                                )
                             }
                             for signal_type in sorted(relevant)
                         }
@@ -1152,19 +1200,45 @@ def build_market_signals_result(
                 )
             effective_coverage[signal_type] = SignalCoverage(
                 state,
+                provider_total=(
+                    reported.provider_total
+                    if reported is not None and reported_state is not None
+                    else None
+                ),
+                pages_collected=(
+                    reported.pages_collected
+                    if reported is not None and reported_state is not None
+                    else None
+                ),
+                pages_expected=(
+                    reported.pages_expected
+                    if reported is not None and reported_state is not None
+                    else None
+                ),
                 details=(reported.details if reported is not None else {}),
             )
-        signal_coverage = {
-            signal_type: {
-                "state": effective_coverage[signal_type].state,
-                "source_error_codes": sorted(
-                    item.code
-                    for item in errors
-                    if signal_type in item.details["signal_types"]
+        signal_coverage: dict[str, dict[str, object]] = {}
+        for signal_type in sorted(relevant):
+            error_codes = sorted(
+                item.code
+                for item in errors
+                if signal_type in item.details["signal_types"]
+            )
+            signal_coverage[signal_type] = _market_signal_public_coverage(
+                operation.operation_id,
+                signal_type,
+                effective_coverage[signal_type],
+                observation_count=sum(
+                    item.signal_type == signal_type for item in valid
                 ),
-            }
-            for signal_type in sorted(relevant)
-        }
+                source_error_codes=error_codes,
+                request_limit=operation_query.limit,
+                retained_pool_states=tuple(
+                    item.dimensions.get("pool_state")
+                    for item in valid
+                    if item.signal_type == signal_type
+                ),
+            )
         outcomes.append(
             _market_signal_outcome(
                 operation,

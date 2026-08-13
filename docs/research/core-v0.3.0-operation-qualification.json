@@ -185,7 +185,7 @@
     },
     {
       "producer_operation_id": "eastmoney_focus_monitoring@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -199,20 +199,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_market_monitoring_sources.py#FocusMonitoringSourceTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/market_monitoring_sources.py#EastmoneyFocusMonitoringOperation",
-        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#SignalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
         "tests/test_market_monitoring_sources.py#FocusMonitoringSourceTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_forward_adjusted_daily_line@1",
@@ -248,7 +247,7 @@
     },
     {
       "producer_operation_id": "eastmoney_industry_rotation@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -262,24 +261,23 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_market_theme_sources.py#EastmoneyIndustryRotationTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/market_theme_sources.py#EastmoneyIndustryRotationOperation",
-        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#SignalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
         "tests/test_market_theme_sources.py#EastmoneyIndustryRotationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_limit_state@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -293,20 +291,20 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_market_limit_sources.py#EastmoneyLimitStateTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_market_pool_public_contract_distinguishes_proven_empty_and_partial",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/market_limit_sources.py#EastmoneyLimitStateOperation",
-        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#SignalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalCoverageAuthority",
         "tests/test_market_limit_sources.py#EastmoneyLimitStateTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_market_pool_public_contract_distinguishes_proven_empty_and_partial",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_margin_trading@1",
@@ -370,7 +368,7 @@
     },
     {
       "producer_operation_id": "eastmoney_northbound_flow@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -384,20 +382,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_capital_flow_sources.py#NorthboundFlowTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_northbound_owner_enforces_disclosure_cutoff_and_semantics",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/capital_flow_sources.py#EastmoneyNorthboundFlowOperation",
-        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
         "tests/test_capital_flow_sources.py#NorthboundFlowTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_northbound_owner_enforces_disclosure_cutoff_and_semantics",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_reports@1",
@@ -431,7 +428,7 @@
     },
     {
       "producer_operation_id": "eastmoney_security_board_membership@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -445,24 +442,23 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_market_theme_sources.py#EastmoneySecurityBoardMembershipTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/market_theme_sources.py#EastmoneySecurityBoardMembershipOperation",
-        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#SignalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
         "tests/test_market_theme_sources.py#EastmoneySecurityBoardMembershipTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_severe_abnormal_movement@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -476,20 +472,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_market_monitoring_sources.py#SevereAbnormalMovementSourceTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/market_monitoring_sources.py#EastmoneySevereAbnormalMovementOperation",
-        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#SignalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
         "tests/test_market_monitoring_sources.py#SevereAbnormalMovementSourceTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_shareholder_count@1",
@@ -1256,7 +1251,7 @@
     },
     {
       "producer_operation_id": "ths_limit_reason@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -1270,24 +1265,23 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_market_limit_sources.py#ThsLimitReasonTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/market_limit_sources.py#ThsLimitReasonOperation",
-        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#SignalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
         "tests/test_market_limit_sources.py#ThsLimitReasonTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "ths_market_heat@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -1301,24 +1295,23 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_market_theme_sources.py#ThsMarketHeatTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/market_theme_sources.py#ThsMarketHeatOperation",
-        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#SignalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
         "tests/test_market_theme_sources.py#ThsMarketHeatTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "ths_strong_stock_theme@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
         "request_boundary": "bounded_observation_window"
@@ -1332,20 +1325,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_64",
         "request_bound": "limit_window_and_pages_bounded"
       },
-      "offline_contract_selector": "tests/test_market_theme_sources.py#ThsStrongStockThemeTests",
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_strong_theme_owner_rejects_coherent_scope_and_period_forgery",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/market_theme_sources.py#ThsStrongStockThemeOperation",
-        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#SignalSourceBatch",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
         "tests/test_market_theme_sources.py#ThsStrongStockThemeTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_strong_theme_owner_rejects_coherent_scope_and_period_forgery",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        64
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "tongdaxin_intraday_snapshot@1",

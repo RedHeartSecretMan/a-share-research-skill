@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any, Literal, Protocol
 
@@ -98,6 +98,7 @@ class CapitalObservationAuthority:
     variants: tuple[CapitalObservationVariant, ...]
     market_scope: str | None = None
     group_authority: CapitalObservationGroupAuthority | None = None
+    observed_before: date | None = None
 
     def __post_init__(self) -> None:
         if not self.variants:
@@ -150,6 +151,15 @@ class CapitalObservationAuthority:
         observed_on = payload.get("observed_on")
         if not isinstance(observed_on, str):
             raise ValueError("capital period contradicts owner authority")
+        if self.observed_before is not None:
+            try:
+                observed_date = date.fromisoformat(observed_on)
+            except ValueError as error:
+                raise ValueError(
+                    "capital disclosure date contradicts owner authority"
+                ) from error
+            if observed_date >= self.observed_before:
+                raise ValueError("capital disclosure date contradicts owner authority")
         metric_variants = [
             item for item in self.variants if set(item.metrics) == set(metrics)
         ]
@@ -187,6 +197,23 @@ def _event_period(frequency: str, *, kind: str | None = None) -> CapitalPeriodAu
 
 
 _QUALIFIED_CAPITAL_AUTHORITIES = (
+    CapitalObservationAuthority(
+        "eastmoney_northbound_flow@1",
+        "northbound_flow",
+        "market_observation",
+        "market",
+        _observation_variants(
+            {
+                "net_buy_amount": (
+                    "CNY_100_MILLION",
+                    "positive_is_net_inflow",
+                )
+            },
+            _event_period("trading_day"),
+        ),
+        market_scope="mainland_hong_kong_stock_connect_northbound",
+        observed_before=date(2024, 8, 19),
+    ),
     CapitalObservationAuthority(
         "eastmoney_stock_fund_flow@1",
         "stock_fund_flow",

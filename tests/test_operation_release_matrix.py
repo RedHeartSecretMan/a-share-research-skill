@@ -741,6 +741,128 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                     item["evidence_references"],
                 )
 
+    def test_issue_64_closes_exact_reviewed_market_signal_gaps(self) -> None:
+        issue_64_owners = {
+            "eastmoney_focus_monitoring@1",
+            "eastmoney_industry_rotation@1",
+            "eastmoney_limit_state@1",
+            "eastmoney_northbound_flow@1",
+            "eastmoney_security_board_membership@1",
+            "eastmoney_severe_abnormal_movement@1",
+            "ths_limit_reason@1",
+            "ths_market_heat@1",
+            "ths_strong_stock_theme@1",
+        }
+        issue_63_owners = {
+            "eastmoney_board_fund_flow@1",
+            "eastmoney_dividend@1",
+            "eastmoney_margin_trading@1",
+            "eastmoney_shareholder_count@1",
+            "eastmoney_stock_fund_flow@1",
+            "eastmoney_trading_events@1",
+        }
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        ordered_owners = [
+            item["producer_operation_id"] for item in payload["operations"]
+        ]
+        operations = {
+            item["producer_operation_id"]: item for item in payload["operations"]
+        }
+
+        self.assertEqual(len(ordered_owners), 44)
+        self.assertEqual(len(operations), 44)
+        self.assertEqual(ordered_owners, sorted(ordered_owners))
+        self.assertFalse(issue_64_owners & issue_63_owners)
+        self.assertEqual(issue_64_owners & set(operations), issue_64_owners)
+        self.assertFalse(any(64 in item["gap_issues"] for item in operations.values()))
+        self.assertEqual(
+            {
+                operation_id
+                for operation_id, item in operations.items()
+                if item["rate_limit_policy"]["qualification"] == "qualified_by_issue_64"
+            },
+            issue_64_owners,
+        )
+
+        direct_selector = "tests/test_direct_capital_market_signals_runtime.py#"
+        remaining_selector = (
+            direct_selector
+            + "test_issue_64_remaining_market_owners_use_copied_installed_public_seam"
+        )
+        expected_selectors = {
+            "eastmoney_focus_monitoring@1": remaining_selector,
+            "eastmoney_industry_rotation@1": remaining_selector,
+            "eastmoney_limit_state@1": (
+                direct_selector
+                + "test_issue_64_market_pool_public_contract_distinguishes_proven_empty_and_partial"
+            ),
+            "eastmoney_northbound_flow@1": (
+                direct_selector
+                + "test_issue_64_northbound_owner_enforces_disclosure_cutoff_and_semantics"
+            ),
+            "eastmoney_security_board_membership@1": remaining_selector,
+            "eastmoney_severe_abnormal_movement@1": remaining_selector,
+            "ths_limit_reason@1": remaining_selector,
+            "ths_market_heat@1": remaining_selector,
+            "ths_strong_stock_theme@1": (
+                direct_selector
+                + "test_issue_64_strong_theme_owner_rejects_coherent_scope_and_period_forgery"
+            ),
+        }
+        expected_lower = {
+            "eastmoney_focus_monitoring@1": (
+                "tests/test_market_monitoring_sources.py#FocusMonitoringSourceTests"
+            ),
+            "eastmoney_industry_rotation@1": (
+                "tests/test_market_theme_sources.py#EastmoneyIndustryRotationTests"
+            ),
+            "eastmoney_limit_state@1": (
+                "tests/test_market_limit_sources.py#EastmoneyLimitStateTests"
+            ),
+            "eastmoney_northbound_flow@1": (
+                "tests/test_capital_flow_sources.py#NorthboundFlowTests"
+            ),
+            "eastmoney_security_board_membership@1": (
+                "tests/test_market_theme_sources.py#EastmoneySecurityBoardMembershipTests"
+            ),
+            "eastmoney_severe_abnormal_movement@1": (
+                "tests/test_market_monitoring_sources.py#SevereAbnormalMovementSourceTests"
+            ),
+            "ths_limit_reason@1": (
+                "tests/test_market_limit_sources.py#ThsLimitReasonTests"
+            ),
+            "ths_market_heat@1": (
+                "tests/test_market_theme_sources.py#ThsMarketHeatTests"
+            ),
+            "ths_strong_stock_theme@1": (
+                "tests/test_market_theme_sources.py#ThsStrongStockThemeTests"
+            ),
+        }
+        for owner in issue_64_owners:
+            with self.subTest(owner=owner):
+                item = operations[owner]
+                self.assertEqual(item["disposition"], "integrated")
+                self.assertEqual(
+                    item["rate_limit_policy"]["qualification"],
+                    "qualified_by_issue_64",
+                )
+                self.assertEqual(
+                    item["offline_contract_selector"], expected_selectors[owner]
+                )
+                self.assertEqual(item["gap_issues"], [])
+                authority = "skill/a-share-research/scripts/a_share_research/" + (
+                    "capital_contract.py#CapitalObservationAuthority"
+                    if owner == "eastmoney_northbound_flow@1"
+                    else "market_signal_contract.py#MarketSignalObservationAuthority"
+                )
+                self.assertIn(authority, item["evidence_references"])
+                self.assertIn(expected_selectors[owner], item["evidence_references"])
+                self.assertIn(expected_lower[owner], item["evidence_references"])
+                self.assertIn(
+                    "docs/specs/0007-implementation-amendment-a.md#A-08a",
+                    item["evidence_references"],
+                )
+
     def test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention(
         self,
     ) -> None:

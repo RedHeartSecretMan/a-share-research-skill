@@ -27,7 +27,6 @@ from .source_throttle import (
 )
 
 USER_AGENT = "Mozilla/5.0 (compatible; a-share-research-skill/0.1)"
-NORTHBOUND_NET_BUY_DISCLOSURE_CUTOFF = date(2024, 8, 19)
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 
 
@@ -86,7 +85,12 @@ class EastmoneyNorthboundFlowOperation:
                     "invalid_subject",
                     "Northbound flow is a market-wide observation and takes no security subject.",
                 )
-            if observed_to >= NORTHBOUND_NET_BUY_DISCLOSURE_CUTOFF:
+            authority = capital_observation_authority(
+                self.operation_id, "northbound_flow"
+            )
+            if authority is None or authority.observed_before is None:
+                raise AssertionError("northbound disclosure authority is missing")
+            if observed_to >= authority.observed_before:
                 raise _CapitalFlowError(
                     "northbound_net_buy_disclosure_unavailable",
                     "Daily northbound net-buy amounts are unavailable at or after the disclosure boundary.",
@@ -700,25 +704,38 @@ def _northbound_observation(
             "unknown_schema", "A northbound channel identifier is unknown."
         )
     net_buy = _decimal_text(row.get("NET_DEAL_AMT"))
+    authority = capital_observation_authority(
+        EastmoneyNorthboundFlowOperation.operation_id, "northbound_flow"
+    )
+    if authority is None:
+        raise AssertionError("northbound observation authority is missing")
+    metrics: dict[str, str | None] = {"net_buy_amount": net_buy}
+    units, directions = authority.metric_semantics(metrics)
+    if len(authority.variants) != 1:
+        raise AssertionError("northbound period authority is ambiguous")
+    period_authority = authority.variants[0].period
+    period: dict[str, str | None] = {
+        "start": observed_on.isoformat(),
+        "end": observed_on.isoformat(),
+        "frequency": period_authority.frequency,
+    }
+    if not period_authority.matches(period, observed_on.isoformat()):
+        raise AssertionError("northbound period authority is inconsistent")
     return CapitalObservation(
-        data_type="northbound_flow",
+        data_type=authority.data_type,
         source_operation=EastmoneyNorthboundFlowOperation.operation_id,
-        source_role="market_observation",
+        source_role=authority.source_role,
         subject=None,
         observed_on=observed_on.isoformat(),
         available_at=None,
         retrieved_at=retrieved_at,
-        period={
-            "start": observed_on.isoformat(),
-            "end": observed_on.isoformat(),
-            "frequency": "trading_day",
-        },
-        metrics={"net_buy_amount": net_buy},
-        units={"net_buy_amount": "CNY_100_MILLION"},
-        directions={"net_buy_amount": "positive_is_net_inflow"},
+        period=period,
+        metrics=metrics,
+        units=units,
+        directions=directions,
         dimensions={
             "connect_channel": channel,
-            "market_scope": "mainland_hong_kong_stock_connect_northbound",
+            "market_scope": authority.market_scope,
         },
         locator_uri=locator_uri,
         limitations=("availability_time_unknown",),

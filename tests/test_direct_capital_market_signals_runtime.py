@@ -51,6 +51,14 @@ ISSUE_63_BOOTSTRAP = (
     / "issue_63"
     / "sitecustomize.py"
 ).read_text(encoding="utf-8")
+ISSUE_64_BOOTSTRAP = (
+    REPOSITORY_ROOT
+    / "tests"
+    / "fixtures"
+    / "market_signals"
+    / "issue_64"
+    / "sitecustomize.py"
+).read_text(encoding="utf-8")
 
 
 def _issue_63_company_request() -> dict[str, object]:
@@ -118,6 +126,51 @@ def _issue_63_board_request() -> dict[str, object]:
             "period": "today",
             "limit": 2,
         },
+        "source_policy": {
+            "allow_experimental": True,
+            "allow_credentials": False,
+            "allow_fallback": True,
+        },
+    }
+
+
+def _issue_64_market_request(
+    signal_types: list[str],
+    *,
+    parameters: dict[str, object] | None = None,
+    observed_on: str = "2026-07-31",
+    subjects: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "task_type": "market_signals",
+        "subjects": subjects or [],
+        "as_of": "2026-08-02",
+        "window": {
+            "observed_from": observed_on,
+            "observed_to": observed_on,
+        },
+        "parameters": {
+            "signal_types": signal_types,
+            "limit": 20,
+            **(parameters or {}),
+        },
+        "source_policy": {
+            "allow_experimental": True,
+            "allow_credentials": False,
+            "allow_fallback": True,
+        },
+    }
+
+
+def _issue_64_northbound_request(day: str) -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "task_type": "capital_events",
+        "subjects": [],
+        "as_of": day,
+        "window": {"observed_from": day, "observed_to": day},
+        "parameters": {"data_types": ["northbound_flow"], "limit": 20},
         "source_policy": {
             "allow_experimental": True,
             "allow_credentials": False,
@@ -253,6 +306,711 @@ def _invoke_copied_installed(
 
 
 class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
+    def test_issue_64_exact_formal_owner_authority_inventory(self) -> None:
+        from a_share_research.capital_contract import (
+            CAPITAL_OBSERVATION_AUTHORITIES,
+        )
+        from a_share_research.market_signal_contract import (
+            MARKET_SIGNAL_OBSERVATION_AUTHORITIES,
+        )
+
+        market_owners = {
+            "eastmoney_focus_monitoring@1": "focus_monitoring",
+            "eastmoney_industry_rotation@1": "industry_rotation",
+            "eastmoney_limit_state@1": "limit_state",
+            "eastmoney_security_board_membership@1": "security_board_membership",
+            "eastmoney_severe_abnormal_movement@1": "severe_abnormal_movement",
+            "ths_limit_reason@1": "limit_state",
+            "ths_market_heat@1": "market_heat",
+            "ths_strong_stock_theme@1": "strong_stock_theme",
+        }
+        self.assertEqual(
+            {
+                owner: signal_type
+                for owner, signal_type in MARKET_SIGNAL_OBSERVATION_AUTHORITIES
+                if owner in market_owners
+            },
+            market_owners,
+        )
+        self.assertIn(
+            ("eastmoney_northbound_flow@1", "northbound_flow"),
+            CAPITAL_OBSERVATION_AUTHORITIES,
+        )
+
+    def test_issue_64_remaining_market_owners_use_copied_installed_public_seam(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "eastmoney_focus_monitoring@1",
+                "focus_monitoring",
+                "focus_monitoring",
+                "2026-08-02",
+                {},
+                [],
+            ),
+            (
+                "eastmoney_industry_rotation@1",
+                "industry_rotation",
+                "industry_rotation",
+                "2026-07-31",
+                {"limit": 1},
+                [],
+            ),
+            (
+                "eastmoney_security_board_membership@1",
+                "security_board_membership",
+                "board_membership",
+                "2026-08-02",
+                {},
+                [{"clue": "300058"}],
+            ),
+            (
+                "eastmoney_severe_abnormal_movement@1",
+                "severe_abnormal_movement",
+                "severe_abnormal",
+                "2026-07-31",
+                {},
+                [],
+            ),
+            (
+                "ths_limit_reason@1",
+                "limit_state",
+                "limit_reason",
+                "2026-07-31",
+                {"limit_states": ["limit_up"]},
+                [],
+            ),
+            (
+                "ths_market_heat@1",
+                "market_heat",
+                "market_heat",
+                "2026-08-02",
+                {"market_heat_period": "hour"},
+                [],
+            ),
+        )
+        for owner, signal_type, scenario, observed_on, parameters, subjects in cases:
+            with self.subTest(owner=owner):
+                result = _invoke_copied_installed(
+                    _issue_64_market_request(
+                        [signal_type],
+                        parameters=parameters,
+                        observed_on=observed_on,
+                        subjects=subjects,
+                    ),
+                    bootstrap=ISSUE_64_BOOTSTRAP,
+                    environment_overrides={"A_SHARE_ISSUE64_SCENARIO": scenario},
+                )
+                obligation = next(
+                    item
+                    for item in result["plan"]["operation_obligations"]
+                    if item["producer_operation_id"] == owner
+                )
+                self.assertEqual(obligation["operation_kind"], "external_source")
+                self.assertTrue(obligation["experimental"])
+                operation = result["coverage"]["market_signal_observations"][
+                    "operations"
+                ][owner]
+                self.assertEqual(
+                    (operation["execution_state"], operation["state"]),
+                    ("succeeded", "complete"),
+                )
+                records = [
+                    item
+                    for item in result["observations"]
+                    if item["operation_id"] == owner
+                ]
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["payload"]["signal_type"], signal_type)
+                self.assertEqual(records[0]["payload"]["observed_on"], observed_on)
+                self.assertFalse(records[0]["payload"]["issuer_fact"])
+                self.assertFalse(records[0]["payload"]["certain_causality"])
+
+    def test_issue_64_security_signal_requires_owned_subject_identity(self) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_64_market_request(
+                ["security_board_membership"],
+                observed_on="2026-08-02",
+                subjects=[{"clue": "300058"}],
+            ),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "board_membership"},
+        )
+        identity_claim = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "market_signals_subject_identity"
+        )
+        self.assertEqual(
+            identity_claim["payload"]["security"],
+            {"exchange": "SZSE", "code": "300058", "type": "A_SHARE"},
+        )
+        payload = next(
+            item["payload"]
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_security_board_membership@1"
+        )
+        forged_subject = {
+            "security": {
+                "exchange": "SSE",
+                "code": "600519",
+                "type": "A_SHARE",
+            },
+            "name": "贵州茅台",
+            "issuer": {
+                "name": None,
+                "identifier": None,
+                "security_relationship": "unverified",
+            },
+        }
+        payload["subject"] = deepcopy(forged_subject)
+        payload["source_facts"]["subject"] = deepcopy(forged_subject)
+
+        with self.assertRaisesRegex(ValueError, "market signal.*identity"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_64_market_pool_coverage_preserves_observed_counts_and_limits(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "eastmoney_focus_monitoring@1",
+                "focus_monitoring",
+                "focus_monitoring",
+                "2026-08-02",
+                {},
+                [],
+                1,
+                "reported",
+                False,
+                None,
+            ),
+            (
+                "eastmoney_industry_rotation@1",
+                "industry_rotation",
+                "industry_rotation",
+                "2026-07-31",
+                {"limit": 1},
+                [],
+                2,
+                "reported",
+                True,
+                None,
+            ),
+            (
+                "eastmoney_security_board_membership@1",
+                "security_board_membership",
+                "board_membership",
+                "2026-08-02",
+                {},
+                [{"clue": "300058"}],
+                1,
+                "reported",
+                False,
+                None,
+            ),
+            (
+                "eastmoney_severe_abnormal_movement@1",
+                "severe_abnormal_movement",
+                "severe_abnormal",
+                "2026-07-31",
+                {},
+                [],
+                None,
+                "not_exposed",
+                False,
+                1,
+            ),
+            (
+                "ths_limit_reason@1",
+                "limit_state",
+                "limit_reason",
+                "2026-07-31",
+                {"limit_states": ["limit_up"]},
+                [],
+                1,
+                "reported",
+                False,
+                None,
+            ),
+            (
+                "ths_market_heat@1",
+                "market_heat",
+                "market_heat",
+                "2026-08-02",
+                {"market_heat_period": "hour"},
+                [],
+                None,
+                "not_exposed",
+                False,
+                1,
+            ),
+            (
+                "ths_strong_stock_theme@1",
+                "strong_stock_theme",
+                "strong_theme",
+                "2026-07-31",
+                {},
+                [],
+                1,
+                "reported",
+                False,
+                None,
+            ),
+        )
+        for (
+            owner,
+            signal_type,
+            scenario,
+            observed_on,
+            parameters,
+            subjects,
+            provider_total,
+            provider_total_status,
+            truncated,
+            collected_count,
+        ) in cases:
+            with self.subTest(owner=owner):
+                result = _invoke_copied_installed(
+                    _issue_64_market_request(
+                        [signal_type],
+                        parameters=parameters,
+                        observed_on=observed_on,
+                        subjects=subjects,
+                    ),
+                    bootstrap=ISSUE_64_BOOTSTRAP,
+                    environment_overrides={"A_SHARE_ISSUE64_SCENARIO": scenario},
+                )
+                material = result["coverage"]["market_signal_observations"][
+                    "operations"
+                ][owner]["diagnostics"]["signal_coverage"][signal_type]
+                self.assertEqual(material["provider_total"], provider_total)
+                self.assertEqual(
+                    material["provider_total_status"], provider_total_status
+                )
+                self.assertEqual(material["pages_collected"], 1)
+                self.assertEqual(material["pages_expected"], 1)
+                self.assertEqual(material["retained_count"], 1)
+                self.assertEqual(material["truncated"], truncated)
+                if collected_count is None:
+                    self.assertNotIn("collected_count", material)
+                else:
+                    self.assertEqual(material["collected_count"], collected_count)
+
+    def test_issue_64_focus_monitoring_rejects_rehashed_period_state_mismatch(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_64_market_request(["focus_monitoring"], observed_on="2026-08-02"),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "focus_monitoring"},
+        )
+        payload = next(
+            item["payload"]
+            for item in result["observations"]
+            if item["operation_id"] == "eastmoney_focus_monitoring@1"
+        )
+        self.assertEqual(payload["observed_on"], "2026-08-02")
+        self.assertEqual(
+            payload["period"],
+            {
+                "start": "2026-07-30",
+                "end": "2026-08-12",
+                "frequency": "calendar_date_window",
+            },
+        )
+        self.assertEqual(payload["dimensions"]["monitoring_state"], "active")
+
+        forged_period = {
+            "start": "2027-01-01",
+            "end": "2027-01-02",
+            "frequency": "calendar_date_window",
+        }
+        payload["period"] = dict(forged_period)
+        payload["source_facts"]["period"] = dict(forged_period)
+        with self.assertRaisesRegex(ValueError, "market signal.*period state"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_64_market_pool_public_contract_distinguishes_proven_empty_and_partial(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import validate_serialized
+
+        owner = "eastmoney_limit_state@1"
+        empty = _invoke_copied_installed(
+            _issue_64_market_request(
+                ["limit_state"], parameters={"limit_states": ["limit_down"]}
+            ),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "limit_empty"},
+        )
+        empty_operation = empty["coverage"]["market_signal_observations"]["operations"][
+            owner
+        ]
+        self.assertEqual(
+            (empty_operation["execution_state"], empty_operation["state"]),
+            ("succeeded", "observed_empty"),
+        )
+        self.assertEqual(
+            empty_operation["diagnostics"]["signal_coverage"]["limit_state"],
+            {
+                "state": "observed_empty",
+                "provider_total": 0,
+                "provider_total_status": "reported",
+                "pages_collected": 1,
+                "pages_expected": 1,
+                "retained_count": 0,
+                "truncated": False,
+                "pool_states": ["limit_down"],
+                "completed_pool_states": ["limit_down"],
+                "failed_pool_states": [],
+                "pool_errors": [],
+                "duplicate_count": 0,
+                "source_error_codes": [],
+            },
+        )
+        self.assertFalse(
+            any(item["operation_id"] == owner for item in empty["observations"])
+        )
+
+        partial = _invoke_copied_installed(
+            _issue_64_market_request(
+                ["limit_state"],
+                parameters={"limit_states": ["limit_up", "limit_down"]},
+            ),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "limit_partial"},
+        )
+        partial_operation = partial["coverage"]["market_signal_observations"][
+            "operations"
+        ][owner]
+        self.assertEqual(
+            (partial_operation["execution_state"], partial_operation["state"]),
+            ("failed", "partial"),
+        )
+        self.assertEqual(
+            partial_operation["diagnostics"]["signal_coverage"]["limit_state"],
+            {
+                "state": "partial",
+                "provider_total": 1,
+                "provider_total_status": "reported",
+                "pages_collected": 1,
+                "pages_expected": 2,
+                "retained_count": 1,
+                "truncated": False,
+                "pool_states": ["limit_up", "limit_down"],
+                "completed_pool_states": ["limit_up"],
+                "failed_pool_states": ["limit_down"],
+                "pool_errors": [
+                    {
+                        "pool_state": "limit_down",
+                        "error_code": "non_trading_day_or_invalid_date",
+                    }
+                ],
+                "duplicate_count": 0,
+                "source_error_codes": ["non_trading_day_or_invalid_date"],
+            },
+        )
+        retained = [
+            item for item in partial["observations"] if item["operation_id"] == owner
+        ]
+        self.assertEqual(len(retained), 1)
+        self.assertEqual(retained[0]["payload"]["observed_on"], "2026-07-31")
+        calculation = next(
+            item
+            for item in partial["calculations"]
+            if item["kind"] == "market_signal_coverage"
+            and item["payload"]["signal_type"] == "limit_state"
+        )
+        self.assertEqual(calculation["payload"]["state"], "partial")
+
+        unavailable = _invoke_copied_installed(
+            _issue_64_market_request(
+                ["limit_state"], parameters={"limit_states": ["limit_down"]}
+            ),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "limit_partial"},
+        )
+        unavailable_material = unavailable["coverage"]["market_signal_observations"][
+            "operations"
+        ][owner]["diagnostics"]["signal_coverage"]["limit_state"]
+        self.assertEqual(
+            unavailable_material,
+            {
+                "state": "indeterminate",
+                "provider_total": None,
+                "provider_total_status": "unavailable",
+                "pages_collected": 0,
+                "pages_expected": 1,
+                "retained_count": 0,
+                "truncated": False,
+                "pool_states": ["limit_down"],
+                "completed_pool_states": [],
+                "failed_pool_states": ["limit_down"],
+                "pool_errors": [
+                    {
+                        "pool_state": "limit_down",
+                        "error_code": "non_trading_day_or_invalid_date",
+                    }
+                ],
+                "duplicate_count": 0,
+                "source_error_codes": ["non_trading_day_or_invalid_date"],
+            },
+        )
+
+        forged = deepcopy(partial)
+        forged["coverage"]["market_signal_observations"]["operations"][owner][
+            "diagnostics"
+        ]["signal_coverage"]["limit_state"]["provider_total"] = 0
+        with self.assertRaisesRegex(ValueError, "market signal pool coverage"):
+            validate_serialized(forged)
+
+    def test_issue_64_market_pool_coverage_rejects_rehashed_count_tampering(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        owner = "eastmoney_limit_state@1"
+        result = _invoke_copied_installed(
+            _issue_64_market_request(
+                ["limit_state"],
+                parameters={"limit_states": ["limit_up", "limit_down"]},
+            ),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "limit_partial"},
+        )
+
+        forged_total = deepcopy(result)
+        total_material = forged_total["coverage"]["market_signal_observations"][
+            "operations"
+        ][owner]["diagnostics"]["signal_coverage"]["limit_state"]
+        total_material["provider_total"] = 999
+        with self.assertRaisesRegex(ValueError, "market signal pool coverage"):
+            validate_serialized(rehash_result(forged_total))
+
+        forged_pages = deepcopy(result)
+        page_material = forged_pages["coverage"]["market_signal_observations"][
+            "operations"
+        ][owner]["diagnostics"]["signal_coverage"]["limit_state"]
+        page_material["pages_collected"] = 0
+        with self.assertRaisesRegex(ValueError, "market signal pool coverage"):
+            validate_serialized(rehash_result(forged_pages))
+
+    def test_issue_64_market_pool_coverage_rejects_rehashed_partition_tampering(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        owner = "eastmoney_limit_state@1"
+        result = _invoke_copied_installed(
+            _issue_64_market_request(
+                ["limit_state"],
+                parameters={"limit_states": ["limit_up", "limit_down"]},
+            ),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "limit_partial"},
+        )
+        forged = deepcopy(result)
+        partition_material = forged["coverage"]["market_signal_observations"][
+            "operations"
+        ][owner]["diagnostics"]["signal_coverage"]["limit_state"]
+        partition_material["completed_pool_states"] = ["limit_down"]
+        partition_material["failed_pool_states"] = ["limit_up"]
+        partition_material["pool_errors"] = [
+            {
+                "pool_state": "limit_up",
+                "error_code": "non_trading_day_or_invalid_date",
+            }
+        ]
+        with self.assertRaisesRegex(ValueError, "market signal pool coverage"):
+            validate_serialized(rehash_result(forged))
+
+    def test_issue_64_market_pool_coverage_cannot_borrow_sibling_limitation(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_64_market_request(
+                ["limit_state", "market_heat"],
+                parameters={
+                    "limit_states": ["limit_up"],
+                    "market_heat_period": "hour",
+                },
+                observed_on="2026-08-02",
+            ),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "limit_reason_heat"},
+        )
+        reason_material = result["coverage"]["market_signal_observations"][
+            "operations"
+        ]["ths_limit_reason@1"]["diagnostics"]["signal_coverage"]["limit_state"]
+        self.assertEqual(reason_material["provider_total"], 1)
+        self.assertIn(
+            "provider_total_not_exposed",
+            [item["code"] for item in result["limitations"]],
+        )
+
+        reason_material["provider_total"] = None
+        reason_material["provider_total_status"] = "not_exposed"
+        with self.assertRaisesRegex(ValueError, "market signal pool coverage"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_64_northbound_owner_enforces_disclosure_cutoff_and_semantics(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        historical = _invoke_copied_installed(
+            _issue_64_northbound_request("2024-08-16"),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "northbound_historical"},
+        )
+        owner = "eastmoney_northbound_flow@1"
+        operation = historical["coverage"]["capital_event_observations"]["operations"][
+            owner
+        ]
+        obligation = next(
+            item
+            for item in historical["plan"]["operation_obligations"]
+            if item["producer_operation_id"] == owner
+        )
+        self.assertTrue(obligation["experimental"])
+        self.assertEqual(operation["execution_state"], "succeeded")
+        self.assertEqual(operation["state"], "complete")
+        record = next(
+            item for item in historical["observations"] if item["operation_id"] == owner
+        )
+        self.assertEqual(record["payload"]["observed_on"], "2024-08-16")
+        self.assertEqual(
+            record["payload"]["units"]["net_buy_amount"], "CNY_100_MILLION"
+        )
+        record["payload"]["units"]["net_buy_amount"] = "CNY"
+        record["payload"]["source_facts"]["units"]["net_buy_amount"] = "CNY"
+        with self.assertRaisesRegex(ValueError, "capital.*unit"):
+            validate_serialized(rehash_result(historical))
+
+        current = _invoke_copied_installed(
+            _issue_64_northbound_request("2026-08-02"),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "northbound_current"},
+        )
+        operation = current["coverage"]["capital_event_observations"]["operations"][
+            owner
+        ]
+        self.assertEqual(operation["execution_state"], "failed")
+        self.assertEqual(operation["state"], "failed")
+        self.assertFalse(
+            any(item["operation_id"] == owner for item in current["observations"])
+        )
+        self.assertIn(
+            "northbound_net_buy_disclosure_unavailable",
+            [
+                item["code"]
+                for item in current["source_errors"]
+                if item["operation_id"] == owner
+            ],
+        )
+
+    def test_issue_64_strong_theme_owner_rejects_coherent_unit_forgery(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_64_market_request(["strong_stock_theme"]),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "strong_theme"},
+        )
+        operation_id = "ths_strong_stock_theme@1"
+        operation = result["coverage"]["market_signal_observations"]["operations"][
+            operation_id
+        ]
+        self.assertEqual(operation["state"], "complete")
+        records = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] == operation_id
+        ]
+        self.assertEqual(len(records), 1)
+        payload = records[0]["payload"]
+        self.assertEqual(payload["units"]["change_rate"], "percent")
+        self.assertEqual(
+            payload["attributions"][0]["provenance"], "editorial_annotation"
+        )
+        self.assertFalse(payload["issuer_fact"])
+        self.assertFalse(payload["certain_causality"])
+
+        payload["units"]["change_rate"] = "CNY"
+        payload["source_facts"]["units"]["change_rate"] = "CNY"
+        with self.assertRaisesRegex(ValueError, "market signal.*unit"):
+            validate_serialized(rehash_result(result))
+
+    def test_issue_64_strong_theme_owner_rejects_coherent_scope_and_period_forgery(
+        self,
+    ) -> None:
+        from tests.test_direct_research_content_runtime import (
+            rehash_result,
+            validate_serialized,
+        )
+
+        result = _invoke_copied_installed(
+            _issue_64_market_request(["strong_stock_theme"]),
+            bootstrap=ISSUE_64_BOOTSTRAP,
+            environment_overrides={"A_SHARE_ISSUE64_SCENARIO": "strong_theme"},
+        )
+        scope_forgery = deepcopy(result)
+        scope_payload = next(
+            item["payload"]
+            for item in scope_forgery["observations"]
+            if item["operation_id"] == "ths_strong_stock_theme@1"
+        )
+        scope_payload["dimensions"]["market_scope"] = "issuer_fundamentals"
+        scope_payload["source_facts"]["dimensions"]["market_scope"] = (
+            "issuer_fundamentals"
+        )
+        with self.assertRaisesRegex(ValueError, "market signal.*scope"):
+            validate_serialized(rehash_result(scope_forgery))
+
+        period_forgery = deepcopy(result)
+        period_payload = next(
+            item["payload"]
+            for item in period_forgery["observations"]
+            if item["operation_id"] == "ths_strong_stock_theme@1"
+        )
+        period_payload["period"]["frequency"] = "fundamental_reporting_period"
+        period_payload["source_facts"]["period"]["frequency"] = (
+            "fundamental_reporting_period"
+        )
+        with self.assertRaisesRegex(ValueError, "market signal.*period"):
+            validate_serialized(rehash_result(period_forgery))
+
     def test_production_authorities_reject_rehashed_sibling_destinations(self) -> None:
         for task_type, capability_id in (
             ("capital_events", "capital_event_observations"),
@@ -292,6 +1050,7 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
             MarketSignalQuery,
             SignalCoverage,
             SignalSourceBatch,
+            market_signal_coverage_authority,
         )
         from a_share_research.market_signals import (
             COORDINATOR_OPERATION_ID,
@@ -308,12 +1067,34 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
 
             def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
                 relevant = self.supported_signal_types.intersection(query.signal_types)
+                coverage: dict[str, SignalCoverage] = {}
+                for signal_type in relevant:
+                    authority = market_signal_coverage_authority(
+                        self.operation_id, signal_type
+                    )
+                    assert authority is not None
+                    details = {
+                        key: (
+                            "empty_first_page"
+                            if "empty_first_page" in values
+                            else sorted(values)[0]
+                        )
+                        for key, values in authority.bounded_details
+                    }
+                    if authority.exposes_collected_count:
+                        details["collected_count"] = 0
+                    coverage[signal_type] = SignalCoverage(
+                        "observed_empty",
+                        provider_total=(
+                            None if authority.provider_total_mode == "absent" else 0
+                        ),
+                        pages_collected=1,
+                        pages_expected=1,
+                        details=details,
+                    )
                 return SignalSourceBatch(
                     operation_id=self.operation_id,
-                    coverage={
-                        signal_type: SignalCoverage("observed_empty")
-                        for signal_type in relevant
-                    },
+                    coverage=coverage,
                 )
 
         class NoNetwork:
@@ -575,6 +1356,8 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
             SignalCoverage,
             SignalSourceBatch,
             ThemeAttribution,
+            market_signal_coverage_authority,
+            market_signal_observation_authority,
         )
         from a_share_research.market_signals import build_market_signals_result
 
@@ -649,6 +1432,11 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
             authority = capital_observation_authority(
                 production.operation_id, data_type
             )
+            owner_observed_on = (
+                "2024-08-16"
+                if authority is not None and authority.observed_before is not None
+                else "2026-08-01"
+            )
             subject_required = data_type not in {
                 "northbound_flow",
                 "board_fund_flow",
@@ -661,6 +1449,7 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                 raw_fields = production.raw_fields
                 fixture_data_type = data_type
                 fixture_authority = authority
+                fixture_observed_on = owner_observed_on
 
                 def collect(self, query: CapitalQuery) -> CapitalSourceBatch:
                     query_subject = query.subject
@@ -674,8 +1463,8 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                     directions = {key: "not_directional" for key in metrics}
                     dimensions = dict(capital_dimensions)
                     period: dict[str, str | None] = {
-                        "start": "2026-08-01",
-                        "end": "2026-08-01",
+                        "start": self.fixture_observed_on,
+                        "end": self.fixture_observed_on,
                         "frequency": "daily",
                     }
                     source_role = "market_observation"
@@ -690,9 +1479,9 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                             "start": (
                                 None
                                 if period_variant.start_relation == "absent"
-                                else "2026-08-01"
+                                else self.fixture_observed_on
                             ),
-                            "end": "2026-08-01",
+                            "end": self.fixture_observed_on,
                             "frequency": period_variant.frequency,
                         }
                         if period_variant.kind is not None:
@@ -705,7 +1494,7 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                                 self.fixture_authority.market_scope
                             )
                         source_role = self.fixture_authority.source_role
-                    observed_ons = ("2026-08-01",)
+                    observed_ons = (self.fixture_observed_on,)
                     if (
                         self.fixture_authority is not None
                         and self.fixture_authority.group_authority is not None
@@ -748,8 +1537,8 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                 capital_request(
                     [data_type],
                     subjects=[{"clue": "300058"}] if subject_required else [],
-                    observed_from="2026-08-01",
-                    observed_to="2026-08-01",
+                    observed_from=owner_observed_on,
+                    observed_to=owner_observed_on,
                 ),
                 (CapitalFixture(),),
                 BluefocusIdentityTransport(),
@@ -775,39 +1564,6 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
             "ths_limit_reason@1": "limit_state",
             "eastmoney_focus_monitoring@1": "focus_monitoring",
             "eastmoney_severe_abnormal_movement@1": "severe_abnormal_movement",
-        }
-        signal_metrics = {
-            key: "1"
-            for key in (
-                "change_rate",
-                "close_price",
-                "turnover_rate",
-                "trading_amount",
-                "up_count",
-                "down_count",
-                "leader_change_rate",
-                "board_change_rate",
-                "price",
-                "amount",
-                "float_market_cap",
-                "seal_fund",
-                "limit_price",
-                "amplitude",
-                "speed",
-                "pe",
-                "board_amount",
-                "consecutive_limit_days",
-                "break_times",
-                "consecutive_limit_down_days",
-                "open_times",
-                "previous_consecutive_limit_days",
-                "seal_success_rate",
-                "cumulative_deviation",
-                "target_change_rate",
-                "heat",
-                "rank_change",
-                "rank",
-            )
         }
         signal_dimensions = {
             key: "fixture"
@@ -841,32 +1597,78 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
         signal_dimensions["pool_state"] = "limit_up"
         for production in build_default_market_signal_operations(NoNetwork()):  # type: ignore[arg-type]
             signal_type = signal_types[production.operation_id]
+            signal_authority = market_signal_observation_authority(
+                production.operation_id, signal_type
+            )
+            assert signal_authority is not None
 
             class SignalFixture:
                 operation_id = production.operation_id
                 supported_signal_types = frozenset({signal_type})
                 raw_fields = production.raw_fields
                 fixture_signal_type = signal_type
+                fixture_authority = signal_authority
+                fixture_coverage_authority = market_signal_coverage_authority(
+                    production.operation_id, signal_type
+                )
 
                 def collect(self, query: MarketSignalQuery) -> SignalSourceBatch:
+                    metrics = {key: "1" for key in self.fixture_authority.metrics}
+                    units, directions = self.fixture_authority.metric_semantics(metrics)
+                    dimensions = dict(signal_dimensions)
+                    dimensions["market_scope"] = self.fixture_authority.market_scope
+                    selected_pool_state: str | None = None
+                    if (
+                        self.fixture_coverage_authority is not None
+                        and self.fixture_coverage_authority.page_semantics
+                        == "selected_pools"
+                    ):
+                        selected_pool_state = sorted(
+                            self.fixture_coverage_authority.pool_states
+                        )[0]
+                        dimensions["pool_state"] = selected_pool_state
+                    period_frequency = sorted(
+                        self.fixture_authority.period.frequencies
+                    )[0]
+                    observed_at = None
+                    if self.fixture_authority.period.boundary == "provider_range":
+                        period = self.fixture_authority.period.payload(
+                            "2026-07-31",
+                            None,
+                            start="2026-07-30",
+                            end="2026-08-12",
+                            frequency=period_frequency,
+                        )
+                    else:
+                        observed_at = (
+                            "2026-07-31T15:00:00+08:00"
+                            if self.fixture_authority.period.observed_at == "required"
+                            else None
+                        )
+                        period = self.fixture_authority.period.payload(
+                            "2026-07-31",
+                            observed_at,
+                            frequency=period_frequency,
+                        )
+                    if self.fixture_authority.period_state is not None:
+                        state_authority = self.fixture_authority.period_state
+                        dimensions[state_authority.dimension_key] = (
+                            state_authority.state(period, "2026-07-31")
+                        )
                     item = MarketSignalObservation(
                         signal_type=self.fixture_signal_type,
                         source_operation=self.operation_id,
-                        source_role="market_signal",
+                        source_role=self.fixture_authority.source_role,
                         subject=query.subject,
                         source_document_id="fixture-document",
                         observed_on="2026-07-31",
-                        observed_at=None,
+                        observed_at=observed_at,
                         available_at="2026-08-02T10:00:00+08:00",
                         retrieved_at=now,
-                        period={
-                            "start": "2026-07-31",
-                            "end": "2026-07-31",
-                            "frequency": "trading_day",
-                        },
-                        metrics=signal_metrics,
-                        units={key: "unit" for key in signal_metrics},
-                        directions={key: "not_directional" for key in signal_metrics},
+                        period=period,
+                        metrics=metrics,
+                        units=units,
+                        directions=directions,
                         rule={"code": "fixture_rule"},
                         attributions=(
                             ThemeAttribution(
@@ -877,18 +1679,50 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                                 "https://provider.invalid/private",
                             ),
                         ),
-                        dimensions=signal_dimensions,
+                        dimensions=dimensions,
                         locator_uri="https://provider.invalid/private",
                         limitations=("security_exchange_unverified",),
                     )
+                    coverage = SignalCoverage("observed_nonempty")
+                    if self.fixture_coverage_authority is not None:
+                        details = {
+                            key: sorted(values)[0]
+                            for key, values in (
+                                self.fixture_coverage_authority.bounded_details
+                            )
+                        }
+                        if (
+                            self.fixture_coverage_authority.page_semantics
+                            == "selected_pools"
+                        ):
+                            assert selected_pool_state is not None
+                            details.update(
+                                {
+                                    "pool_states": [selected_pool_state],
+                                    "completed_pool_states": [selected_pool_state],
+                                    "failed_pool_states": [],
+                                    "pool_errors": [],
+                                    "duplicate_count": 0,
+                                }
+                            )
+                        if self.fixture_coverage_authority.exposes_collected_count:
+                            details["collected_count"] = 1
+                        coverage = SignalCoverage(
+                            "observed_nonempty",
+                            provider_total=(
+                                None
+                                if self.fixture_coverage_authority.provider_total_mode
+                                == "absent"
+                                else 1
+                            ),
+                            pages_collected=1,
+                            pages_expected=1,
+                            details=details,
+                        )
                     return SignalSourceBatch(
                         self.operation_id,
                         observations=(item,),
-                        coverage={
-                            self.fixture_signal_type: SignalCoverage(
-                                "observed_nonempty"
-                            )
-                        },
+                        coverage={self.fixture_signal_type: coverage},
                     )
 
             subject_required = signal_type == "security_board_membership"
