@@ -44,6 +44,7 @@ from .valuation_sources import (
     FinancialStatementItem,
     FinancialStatementObservation,
     SinaFinancialStatementsOperation,
+    StockInfoObservation,
     ThsConsensusEpsOperation,
 )
 
@@ -283,6 +284,7 @@ def _execute_security_valuation(
             evidence_store=evidence_store,
         )
 
+    stock_info: StockInfoObservation | None = None
     try:
         stock_info = (stock_info_operation or EastmoneyStockInfoOperation()).observe(
             security, transport
@@ -291,36 +293,25 @@ def _execute_security_valuation(
         outcomes.append(
             _valuation_outcome("eastmoney_stock_info@1", error=_source_error(error))
         )
-        return _blocked_execution(
-            request,
-            "automatic_valuation_evidence_incomplete",
-            "A critical effective-share observation is unavailable.",
-            subjects=[subject],
-            outcomes=tuple(outcomes),
-            conflicts=conflicts,
-            limitations=limitations,
-            metrics={
-                metric: {
-                    "status": "not_calculable",
-                    "reason": (
-                        "effective_total_shares_unavailable"
-                        if metric in {"market_capitalization", "pe_ttm", "pb_mrq"}
-                        else "not_evaluated_after_critical_input_failure"
-                    ),
-                }
-                for metric in COMPARISON_METRIC_ORDER
-            },
-            evidence_store=evidence_store,
+        limitations.append(
+            {
+                "code": "effective_total_shares_unavailable",
+                "message": (
+                    "Market capitalization, reported PE, and PB cannot be "
+                    "calculated without an effective-share observation."
+                ),
+            }
         )
-    outcomes.append(
-        _valuation_outcome(
-            "eastmoney_stock_info@1",
-            observations=(stock_info.to_evidence(),),
-            diagnostics={"attempts": list(stock_info.degradations)},
+    else:
+        outcomes.append(
+            _valuation_outcome(
+                "eastmoney_stock_info@1",
+                observations=(stock_info.to_evidence(),),
+                diagnostics={"attempts": list(stock_info.degradations)},
+            )
         )
-    )
 
-    if stock_info.name != canonical_identity.name:
+    if stock_info is not None and stock_info.name != canonical_identity.name:
         conflicts.append(
             {
                 "code": "stock_information_identity_conflict",
@@ -466,10 +457,6 @@ def _execute_security_valuation(
 
     try:
         price = Decimal(selected_close.value)
-        shares = Decimal(stock_info.total_shares)
-        market_cap = exact_product(price, shares)
-        provider_market_cap = Decimal(stock_info.provider_market_cap)
-        provider_price = Decimal(stock_info.provider_price)
     except (InvalidOperation, KeyError, ValueError) as error:
         return _blocked_execution(
             request,
@@ -482,34 +469,53 @@ def _execute_security_valuation(
             evidence_store=evidence_store,
         )
 
-    provider_market_cap_difference = exact_difference(market_cap, provider_market_cap)
-    if provider_price == price and abs(provider_market_cap_difference) > Decimal(
-        "0.01"
-    ):
-        conflicts.append(
-            {
-                "code": "provider_market_cap_conflict",
-                "message": (
-                    "The provider market capitalization differs from the project's "
-                    "price-times-shares calculation on a comparable price basis."
-                ),
-                "difference": format(provider_market_cap_difference, "f"),
-                "evidence_ids": [stock_info.evidence_id],
-            }
+    shares: Decimal | None = None
+    market_cap: Decimal | None = None
+    if stock_info is not None:
+        try:
+            shares = Decimal(stock_info.total_shares)
+            market_cap = exact_product(price, shares)
+            provider_market_cap = Decimal(stock_info.provider_market_cap)
+            provider_price = Decimal(stock_info.provider_price)
+        except (InvalidOperation, KeyError, ValueError) as error:
+            return _blocked_execution(
+                request,
+                "valuation_inputs_not_calculable",
+                str(error),
+                subjects=[subject],
+                outcomes=tuple(outcomes),
+                conflicts=conflicts,
+                limitations=limitations,
+                evidence_store=evidence_store,
+            )
+
+        provider_market_cap_difference = exact_difference(
+            market_cap, provider_market_cap
         )
-    elif provider_price != price:
-        limitations.append(
-            {
-                "code": "provider_market_cap_basis_not_comparable",
-                "message": (
-                    "The provider market capitalization uses another price snapshot "
-                    "and is retained as observation only."
-                ),
-            }
-        )
-    financial_statement_highlights: dict[str, Any] = {}
-    reported_financials: dict[str, Any] = {}
-    metrics: dict[str, Any] = {"market_capitalization": _metric(market_cap, "CNY", 3)}
+        if provider_price == price and abs(provider_market_cap_difference) > Decimal(
+            "0.01"
+        ):
+            conflicts.append(
+                {
+                    "code": "provider_market_cap_conflict",
+                    "message": (
+                        "The provider market capitalization differs from the project's "
+                        "price-times-shares calculation on a comparable price basis."
+                    ),
+                    "difference": format(provider_market_cap_difference, "f"),
+                    "evidence_ids": [stock_info.evidence_id],
+                }
+            )
+        elif provider_price != price:
+            limitations.append(
+                {
+                    "code": "provider_market_cap_basis_not_comparable",
+                    "message": (
+                        "The provider market capitalization uses another price snapshot "
+                        "and is retained as observation only."
+                    ),
+                }
+            )
     ttm_profit: Decimal | None = None
     mrq_equity: Decimal | None = None
     if statements:
@@ -532,134 +538,14 @@ def _execute_security_valuation(
             ]
         )
     if selected is not None:
-        financial_statement_highlights = _statement_highlights(selected)
         ttm_profit = selected.ttm_profit
         mrq_equity = selected.mrq_equity
-        reported_financials = {
-            "ttm_attributable_profit": {
-                "value": format(ttm_profit, "f"),
-                "unit": "CNY",
-                "period_method": selected.period_method,
-                "evidence_periods": [
-                    item.period.isoformat() for item in selected.profit_reports
-                ],
-            },
-            "mrq_attributable_equity": {
-                "value": format(mrq_equity, "f"),
-                "unit": "CNY",
-                "period": selected.balance.period.isoformat(),
-                "publication_date": selected.balance.publication_date.isoformat(),
-                "scope": "consolidated_attributable_to_owners_of_parent",
-                "audit_status": selected.balance.audit_status,
-            },
-        }
-        metrics["pe_ttm"] = (
-            _metric(decimal_ratio(market_cap, ttm_profit), "ratio")
-            if ttm_profit > 0
-            else {
-                "status": "no_valuation_meaning",
-                "reason": "ttm_attributable_profit_is_nonpositive",
-            }
-        )
-        metrics["pb_mrq"] = (
-            _metric(decimal_ratio(market_cap, mrq_equity), "ratio")
-            if mrq_equity > 0
-            else {
-                "status": "no_valuation_meaning",
-                "reason": "mrq_attributable_equity_is_nonpositive",
-            }
-        )
-    else:
-        metrics["pe_ttm"] = {
-            "status": "not_calculable",
-            "reason": "reported_financial_statements_unavailable",
-        }
-        metrics["pb_mrq"] = {
-            "status": "not_calculable",
-            "reason": "reported_financial_statements_unavailable",
-        }
 
-    forecast_output: dict[str, Any]
     forecast_eps: Decimal | None = None
     next_eps: Decimal | None = None
-    forecast_growth: Decimal | None = None
     if consensus is not None and forecasts:
-        forecast_output = {
-            "consensus_eps": [
-                {
-                    "year": item.year,
-                    "value": item.mean,
-                    "unit": "CNY/share",
-                    "institutions": item.institutions,
-                }
-                for item in forecasts
-            ],
-            "source_aggregation": "mean",
-            "evidence_id": consensus.evidence_id,
-        }
         forecast_eps = Decimal(forecasts[0].mean)
         next_eps = Decimal(forecasts[1].mean)
-        if forecast_eps <= 0:
-            metrics["forward_pe"] = {
-                "status": "no_valuation_meaning",
-                "reason": "first_forecast_year_eps_is_nonpositive",
-            }
-            metrics["forecast_eps_growth"] = {
-                "status": "not_calculable",
-                "reason": "first_forecast_year_eps_is_nonpositive",
-            }
-            metrics["peg"] = dict(metrics["forecast_eps_growth"])
-            metrics["pe_digestion_years"] = dict(metrics["forecast_eps_growth"])
-        else:
-            forward_pe = decimal_ratio(price, forecast_eps)
-            forecast_growth = decimal_ratio(next_eps, forecast_eps) - Decimal(1)
-            metrics["forward_pe"] = {
-                **_metric(forward_pe, "ratio"),
-                "forecast_year": forecasts[0].year,
-            }
-            metrics["forecast_eps_growth"] = {
-                **_metric(forecast_growth * 100, "percent"),
-                "from_year": forecasts[0].year,
-                "to_year": forecasts[1].year,
-            }
-            if forecast_growth <= 0:
-                metrics["peg"] = {
-                    "status": "no_valuation_meaning",
-                    "reason": "forecast_eps_growth_is_nonpositive",
-                }
-                metrics["pe_digestion_years"] = {
-                    "status": "no_valuation_meaning",
-                    "reason": "forecast_eps_growth_is_nonpositive",
-                }
-            else:
-                metrics["peg"] = {
-                    **_metric(
-                        decimal_ratio(forward_pe, forecast_growth * Decimal(100)),
-                        "ratio",
-                    ),
-                    "growth_basis": "next_year_consensus_eps_vs_first_forecast_year",
-                }
-                metrics["pe_digestion_years"] = {
-                    **_metric(
-                        _pe_digestion_years(forward_pe, forecast_growth, target_pe),
-                        "years",
-                    ),
-                    "target_pe": format(target_pe, "f"),
-                    "target_role": "user_parameter_not_factual_valuation_anchor",
-                }
-    else:
-        forecast_output = {
-            "status": "not_calculable",
-            "reason": "consensus_eps_forecast_unavailable",
-        }
-        unavailable = {
-            "status": "not_calculable",
-            "reason": "consensus_eps_forecast_unavailable",
-        }
-        metrics["forward_pe"] = dict(unavailable)
-        metrics["forecast_eps_growth"] = dict(unavailable)
-        metrics["peg"] = dict(unavailable)
-        metrics["pe_digestion_years"] = dict(unavailable)
     limitations.append(
         {
             "code": "experimental_automatic_valuation_sources",
@@ -669,15 +555,16 @@ def _execute_security_valuation(
             ),
         }
     )
-    limitations.append(
-        {
-            "code": "effective_share_start_time_unverified",
-            "message": (
-                "Total shares are a current snapshot observation; their underlying "
-                "corporate-action effective start time is not established."
-            ),
-        }
-    )
+    if stock_info is not None:
+        limitations.append(
+            {
+                "code": "effective_share_start_time_unverified",
+                "message": (
+                    "Total shares are a current snapshot observation; their underlying "
+                    "corporate-action effective start time is not established."
+                ),
+            }
+        )
     if consensus is not None:
         limitations.append(
             {
@@ -689,6 +576,8 @@ def _execute_security_valuation(
             }
         )
     critical_input_gaps = []
+    if stock_info is None:
+        critical_input_gaps.append("effective_total_shares")
     if selected is None:
         critical_input_gaps.append("reported_financial_statements")
     if consensus is None or not forecasts:
@@ -717,36 +606,23 @@ def _execute_security_valuation(
         next_eps,
         target_pe,
     )
-    valuation_payload: dict[str, object] = {
-        "subjects": [subject],
-        "research": {
+    valuation_payload = _valuation_claim_payload(
+        subject=subject,
+        research={
             "as_of": request["as_of"],
             "timezone": "Asia/Shanghai",
             "retrieved_at": research_now.isoformat(),
             "question": "automatic_security_valuation",
         },
-        "valuation_basis": {
-            "trading_date": selected_close.trading_date,
-            "price": {
-                "value": selected_close.value,
-                "unit": "CNY/share",
-            },
-            "effective_total_shares": {
-                "value": stock_info.total_shares,
-                "unit": "shares",
-                "effective_at": None,
-                "observed_at": stock_info.retrieved_at.isoformat(),
-                "effective_status": "current_snapshot_observation",
-            },
-        },
-        "financial_statement_highlights": financial_statement_highlights,
-        "financial_statements": _financial_statement_series(statements),
-        "quarterly_snapshots": _quarterly_snapshots(statements),
-        "reported_financials": reported_financials,
-        "forecast": forecast_output,
-        "metrics": metrics,
-        "degradations": list(stock_info.degradations),
-    }
+        trading_date=selected_close.trading_date,
+        price=selected_close.value,
+        stock_info=stock_info,
+        statements=statements,
+        selected=selected,
+        consensus=consensus,
+        forecasts=forecasts,
+        target_pe=target_pe,
+    )
     owned_evidence = [
         dict(observation)
         for outcome in outcomes
@@ -1307,6 +1183,115 @@ def _statements_from_outcome(
     return statements
 
 
+def _statements_from_evidence(
+    evidence: list[Mapping[str, object]], security: str
+) -> dict[str, list[FinancialStatementObservation]]:
+    """Rebuild typed statements for serializer authority from public evidence."""
+
+    return _statements_from_outcome(
+        OperationOutcome(
+            capability_id="security_valuation_metrics",
+            operation_id="sina_financial_statements@1",
+            execution=OperationExecution("succeeded", query_complete=True),
+            observations=tuple(evidence),
+            field_dispositions=_valuation_dispositions("sina_financial_statements@1"),
+        ),
+        security,
+    )
+
+
+def _stock_info_from_evidence(
+    evidence: Mapping[str, object],
+    degradations: tuple[dict[str, str], ...] = (),
+) -> StockInfoObservation:
+    subject = evidence.get("subject")
+    observed_value = evidence.get("observed_value")
+    locator = evidence.get("locator")
+    retrieved_at = evidence.get("retrieved_at")
+    if (
+        not isinstance(subject, Mapping)
+        or not isinstance(subject.get("security"), str)
+        or not isinstance(observed_value, Mapping)
+        or not isinstance(observed_value.get("value"), Mapping)
+        or not isinstance(locator, Mapping)
+        or not isinstance(locator.get("uri"), str)
+        or not isinstance(retrieved_at, str)
+    ):
+        raise ValueError("stock information evidence contract is invalid")
+    values = cast(Mapping[str, object], observed_value["value"])
+    if any(
+        not isinstance(values.get(key), str)
+        for key in (
+            "name",
+            "effective_total_shares",
+            "provider_market_cap",
+            "provider_price",
+        )
+    ):
+        raise ValueError("stock information evidence contract is invalid")
+    stock = StockInfoObservation(
+        security=cast(str, subject["security"]),
+        name=cast(str, values["name"]),
+        total_shares=cast(str, values["effective_total_shares"]),
+        provider_market_cap=cast(str, values["provider_market_cap"]),
+        provider_price=cast(str, values["provider_price"]),
+        source_uri=cast(str, locator["uri"]),
+        retrieved_at=datetime.fromisoformat(retrieved_at),
+        degradations=degradations,
+    )
+    if stock.to_evidence() != evidence:
+        raise ValueError("stock information evidence is not canonical")
+    return stock
+
+
+def _consensus_from_evidence(
+    evidence: Mapping[str, object], security: str
+) -> ConsensusEpsSnapshot:
+    observed_value = evidence.get("observed_value")
+    locator = evidence.get("locator")
+    retrieved_at = evidence.get("retrieved_at")
+    if (
+        not isinstance(observed_value, Mapping)
+        or not isinstance(observed_value.get("value"), list)
+        or not isinstance(locator, Mapping)
+        or not isinstance(locator.get("uri"), str)
+        or not isinstance(retrieved_at, str)
+    ):
+        raise ValueError("consensus evidence contract is invalid")
+    forecasts: list[ConsensusEpsObservation] = []
+    for item in cast(list[object], observed_value["value"]):
+        if (
+            not isinstance(item, Mapping)
+            or not isinstance(item.get("year"), int)
+            or isinstance(item.get("year"), bool)
+            or not isinstance(item.get("institutions"), int)
+            or isinstance(item.get("institutions"), bool)
+            or any(
+                not isinstance(item.get(key), str)
+                for key in ("minimum", "mean", "maximum")
+            )
+        ):
+            raise ValueError("consensus evidence contract is invalid")
+        forecasts.append(
+            ConsensusEpsObservation(
+                year=cast(int, item["year"]),
+                institutions=cast(int, item["institutions"]),
+                minimum=cast(str, item["minimum"]),
+                mean=cast(str, item["mean"]),
+                maximum=cast(str, item["maximum"]),
+            )
+        )
+    snapshot = ConsensusEpsSnapshot(
+        security=security,
+        forecasts=tuple(forecasts),
+        source_uri=cast(str, locator["uri"]),
+        retrieved_at=datetime.fromisoformat(retrieved_at),
+    )
+    if snapshot.to_evidence() != evidence:
+        raise ValueError("consensus evidence is not canonical")
+    return snapshot
+
+
 def _report_summary(report: FinancialStatementObservation) -> dict[str, Any]:
     return {
         "period": report.period.isoformat(),
@@ -1365,6 +1350,203 @@ def _quarterly_snapshots(
     ]
 
 
+def _valuation_claim_payload(
+    *,
+    subject: Mapping[str, object],
+    research: Mapping[str, object],
+    trading_date: str,
+    price: str,
+    stock_info: StockInfoObservation | None,
+    statements: dict[str, list[FinancialStatementObservation]],
+    selected: SelectedReportedFinancials | None,
+    consensus: ConsensusEpsSnapshot | None,
+    forecasts: list[ConsensusEpsObservation],
+    target_pe: Decimal,
+) -> dict[str, object]:
+    """Project the complete public claim from normalized valuation owner facts."""
+
+    price_value = Decimal(price)
+    market_cap = (
+        exact_product(price_value, Decimal(stock_info.total_shares))
+        if stock_info is not None
+        else None
+    )
+    metrics: dict[str, object] = {
+        "market_capitalization": (
+            _metric(market_cap, "CNY", 3)
+            if market_cap is not None
+            else {
+                "status": "not_calculable",
+                "reason": "effective_total_shares_unavailable",
+            }
+        )
+    }
+    if selected is None:
+        unavailable_reported = {
+            "status": "not_calculable",
+            "reason": "reported_financial_statements_unavailable",
+        }
+        metrics["pe_ttm"] = dict(unavailable_reported)
+        metrics["pb_mrq"] = dict(unavailable_reported)
+    else:
+        metrics["pe_ttm"] = (
+            {
+                "status": "no_valuation_meaning",
+                "reason": "ttm_attributable_profit_is_nonpositive",
+            }
+            if selected.ttm_profit <= 0
+            else _metric(decimal_ratio(market_cap, selected.ttm_profit), "ratio")
+            if market_cap is not None
+            else {
+                "status": "not_calculable",
+                "reason": "effective_total_shares_unavailable",
+            }
+        )
+        metrics["pb_mrq"] = (
+            {
+                "status": "no_valuation_meaning",
+                "reason": "mrq_attributable_equity_is_nonpositive",
+            }
+            if selected.mrq_equity <= 0
+            else _metric(decimal_ratio(market_cap, selected.mrq_equity), "ratio")
+            if market_cap is not None
+            else {
+                "status": "not_calculable",
+                "reason": "effective_total_shares_unavailable",
+            }
+        )
+    if consensus is None or not forecasts:
+        unavailable_forecast = {
+            "status": "not_calculable",
+            "reason": "consensus_eps_forecast_unavailable",
+        }
+        for metric in (
+            "forward_pe",
+            "forecast_eps_growth",
+            "peg",
+            "pe_digestion_years",
+        ):
+            metrics[metric] = dict(unavailable_forecast)
+    else:
+        forecast_eps = Decimal(forecasts[0].mean)
+        next_eps = Decimal(forecasts[1].mean)
+        if forecast_eps <= 0:
+            metrics["forward_pe"] = {
+                "status": "no_valuation_meaning",
+                "reason": "first_forecast_year_eps_is_nonpositive",
+            }
+            unavailable_growth = {
+                "status": "not_calculable",
+                "reason": "first_forecast_year_eps_is_nonpositive",
+            }
+            metrics["forecast_eps_growth"] = dict(unavailable_growth)
+            metrics["peg"] = dict(unavailable_growth)
+            metrics["pe_digestion_years"] = dict(unavailable_growth)
+        else:
+            forward_pe = decimal_ratio(price_value, forecast_eps)
+            growth = decimal_ratio(next_eps, forecast_eps) - Decimal(1)
+            metrics["forward_pe"] = {
+                **_metric(forward_pe, "ratio"),
+                "forecast_year": forecasts[0].year,
+            }
+            metrics["forecast_eps_growth"] = {
+                **_metric(growth * 100, "percent"),
+                "from_year": forecasts[0].year,
+                "to_year": forecasts[1].year,
+            }
+            if growth <= 0:
+                no_growth = {
+                    "status": "no_valuation_meaning",
+                    "reason": "forecast_eps_growth_is_nonpositive",
+                }
+                metrics["peg"] = dict(no_growth)
+                metrics["pe_digestion_years"] = dict(no_growth)
+            else:
+                metrics["peg"] = {
+                    **_metric(decimal_ratio(forward_pe, growth * 100), "ratio"),
+                    "growth_basis": ("next_year_consensus_eps_vs_first_forecast_year"),
+                }
+                metrics["pe_digestion_years"] = {
+                    **_metric(
+                        _pe_digestion_years(forward_pe, growth, target_pe), "years"
+                    ),
+                    "target_pe": format(target_pe, "f"),
+                    "target_role": "user_parameter_not_factual_valuation_anchor",
+                }
+    financial_statement_highlights = (
+        _statement_highlights(selected) if selected is not None else {}
+    )
+    reported_financials: dict[str, object] = {}
+    if selected is not None:
+        reported_financials = {
+            "ttm_attributable_profit": {
+                "value": format(selected.ttm_profit, "f"),
+                "unit": "CNY",
+                "period_method": selected.period_method,
+                "evidence_periods": [
+                    item.period.isoformat() for item in selected.profit_reports
+                ],
+            },
+            "mrq_attributable_equity": {
+                "value": format(selected.mrq_equity, "f"),
+                "unit": "CNY",
+                "period": selected.balance.period.isoformat(),
+                "publication_date": selected.balance.publication_date.isoformat(),
+                "scope": "consolidated_attributable_to_owners_of_parent",
+                "audit_status": selected.balance.audit_status,
+            },
+        }
+    forecast: dict[str, object]
+    if consensus is not None and forecasts:
+        forecast = {
+            "consensus_eps": [
+                {
+                    "year": item.year,
+                    "value": item.mean,
+                    "unit": "CNY/share",
+                    "institutions": item.institutions,
+                }
+                for item in forecasts
+            ],
+            "source_aggregation": "mean",
+            "evidence_id": consensus.evidence_id,
+        }
+    else:
+        forecast = {
+            "status": "not_calculable",
+            "reason": "consensus_eps_forecast_unavailable",
+        }
+    return {
+        "subjects": [dict(subject)],
+        "research": dict(research),
+        "valuation_basis": {
+            "trading_date": trading_date,
+            "price": {"value": price, "unit": "CNY/share"},
+            "effective_total_shares": (
+                {
+                    "value": stock_info.total_shares,
+                    "unit": "shares",
+                    "effective_at": None,
+                    "observed_at": stock_info.retrieved_at.isoformat(),
+                    "effective_status": "current_snapshot_observation",
+                }
+                if stock_info is not None
+                else {
+                    "status": "not_calculable",
+                    "reason": "effective_total_shares_unavailable",
+                }
+            ),
+        },
+        "financial_statement_highlights": financial_statement_highlights,
+        "financial_statements": _financial_statement_series(statements),
+        "quarterly_snapshots": _quarterly_snapshots(statements),
+        "reported_financials": reported_financials,
+        "forecast": forecast,
+        "metrics": metrics,
+        "degradations": list(stock_info.degradations) if stock_info is not None else [],
+    }
+
+
 def _statement_highlights(selected: SelectedReportedFinancials) -> dict[str, Any]:
     output = {}
     for key, report in (
@@ -1409,8 +1591,8 @@ def _metric(value: Decimal, unit: str, places: int = 4) -> dict[str, str]:
 
 def _calculations(
     price: Decimal,
-    shares: Decimal,
-    market_cap: Decimal,
+    shares: Decimal | None,
+    market_cap: Decimal | None,
     ttm_profit: Decimal | None,
     mrq_equity: Decimal | None,
     forecast_year: int | None,
@@ -1419,14 +1601,19 @@ def _calculations(
     next_eps: Decimal | None,
     target_pe: Decimal,
 ) -> list[dict[str, Any]]:
-    calculations: list[dict[str, Any]] = [
-        {
-            "id": "market_capitalization",
-            "formula": "completed_unadjusted_close * effective_total_shares",
-            "operands": {"price": format(price, "f"), "shares": format(shares, "f")},
-        },
-    ]
-    if ttm_profit is not None and ttm_profit > 0:
+    calculations: list[dict[str, Any]] = []
+    if shares is not None and market_cap is not None:
+        calculations.append(
+            {
+                "id": "market_capitalization",
+                "formula": "completed_unadjusted_close * effective_total_shares",
+                "operands": {
+                    "price": format(price, "f"),
+                    "shares": format(shares, "f"),
+                },
+            }
+        )
+    if market_cap is not None and ttm_profit is not None and ttm_profit > 0:
         calculations.append(
             {
                 "id": "pe_ttm",
@@ -1437,7 +1624,7 @@ def _calculations(
                 },
             }
         )
-    if mrq_equity is not None and mrq_equity > 0:
+    if market_cap is not None and mrq_equity is not None and mrq_equity > 0:
         calculations.append(
             {
                 "id": "pb_mrq",

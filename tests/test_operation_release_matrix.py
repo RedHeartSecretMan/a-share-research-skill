@@ -31,6 +31,9 @@ from tests.test_direct_intraday_runtime import (  # noqa: E402
 from tests.test_direct_market_valuation_runtime import (  # noqa: E402
     invoke_copied_installed as invoke_copied_market,
 )
+from tests.test_direct_research_content_runtime import (  # noqa: E402
+    invoke_copied_installed as invoke_copied_content,
+)
 from tests.test_direct_research_workflow_runtime import (  # noqa: E402
     comparison_workflow_request,
 )
@@ -47,6 +50,499 @@ QUALIFICATION_PATH = (
 
 
 class OperationReleaseMatrixTests(unittest.TestCase):
+    def test_issue_61_valuation_owners_have_installed_public_qualification(
+        self,
+    ) -> None:
+        as_of = "2026-08-02"
+        request = {
+            "schema_version": "1.0",
+            "task_type": "security_valuation",
+            "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
+            "as_of": as_of,
+            "window": None,
+            "parameters": {"target_pe": "30"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        result = invoke_copied_market(
+            request,
+            valuation_fixtures=True,
+            fixture_research_now="2026-08-02T18:30:00+08:00",
+        )
+        expected_owners = {
+            "eastmoney_stock_info@1",
+            "sina_financial_statements@1",
+            "ths_consensus_eps@1",
+        }
+
+        self.assertEqual(result["status"], "limited")
+        obligations = {
+            item["producer_operation_id"]: item
+            for item in result["plan"]["operation_obligations"]
+            if item["producer_operation_id"] in expected_owners
+        }
+        self.assertEqual(set(obligations), expected_owners)
+        self.assertTrue(all(item["experimental"] for item in obligations.values()))
+        self.assertEqual(
+            {
+                owner: (
+                    item["operation_kind"],
+                    item["source_role"],
+                    item["evidence_uses"],
+                )
+                for owner, item in obligations.items()
+            },
+            {
+                "eastmoney_stock_info@1": (
+                    "external_source",
+                    "market_observation",
+                    [{"use": "security_valuation", "role": "supporting"}],
+                ),
+                "sina_financial_statements@1": (
+                    "external_source",
+                    "market_observation",
+                    [{"use": "security_valuation", "role": "supporting"}],
+                ),
+                "ths_consensus_eps@1": (
+                    "external_source",
+                    "signed_opinion",
+                    [{"use": "security_valuation", "role": "supporting"}],
+                ),
+            },
+        )
+        operations = result["coverage"]["security_valuation_metrics"]["operations"]
+        self.assertTrue(
+            all(
+                operations[owner]["execution_state"] == "succeeded"
+                and operations[owner]["state"] == "complete"
+                for owner in expected_owners
+            )
+        )
+        owned = {
+            owner: [
+                item for item in result["observations"] if item["operation_id"] == owner
+            ]
+            for owner in expected_owners
+        }
+        self.assertTrue(all(owned.values()))
+        for owner in expected_owners:
+            self.assertEqual(
+                {item["id"] for item in owned[owner]},
+                set(operations[owner]["observation_ids"]),
+            )
+
+        stock = owned["eastmoney_stock_info@1"][0]["payload"]
+        self.assertEqual(stock["subject"]["security"], "SSE:601138")
+        self.assertEqual(stock["source_role"], "market_observation")
+        self.assertEqual(stock["basis"], "current_stock_information_snapshot")
+        self.assertEqual(
+            stock["observed_value"]["unit"],
+            {
+                "effective_total_shares": "shares",
+                "provider_market_cap": "CNY",
+                "provider_price": "CNY/share",
+            },
+        )
+        self.assertEqual(stock["evidence_time"], "2026-08-02T18:30:00+08:00")
+        self.assertEqual(stock["available_at"], stock["evidence_time"])
+        self.assertEqual(stock["retrieved_at"], stock["evidence_time"])
+        market_cap = next(
+            item
+            for item in result["calculations"]
+            if item["kind"] == "market_capitalization"
+        )
+        self.assertEqual(
+            market_cap["payload"],
+            {
+                "formula": "completed_unadjusted_close * effective_total_shares",
+                "operands": {"price": "56.700", "shares": "19844092284"},
+            },
+        )
+        self.assertIn(owned["eastmoney_stock_info@1"][0]["id"], market_cap["input_ids"])
+
+        statements = owned["sina_financial_statements@1"]
+        self.assertEqual(
+            {item["payload"]["basis"] for item in statements},
+            {
+                "reported_income_statement",
+                "reported_balance_statement",
+                "reported_cashflow_statement",
+            },
+        )
+        for item in statements:
+            payload = item["payload"]
+            report = payload["report"]
+            self.assertEqual(payload["subject"]["security"], "SSE:601138")
+            self.assertEqual(payload["source_role"], "market_observation")
+            self.assertLessEqual(report["period"], as_of)
+            self.assertLessEqual(report["publication_date"], as_of)
+            self.assertEqual(report["scope"], "consolidated")
+            self.assertIn(report["audit_status"], {"audited", "unaudited"})
+            self.assertTrue(report["data_source"])
+            self.assertTrue(report["source_update_time"])
+            self.assertEqual(report["version_identifier"], report["source_update_time"])
+            self.assertEqual(
+                report["version_relationship"],
+                "unique_period_snapshot_from_source_response",
+            )
+            self.assertEqual(payload["observed_value"]["unit"], "CNY")
+            self.assertEqual(payload["available_at"], report["publication_date"])
+            self.assertEqual(payload["retrieved_at"], "2026-08-02T18:30:00+08:00")
+
+        consensus = owned["ths_consensus_eps@1"][0]["payload"]
+        self.assertEqual(consensus["subject"]["security"], "SSE:601138")
+        self.assertEqual(consensus["source_role"], "signed_opinion")
+        self.assertEqual(consensus["basis"], "source_aggregated_annual_consensus_eps")
+        self.assertIsNone(consensus["available_at"])
+        self.assertEqual(consensus["retrieved_at"], "2026-08-02T18:30:00+08:00")
+        forecasts = consensus["observed_value"]["value"]
+        self.assertEqual([item["year"] for item in forecasts], [2026, 2027, 2028])
+        self.assertEqual([item["institutions"] for item in forecasts], [20, 20, 18])
+        self.assertTrue(
+            all(
+                set(item) == {"year", "institutions", "minimum", "mean", "maximum"}
+                for item in forecasts
+            )
+        )
+        self.assertEqual(consensus["observed_value"]["unit"], "CNY/share")
+
+        claim = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "security_valuation_metrics"
+        )
+        self.assertEqual(
+            claim["payload"]["subjects"][0]["issuer"],
+            {
+                "name": "富士康工业互联网股份有限公司",
+                "identifier": None,
+                "security_relationship": "verified",
+            },
+        )
+
+        conflict = invoke_copied_market(
+            request,
+            valuation_fixtures=True,
+            fixture_scenario="provider_mcap_conflict",
+            fixture_research_now="2026-08-02T18:30:00+08:00",
+        )
+        conflict_stock = next(
+            item
+            for item in conflict["observations"]
+            if item["operation_id"] == "eastmoney_stock_info@1"
+        )
+        conflict_calculation = next(
+            item
+            for item in conflict["calculations"]
+            if item["kind"] == "market_capitalization"
+        )
+        self.assertEqual(
+            conflict_stock["payload"]["observed_value"]["value"]["provider_market_cap"],
+            "1",
+        )
+        self.assertEqual(conflict_calculation["payload"], market_cap["payload"])
+        self.assertIn(
+            "provider_market_cap_conflict",
+            {item["code"] for item in conflict["conflicts"]},
+        )
+
+        for scenario, failed_owner, retained_owner, retained_calculations in (
+            (
+                "missing_forecast",
+                "ths_consensus_eps@1",
+                "sina_financial_statements@1",
+                {"market_capitalization", "pe_ttm", "pb_mrq"},
+            ),
+            (
+                "missing_financials",
+                "sina_financial_statements@1",
+                "ths_consensus_eps@1",
+                {
+                    "market_capitalization",
+                    "forward_pe",
+                    "forecast_eps_growth",
+                    "peg",
+                    "pe_digestion_years",
+                },
+            ),
+        ):
+            with self.subTest(scenario=scenario):
+                partial = invoke_copied_market(
+                    request,
+                    valuation_fixtures=True,
+                    fixture_scenario=scenario,
+                    fixture_research_now="2026-08-02T18:30:00+08:00",
+                )
+                partial_operations = partial["coverage"]["security_valuation_metrics"][
+                    "operations"
+                ]
+                self.assertEqual(partial_operations[failed_owner]["state"], "failed")
+                self.assertEqual(
+                    partial_operations[retained_owner]["state"], "complete"
+                )
+                self.assertIn(
+                    retained_owner,
+                    {item["operation_id"] for item in partial["observations"]},
+                )
+                self.assertEqual(
+                    {item["kind"] for item in partial["calculations"]},
+                    retained_calculations,
+                )
+
+        missing_shares = invoke_copied_market(
+            request,
+            valuation_fixtures=True,
+            fixture_scenario="missing_shares",
+            fixture_research_now="2026-08-02T18:30:00+08:00",
+        )
+        missing_share_operations = missing_shares["coverage"][
+            "security_valuation_metrics"
+        ]["operations"]
+        self.assertEqual(missing_shares["status"], "limited")
+        self.assertEqual(
+            missing_share_operations["eastmoney_stock_info@1"]["state"], "failed"
+        )
+        self.assertEqual(
+            missing_share_operations["sina_financial_statements@1"]["state"],
+            "complete",
+        )
+        self.assertEqual(
+            missing_share_operations["ths_consensus_eps@1"]["state"], "complete"
+        )
+        self.assertTrue(
+            {
+                "sina_financial_statements@1",
+                "ths_consensus_eps@1",
+            }.issubset(
+                {item["operation_id"] for item in missing_shares["observations"]}
+            )
+        )
+        self.assertEqual(
+            {item["kind"] for item in missing_shares["calculations"]},
+            {
+                "forward_pe",
+                "forecast_eps_growth",
+                "peg",
+                "pe_digestion_years",
+            },
+        )
+        missing_share_claim = next(
+            item
+            for item in missing_shares["claims"]
+            if item["kind"] == "security_valuation_metrics"
+        )
+        self.assertEqual(
+            missing_share_claim["payload"]["valuation_basis"]["effective_total_shares"],
+            {
+                "status": "not_calculable",
+                "reason": "effective_total_shares_unavailable",
+            },
+        )
+        for metric in ("market_capitalization", "pe_ttm", "pb_mrq"):
+            self.assertEqual(
+                missing_share_claim["payload"]["metrics"][metric],
+                {
+                    "status": "not_calculable",
+                    "reason": "effective_total_shares_unavailable",
+                },
+            )
+        self.assertNotIn(
+            "effective_share_start_time_unverified",
+            {item["code"] for item in missing_shares["limitations"]},
+        )
+        self.assertEqual(
+            {
+                (item["operation_id"], item["code"])
+                for item in missing_shares["source_errors"]
+            },
+            {("eastmoney_stock_info@1", "unknown_schema")},
+        )
+        retained_ids = {item["id"] for item in missing_shares["observations"]}
+        self.assertTrue(
+            all(
+                calculation["input_ids"]
+                and set(calculation["input_ids"]).issubset(retained_ids)
+                for calculation in missing_shares["calculations"]
+            )
+        )
+        self.assertFalse(
+            any(
+                item["operation_id"] == "eastmoney_stock_info@1"
+                for item in missing_shares["observations"]
+            )
+        )
+
+    def test_issue_61_formal_mootdx_f10_owner_has_installed_public_qualification(
+        self,
+    ) -> None:
+        result = invoke_copied_content(
+            {
+                "schema_version": "1.0",
+                "task_type": "research_content",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": "2026-08-02",
+                "window": {
+                    "published_from": "2026-07-01",
+                    "published_to": "2026-08-02",
+                },
+                "parameters": {
+                    "material_types": ["issuer_profile"],
+                    "query": ["issue-61-formal-mootdx"],
+                    "limit": 20,
+                    "profile_categories": ["公司概况"],
+                },
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            fixture=True,
+            formal_mootdx_f10=True,
+        )
+        owner = "mootdx_f10@1"
+
+        self.assertEqual(result["status"], "limited")
+        obligation = next(
+            item
+            for item in result["plan"]["operation_obligations"]
+            if item["producer_operation_id"] == owner
+        )
+        self.assertEqual(obligation["operation_id"], owner)
+        self.assertEqual(obligation["operation_kind"], "external_source")
+        self.assertTrue(obligation["experimental"])
+        self.assertEqual(obligation["source_role"], "declared_per_observation")
+        self.assertEqual(
+            obligation["evidence_uses"],
+            [{"use": "research_content_material", "role": "supporting"}],
+        )
+        operation = result["coverage"]["research_content_materials"]["operations"][
+            owner
+        ]
+        self.assertEqual(
+            (operation["execution_state"], operation["state"]),
+            ("succeeded", "complete"),
+        )
+        self.assertEqual(
+            {
+                item["field"]: (item["disposition"], item["destination"])
+                for item in operation["field_dispositions"]
+            },
+            {
+                "category": (
+                    "normalized",
+                    "observations[].payload.attributes.category",
+                ),
+                "content": ("normalized", "observations[].payload.content"),
+            },
+        )
+        owned = [
+            item for item in result["observations"] if item["operation_id"] == owner
+        ]
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(operation["observation_ids"], [owned[0]["id"]])
+        payload = owned[0]["payload"]
+        self.assertEqual(payload["source_operation"], owner)
+        self.assertEqual(payload["source_role"], "market_observation")
+        self.assertEqual(payload["material_type"], "issuer_profile")
+        self.assertEqual(payload["published_at"], None)
+        self.assertEqual(payload["available_at"], "2026-08-02T19:30:00+08:00")
+        self.assertEqual(payload["retrieved_at"], "2026-08-02T19:30:00+08:00")
+        self.assertEqual(
+            payload["subject"]["security"],
+            {"exchange": "SZSE", "code": "300058", "type": "A_SHARE"},
+        )
+        self.assertEqual(payload["attributes"]["category"], "公司概况")
+        self.assertEqual(payload["content"], "蓝色光标公司概况公开聚合文本")
+        self.assertEqual(
+            set(payload["limitations"]),
+            {
+                "publication_time_unknown",
+                "source_document_id_unknown",
+                "f10_version_semantics_unverified",
+            },
+        )
+        self.assertEqual(payload["license_boundary"]["raw_payload"], "excluded")
+        self.assertEqual(
+            payload["query_scope"],
+            {
+                "as_of": "2026-08-02",
+                "published_from": "2026-07-01",
+                "published_to": "2026-08-02",
+                "material_types": ["issuer_profile"],
+                "query": ["issue-61-formal-mootdx"],
+                "limit": 20,
+                "verify_documents": False,
+            },
+        )
+
+    def test_issue_61_closes_exact_reviewed_domain_gaps(self) -> None:
+        issue_61_owners = {
+            "eastmoney_stock_info@1",
+            "mootdx_f10@1",
+            "sina_financial_statements@1",
+            "ths_consensus_eps@1",
+        }
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        operations = {
+            item["producer_operation_id"]: item for item in payload["operations"]
+        }
+
+        self.assertEqual(len(operations), 44)
+        self.assertEqual(issue_61_owners & set(operations), issue_61_owners)
+        self.assertFalse(any(61 in item["gap_issues"] for item in operations.values()))
+        self.assertEqual(
+            {
+                operation_id
+                for operation_id, item in operations.items()
+                if item["rate_limit_policy"]["qualification"] == "qualified_by_issue_61"
+            },
+            issue_61_owners,
+        )
+        expected_selectors = {
+            "eastmoney_stock_info@1": (
+                "tests/test_operation_release_matrix.py#"
+                "test_issue_61_valuation_owners_have_installed_public_qualification"
+            ),
+            "sina_financial_statements@1": (
+                "tests/test_operation_release_matrix.py#"
+                "test_issue_61_valuation_owners_have_installed_public_qualification"
+            ),
+            "ths_consensus_eps@1": (
+                "tests/test_operation_release_matrix.py#"
+                "test_issue_61_valuation_owners_have_installed_public_qualification"
+            ),
+            "mootdx_f10@1": (
+                "tests/test_operation_release_matrix.py#"
+                "test_issue_61_formal_mootdx_f10_owner_has_installed_public_qualification"
+            ),
+        }
+        self.assertEqual(
+            {
+                owner: {
+                    "disposition": operations[owner]["disposition"],
+                    "qualification": operations[owner]["rate_limit_policy"][
+                        "qualification"
+                    ],
+                    "selector": operations[owner]["offline_contract_selector"],
+                    "gap_issues": operations[owner]["gap_issues"],
+                }
+                for owner in issue_61_owners
+            },
+            {
+                owner: {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_61",
+                    "selector": expected_selectors[owner],
+                    "gap_issues": [],
+                }
+                for owner in issue_61_owners
+            },
+        )
+
     def test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention(
         self,
     ) -> None:

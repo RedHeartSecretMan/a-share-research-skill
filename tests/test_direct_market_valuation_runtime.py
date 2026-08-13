@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -1902,6 +1903,141 @@ class DirectResultInvariantTests(unittest.TestCase):
         ):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
+                    result.to_dict()
+
+    def test_missing_shares_serializer_rejects_rehashed_calculated_claim_forgery(
+        self,
+    ) -> None:
+        transport = load_fixture_transport(
+            VALUATION_FIXTURE_CLI, "ValuationFixtureTransport"
+        )
+        request = {
+            "schema_version": "1.0",
+            "task_type": "security_valuation",
+            "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
+            "as_of": "2026-08-02",
+            "window": None,
+            "parameters": {"target_pe": "30"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        research_now = datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8)))
+        for field, forged_value in (
+            (
+                "effective_total_shares",
+                {
+                    "value": "1",
+                    "unit": "shares",
+                    "effective_at": None,
+                    "observed_at": "2026-08-02T18:30:00+08:00",
+                    "effective_status": "current_snapshot_observation",
+                },
+            ),
+            (
+                "market_capitalization",
+                {
+                    "status": "calculated",
+                    "value": "56.700",
+                    "unit": "CNY",
+                    "formula": "completed_unadjusted_close * effective_total_shares",
+                },
+            ),
+        ):
+            with self.subTest(field=field):
+                with patch.dict(
+                    os.environ,
+                    {"A_SHARE_RESEARCH_TEST_SCENARIO": "missing_shares"},
+                ):
+                    result = build_security_valuation_result(
+                        request, transport, research_now
+                    )
+                claim = result.claims[0]
+                if field == "effective_total_shares":
+                    claim["payload"]["valuation_basis"][field] = forged_value
+                else:
+                    claim["payload"]["metrics"][field] = forged_value
+                rehash_direct_consumer(result, collection="claims", index=0)
+
+                with self.assertRaisesRegex(ValueError, "valuation domain facts"):
+                    result.to_dict()
+
+    def test_valuation_serializer_rejects_rehashed_claim_projection_forgeries(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "security_valuation",
+            "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
+            "as_of": "2026-08-02",
+            "window": None,
+            "parameters": {"target_pe": "30"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        research_now = datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8)))
+        cases = (
+            ("default", ("subjects", 0, "issuer", "name"), "伪造发行人"),
+            ("default", ("subjects", 0, "security", "type"), "ETF"),
+            ("default", ("research", "as_of"), "2099-01-01"),
+            ("default", ("valuation_basis", "price", "unit"), "USD/share"),
+            (
+                "default",
+                ("financial_statements", "income", 0, "publication_date"),
+                "2026-08-01",
+            ),
+            (
+                "default",
+                ("financial_statements", "income", 0, "scope"),
+                "standalone",
+            ),
+            (
+                "default",
+                ("forecast", "consensus_eps", 0, "institutions"),
+                999,
+            ),
+            (
+                "default",
+                ("reported_financials", "mrq_attributable_equity", "value"),
+                "1",
+            ),
+            (
+                "missing_financials",
+                ("metrics", "pe_ttm"),
+                {"status": "calculated", "value": "1.0000", "unit": "ratio"},
+            ),
+            (
+                "missing_forecast",
+                ("metrics", "forward_pe"),
+                {"status": "calculated", "value": "1.0000", "unit": "ratio"},
+            ),
+        )
+        for scenario, path, forged_value in cases:
+            with self.subTest(scenario=scenario, path=path):
+                transport = load_fixture_transport(
+                    VALUATION_FIXTURE_CLI, "ValuationFixtureTransport"
+                )
+                with patch.dict(
+                    os.environ,
+                    {"A_SHARE_RESEARCH_TEST_SCENARIO": scenario},
+                ):
+                    result = build_security_valuation_result(
+                        request, transport, research_now
+                    )
+                original_observations = deepcopy(result.observations)
+                target = result.claims[0]["payload"]
+                for part in path[:-1]:
+                    target = target[part]
+                target[path[-1]] = forged_value
+                rehash_direct_consumer(result, collection="claims", index=0)
+
+                self.assertEqual(result.observations, original_observations)
+                with self.assertRaisesRegex(ValueError, "valuation domain facts"):
                     result.to_dict()
 
     def test_copied_installed_etf_market_is_a_direct_unified_result(self) -> None:

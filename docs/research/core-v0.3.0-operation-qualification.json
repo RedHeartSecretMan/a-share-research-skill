@@ -563,7 +563,7 @@
     },
     {
       "producer_operation_id": "eastmoney_stock_info@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "retrieval_snapshot_at_research_boundary",
         "effective_time": "source_snapshot_not_independently_verified"
@@ -579,20 +579,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_61",
         "request_bound": "paced_and_bounded_retry"
       },
-      "offline_contract_selector": "tests/test_valuation_sources.py#EastmoneyStockInfoOperationTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/valuation_sources.py#EastmoneyStockInfoOperation",
         "skill/a-share-research/scripts/a_share_research/valuation_sources.py#StockInfoObservation",
         "tests/test_valuation_sources.py#EastmoneyStockInfoOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        61
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_stock_news@1",
@@ -722,7 +721,7 @@
     },
     {
       "producer_operation_id": "mootdx_f10@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -736,20 +735,21 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_61",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_communication_sources.py#CommunicationSourceOperationTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_61_formal_mootdx_f10_owner_has_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/communication_sources.py#MootdxF10Operation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_communication_sources.py#CommunicationSourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_communication_sources.py#test_mootdx_f10_missing_dependency_is_explicit_without_installing",
+        "tests/test_communication_sources.py#test_mootdx_f10_missing_category_is_explicit_and_incomplete",
+        "tests/test_operation_release_matrix.py#test_issue_61_formal_mootdx_f10_owner_has_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        61
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "mootdx_intraday_replay@1",
@@ -820,7 +820,7 @@
     },
     {
       "producer_operation_id": "sina_financial_statements@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "report_period_and_publication_date_not_after_as_of",
         "version_time": "source_update_time"
@@ -834,20 +834,20 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_61",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_valuation_sources.py#SinaFinancialStatementsOperationTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/valuation_sources.py#SinaFinancialStatementsOperation",
         "skill/a-share-research/scripts/a_share_research/valuation_sources.py#FinancialStatementObservation",
         "tests/test_valuation_sources.py#SinaFinancialStatementsOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_market_valuation_runtime.py#test_valuation_missing_financials_keeps_other_owned_inputs",
+        "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        61
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "sse_announcement@1",
@@ -1209,7 +1209,7 @@
     },
     {
       "producer_operation_id": "ths_consensus_eps@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "retrieved_consensus_snapshot",
         "forecast_period": "annual_forecast_year"
@@ -1224,20 +1224,20 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_61",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_valuation_sources.py#ThsConsensusEpsOperationTests",
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/valuation_sources.py#ThsConsensusEpsOperation",
         "skill/a-share-research/scripts/a_share_research/valuation_sources.py#ConsensusEpsSnapshot",
         "tests/test_valuation_sources.py#ThsConsensusEpsOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_market_valuation_runtime.py#test_valuation_partial_failure_retains_completed_inputs",
+        "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        61
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "ths_consensus_material@1",

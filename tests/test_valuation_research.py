@@ -274,11 +274,11 @@ class SecurityValuationProcessTests(unittest.TestCase):
         )
         self.assertTrue(result["observations"])
 
-    def test_missing_shares_blocks_and_keeps_price_evidence(self) -> None:
+    def test_missing_shares_limits_only_share_dependent_metrics(self) -> None:
         result = self.run_valuation("missing_shares")
         payload = result["claims"][0]["payload"]
 
-        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["status"], "limited")
         self.assertEqual(
             payload["metrics"]["market_capitalization"],
             {
@@ -293,8 +293,13 @@ class SecurityValuationProcessTests(unittest.TestCase):
                 "cninfo_security_dictionary@1",
                 "sse_daily_line@1",
                 "tencent_daily_line@1",
+                "sina_financial_statements@1",
+                "ths_consensus_eps@1",
             },
         )
+        self.assertEqual(payload["metrics"]["pe_ttm"]["status"], "not_calculable")
+        self.assertEqual(payload["metrics"]["pb_mrq"]["status"], "not_calculable")
+        self.assertEqual(payload["metrics"]["forward_pe"]["status"], "calculated")
 
     def test_unusable_financial_statements_limit_but_keep_forward_metrics(self) -> None:
         result = self.run_valuation("financial_scope_conflict")

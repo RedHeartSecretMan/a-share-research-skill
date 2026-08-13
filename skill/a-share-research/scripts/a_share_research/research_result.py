@@ -6023,30 +6023,60 @@ def _valuation_owned_facts(
         *operation_records("sse_daily_line@1"),
         *operation_records("szse_daily_line@1"),
     ]
-    if len(stock_records) != 1 or len(official_close_records) != 1:
-        raise ValueError("valuation domain facts lack price or share observations")
-    stock_payload = _record_payload(stock_records[0])
-    stock_values = _nested_mapping(stock_payload, "observed_value", "value")
+    if len(stock_records) > 1 or len(official_close_records) != 1:
+        raise ValueError("valuation domain facts lack a unique price observation")
     close_payload = _record_payload(official_close_records[0])
     close_observed = _nested_mapping(close_payload, "observed_value")
     close_observation = _nested_mapping(close_payload, "observation")
-    subject = _nested_mapping(stock_payload, "subject")
-    security = str(subject.get("security"))
-    name = str(stock_values.get("name"))
+    close_subject = _nested_mapping(close_payload, "subject")
+    security_value = close_subject.get("security")
+    if not isinstance(security_value, str):
+        raise ValueError("valuation domain facts lack a security identity")
+    security = security_value
+    identity_names = {
+        str(observation.get("name"))
+        for record in observations
+        for payload in (_record_payload(record),)
+        for subject in (payload.get("subject"),)
+        for observation in (payload.get("observation"),)
+        if isinstance(subject, Mapping)
+        and subject.get("security") == security
+        and isinstance(observation, Mapping)
+        and observation.get("kind") == "security_identity"
+        and isinstance(observation.get("name"), str)
+    }
+    if len(identity_names) != 1:
+        raise ValueError("valuation domain facts lack a unique security name")
+    name = identity_names.pop()
     trading_date = str(close_observation.get("trading_date"))
     price = _decimal_fact(close_observed.get("value"))
-    shares = _decimal_fact(stock_values.get("effective_total_shares"))
-    market_cap = price * shares
-    expected_metrics: dict[str, dict[str, object]] = {
-        "market_capitalization": cast(
+    expected_metrics: dict[str, dict[str, object]] = {}
+    anchors: dict[str, object] = {"price": format(price, "f")}
+    if stock_records:
+        stock_payload = _record_payload(stock_records[0])
+        stock_values = _nested_mapping(stock_payload, "observed_value", "value")
+        stock_subject = _nested_mapping(stock_payload, "subject")
+        if (
+            stock_subject.get("security") != security
+            or stock_values.get("name") != name
+        ):
+            raise ValueError("valuation stock information contradicts identity")
+        shares = _decimal_fact(stock_values.get("effective_total_shares"))
+        market_cap = price * shares
+        anchors.update(
+            {
+                "shares": format(shares, "f"),
+                "market_cap": format(market_cap, "f"),
+            }
+        )
+        expected_metrics["market_capitalization"] = cast(
             dict[str, object], _metric_fact(market_cap, "CNY", 3)
         )
-    }
-    anchors: dict[str, object] = {
-        "price": format(price, "f"),
-        "shares": format(shares, "f"),
-        "market_cap": format(market_cap, "f"),
-    }
+    else:
+        expected_metrics["market_capitalization"] = {
+            "status": "not_calculable",
+            "reason": "effective_total_shares_unavailable",
+        }
     statements = operation_records("sina_financial_statements@1")
     income_by_period: dict[str, Decimal] = {}
     equity_by_period: dict[str, Decimal] = {}
@@ -6079,15 +6109,37 @@ def _valuation_owned_facts(
             )
             anchors["ttm_profit"] = format(ttm_profit, "f")
             if ttm_profit > 0:
-                expected_metrics["pe_ttm"] = cast(
-                    dict[str, object], _metric_fact(market_cap / ttm_profit, "ratio")
+                expected_metrics["pe_ttm"] = (
+                    cast(
+                        dict[str, object],
+                        _metric_fact(
+                            _decimal_fact(anchors["market_cap"]) / ttm_profit,
+                            "ratio",
+                        ),
+                    )
+                    if "market_cap" in anchors
+                    else {
+                        "status": "not_calculable",
+                        "reason": "effective_total_shares_unavailable",
+                    }
                 )
     if equity_by_period:
         mrq_equity = equity_by_period[max(equity_by_period)]
         anchors["mrq_equity"] = format(mrq_equity, "f")
         if mrq_equity > 0:
-            expected_metrics["pb_mrq"] = cast(
-                dict[str, object], _metric_fact(market_cap / mrq_equity, "ratio")
+            expected_metrics["pb_mrq"] = (
+                cast(
+                    dict[str, object],
+                    _metric_fact(
+                        _decimal_fact(anchors["market_cap"]) / mrq_equity,
+                        "ratio",
+                    ),
+                )
+                if "market_cap" in anchors
+                else {
+                    "status": "not_calculable",
+                    "reason": "effective_total_shares_unavailable",
+                }
             )
     forecasts = operation_records("ths_consensus_eps@1")
     if forecasts:
@@ -6144,18 +6196,26 @@ def _valuation_owned_facts(
             "ln(forward_pe / target_pe) / ln(1 + forecast_eps_growth)"
         ),
     }
-    expected_operands: dict[str, dict[str, object]] = {
-        "market_capitalization": {
+    expected_operands: dict[str, dict[str, object]] = {}
+    if "shares" in anchors and "market_cap" in anchors:
+        expected_operands["market_capitalization"] = {
             "price": anchors["price"],
             "shares": anchors["shares"],
         }
-    }
-    if "ttm_profit" in anchors and _decimal_fact(anchors["ttm_profit"]) > 0:
+    if (
+        "market_cap" in anchors
+        and "ttm_profit" in anchors
+        and _decimal_fact(anchors["ttm_profit"]) > 0
+    ):
         expected_operands["pe_ttm"] = {
             "market_capitalization": anchors["market_cap"],
             "ttm_attributable_profit": anchors["ttm_profit"],
         }
-    if "mrq_equity" in anchors and _decimal_fact(anchors["mrq_equity"]) > 0:
+    if (
+        "market_cap" in anchors
+        and "mrq_equity" in anchors
+        and _decimal_fact(anchors["mrq_equity"]) > 0
+    ):
         expected_operands["pb_mrq"] = {
             "market_capitalization": anchors["market_cap"],
             "mrq_attributable_equity": anchors["mrq_equity"],
@@ -6218,7 +6278,12 @@ def _valuation_owned_facts(
 def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
     from .automatic_valuation import (
         _VALUATION_REQUIRED_OPERATIONS,
+        _consensus_from_evidence,
+        _select_reported_financials,
+        _statements_from_evidence,
+        _stock_info_from_evidence,
         _validate_valuation_evidence_storage_authority,
+        _valuation_claim_payload,
         _valuation_dispositions,
     )
     from .close_observation import _close_dispositions
@@ -6308,33 +6373,180 @@ def _validate_valuation_domain_facts(result: Mapping[str, object]) -> None:
         return
     observations = _owned_observations(result)
     calculations = cast(list[dict[str, object]], result["calculations"])
-    security, name, trading_date, expected_metrics, anchors = _valuation_owned_facts(
+    security, name, trading_date, _expected_metrics, anchors = _valuation_owned_facts(
         observations, calculations
     )
     payload = _nested_mapping(claim, "payload")
-    subjects = payload.get("subjects")
-    basis = payload.get("valuation_basis")
-    metrics = payload.get("metrics")
+    research = payload.get("research")
+    anchor = cast(dict[str, object], result["research_anchor"])
+    if not isinstance(research, dict) or set(research) != {
+        "as_of",
+        "timezone",
+        "retrieved_at",
+        "question",
+    }:
+        raise ValueError("valuation domain facts contain invalid research authority")
+    retrieved_at = research.get("retrieved_at")
+    try:
+        retrieved = datetime.fromisoformat(cast(str, retrieved_at))
+        as_of = date.fromisoformat(cast(str, anchor["as_of"]))
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "valuation domain facts contain invalid research time"
+        ) from error
     if (
-        not isinstance(subjects, list)
-        or not subjects
-        or not isinstance(subjects[0], dict)
-        or subjects[0].get("name") != name
-        or not isinstance(subjects[0].get("security"), dict)
-        or f"{subjects[0]['security'].get('exchange')}:{subjects[0]['security'].get('code')}"
-        != security
-        or not isinstance(basis, dict)
-        or basis.get("trading_date") != trading_date
-        or _decimal_fact(_nested_mapping(basis, "price").get("value"))
-        != _decimal_fact(anchors["price"])
-        or _decimal_fact(_nested_mapping(basis, "effective_total_shares").get("value"))
-        != _decimal_fact(anchors["shares"])
-        or not isinstance(metrics, dict)
+        research.get("as_of") != anchor.get("as_of")
+        or research.get("timezone") != anchor.get("timezone")
+        or research.get("question") != "automatic_security_valuation"
+        or retrieved.utcoffset() is None
+        or retrieved.date() != as_of
     ):
-        raise ValueError("valuation domain facts contradict owned observations")
-    for metric, expected in expected_metrics.items():
-        if metrics.get(metric) != expected:
-            raise ValueError("valuation domain facts contain a forged metric")
+        raise ValueError("valuation domain facts contain invalid research authority")
+
+    identity_records = [
+        item
+        for item in observations
+        if item.get("capability_id") == "security_identity_resolution"
+        and _nested_mapping(_record_payload(item), "subject").get("security")
+        == security
+    ]
+    if len(identity_records) != 1:
+        raise ValueError("valuation domain facts lack a unique official identity")
+    identity_payload = _record_payload(identity_records[0])
+    identity = _nested_mapping(identity_payload, "observation")
+    identity_subject = _nested_mapping(identity_payload, "subject")
+    exchange, code = security.split(":", 1)
+    subject = {
+        "security": {
+            "exchange": exchange,
+            "code": code,
+            "type": identity.get("security_type"),
+        },
+        "name": name,
+        "issuer": {
+            "name": identity_subject.get("issuer"),
+            "identifier": identity.get("issuer_identifier"),
+            "security_relationship": (
+                "verified"
+                if identity.get("issuer_relationship_verified") is True
+                else "unverified"
+            ),
+        },
+    }
+
+    records_by_operation = {
+        suffix: [
+            item
+            for item in observations
+            if str(item["operation_id"]).rsplit("::", 1)[-1] == suffix
+        ]
+        for suffix in (
+            "eastmoney_stock_info@1",
+            "sina_financial_statements@1",
+            "ths_consensus_eps@1",
+        )
+    }
+    stock_info = None
+    if records_by_operation["eastmoney_stock_info@1"]:
+        stock_coverage = _nested_mapping(
+            _nested_mapping(result, "coverage"), "security_valuation_metrics"
+        )
+        stock_operation = _nested_mapping(
+            stock_coverage,
+            "operations",
+            "eastmoney_stock_info@1",
+        )
+        diagnostics = stock_operation.get("diagnostics")
+        attempts = diagnostics.get("attempts") if isinstance(diagnostics, dict) else []
+        if not isinstance(attempts, list) or any(
+            not isinstance(item, dict)
+            or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in item.items()
+            )
+            for item in attempts
+        ):
+            raise ValueError("valuation domain facts contain invalid degradations")
+        stock_info = _stock_info_from_evidence(
+            _record_payload(records_by_operation["eastmoney_stock_info@1"][0]),
+            tuple(cast(list[dict[str, str]], attempts)),
+        )
+    statement_records = records_by_operation["sina_financial_statements@1"]
+    statements = (
+        _statements_from_evidence(
+            [_record_payload(item) for item in statement_records], security
+        )
+        if statement_records
+        else {}
+    )
+    selected = None
+    if statements:
+        try:
+            selected = _select_reported_financials(statements)
+        except (InvalidOperation, KeyError, ValueError):
+            selected = None
+    consensus_records = records_by_operation["ths_consensus_eps@1"]
+    consensus = (
+        _consensus_from_evidence(_record_payload(consensus_records[0]), security)
+        if consensus_records
+        else None
+    )
+    forecasts = (
+        [item for item in consensus.forecasts if item.year >= as_of.year]
+        if consensus is not None
+        else []
+    )
+    if len(forecasts) < 2 or any(item.institutions < 3 for item in forecasts[:2]):
+        forecasts = []
+    digestion = next(
+        (
+            item
+            for item in calculations
+            if str(item.get("kind", "")).rsplit("::", 1)[-1] == "pe_digestion_years"
+        ),
+        None,
+    )
+    target_pe = (
+        _decimal_fact(
+            _nested_mapping(digestion, "payload", "operands").get("target_pe")
+        )
+        if digestion is not None
+        else Decimal(1)
+    )
+    expected_payload = _valuation_claim_payload(
+        subject=subject,
+        research=research,
+        trading_date=trading_date,
+        price=cast(str, anchors["price"]),
+        stock_info=stock_info,
+        statements=statements,
+        selected=selected,
+        consensus=consensus,
+        forecasts=forecasts,
+        target_pe=target_pe,
+    )
+    evidence_ids = {
+        str(_record_payload(item).get("id")): str(item["id"])
+        for item in observations
+        if isinstance(_record_payload(item).get("id"), str)
+    }
+
+    def resolve_evidence_ids(value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                key: (
+                    evidence_ids.get(nested, nested)
+                    if key == "evidence_id" and isinstance(nested, str)
+                    else resolve_evidence_ids(nested)
+                )
+                for key, nested in value.items()
+            }
+        if isinstance(value, list):
+            return [resolve_evidence_ids(item) for item in value]
+        return value
+
+    if payload != resolve_evidence_ids(expected_payload):
+        raise ValueError("valuation domain facts contradict canonical owner projection")
 
 
 def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:

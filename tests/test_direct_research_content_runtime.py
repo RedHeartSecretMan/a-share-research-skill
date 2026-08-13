@@ -177,7 +177,10 @@ def content_request(*, allow_experimental: bool) -> dict[str, object]:
 
 
 def invoke_copied_installed(
-    request: dict[str, object], *, fixture: bool = False
+    request: dict[str, object],
+    *,
+    fixture: bool = False,
+    formal_mootdx_f10: bool = False,
 ) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_root = Path(temporary_directory)
@@ -199,6 +202,7 @@ def invoke_copied_installed(
                     from urllib.parse import urlsplit
 
                     sys.path.insert(0, {str(installed / "scripts")!r})
+                    from a_share_research.communication_sources import MootdxF10Operation
                     from a_share_research.content_contract import ContentObservation, SourceBatch, SourceFailure
                     from a_share_research.identity_sources import HttpResponse
                     import a_share_research.cli as cli
@@ -368,9 +372,20 @@ def invoke_copied_installed(
                         operation_id = "non_applicable_announcements@1"
                         supported_material_types = frozenset({{"announcement"}})
 
+                    class FixedMootdxF10Client:
+                        def F10(self, *, symbol, name):
+                            if symbol != "300058" or name != "公司概况":
+                                raise AssertionError("unexpected formal Mootdx F10 request")
+                            return "蓝色光标公司概况公开聚合文本"
+
                     original_research = cli.research
                     def fixture_research(request, **kwargs):
-                        if request["parameters"]["material_types"] == ["market_flash"]:
+                        if {formal_mootdx_f10!r}:
+                            operations = (MootdxF10Operation(
+                                client_factory=FixedMootdxF10Client,
+                                clock=lambda: retrieved_at,
+                            ),)
+                        elif request["parameters"]["material_types"] == ["market_flash"]:
                             primary = (
                                 FailingFlashOperation()
                                 if request["parameters"].get("query") == ["force-fallback"]
