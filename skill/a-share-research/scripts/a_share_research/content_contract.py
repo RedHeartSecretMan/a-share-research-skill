@@ -28,6 +28,35 @@ PUBLIC_SOURCE_ROLES = frozenset(
         "market_signal",
     }
 )
+PUBLIC_MATERIAL_SOURCE_ROLES = {
+    "research_report": frozenset({"attributed_opinion"}),
+    "industry_report": frozenset({"attributed_opinion"}),
+    "consensus_material": frozenset({"attributed_opinion"}),
+    "issuer_profile": frozenset({"market_observation"}),
+    "stock_news": frozenset({"attributed_opinion"}),
+    "announcement": frozenset({"authoritative_disclosure", "market_observation"}),
+    "market_flash": frozenset({"market_signal"}),
+    "investor_qa": frozenset({"market_observation", "attributed_opinion"}),
+}
+PUBLIC_OWNER_MATERIAL_SOURCE_ROLES = {
+    ("eastmoney_reports@1", "research_report"): frozenset({"attributed_opinion"}),
+    ("eastmoney_reports@1", "industry_report"): frozenset({"attributed_opinion"}),
+    ("ths_consensus_material@1", "consensus_material"): frozenset(
+        {"attributed_opinion"}
+    ),
+    ("eastmoney_stock_news@1", "stock_news"): frozenset({"attributed_opinion"}),
+    ("cninfo_announcement@1", "announcement"): frozenset({"authoritative_disclosure"}),
+    ("sse_announcement@1", "announcement"): frozenset({"authoritative_disclosure"}),
+    ("szse_announcement@1", "announcement"): frozenset({"authoritative_disclosure"}),
+    ("cls_market_flash@1", "market_flash"): frozenset({"market_signal"}),
+    ("eastmoney_market_flash@1", "market_flash"): frozenset({"market_signal"}),
+    ("cninfo_investor_qa@1", "investor_qa"): frozenset(
+        {"market_observation", "attributed_opinion"}
+    ),
+    ("iwencai_content_search@1", "research_report"): frozenset({"attributed_opinion"}),
+    ("iwencai_content_search@1", "stock_news"): frozenset({"attributed_opinion"}),
+    ("iwencai_content_search@1", "announcement"): frozenset({"market_observation"}),
+}
 F10_PROFILE_CATEGORIES = frozenset(
     {
         "最新提示",
@@ -55,6 +84,36 @@ def valid_f10_profile_categories(value: object) -> bool:
         )
         and len(set(value)) == len(value)
     )
+
+
+def has_declared_material_owner_authority(operation_id: object) -> bool:
+    """Return whether an operation has an owner-local public material contract."""
+
+    return isinstance(operation_id, str) and any(
+        owner_operation_id == operation_id
+        for owner_operation_id, _material_type in PUBLIC_OWNER_MATERIAL_SOURCE_ROLES
+    )
+
+
+def valid_material_source_role(
+    material_type: object,
+    source_role: object,
+    *,
+    operation_id: object = None,
+) -> bool:
+    """Check the bounded evidence roles permitted for one material owner and kind."""
+
+    if not isinstance(material_type, str) or not isinstance(source_role, str):
+        return False
+    if isinstance(operation_id, str):
+        owner_roles = PUBLIC_OWNER_MATERIAL_SOURCE_ROLES.get(
+            (operation_id, material_type)
+        )
+        if owner_roles is not None:
+            return source_role in owner_roles
+        if has_declared_material_owner_authority(operation_id):
+            return False
+    return source_role in PUBLIC_MATERIAL_SOURCE_ROLES.get(material_type, ())
 
 
 def undeclared_raw_fields(

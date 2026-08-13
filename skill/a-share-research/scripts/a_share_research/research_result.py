@@ -3429,9 +3429,12 @@ def _validate_market_signal_domain_facts(
 def _validate_research_content_domain_facts(
     result: Mapping[str, object],
 ) -> None:
+    from .content_contract import valid_material_source_role
     from .content_registry import build_default_content_operations
     from .research_content import (
+        _canonical_content_document_locators,
         _content_dispositions,
+        _content_persistence_license,
         _validate_content_evidence_storage_authority,
     )
 
@@ -3446,6 +3449,7 @@ def _validate_research_content_domain_facts(
     authorities = {
         item.operation_id: _content_dispositions(item) for item in canonical_operations
     }
+    canonical_by_id = {item.operation_id: item for item in canonical_operations}
     _require_known_operation_capability(
         result,
         authorities,
@@ -3648,6 +3652,49 @@ def _validate_research_content_domain_facts(
             or not payload.get("title")
         ):
             raise ValueError("research content material audit facts are invalid")
+        expected_locator, expected_document_locator = (
+            _canonical_content_document_locators(
+                record["operation_id"],
+                cast(str, payload["source_document_namespace"]),
+                cast(str, payload["source_document_id"]),
+                locator_uri=locator["uri"],
+                document_locator_uri=(
+                    cast(dict[str, object], document_locator)["uri"]
+                    if document_locator is not None
+                    else None
+                ),
+            )
+        )
+        if locator["uri"] != expected_locator or (
+            document_locator is not None
+            and cast(dict[str, object], document_locator)["uri"]
+            != expected_document_locator
+        ):
+            raise ValueError("research content material locator contradicts identity")
+        material_operation_id = cast(str, record["operation_id"])
+        material_type = payload.get("material_type")
+        source_role = payload.get("source_role")
+        if not valid_material_source_role(
+            material_type,
+            source_role,
+            operation_id=material_operation_id,
+        ):
+            raise ValueError("research content material owner facts are invalid")
+        license_value = attributes.get("license")
+        expected_derived_license = (
+            license_value
+            if isinstance(license_value, str) and license_value
+            else "not_established"
+        )
+        if license_boundary.get("status") != expected_derived_license:
+            raise ValueError("research content material owner facts are invalid")
+        canonical_operation = canonical_by_id.get(material_operation_id)
+        if canonical_operation is not None:
+            expected_license = (
+                _content_persistence_license(canonical_operation) or "not_established"
+            )
+            if license_boundary.get("status") != expected_license:
+                raise ValueError("research content material owner facts are invalid")
         _reject_sensitive_research_content_attributes(attributes)
         material = (cast(str, record["id"]), payload)
         materials.append(material)

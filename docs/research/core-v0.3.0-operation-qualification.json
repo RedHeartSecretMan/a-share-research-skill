@@ -3,7 +3,7 @@
   "operations": [
     {
       "producer_operation_id": "cls_market_flash@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -17,24 +17,23 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_communication_sources.py#CommunicationSourceOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/communication_sources.py#ClsMarketFlashOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_communication_sources.py#CommunicationSourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "cninfo_announcement@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -48,24 +47,23 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_disclosure_sources.py#CninfoAnnouncementOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/disclosure_sources.py#CninfoAnnouncementOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_disclosure_sources.py#CninfoAnnouncementOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "cninfo_investor_qa@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -79,20 +77,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_communication_sources.py#CommunicationSourceOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_investor_qa_qualifies_formal_owner",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/communication_sources.py#CninfoInvestorQaOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_communication_sources.py#CommunicationSourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_investor_qa_qualifies_formal_owner",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "cninfo_security_dictionary@1",
@@ -346,7 +343,7 @@
     },
     {
       "producer_operation_id": "eastmoney_market_flash@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -360,20 +357,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_communication_sources.py#CommunicationSourceOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/communication_sources.py#EastmoneyMarketFlashOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_communication_sources.py#CommunicationSourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_northbound_flow@1",
@@ -408,7 +404,7 @@
     },
     {
       "producer_operation_id": "eastmoney_reports@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -422,20 +418,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_report_sources.py#EastmoneyReportOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/report_sources.py#EastmoneyReportOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_report_sources.py#EastmoneyReportOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_security_board_membership@1",
@@ -595,7 +590,7 @@
     },
     {
       "producer_operation_id": "eastmoney_stock_news@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -609,20 +604,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_disclosure_sources.py#EastmoneyStockNewsOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/disclosure_sources.py#EastmoneyStockNewsOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_disclosure_sources.py#EastmoneyStockNewsOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_trading_events@1",
@@ -690,7 +684,7 @@
     },
     {
       "producer_operation_id": "iwencai_content_search@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -704,20 +698,19 @@
       "credential_policy": "local_environment_reference_required_not_persisted",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_report_sources.py#IwencaiContentSearchOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/report_sources.py#IwencaiContentSearchOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_report_sources.py#IwencaiContentSearchOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "mootdx_f10@1",
@@ -851,7 +844,7 @@
     },
     {
       "producer_operation_id": "sse_announcement@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -865,20 +858,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_sse_disclosure_sources.py#SseAnnouncementOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_sse_material_survives_cninfo_failure",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/sse_disclosure_sources.py#SseAnnouncementOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_sse_disclosure_sources.py#SseAnnouncementOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_sse_material_survives_cninfo_failure",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "sse_daily_line@1",
@@ -1013,7 +1005,7 @@
     },
     {
       "producer_operation_id": "szse_announcement@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -1027,20 +1019,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_disclosure_sources.py#SzseAnnouncementOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/disclosure_sources.py#SzseAnnouncementOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_disclosure_sources.py#SzseAnnouncementOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "szse_daily_line@1",
@@ -1241,7 +1232,7 @@
     },
     {
       "producer_operation_id": "ths_consensus_material@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "published_at_available_at_and_retrieved_at",
         "request_boundary": "published_window_not_after_as_of"
@@ -1255,20 +1246,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_62",
         "request_bound": "limit_and_window_bounded"
       },
-      "offline_contract_selector": "tests/test_report_sources.py#ThsConsensusMaterialOperationTests",
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/report_sources.py#ThsConsensusMaterialOperation",
         "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
         "tests/test_report_sources.py#ThsConsensusMaterialOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        62
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "ths_limit_reason@1",

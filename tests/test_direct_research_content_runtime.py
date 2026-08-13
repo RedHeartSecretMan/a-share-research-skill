@@ -42,6 +42,7 @@ UNIFIED_RESULT_KEYS = {
     "task_views",
     "briefs",
 }
+ISSUE_62_FAKE_IWENCAI_CREDENTIAL = "issue-62-named-fixture-credential"
 
 
 def rehash_result(result: dict[str, object]) -> dict[str, object]:
@@ -181,6 +182,7 @@ def invoke_copied_installed(
     *,
     fixture: bool = False,
     formal_mootdx_f10: bool = False,
+    issue_62_scenario: str | None = None,
 ) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_root = Path(temporary_directory)
@@ -190,7 +192,36 @@ def invoke_copied_installed(
         request_path.write_text(json.dumps(request), encoding="utf-8")
         environment = os.environ.copy()
         command = [sys.executable]
-        if fixture:
+        if issue_62_scenario is not None:
+            identity_fixtures = temporary_root / "identity-fixtures"
+            shutil.copytree(IDENTITY_FIXTURES, identity_fixtures)
+            content_fixtures = temporary_root / "content-fixtures"
+            shutil.copytree(
+                REPOSITORY_ROOT / "tests" / "fixtures" / "research_content",
+                content_fixtures,
+            )
+            shutil.copy2(
+                REPOSITORY_ROOT
+                / "tests"
+                / "fixtures"
+                / "research_content"
+                / "issue_62"
+                / "sitecustomize.py",
+                temporary_root / "sitecustomize.py",
+            )
+            environment.update(
+                {
+                    "PYTHONPATH": str(temporary_root),
+                    "PYTHONNOUSERSITE": "1",
+                    "A_SHARE_ISSUE62_INSTALLED_SCRIPTS": str(installed / "scripts"),
+                    "A_SHARE_ISSUE62_IDENTITY_FIXTURES": str(identity_fixtures),
+                    "A_SHARE_ISSUE62_CONTENT_FIXTURES": str(content_fixtures),
+                    "A_SHARE_ISSUE62_SCENARIO": issue_62_scenario,
+                    "IWENCAI_API_KEY": ISSUE_62_FAKE_IWENCAI_CREDENTIAL,
+                    "IWENCAI_BASE_URL": "https://iwencai.fixture.test",
+                }
+            )
+        elif fixture:
             identity_fixtures = temporary_root / "identity-fixtures"
             shutil.copytree(IDENTITY_FIXTURES, identity_fixtures)
             sitecustomize = temporary_root / "sitecustomize.py"
@@ -442,6 +473,10 @@ def invoke_copied_installed(
             text=True,
             env=environment,
         )
+    if issue_62_scenario is not None and ISSUE_62_FAKE_IWENCAI_CREDENTIAL in (
+        completed.stdout + completed.stderr
+    ):
+        raise AssertionError("named fixture credential escaped the public run seam")
     if completed.returncode != 0:
         raise AssertionError(completed.stderr)
     if completed.stderr:
@@ -453,6 +488,964 @@ def invoke_copied_installed(
 
 
 class DirectResearchContentPublicSeamTests(unittest.TestCase):
+    def test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "research_content",
+            "subjects": [{"clue": "蓝色光标"}],
+            "as_of": "2026-08-02",
+            "window": {
+                "published_from": "2026-07-01",
+                "published_to": "2026-08-02",
+            },
+            "parameters": {
+                "material_types": ["announcement", "stock_news"],
+                "query": [],
+                "limit": 20,
+            },
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        result = invoke_copied_installed(
+            request,
+            issue_62_scenario="bluefocus_disclosures_news",
+        )
+        expected_owners = {
+            "eastmoney_stock_news@1",
+            "cninfo_announcement@1",
+            "sse_announcement@1",
+            "szse_announcement@1",
+        }
+
+        obligations = {
+            item["producer_operation_id"]: item
+            for item in result["plan"]["operation_obligations"]
+            if item["producer_operation_id"] in expected_owners
+        }
+        self.assertEqual(set(obligations), expected_owners)
+        operations = result["coverage"]["research_content_materials"]["operations"]
+        self.assertEqual(
+            {
+                owner: (
+                    operations[owner]["execution_state"],
+                    operations[owner]["state"],
+                )
+                for owner in expected_owners
+            },
+            {
+                "eastmoney_stock_news@1": ("succeeded", "complete"),
+                "cninfo_announcement@1": ("succeeded", "complete"),
+                "sse_announcement@1": ("succeeded", "observed_empty"),
+                "szse_announcement@1": ("succeeded", "complete"),
+            },
+        )
+        expected_retained_destinations = {
+            "eastmoney_stock_news@1": {
+                "result.cmsArticleWebOld[].content": (
+                    "normalized",
+                    "observations[].payload.summary",
+                ),
+            },
+            "cninfo_announcement@1": {
+                "stockList[].code": (
+                    "cross_check_only",
+                    "observations[].payload.subject.security.code",
+                ),
+                "stockList[].zwjc": (
+                    "cross_check_only",
+                    "observations[].payload.subject.name",
+                ),
+                "stockList[].orgId": (
+                    "cross_check_only",
+                    "observations[].payload.attributes.cninfo_org_id",
+                ),
+                "announcements[].adjunctSize": (
+                    "normalized",
+                    "observations[].payload.attributes.adjunct_size",
+                ),
+                "announcements[].announcementType": (
+                    "normalized",
+                    "observations[].payload.attributes.announcement_type",
+                ),
+                "announcements[].announcementTypeName": (
+                    "normalized",
+                    "observations[].payload.attributes.announcement_type_name",
+                ),
+                "announcements[].orgId": (
+                    "cross_check_only",
+                    "observations[].payload.attributes.cninfo_org_id",
+                ),
+            },
+            "sse_announcement@1": {
+                "beginDate": (
+                    "cross_check_only",
+                    "observations[].payload.query_scope.published_from",
+                ),
+                "endDate": (
+                    "cross_check_only",
+                    "observations[].payload.query_scope.published_to",
+                ),
+                "productId": (
+                    "cross_check_only",
+                    "observations[].payload.subject.security.code",
+                ),
+                "result[].BULLETIN_HEADING": (
+                    "normalized",
+                    "observations[].payload.attributes.bulletin_heading",
+                ),
+                "result[].BULLETIN_TYPE": (
+                    "normalized",
+                    "observations[].payload.attributes.bulletin_type",
+                ),
+                "result[].SSEDATE": (
+                    "normalized",
+                    "observations[].payload.attributes.sse_disclosure_date",
+                ),
+            },
+            "szse_announcement@1": {
+                "data[].id": (
+                    "normalized",
+                    "observations[].payload.attributes.szse_index_id",
+                ),
+                "data[].attachSize": (
+                    "normalized",
+                    "observations[].payload.attributes.attach_size",
+                ),
+            },
+        }
+        for owner, expected in expected_retained_destinations.items():
+            with self.subTest(owner=owner):
+                actual = {
+                    item["field"]: (item["disposition"], item["destination"])
+                    for item in operations[owner]["field_dispositions"]
+                }
+                self.assertEqual(
+                    {field: actual[field] for field in expected},
+                    expected,
+                )
+        materials = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] in expected_owners
+        ]
+        self.assertEqual(
+            {item["operation_id"] for item in materials},
+            expected_owners - {"sse_announcement@1"},
+        )
+        for item in materials:
+            payload = item["payload"]
+            self.assertEqual(payload["source_operation"], item["operation_id"])
+            self.assertTrue(payload["source_document_id"])
+            self.assertTrue(payload["published_at"])
+            self.assertEqual(payload["available_at"], payload["published_at"])
+            self.assertTrue(payload["retrieved_at"])
+            self.assertTrue(payload["locator"]["uri"])
+            self.assertEqual(
+                payload["license_boundary"],
+                {"status": "not_established", "raw_payload": "excluded"},
+            )
+        announcement_groups = [
+            item
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
+            and item["payload"]["material_type"] == "announcement"
+        ]
+        self.assertEqual(len(announcement_groups), 3)
+        self.assertEqual(
+            {item["payload"]["member_count"] for item in announcement_groups},
+            {2},
+        )
+        grouped_observation_ids = {
+            observation_id
+            for item in announcement_groups
+            for observation_id in item["observation_ids"]
+        }
+        announcement_observation_ids = {
+            item["id"]
+            for item in materials
+            if item["payload"]["material_type"] == "announcement"
+        }
+        self.assertEqual(grouped_observation_ids, announcement_observation_ids)
+        metadata_conflicts = [
+            item
+            for item in result["conflicts"]
+            if item["code"] == "research_content_metadata_conflict"
+        ]
+        self.assertEqual(len(metadata_conflicts), 3)
+        self.assertEqual(
+            {tuple(sorted(item["observation_ids"])) for item in metadata_conflicts},
+            {tuple(sorted(item["observation_ids"])) for item in announcement_groups},
+        )
+        same_title_news = [
+            item
+            for item in materials
+            if item["operation_id"] == "eastmoney_stock_news@1"
+            and item["payload"]["title"] == "蓝色光标公告观察"
+        ]
+        self.assertEqual(
+            {item["payload"]["source_document_id"] for item in same_title_news},
+            {"NEWS-2", "NEWS-3"},
+        )
+        news_groups = [
+            item
+            for item in result["claims"]
+            if item["kind"] == "research_content_material_group"
+            and item["payload"]["material_type"] == "stock_news"
+        ]
+        self.assertEqual(len(news_groups), 3)
+        self.assertEqual(
+            {
+                item["payload"]["source_document_id"]
+                for item in news_groups
+                if item["payload"]["source_document_id"] in {"NEWS-2", "NEWS-3"}
+            },
+            {"NEWS-2", "NEWS-3"},
+        )
+        self.assertTrue(
+            all(item["payload"]["member_count"] == 1 for item in news_groups)
+        )
+
+        cninfo = next(
+            item
+            for item in materials
+            if item["operation_id"] == "cninfo_announcement@1"
+        )
+        for field, forged_value in (
+            ("source_role", "market_signal"),
+            (
+                "license_boundary",
+                {"status": "source_terms", "raw_payload": "excluded"},
+            ),
+        ):
+            with self.subTest(field=field):
+                forged = deepcopy(result)
+                forged_cninfo = next(
+                    item
+                    for item in forged["observations"]
+                    if item["id"] == cninfo["id"]
+                )
+                forged_cninfo["payload"][field] = forged_value
+                with self.assertRaisesRegex(ValueError, "research.content|owner"):
+                    validate_serialized(rehash_result(forged))
+
+    def test_issue_62_copied_installed_sse_material_survives_cninfo_failure(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "research_content",
+            "subjects": [{"clue": "工业富联"}],
+            "as_of": "2026-08-02",
+            "window": {
+                "published_from": "2026-07-01",
+                "published_to": "2026-08-02",
+            },
+            "parameters": {
+                "material_types": ["announcement"],
+                "query": [],
+                "limit": 20,
+            },
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        result = invoke_copied_installed(
+            request,
+            issue_62_scenario="sse_announcement_with_cninfo_failure",
+        )
+        operations = result["coverage"]["research_content_materials"]["operations"]
+        self.assertEqual(
+            (
+                operations["cninfo_announcement@1"]["execution_state"],
+                operations["cninfo_announcement@1"]["state"],
+            ),
+            ("failed", "failed"),
+        )
+        self.assertEqual(
+            (
+                operations["sse_announcement@1"]["execution_state"],
+                operations["sse_announcement@1"]["state"],
+            ),
+            ("succeeded", "complete"),
+        )
+        self.assertEqual(
+            {
+                (item["operation_id"], item["code"])
+                for item in result["source_errors"]
+                if item["operation_id"] == "cninfo_announcement@1"
+            },
+            {("cninfo_announcement@1", "wrong_security_payload")},
+        )
+        materials = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "sse_announcement@1"
+        ]
+        self.assertEqual(len(materials), 3)
+        self.assertEqual(
+            {item["payload"]["source_document_id"] for item in materials},
+            {
+                "601138_20260802_A1",
+                "601138_20260801_A2",
+                "601138_20260730_A3",
+            },
+        )
+        for item in materials:
+            payload = item["payload"]
+            self.assertEqual(payload["source_role"], "authoritative_disclosure")
+            self.assertTrue(payload["published_at"])
+            self.assertEqual(payload["available_at"], payload["published_at"])
+            self.assertTrue(payload["retrieved_at"])
+            self.assertTrue(payload["locator"]["uri"].startswith("source-document:"))
+            self.assertTrue(
+                payload["document_locator"]["uri"].startswith(
+                    "source-document-content:"
+                )
+            )
+            self.assertIsNone(payload["summary"])
+            self.assertEqual(
+                payload["license_boundary"],
+                {"status": "not_established", "raw_payload": "excluded"},
+            )
+
+    def test_issue_62_serializer_revalidates_owner_roles_and_license_derivation(
+        self,
+    ) -> None:
+        def announcement_request(
+            clue: str, *, allow_credentials: bool
+        ) -> dict[str, object]:
+            return {
+                "schema_version": "1.0",
+                "task_type": "research_content",
+                "subjects": [{"clue": clue}],
+                "as_of": "2026-08-02",
+                "window": {
+                    "published_from": "2026-07-01",
+                    "published_to": "2026-08-02",
+                },
+                "parameters": {
+                    "material_types": ["announcement"],
+                    "query": ["公司公告"] if allow_credentials else [],
+                    "limit": 20,
+                },
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": allow_credentials,
+                    "allow_fallback": True,
+                },
+            }
+
+        bluefocus = invoke_copied_installed(
+            announcement_request("蓝色光标", allow_credentials=False),
+            issue_62_scenario="bluefocus_disclosures_news",
+        )
+        sse = invoke_copied_installed(
+            announcement_request("工业富联", allow_credentials=False),
+            issue_62_scenario="sse_announcement_with_cninfo_failure",
+        )
+        iwencai = invoke_copied_installed(
+            announcement_request("蓝色光标", allow_credentials=True),
+            issue_62_scenario="iwencai_announcement",
+        )
+        cases = (
+            (bluefocus, "cninfo_announcement@1", "market_observation"),
+            (bluefocus, "szse_announcement@1", "market_observation"),
+            (sse, "sse_announcement@1", "market_observation"),
+            (
+                iwencai,
+                "iwencai_content_search@1",
+                "authoritative_disclosure",
+            ),
+        )
+        for result, owner, forged_role in cases:
+            with self.subTest(owner=owner):
+                forged = deepcopy(result)
+                material = next(
+                    item
+                    for item in forged["observations"]
+                    if item["operation_id"] == owner
+                )
+                material["payload"]["source_role"] = forged_role
+                with self.assertRaisesRegex(
+                    ValueError, "research content material owner"
+                ):
+                    validate_serialized(rehash_result(forged))
+
+        forged_license = deepcopy(bluefocus)
+        cninfo = next(
+            item
+            for item in forged_license["observations"]
+            if item["operation_id"] == "cninfo_announcement@1"
+        )
+        cninfo["payload"]["attributes"]["license"] = "source_terms"
+        with self.assertRaisesRegex(ValueError, "research content material owner"):
+            validate_serialized(rehash_result(forged_license))
+
+    def test_issue_62_serializer_binds_cninfo_fallback_locators_to_document_identity(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            {
+                "schema_version": "1.0",
+                "task_type": "research_content",
+                "subjects": [{"clue": "蓝色光标"}],
+                "as_of": "2026-08-02",
+                "window": {
+                    "published_from": "2026-07-01",
+                    "published_to": "2026-08-02",
+                },
+                "parameters": {
+                    "material_types": ["announcement"],
+                    "query": [],
+                    "limit": 20,
+                },
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+            issue_62_scenario="bluefocus_disclosures_news",
+        )
+        cninfo = next(
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "cninfo_announcement@1"
+        )
+        self.assertTrue(
+            cninfo["payload"]["locator"]["uri"].startswith("source-document:")
+        )
+        self.assertTrue(
+            cninfo["payload"]["document_locator"]["uri"].startswith(
+                "source-document-content:"
+            )
+        )
+
+        for forge_kind, field, forged_uri in (
+            (
+                "reserved_fallback",
+                "locator",
+                "source-document:000000000000000000000000",
+            ),
+            (
+                "reserved_fallback",
+                "document_locator",
+                "source-document-content:000000000000000000000000",
+            ),
+            ("safe_opaque", "locator", "opaque-document:forged"),
+            ("safe_opaque", "document_locator", "opaque-content:forged"),
+        ):
+            with self.subTest(forge_kind=forge_kind, field=field):
+                forged = deepcopy(result)
+                forged_cninfo = next(
+                    item
+                    for item in forged["observations"]
+                    if item["id"] == cninfo["id"]
+                )
+                forged_cninfo["payload"][field]["uri"] = forged_uri
+                with self.assertRaisesRegex(
+                    ValueError, "research content material locator"
+                ):
+                    validate_serialized(rehash_result(forged))
+
+    def test_issue_62_copied_installed_reports_qualify_three_formal_owners(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "research_content",
+            "subjects": [{"clue": "工业富联"}],
+            "as_of": "2026-08-02",
+            "window": {
+                "published_from": "2026-05-01",
+                "published_to": "2026-08-02",
+            },
+            "parameters": {
+                "material_types": ["research_report", "consensus_material"],
+                "query": ["AI服务器", "算力产业链"],
+                "limit": 20,
+            },
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": True,
+                "allow_fallback": True,
+            },
+        }
+        result = invoke_copied_installed(
+            request,
+            issue_62_scenario="reports_consensus_search",
+        )
+        expected_owners = {
+            "eastmoney_reports@1",
+            "iwencai_content_search@1",
+            "ths_consensus_material@1",
+        }
+
+        obligations = {
+            item["producer_operation_id"]: item
+            for item in result["plan"]["operation_obligations"]
+            if item["producer_operation_id"] in expected_owners
+        }
+        self.assertEqual(set(obligations), expected_owners)
+        operations = result["coverage"]["research_content_materials"]["operations"]
+        self.assertEqual(
+            {
+                owner: (
+                    operations[owner]["execution_state"],
+                    operations[owner]["state"],
+                )
+                for owner in expected_owners
+            },
+            {
+                "eastmoney_reports@1": ("succeeded", "complete"),
+                "iwencai_content_search@1": ("succeeded", "partial"),
+                "ths_consensus_material@1": ("succeeded", "complete"),
+            },
+        )
+        expected_retained_destinations = {
+            "eastmoney_reports@1": {
+                "currentYear": (
+                    "normalized",
+                    "observations[].payload.attributes.forecast_eps",
+                ),
+                "data[].stockName": (
+                    "normalized",
+                    "observations[].payload.attributes.provider_stock_name",
+                ),
+                "data[].industryCode": (
+                    "normalized",
+                    "observations[].payload.attributes.provider_industry_code",
+                ),
+                "data[].industryName": (
+                    "normalized",
+                    "observations[].payload.attributes.provider_industry_name",
+                ),
+                "data[].indvInduCode": (
+                    "normalized",
+                    "observations[].payload.attributes.provider_industry_code",
+                ),
+                "data[].indvInduName": (
+                    "normalized",
+                    "observations[].payload.attributes.provider_industry_name",
+                ),
+                "data[].predictThisYearEps": (
+                    "normalized",
+                    "observations[].payload.attributes.forecast_eps",
+                ),
+                "data[].predictNextYearEps": (
+                    "normalized",
+                    "observations[].payload.attributes.forecast_eps",
+                ),
+                "data[].predictNextTwoYearEps": (
+                    "normalized",
+                    "observations[].payload.attributes.forecast_eps",
+                ),
+                "data[].emRatingName": (
+                    "normalized",
+                    "observations[].payload.attributes.rating",
+                ),
+                "data[].reportType": (
+                    "normalized",
+                    "observations[].payload.attributes.report_type",
+                ),
+                "data[].attachPages": (
+                    "normalized",
+                    "observations[].payload.attributes.attachment_pages",
+                ),
+                "data[].attachSize": (
+                    "normalized",
+                    "observations[].payload.attributes.attachment_size_kib",
+                ),
+            },
+            "iwencai_content_search@1": {
+                "data[].stock_infos[].code": (
+                    "cross_check_only",
+                    "observations[].payload.attributes.provider_security_code",
+                ),
+                "data[].score": (
+                    "normalized",
+                    "observations[].payload.attributes.relevance_score",
+                ),
+            },
+            "ths_consensus_material@1": {
+                "security": (
+                    "cross_check_only",
+                    "observations[].payload.subject.security",
+                ),
+            },
+        }
+        for owner, expected in expected_retained_destinations.items():
+            with self.subTest(owner=owner):
+                actual = {
+                    item["field"]: (item["disposition"], item["destination"])
+                    for item in operations[owner]["field_dispositions"]
+                }
+                self.assertEqual(
+                    {field: actual[field] for field in expected},
+                    expected,
+                )
+
+        materials = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] in expected_owners
+        ]
+        self.assertEqual(len(materials), 5)
+        self.assertEqual(
+            {item["operation_id"] for item in materials},
+            expected_owners,
+        )
+        for item in materials:
+            payload = item["payload"]
+            self.assertEqual(payload["source_operation"], item["operation_id"])
+            self.assertTrue(payload["source_document_id"])
+            self.assertIn("published_at", payload)
+            self.assertTrue(payload["available_at"])
+            self.assertTrue(payload["retrieved_at"])
+            self.assertTrue(payload["locator"]["uri"])
+            self.assertIn("summary", payload)
+            self.assertEqual(
+                payload["license_boundary"],
+                {"status": "not_established", "raw_payload": "excluded"},
+            )
+
+    def test_issue_62_serializer_rejects_material_type_outside_formal_owner_authority(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            {
+                "schema_version": "1.0",
+                "task_type": "research_content",
+                "subjects": [{"clue": "工业富联"}],
+                "as_of": "2026-08-02",
+                "window": {
+                    "published_from": "2026-05-01",
+                    "published_to": "2026-08-02",
+                },
+                "parameters": {
+                    "material_types": ["research_report", "consensus_material"],
+                    "query": ["AI服务器", "算力产业链"],
+                    "limit": 20,
+                },
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": True,
+                    "allow_fallback": True,
+                },
+            },
+            issue_62_scenario="reports_consensus_search",
+        )
+        forged = deepcopy(result)
+        report = next(
+            item
+            for item in forged["observations"]
+            if item["operation_id"] == "eastmoney_reports@1"
+        )
+        report_group = next(
+            item
+            for item in forged["claims"]
+            if item["kind"] == "research_content_material_group"
+            and report["id"] in item["observation_ids"]
+        )
+        self.assertEqual(report["payload"]["material_type"], "research_report")
+        self.assertEqual(report_group["payload"]["material_type"], "research_report")
+        report["payload"]["material_type"] = "consensus_material"
+        report_group["payload"]["material_type"] = "consensus_material"
+
+        with self.assertRaisesRegex(ValueError, "research content material owner"):
+            validate_serialized(rehash_result(forged))
+
+    def test_issue_62_copied_installed_investor_qa_qualifies_formal_owner(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "research_content",
+            "subjects": [{"clue": "蓝色光标"}],
+            "as_of": "2026-08-02",
+            "window": {
+                "published_from": "2026-07-01",
+                "published_to": "2026-08-02",
+            },
+            "parameters": {
+                "material_types": ["investor_qa"],
+                "query": [],
+                "limit": 20,
+            },
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        result = invoke_copied_installed(
+            request,
+            issue_62_scenario="investor_qa",
+        )
+        owner = "cninfo_investor_qa@1"
+        obligations = {
+            item["producer_operation_id"]: item
+            for item in result["plan"]["operation_obligations"]
+            if item["producer_operation_id"] == owner
+        }
+        self.assertEqual(set(obligations), {owner})
+        operation = result["coverage"]["research_content_materials"]["operations"][
+            owner
+        ]
+        self.assertEqual(
+            (operation["execution_state"], operation["state"]),
+            ("succeeded", "complete"),
+        )
+        expected_retained_destinations = {
+            "lookup.data[].stockCode": (
+                "cross_check_only",
+                "observations[].payload.subject.security.code",
+            ),
+            "lookup.data[].shortName": (
+                "cross_check_only",
+                "observations[].payload.attributes.provider_company_short_name",
+            ),
+            "lookup.data[].secid": (
+                "cross_check_only",
+                "observations[].payload.attributes.provider_org_id",
+            ),
+            "rows[].indexId": (
+                "normalized",
+                "observations[].payload.source_document_id",
+            ),
+            "rows[].stockCode": (
+                "cross_check_only",
+                "observations[].payload.subject.security.code",
+            ),
+            "rows[].companyShortName": (
+                "cross_check_only",
+                "observations[].payload.attributes.provider_company_short_name",
+            ),
+            "rows[].mainContent": (
+                "normalized",
+                "observations[].payload.summary",
+            ),
+            "rows[].pubDate": (
+                "normalized",
+                "observations[].payload.published_at",
+            ),
+            "rows[].updateDate": (
+                "normalized",
+                "observations[].payload.attributes.observed_update_at",
+            ),
+            "rows[].attachedId": (
+                "normalized",
+                "observations[].payload.source_document_id",
+            ),
+            "rows[].attachedContent": (
+                "normalized",
+                "observations[].payload.summary",
+            ),
+            "rows[].attachedPubDate": (
+                "normalized",
+                "observations[].payload.published_at",
+            ),
+        }
+        actual = {
+            item["field"]: (item["disposition"], item["destination"])
+            for item in operation["field_dispositions"]
+        }
+        self.assertEqual(
+            {field: actual[field] for field in expected_retained_destinations},
+            expected_retained_destinations,
+        )
+
+        materials = [
+            item for item in result["observations"] if item["operation_id"] == owner
+        ]
+        self.assertEqual(len(materials), 3)
+        self.assertEqual(
+            [item["payload"]["source_document_id"] for item in materials],
+            ["question-Q-1", "question-Q-2", "answer-A-2"],
+        )
+        self.assertEqual(
+            [item["payload"]["source_role"] for item in materials],
+            ["market_observation", "market_observation", "attributed_opinion"],
+        )
+        self.assertEqual(
+            [item["payload"]["published_at"] for item in materials],
+            [
+                "2026-07-31T09:09:13+08:00",
+                "2026-07-30T10:00:00+08:00",
+                "2026-07-31T11:00:00+08:00",
+            ],
+        )
+        for item in materials:
+            payload = item["payload"]
+            self.assertEqual(payload["available_at"], payload["published_at"])
+            self.assertTrue(payload["retrieved_at"])
+            self.assertTrue(payload["locator"]["uri"])
+            self.assertTrue(payload["summary"])
+            self.assertEqual(
+                payload["license_boundary"],
+                {"status": "not_established", "raw_payload": "excluded"},
+            )
+
+    def test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "research_content",
+            "subjects": [],
+            "as_of": "2026-08-02",
+            "window": {
+                "published_from": "2026-08-02",
+                "published_to": "2026-08-02",
+            },
+            "parameters": {
+                "material_types": ["market_flash"],
+                "query": [],
+                "limit": 2,
+            },
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        owners = {"cls_market_flash@1", "eastmoney_market_flash@1"}
+        scenarios = {
+            "market_flash_primary_success": {
+                "cls_market_flash@1": ("succeeded", "partial"),
+                "eastmoney_market_flash@1": ("not_requested", "not_requested"),
+            },
+            "market_flash_fallback": {
+                "cls_market_flash@1": ("failed", "failed"),
+                "eastmoney_market_flash@1": ("succeeded", "partial"),
+            },
+        }
+        results = {
+            scenario: invoke_copied_installed(
+                request,
+                issue_62_scenario=scenario,
+            )
+            for scenario in scenarios
+        }
+
+        for scenario, expected_states in scenarios.items():
+            with self.subTest(scenario=scenario):
+                result = results[scenario]
+                obligations = {
+                    item["producer_operation_id"]
+                    for item in result["plan"]["operation_obligations"]
+                    if item["producer_operation_id"] in owners
+                }
+                self.assertEqual(obligations, owners)
+                operations = result["coverage"]["research_content_materials"][
+                    "operations"
+                ]
+                self.assertEqual(
+                    {
+                        owner: (
+                            operations[owner]["execution_state"],
+                            operations[owner]["state"],
+                        )
+                        for owner in owners
+                    },
+                    expected_states,
+                )
+
+        primary = results["market_flash_primary_success"]
+        self.assertFalse(
+            any(
+                item["operation_id"] == "eastmoney_market_flash@1"
+                for item in primary["observations"]
+            )
+        )
+        fallback = results["market_flash_fallback"]
+        self.assertEqual(
+            {
+                (item["operation_id"], item["code"])
+                for item in fallback["source_errors"]
+            },
+            {("cls_market_flash@1", "empty_response")},
+        )
+        expected_retained_destinations = {
+            "cls_market_flash@1": {
+                "data.roll_data[].content": (
+                    "normalized",
+                    "observations[].payload.summary",
+                ),
+                "data.roll_data[].modified_time": (
+                    "normalized",
+                    "observations[].payload.attributes.modified_at",
+                ),
+                "data.roll_data[].stock_list[]": (
+                    "normalized",
+                    "observations[].payload.attributes.stock_list",
+                ),
+                "data.roll_data[].subjects[]": (
+                    "normalized",
+                    "observations[].payload.attributes.subjects",
+                ),
+            },
+            "eastmoney_market_flash@1": {
+                "data.fastNewsList[].realSort": (
+                    "normalized",
+                    "observations[].payload.attributes.provider_sort",
+                ),
+                "data.fastNewsList[].stockList[]": (
+                    "normalized",
+                    "observations[].payload.attributes.stock_list",
+                ),
+            },
+        }
+        fallback_operations = fallback["coverage"]["research_content_materials"][
+            "operations"
+        ]
+        for owner, expected in expected_retained_destinations.items():
+            with self.subTest(owner=owner):
+                actual = {
+                    item["field"]: (item["disposition"], item["destination"])
+                    for item in fallback_operations[owner]["field_dispositions"]
+                }
+                self.assertEqual(
+                    {field: actual[field] for field in expected},
+                    expected,
+                )
+        self.assertIn(
+            "fallback_used",
+            {item["code"] for item in fallback["limitations"]},
+        )
+
+        expected_material_owners = {
+            "market_flash_primary_success": "cls_market_flash@1",
+            "market_flash_fallback": "eastmoney_market_flash@1",
+        }
+        for scenario, expected_owner in expected_material_owners.items():
+            materials = [
+                item
+                for item in results[scenario]["observations"]
+                if item["operation_id"] in owners
+            ]
+            self.assertEqual(len(materials), 1)
+            payload = materials[0]["payload"]
+            self.assertEqual(materials[0]["operation_id"], expected_owner)
+            self.assertEqual(payload["source_role"], "market_signal")
+            self.assertTrue(payload["source_document_id"])
+            self.assertTrue(payload["published_at"])
+            self.assertEqual(payload["available_at"], payload["published_at"])
+            self.assertTrue(payload["retrieved_at"])
+            self.assertTrue(payload["locator"]["uri"])
+            self.assertTrue(payload["summary"])
+            self.assertEqual(
+                payload["license_boundary"],
+                {"status": "not_established", "raw_payload": "excluded"},
+            )
+
     def test_content_authority_rejects_coherent_capability_rebinding(self) -> None:
         result = invoke_copied_installed(content_request(allow_experimental=False))
         source_capability = "research_content_materials"

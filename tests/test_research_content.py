@@ -1075,7 +1075,7 @@ class ResearchContentProcessTests(unittest.TestCase):
                         ContentObservation(
                             material_type="research_report",
                             source_operation=self.operation_id,
-                            source_role="market_observation",
+                            source_role="attributed_opinion",
                             source_document_id="REPORT-REVISION",
                             title="报告索引标题",
                             published_at="2026-07-31T09:00:00+08:00",

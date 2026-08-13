@@ -20,7 +20,9 @@ from .content_contract import (
     EvidencePersistableContentSourceOperation,
     SourceBatch,
     SourceFailure,
+    has_declared_material_owner_authority,
     valid_f10_profile_categories,
+    valid_material_source_role,
 )
 from .evidence_store import (
     EvidenceReusePolicy,
@@ -301,6 +303,22 @@ def build_research_content_result(
                 resolution.outcome,
                 evidence_storage=resolution.audit,
             )
+        if fallback_for is not None:
+            reuse_facts = outcome.reuse_facts or OperationReuseFacts()
+            outcome = replace(
+                outcome,
+                reuse_facts=replace(
+                    reuse_facts,
+                    degradation_codes=tuple(
+                        sorted(
+                            {
+                                *reuse_facts.degradation_codes,
+                                "fallback_used",
+                            }
+                        )
+                    ),
+                ),
+            )
         outcomes.append(outcome)
         accepted = [
             material
@@ -472,7 +490,227 @@ def _content_dispositions(
     )
 
 
+_OWNER_FIELD_DESTINATIONS: Mapping[tuple[str, str], tuple[str, str]] = {
+    ("eastmoney_reports@1", "currentYear"): (
+        "normalized",
+        "observations[].payload.attributes.forecast_eps",
+    ),
+    ("eastmoney_reports@1", "data[].stockName"): (
+        "normalized",
+        "observations[].payload.attributes.provider_stock_name",
+    ),
+    ("eastmoney_reports@1", "data[].industryCode"): (
+        "normalized",
+        "observations[].payload.attributes.provider_industry_code",
+    ),
+    ("eastmoney_reports@1", "data[].industryName"): (
+        "normalized",
+        "observations[].payload.attributes.provider_industry_name",
+    ),
+    ("eastmoney_reports@1", "data[].predictThisYearEps"): (
+        "normalized",
+        "observations[].payload.attributes.forecast_eps",
+    ),
+    ("eastmoney_reports@1", "data[].predictNextYearEps"): (
+        "normalized",
+        "observations[].payload.attributes.forecast_eps",
+    ),
+    ("eastmoney_reports@1", "data[].predictNextTwoYearEps"): (
+        "normalized",
+        "observations[].payload.attributes.forecast_eps",
+    ),
+    ("eastmoney_reports@1", "data[].indvInduCode"): (
+        "normalized",
+        "observations[].payload.attributes.provider_industry_code",
+    ),
+    ("eastmoney_reports@1", "data[].indvInduName"): (
+        "normalized",
+        "observations[].payload.attributes.provider_industry_name",
+    ),
+    ("eastmoney_reports@1", "data[].emRatingName"): (
+        "normalized",
+        "observations[].payload.attributes.rating",
+    ),
+    ("eastmoney_reports@1", "data[].reportType"): (
+        "normalized",
+        "observations[].payload.attributes.report_type",
+    ),
+    ("eastmoney_reports@1", "data[].attachPages"): (
+        "normalized",
+        "observations[].payload.attributes.attachment_pages",
+    ),
+    ("eastmoney_reports@1", "data[].attachSize"): (
+        "normalized",
+        "observations[].payload.attributes.attachment_size_kib",
+    ),
+    ("iwencai_content_search@1", "data[].stock_infos[].code"): (
+        "cross_check_only",
+        "observations[].payload.attributes.provider_security_code",
+    ),
+    ("iwencai_content_search@1", "data[].score"): (
+        "normalized",
+        "observations[].payload.attributes.relevance_score",
+    ),
+    ("ths_consensus_material@1", "security"): (
+        "cross_check_only",
+        "observations[].payload.subject.security",
+    ),
+    ("cninfo_investor_qa@1", "lookup.data[].stockCode"): (
+        "cross_check_only",
+        "observations[].payload.subject.security.code",
+    ),
+    ("cninfo_investor_qa@1", "lookup.data[].shortName"): (
+        "cross_check_only",
+        "observations[].payload.attributes.provider_company_short_name",
+    ),
+    ("cninfo_investor_qa@1", "lookup.data[].secid"): (
+        "cross_check_only",
+        "observations[].payload.attributes.provider_org_id",
+    ),
+    ("cninfo_investor_qa@1", "rows[].indexId"): (
+        "normalized",
+        "observations[].payload.source_document_id",
+    ),
+    ("cninfo_investor_qa@1", "rows[].stockCode"): (
+        "cross_check_only",
+        "observations[].payload.subject.security.code",
+    ),
+    ("cninfo_investor_qa@1", "rows[].companyShortName"): (
+        "cross_check_only",
+        "observations[].payload.attributes.provider_company_short_name",
+    ),
+    ("cninfo_investor_qa@1", "rows[].mainContent"): (
+        "normalized",
+        "observations[].payload.summary",
+    ),
+    ("cninfo_investor_qa@1", "rows[].pubDate"): (
+        "normalized",
+        "observations[].payload.published_at",
+    ),
+    ("cninfo_investor_qa@1", "rows[].updateDate"): (
+        "normalized",
+        "observations[].payload.attributes.observed_update_at",
+    ),
+    ("cninfo_investor_qa@1", "rows[].attachedId"): (
+        "normalized",
+        "observations[].payload.source_document_id",
+    ),
+    ("cninfo_investor_qa@1", "rows[].attachedContent"): (
+        "normalized",
+        "observations[].payload.summary",
+    ),
+    ("cninfo_investor_qa@1", "rows[].attachedPubDate"): (
+        "normalized",
+        "observations[].payload.published_at",
+    ),
+    ("cls_market_flash@1", "data.roll_data[].content"): (
+        "normalized",
+        "observations[].payload.summary",
+    ),
+    ("cls_market_flash@1", "data.roll_data[].modified_time"): (
+        "normalized",
+        "observations[].payload.attributes.modified_at",
+    ),
+    ("cls_market_flash@1", "data.roll_data[].stock_list[]"): (
+        "normalized",
+        "observations[].payload.attributes.stock_list",
+    ),
+    ("cls_market_flash@1", "data.roll_data[].subjects[]"): (
+        "normalized",
+        "observations[].payload.attributes.subjects",
+    ),
+    ("eastmoney_market_flash@1", "data.fastNewsList[].realSort"): (
+        "normalized",
+        "observations[].payload.attributes.provider_sort",
+    ),
+    ("eastmoney_market_flash@1", "data.fastNewsList[].stockList[]"): (
+        "normalized",
+        "observations[].payload.attributes.stock_list",
+    ),
+    ("eastmoney_stock_news@1", "result.cmsArticleWebOld[].content"): (
+        "normalized",
+        "observations[].payload.summary",
+    ),
+    ("cninfo_announcement@1", "stockList[].code"): (
+        "cross_check_only",
+        "observations[].payload.subject.security.code",
+    ),
+    ("cninfo_announcement@1", "stockList[].zwjc"): (
+        "cross_check_only",
+        "observations[].payload.subject.name",
+    ),
+    ("cninfo_announcement@1", "stockList[].orgId"): (
+        "cross_check_only",
+        "observations[].payload.attributes.cninfo_org_id",
+    ),
+    ("cninfo_announcement@1", "announcements[].adjunctSize"): (
+        "normalized",
+        "observations[].payload.attributes.adjunct_size",
+    ),
+    ("cninfo_announcement@1", "announcements[].announcementType"): (
+        "normalized",
+        "observations[].payload.attributes.announcement_type",
+    ),
+    ("cninfo_announcement@1", "announcements[].announcementTypeName"): (
+        "normalized",
+        "observations[].payload.attributes.announcement_type_name",
+    ),
+    ("cninfo_announcement@1", "announcements[].orgId"): (
+        "cross_check_only",
+        "observations[].payload.attributes.cninfo_org_id",
+    ),
+    ("sse_announcement@1", "beginDate"): (
+        "cross_check_only",
+        "observations[].payload.query_scope.published_from",
+    ),
+    ("sse_announcement@1", "endDate"): (
+        "cross_check_only",
+        "observations[].payload.query_scope.published_to",
+    ),
+    ("sse_announcement@1", "productId"): (
+        "cross_check_only",
+        "observations[].payload.subject.security.code",
+    ),
+    ("sse_announcement@1", "result[].BULLETIN_HEADING"): (
+        "normalized",
+        "observations[].payload.attributes.bulletin_heading",
+    ),
+    ("sse_announcement@1", "result[].BULLETIN_TYPE"): (
+        "normalized",
+        "observations[].payload.attributes.bulletin_type",
+    ),
+    ("sse_announcement@1", "result[].SSEDATE"): (
+        "normalized",
+        "observations[].payload.attributes.sse_disclosure_date",
+    ),
+    ("sse_announcement@1", "pageHelp.data[].BULLETIN_HEADING"): (
+        "normalized",
+        "observations[].payload.attributes.bulletin_heading",
+    ),
+    ("sse_announcement@1", "pageHelp.data[].BULLETIN_TYPE"): (
+        "normalized",
+        "observations[].payload.attributes.bulletin_type",
+    ),
+    ("sse_announcement@1", "pageHelp.data[].SSEDATE"): (
+        "normalized",
+        "observations[].payload.attributes.sse_disclosure_date",
+    ),
+    ("szse_announcement@1", "data[].id"): (
+        "normalized",
+        "observations[].payload.attributes.szse_index_id",
+    ),
+    ("szse_announcement@1", "data[].attachSize"): (
+        "normalized",
+        "observations[].payload.attributes.attach_size",
+    ),
+}
+
+
 def _content_field_disposition(operation_id: str, field: str) -> FieldDisposition:
+    owner_destination = _OWNER_FIELD_DESTINATIONS.get((operation_id, field))
+    if owner_destination is not None:
+        disposition, destination = owner_destination
+        return FieldDisposition(field, cast(Any, disposition), destination)
     leaf = field.rsplit(".", 1)[-1].removesuffix("[]").casefold()
     if field.endswith("[]"):
         return FieldDisposition(
@@ -675,11 +913,13 @@ def _content_observation_payload(
     document_id = (
         observation.source_document_id or _observation_fingerprint(observation)[:24]
     )
-    public_document_key = hashlib.sha256(
-        f"{namespace}\0{document_id}".encode("utf-8")
-    ).hexdigest()[:24]
-    locator_fallback = f"source-document:{public_document_key}"
-    document_fallback = f"source-document-content:{public_document_key}"
+    locator_uri, document_locator = _canonical_content_document_locators(
+        observation.source_operation,
+        namespace,
+        document_id,
+        locator_uri=observation.locator_uri,
+        document_locator_uri=observation.document_locator,
+    )
     license_value = observation.attributes.get("license")
     license_boundary = (
         license_value
@@ -711,17 +951,9 @@ def _content_observation_payload(
             else observation.retrieved_at.isoformat()
         ),
         "retrieved_at": observation.retrieved_at.isoformat(),
-        "locator": {
-            "uri": safe_public_locator(observation.locator_uri, locator_fallback)
-        },
+        "locator": {"uri": locator_uri},
         "document_locator": (
-            {
-                "uri": safe_public_locator(
-                    observation.document_locator, document_fallback
-                )
-            }
-            if observation.document_locator is not None
-            else None
+            {"uri": document_locator} if document_locator is not None else None
         ),
         "subject": observation.subject,
         "author": observation.author,
@@ -734,6 +966,42 @@ def _content_observation_payload(
             "raw_payload": "excluded",
         },
     }
+
+
+def _canonical_content_document_locators(
+    operation_id: object,
+    namespace: str,
+    document_id: str,
+    *,
+    locator_uri: object,
+    document_locator_uri: object,
+) -> tuple[str, str | None]:
+    public_document_key = hashlib.sha256(
+        f"{namespace}\0{document_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    locator_fallback = f"source-document:{public_document_key}"
+    document_fallback = f"source-document-content:{public_document_key}"
+
+    if has_declared_material_owner_authority(operation_id):
+        return (
+            locator_fallback,
+            document_fallback if document_locator_uri is not None else None,
+        )
+
+    def project(value: object, fallback: str) -> str:
+        candidate = safe_public_locator(value, fallback)
+        if candidate.startswith(("source-document:", "source-document-content:")):
+            return fallback
+        return candidate
+
+    return (
+        project(locator_uri, locator_fallback),
+        (
+            project(document_locator_uri, document_fallback)
+            if document_locator_uri is not None
+            else None
+        ),
+    )
 
 
 def _content_material_groups(
@@ -1228,7 +1496,13 @@ def _validate_observation_enums(
             error_code = "operation_owner_mismatch"
         if observation.material_type not in PUBLIC_MATERIAL_TYPES:
             invalid_fields.append("material_type")
-        if observation.source_role not in PUBLIC_SOURCE_ROLES:
+        if observation.source_role not in PUBLIC_SOURCE_ROLES or not (
+            valid_material_source_role(
+                observation.material_type,
+                observation.source_role,
+                operation_id=operation_id,
+            )
+        ):
             invalid_fields.append("source_role")
         invalid_time_fields = _invalid_observation_time_fields(observation)
         if invalid_time_fields:

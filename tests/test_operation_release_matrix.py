@@ -543,6 +543,101 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             },
         )
 
+    def test_issue_62_closes_exact_reviewed_research_material_gaps(self) -> None:
+        issue_62_owners = {
+            "cls_market_flash@1",
+            "cninfo_announcement@1",
+            "cninfo_investor_qa@1",
+            "eastmoney_market_flash@1",
+            "eastmoney_reports@1",
+            "eastmoney_stock_news@1",
+            "iwencai_content_search@1",
+            "sse_announcement@1",
+            "szse_announcement@1",
+            "ths_consensus_material@1",
+        }
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        operations = {
+            item["producer_operation_id"]: item for item in payload["operations"]
+        }
+
+        self.assertEqual(len(operations), 44)
+        self.assertEqual(issue_62_owners & set(operations), issue_62_owners)
+        self.assertFalse(any(62 in item["gap_issues"] for item in operations.values()))
+        self.assertEqual(
+            {
+                operation_id
+                for operation_id, item in operations.items()
+                if item["rate_limit_policy"]["qualification"] == "qualified_by_issue_62"
+            },
+            issue_62_owners,
+        )
+        direct_selector = "tests/test_direct_research_content_runtime.py#"
+        expected_selectors = {
+            "eastmoney_stock_news@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners"
+            ),
+            "cninfo_announcement@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners"
+            ),
+            "szse_announcement@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners"
+            ),
+            "sse_announcement@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_sse_material_survives_cninfo_failure"
+            ),
+            "eastmoney_reports@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_reports_qualify_three_formal_owners"
+            ),
+            "iwencai_content_search@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_reports_qualify_three_formal_owners"
+            ),
+            "ths_consensus_material@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_reports_qualify_three_formal_owners"
+            ),
+            "cninfo_investor_qa@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_investor_qa_qualifies_formal_owner"
+            ),
+            "cls_market_flash@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback"
+            ),
+            "eastmoney_market_flash@1": (
+                direct_selector
+                + "test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback"
+            ),
+        }
+        self.assertEqual(
+            {
+                owner: {
+                    "disposition": operations[owner]["disposition"],
+                    "qualification": operations[owner]["rate_limit_policy"][
+                        "qualification"
+                    ],
+                    "selector": operations[owner]["offline_contract_selector"],
+                    "gap_issues": operations[owner]["gap_issues"],
+                }
+                for owner in issue_62_owners
+            },
+            {
+                owner: {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_62",
+                    "selector": expected_selectors[owner],
+                    "gap_issues": [],
+                }
+                for owner in issue_62_owners
+            },
+        )
+
     def test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention(
         self,
     ) -> None:
