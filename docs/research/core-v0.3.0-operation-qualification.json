@@ -96,7 +96,7 @@
     },
     {
       "producer_operation_id": "cninfo_security_dictionary@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "source_listing_or_dictionary_snapshot",
         "retrieval_time": "retrieved_at_with_timezone"
@@ -110,20 +110,21 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_58",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_identity_sources.py#IdentitySourceOperationTests",
+      "offline_contract_selector": "tests/test_identity_sources.py#test_cninfo_dictionary_normalizes_identity_observation",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/identity_sources.py#CninfoSecurityDictionaryOperation",
         "skill/a-share-research/scripts/a_share_research/identity_sources.py#IdentityFieldContract",
+        "tests/test_identity_sources.py#test_cninfo_dictionary_normalizes_identity_observation",
         "tests/test_identity_sources.py#IdentitySourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+        "tests/test_unified_identity_runtime.py#test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        58
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "eastmoney_board_fund_flow@1",
@@ -769,19 +770,20 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_58",
         "request_bound": "single_security_single_day"
       },
-      "offline_contract_selector": "tests/test_intraday_replay_mootdx.py#MootdxReplayAdapterTests",
+      "offline_contract_selector": "tests/test_intraday_replay_mootdx.py#test_qualified_pages_normalize_units_and_keep_recent_calendar",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/intraday_replay_mootdx.py#MootdxIntradayReplayOperation",
         "skill/a-share-research/scripts/a_share_research/intraday_replay_contract.py#IntradayReplaySourceBatch",
+        "tests/test_intraday_replay_mootdx.py#test_qualified_pages_normalize_units_and_keep_recent_calendar",
         "tests/test_intraday_replay_mootdx.py#MootdxReplayAdapterTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_intraday_runtime.py#test_copied_installed_replay_exercises_formal_mootdx_owner_contract",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
       "gap_issues": [
-        58,
         59
       ]
     },
@@ -977,7 +979,7 @@
     },
     {
       "producer_operation_id": "sse_stock_list@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "source_listing_or_dictionary_snapshot",
         "retrieval_time": "retrieved_at_with_timezone"
@@ -991,20 +993,21 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_58",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_identity_sources.py#IdentitySourceOperationTests",
+      "offline_contract_selector": "tests/test_identity_sources.py#test_sse_stock_list_normalizes_identity_observation",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/identity_sources.py#SseStockListOperation",
         "skill/a-share-research/scripts/a_share_research/identity_sources.py#IdentityFieldContract",
+        "tests/test_identity_sources.py#test_sse_stock_list_normalizes_identity_observation",
         "tests/test_identity_sources.py#IdentitySourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+        "tests/test_unified_identity_runtime.py#test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        58
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "szse_announcement@1",
@@ -1072,7 +1075,7 @@
     },
     {
       "producer_operation_id": "szse_stock_list@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "source_listing_or_dictionary_snapshot",
         "retrieval_time": "retrieved_at_with_timezone"
@@ -1086,20 +1089,21 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_58",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_identity_sources.py#IdentitySourceOperationTests",
+      "offline_contract_selector": "tests/test_identity_sources.py#test_szse_stock_list_normalizes_identity_observation",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/identity_sources.py#SzseStockListOperation",
         "skill/a-share-research/scripts/a_share_research/identity_sources.py#IdentityFieldContract",
+        "tests/test_identity_sources.py#test_szse_stock_list_normalizes_identity_observation",
         "tests/test_identity_sources.py#IdentitySourceOperationTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+        "tests/test_unified_identity_runtime.py#test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        58
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "tencent_daily_line@1",
@@ -1169,7 +1173,7 @@
     },
     {
       "producer_operation_id": "tencent_intraday_snapshot@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "trading_date_observed_at_retrieved_at_and_session_state",
         "timezone": "Asia/Shanghai"
@@ -1185,20 +1189,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_58",
         "request_bound": "single_security_snapshot"
       },
-      "offline_contract_selector": "tests/test_direct_intraday_runtime.py#DirectIntradayPublicSeamTests",
+      "offline_contract_selector": "tests/test_direct_intraday_runtime.py#test_copied_installed_snapshot_fixture_is_exact_formal_result",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/intraday_sources.py#TencentIntradayOperation",
         "skill/a-share-research/scripts/a_share_research/intraday_contract.py#IntradayObservation",
-        "tests/test_direct_intraday_runtime.py#DirectIntradayPublicSeamTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_intraday_runtime.py#test_copied_installed_snapshot_fixture_is_exact_formal_result",
+        "tests/test_intraday_snapshot_cli_e2e.py#IntradaySnapshotCliE2ETests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        58
-      ]
+      "gap_issues": []
     },
     {
       "producer_operation_id": "ths_consensus_eps@1",
@@ -1358,7 +1361,7 @@
     },
     {
       "producer_operation_id": "tongdaxin_intraday_snapshot@1",
-      "disposition": "experimental",
+      "disposition": "integrated",
       "temporal_semantics": {
         "observation_boundary": "trading_date_observed_at_retrieved_at_and_session_state",
         "timezone": "Asia/Shanghai"
@@ -1374,20 +1377,19 @@
       "credential_policy": "not_required_by_owner_contract",
       "rate_limit_policy": {
         "scope": "owner_operation",
-        "qualification": "pending_domain_ticket",
+        "qualification": "qualified_by_issue_58",
         "request_bound": "single_security_snapshot"
       },
-      "offline_contract_selector": "tests/test_direct_intraday_runtime.py#DirectIntradayPublicSeamTests",
+      "offline_contract_selector": "tests/test_direct_intraday_runtime.py#test_copied_installed_snapshot_fixture_is_exact_formal_result",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/intraday_sources.py#TongdaxinIntradayOperation",
         "skill/a-share-research/scripts/a_share_research/intraday_contract.py#IntradayObservation",
-        "tests/test_direct_intraday_runtime.py#DirectIntradayPublicSeamTests",
-        "docs/specs/0007-implementation-amendment-a.md#A-08"
+        "tests/test_direct_intraday_runtime.py#test_copied_installed_snapshot_fixture_is_exact_formal_result",
+        "tests/test_intraday_snapshot_cli_e2e.py#IntradaySnapshotCliE2ETests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
-      "gap_issues": [
-        58
-      ]
+      "gap_issues": []
     }
   ]
 }

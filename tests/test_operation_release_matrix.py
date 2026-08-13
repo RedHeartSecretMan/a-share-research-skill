@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import unittest
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 
 from tests.skill_imports import add_skill_scripts_to_path
 
@@ -22,13 +24,159 @@ from a_share_research.research_result import (  # noqa: E402
     OperationObligation,
 )
 
+from tests.test_direct_intraday_runtime import (  # noqa: E402
+    intraday_request,
+    invoke_copied_installed,
+)
 from tests.test_direct_research_workflow_runtime import (  # noqa: E402
     comparison_workflow_request,
 )
 from tests.test_research_workflows import fixture_runtime  # noqa: E402
+from tests.test_unified_identity_runtime import (  # noqa: E402
+    identity_request,
+    invoke_installed_identity,
+)
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+QUALIFICATION_PATH = (
+    REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-operation-qualification.json"
+)
 
 
 class OperationReleaseMatrixTests(unittest.TestCase):
+    def test_issue_58_qualification_closes_only_its_reviewed_domain_gaps(
+        self,
+    ) -> None:
+        identity = json.loads(
+            invoke_installed_identity(identity_request(allow_experimental=False)).stdout
+        )
+        snapshot = invoke_copied_installed(
+            intraday_request("intraday_market_signal", allow_experimental=False)
+        )
+        replay = invoke_copied_installed(
+            intraday_request("intraday_replay", allow_experimental=False)
+        )
+        for result in (identity, snapshot, replay):
+            self.assertEqual(result["status"], "blocked")
+            external_obligations = [
+                item
+                for item in result["plan"]["operation_obligations"]
+                if item["operation_kind"] == "external_source"
+            ]
+            self.assertTrue(external_obligations)
+            self.assertTrue(all(item["experimental"] for item in external_obligations))
+            self.assertTrue(
+                all(
+                    operation["execution_state"] == "skipped_policy"
+                    for capability in result["coverage"].values()
+                    for operation in capability["operations"].values()
+                )
+            )
+
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        issue_58_owners = {
+            "cninfo_security_dictionary@1",
+            "sse_stock_list@1",
+            "szse_stock_list@1",
+            "tencent_intraday_snapshot@1",
+            "tongdaxin_intraday_snapshot@1",
+            "mootdx_intraday_replay@1",
+        }
+        integrated_issue_58_owners = issue_58_owners - {"mootdx_intraday_replay@1"}
+        self.assertFalse(
+            any(58 in item["gap_issues"] for item in payload["operations"])
+        )
+        self.assertEqual(
+            {
+                item["producer_operation_id"]
+                for item in payload["operations"]
+                if item["rate_limit_policy"].get("qualification")
+                == "qualified_by_issue_58"
+            },
+            issue_58_owners,
+        )
+        self.assertEqual(
+            {
+                item["producer_operation_id"]
+                for item in payload["operations"]
+                if item["producer_operation_id"] in issue_58_owners
+                and item["disposition"] == "integrated"
+            },
+            integrated_issue_58_owners,
+        )
+        entries = {
+            item["producer_operation_id"]: item
+            for item in payload["operations"]
+            if item["producer_operation_id"] in issue_58_owners
+        }
+        self.assertEqual(
+            {
+                producer: {
+                    "disposition": item["disposition"],
+                    "qualification": item["rate_limit_policy"]["qualification"],
+                    "selector": item["offline_contract_selector"],
+                    "gap_issues": item["gap_issues"],
+                }
+                for producer, item in entries.items()
+            },
+            {
+                "cninfo_security_dictionary@1": {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_58",
+                    "selector": (
+                        "tests/test_identity_sources.py#"
+                        "test_cninfo_dictionary_normalizes_identity_observation"
+                    ),
+                    "gap_issues": [],
+                },
+                "mootdx_intraday_replay@1": {
+                    "disposition": "experimental",
+                    "qualification": "qualified_by_issue_58",
+                    "selector": (
+                        "tests/test_intraday_replay_mootdx.py#"
+                        "test_qualified_pages_normalize_units_and_keep_recent_calendar"
+                    ),
+                    "gap_issues": [59],
+                },
+                "sse_stock_list@1": {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_58",
+                    "selector": (
+                        "tests/test_identity_sources.py#"
+                        "test_sse_stock_list_normalizes_identity_observation"
+                    ),
+                    "gap_issues": [],
+                },
+                "szse_stock_list@1": {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_58",
+                    "selector": (
+                        "tests/test_identity_sources.py#"
+                        "test_szse_stock_list_normalizes_identity_observation"
+                    ),
+                    "gap_issues": [],
+                },
+                "tencent_intraday_snapshot@1": {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_58",
+                    "selector": (
+                        "tests/test_direct_intraday_runtime.py#"
+                        "test_copied_installed_snapshot_fixture_is_exact_formal_result"
+                    ),
+                    "gap_issues": [],
+                },
+                "tongdaxin_intraday_snapshot@1": {
+                    "disposition": "integrated",
+                    "qualification": "qualified_by_issue_58",
+                    "selector": (
+                        "tests/test_direct_intraday_runtime.py#"
+                        "test_copied_installed_snapshot_fixture_is_exact_formal_result"
+                    ),
+                    "gap_issues": [],
+                },
+            },
+        )
+
     def test_qualification_manifest_strictly_joins_plan_denominator(self) -> None:
         payload = {
             "schema_version": "1.0",

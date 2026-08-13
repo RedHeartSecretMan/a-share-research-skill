@@ -515,6 +515,62 @@ class UnifiedIdentityPublicSeamTests(unittest.TestCase):
         )
         self.assertNotIn("gzmt", completed.stdout)
 
+    def test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market(
+        self,
+    ) -> None:
+        bse_request = identity_request(allow_experimental=True)
+        bse_request["subjects"] = [{"clue": "BSE:920000"}]
+        bse_completed = invoke_installed_identity(bse_request, fixture_routes={})
+
+        self.assertEqual(bse_completed.returncode, 0, bse_completed.stderr)
+        self.assertEqual(bse_completed.stderr, "")
+        bse_result = json.loads(bse_completed.stdout)
+        self.assertEqual(bse_result["status"], "blocked")
+        self.assertEqual(bse_result["observations"], [])
+        self.assertEqual(bse_result["claims"], [])
+        self.assertIn(
+            "unsupported_exchange",
+            {item["code"] for item in bse_result["limitations"]},
+        )
+        bse_operations = bse_result["coverage"]["security_identity_resolution"][
+            "operations"
+        ]
+        self.assertEqual(
+            set(bse_operations),
+            {
+                "cninfo_security_dictionary@1",
+                "sse_stock_list@1",
+                "szse_stock_list@1",
+            },
+        )
+        self.assertEqual(
+            {item["state"] for item in bse_operations.values()},
+            {"skipped_research_dependency"},
+        )
+
+        wrong_market_request = identity_request(allow_experimental=True)
+        wrong_market_request["subjects"] = [{"clue": "SSE:000001"}]
+        wrong_market_completed = invoke_installed_identity(
+            wrong_market_request,
+            fixture_routes={
+                "query.sse.com.cn": "sse_empty.json",
+                "www.szse.cn": "szse_000001.json",
+                "www.cninfo.com.cn": "cninfo_stocks.json",
+            },
+        )
+
+        self.assertEqual(
+            wrong_market_completed.returncode, 0, wrong_market_completed.stderr
+        )
+        self.assertEqual(wrong_market_completed.stderr, "")
+        wrong_market_result = json.loads(wrong_market_completed.stdout)
+        self.assertEqual(wrong_market_result["status"], "blocked")
+        self.assertEqual(wrong_market_result["claims"], [])
+        self.assertIn(
+            "exchange_hint_conflict",
+            {item["code"] for item in wrong_market_result["conflicts"]},
+        )
+
     def test_installed_identity_local_source_failure_is_limited(self) -> None:
         request_payload = identity_request(allow_experimental=True)
         request_payload["subjects"] = [{"clue": "SSE:600519"}]

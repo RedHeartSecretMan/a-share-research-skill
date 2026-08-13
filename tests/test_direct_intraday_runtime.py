@@ -143,7 +143,7 @@ def invoke_copied_installed(
                         return original_research(
                             request,
                             research_now=replay._research_now(),
-                            intraday_replay_operations=(replay.FixtureIntradayReplayOperation(),),
+                            intraday_replay_operations=(replay.fixture_intraday_replay_operation(),),
                             intraday_replay_daily_operations=daily,
                         )
 
@@ -358,7 +358,45 @@ class DirectIntradayPublicSeamTests(unittest.TestCase):
 
         self.assert_formal_result(result, "intraday_market_signal")
         self.assertEqual(result["status"], "limited")
-        self.assertTrue(result["observations"])
+        expected_owners = {
+            "tongdaxin_intraday_snapshot@1",
+            "tencent_intraday_snapshot@1",
+        }
+        self.assertEqual(
+            {
+                item["producer_operation_id"]
+                for item in result["plan"]["operation_obligations"]
+                if item["capability_id"] == "intraday_market_snapshot"
+            },
+            expected_owners,
+        )
+        coverage = result["coverage"]["intraday_market_snapshot"]
+        self.assertEqual(coverage["state"], "complete")
+        self.assertEqual(set(coverage["operations"]), expected_owners)
+        self.assertTrue(
+            all(
+                operation["execution_state"] == "succeeded"
+                and operation["state"] == "complete"
+                and operation["field_dispositions"]
+                for operation in coverage["operations"].values()
+            )
+        )
+        source_observations = [
+            item
+            for item in result["observations"]
+            if item["operation_id"] in expected_owners
+        ]
+        self.assertEqual(
+            {item["operation_id"] for item in source_observations}, expected_owners
+        )
+        self.assertTrue(
+            all(
+                item["payload"]["trading_date"] == "2026-08-03"
+                and item["payload"]["session_state"] == "continuous"
+                and item["payload"]["observation_boundary"] == "current_session"
+                for item in source_observations
+            )
+        )
 
     def test_snapshot_raw_dispositions_are_stable_across_execution_states(self) -> None:
         policy = invoke_copied_installed(
@@ -443,6 +481,51 @@ class DirectIntradayPublicSeamTests(unittest.TestCase):
         self.assert_formal_result(result, "intraday_replay")
         self.assertEqual(result["status"], "limited")
         self.assertTrue(result["observations"])
+
+    def test_copied_installed_replay_exercises_formal_mootdx_owner_contract(
+        self,
+    ) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_replay", allow_experimental=True),
+            fixture=True,
+            fixture_environment={"A_SHARE_INTRADAY_REPLAY_SCENARIO": "formal_mootdx"},
+        )
+
+        replay_obligations = [
+            item
+            for item in result["plan"]["operation_obligations"]
+            if item["capability_id"] == "intraday_replay_sequence"
+        ]
+        self.assertEqual(
+            replay_obligations,
+            [
+                {
+                    **replay_obligations[0],
+                    "operation_id": "mootdx_intraday_replay@1",
+                    "producer_operation_id": "mootdx_intraday_replay@1",
+                }
+            ],
+        )
+        self.assertEqual(
+            set(result["coverage"]["intraday_replay_sequence"]["operations"]),
+            {"mootdx_intraday_replay@1"},
+        )
+        source_batch = next(
+            item["payload"]
+            for item in result["observations"]
+            if item["payload"].get("kind") == "intraday_replay_source_batch"
+        )
+        self.assertEqual(source_batch["source_operation"], "mootdx_intraday_replay@1")
+        contract = source_batch["contract"]
+        self.assertEqual(contract["operation_id"], "mootdx_intraday_replay@1")
+        self.assertEqual(contract["trading_date"], "2026-08-03")
+        self.assertIn("2026-08-03", contract["completed_trading_dates"])
+        self.assertEqual(
+            contract["completed_calendar_basis"],
+            "source_verified_completed_trading_dates",
+        )
+        self.assertEqual(contract["timestamp_timezone"], "Asia/Shanghai")
+        self.assertEqual(contract["session_contract"], "cn_a_share_regular_v1")
 
     def test_intraday_locators_are_sanitized_before_public_outcomes(self) -> None:
         snapshot = invoke_copied_installed(

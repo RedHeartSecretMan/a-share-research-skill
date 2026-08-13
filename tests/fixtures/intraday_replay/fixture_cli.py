@@ -21,6 +21,10 @@ from a_share_research.intraday_replay_contract import (  # noqa: E402
     IntradayReplaySourceError,
     IntradayReplaySourceRow,
 )
+from a_share_research.intraday_replay_mootdx import (  # noqa: E402
+    MootdxIntradayReplayOperation,
+    MootdxReplayContract,
+)
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 RETRIEVED_AT = datetime(2026, 8, 4, 16, 0, tzinfo=CHINA_STANDARD_TIME)
@@ -237,6 +241,90 @@ def _summary_rows(trading_date: date) -> tuple[IntradayReplaySourceRow, ...]:
             amount="500.00",
             evidence_locator="fixture:summary:closing",
         ),
+    )
+
+
+class _FormalMootdxFrame:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def to_dict(self, orient: str) -> list[dict[str, object]]:
+        if orient != "records":
+            raise AssertionError(orient)
+        return self._rows
+
+
+class _FormalMootdxClient:
+    page_size = 21
+
+    def __init__(self) -> None:
+        replay_date = date(2026, 8, 3)
+        self._rows = [
+            {
+                "code": "600519",
+                "datetime": f"{candidate.isoformat()}T09:30:00+08:00",
+                "trading_phase": "continuous_morning",
+                "trade_state": "traded",
+                "open": "1010",
+                "high": "1021",
+                "low": "1009",
+                "close": "1020",
+                "vol": "1",
+                "amount": "1.015",
+            }
+            for candidate in _completed_dates(replay_date)
+        ]
+        self._rows.insert(
+            1,
+            {
+                "code": "600519",
+                "datetime": f"{replay_date.isoformat()}T09:31:00+08:00",
+                "trading_phase": "continuous_morning",
+                "trade_state": "traded",
+                "open": "1020",
+                "high": "1025",
+                "low": "1019",
+                "close": "1022",
+                "vol": "2",
+                "amount": "2.044",
+            },
+        )
+
+    def bars(
+        self, *, symbol: str, frequency: int, start: int, offset: int
+    ) -> _FormalMootdxFrame:
+        if symbol != "600519" or frequency != 8 or start != 0:
+            raise AssertionError((symbol, frequency, start))
+        return _FormalMootdxFrame(self._rows[offset : offset + self.page_size])
+
+    def close(self) -> None:
+        return None
+
+
+def fixture_intraday_replay_operation() -> object:
+    if os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO") != "formal_mootdx":
+        return FixtureIntradayReplayOperation()
+    contract = MootdxReplayContract(
+        timestamp_semantics="interval_start",
+        timestamp_timezone="Asia/Shanghai",
+        price_adjustment="unadjusted",
+        price_unit="CNY/share",
+        price_scale="0.01",
+        price_minimum_tick="0.01",
+        volume_unit="hands",
+        volume_lot_size="100",
+        amount_unit="CNY_thousand",
+        amount_scale="1000",
+        session_contract="cn_a_share_regular_v1",
+        coverage_bound="bounded",
+        closing_auction_semantics="final_match_14:57_15:00",
+        completed_calendar_basis="source_verified_completed_trading_dates",
+    )
+    return MootdxIntradayReplayOperation(
+        lambda **_: _FormalMootdxClient(),
+        contract=contract,
+        page_size=_FormalMootdxClient.page_size,
+        max_pages=2,
     )
 
 
