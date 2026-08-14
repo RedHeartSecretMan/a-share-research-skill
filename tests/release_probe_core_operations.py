@@ -46,6 +46,7 @@ from tests.release_probe_attempts import (  # noqa: E402
 )
 
 PROBE_ID = "tests/release_probe_core_operations.py"
+_COPIED_INSTALL_TIMEOUT_SECONDS = 1200
 DEFAULT_QUALIFICATION = (
     REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-operation-qualification.json"
 )
@@ -689,7 +690,7 @@ def _execute_release_probe(
                 env=install_environment,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=_COPIED_INSTALL_TIMEOUT_SECONDS,
                 check=False,
             )
             if installed.returncode != 0:

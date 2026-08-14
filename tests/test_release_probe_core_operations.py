@@ -2992,16 +2992,18 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             )
 
         self.assertEqual(len(calls), 2)
-        install_command, _ = calls[0]
-        run_command, _ = calls[1]
+        install_command, install_kwargs = calls[0]
+        run_command, run_kwargs = calls[1]
         self.assertEqual(install_command[:2], [sys.executable, "-I"])
         self.assertEqual(Path(install_command[-1]).name, "install.py")
+        self.assertEqual(install_kwargs["timeout"], 1200)
         self.assertNotEqual(
             Path(install_command[-1]).resolve(),
             (SKILL_ROOT / "scripts" / "install.py").resolve(),
         )
         self.assertEqual(run_command[:2], [sys.executable, "-I"])
         self.assertEqual(Path(run_command[2]).name, "entrypoint.py")
+        self.assertEqual(run_kwargs["timeout"], profile.harness_timeout_seconds)
         self.assertEqual(requests, [profile.request])
         self.assertEqual(
             set(report),
