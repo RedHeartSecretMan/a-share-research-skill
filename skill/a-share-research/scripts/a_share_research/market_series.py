@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -139,6 +140,7 @@ def build_market_trend_result(
     if adjustment == "forward_adjusted":
         adjusted_primary = EastmoneyForwardAdjustedDailyLineOperation()
         adjusted_secondary = TencentForwardAdjustedDailyLineOperation()
+        primary_operation_id = adjusted_primary.operation_id
         secondary_operation_id = adjusted_secondary.operation_id
         try:
             if evidence_store is None:
@@ -233,6 +235,7 @@ def build_market_trend_result(
             else SzseDailyLineOperation()
         )
         unadjusted_secondary = TencentDailyLineOperation()
+        primary_operation_id = exchange_operation.operation_id
         secondary_operation_id = unadjusted_secondary.operation_id
         try:
             if evidence_store is None:
@@ -321,16 +324,33 @@ def build_market_trend_result(
         if research_date < research_now.date()
         else research_now
     )
-    recent_official_rows = sorted(
-        (
-            item
-            for item in official_observations
-            if item.trading_date <= research_date
-            and item.available_at <= research_boundary
-            and item.price_type == "close"
-        ),
-        key=lambda item: item.trading_date,
+    recent_official_rows = _eligible_market_observations(
+        official_observations,
+        research_date,
+        research_boundary,
     )[-trading_days:]
+    eligible_fallback_rows = _eligible_market_observations(
+        fallback_observations,
+        research_date,
+        research_boundary,
+    )
+    selected_official_dates = {item.trading_date for item in recent_official_rows}
+    adopted_fallback_rows = (
+        [
+            item
+            for item in eligible_fallback_rows
+            if item.trading_date in selected_official_dates
+        ]
+        if selected_official_dates
+        else eligible_fallback_rows[-trading_days:]
+    )
+    operation_outcomes = _adopt_market_window(
+        operation_outcomes,
+        {
+            primary_operation_id: recent_official_rows,
+            secondary_operation_id: adopted_fallback_rows,
+        },
+    )
     suspended_rows = [
         item for item in recent_official_rows if item.trading_status == "suspended"
     ]
@@ -504,12 +524,17 @@ def build_market_trend_result(
         if last_close < first_close
         else "flat"
     )
+    identity_keys = identity_material.observation_keys
+    observation_keys = (*identity_keys, *selected_keys)
+    retrieved_at = _canonical_market_retrieved_at(
+        _retained_claim_observations(operation_outcomes, observation_keys)
+    )
     domain_payload: dict[str, object] = {
         "subjects": identity["subjects"],
         "research": {
             "as_of": request["as_of"],
             "timezone": "Asia/Shanghai",
-            "retrieved_at": research_now.isoformat(),
+            "retrieved_at": retrieved_at,
             "adjustment": adjustment,
         },
         "window": {
@@ -535,8 +560,6 @@ def build_market_trend_result(
         },
         "corporate_actions": corporate_actions,
     }
-    identity_keys = identity_material.observation_keys
-    observation_keys = (*identity_keys, *selected_keys)
     return _direct_market_result(
         request,
         identity_obligations=identity_execution.plan.obligations,
@@ -579,6 +602,78 @@ def _completed_observations(
         ),
         key=lambda item: item.trading_date,
     )
+
+
+def _eligible_market_observations(
+    observations: list[DailyBarObservation],
+    research_date: date,
+    research_boundary: datetime,
+) -> list[DailyBarObservation]:
+    return sorted(
+        (
+            item
+            for item in observations
+            if item.trading_date <= research_date
+            and item.available_at <= research_boundary
+            and item.price_type == "close"
+        ),
+        key=lambda item: item.trading_date,
+    )
+
+
+def _adopt_market_window(
+    outcomes: list[OperationOutcome],
+    observations_by_operation: Mapping[str, list[DailyBarObservation]],
+) -> list[OperationOutcome]:
+    adopted = {
+        operation_id: tuple(item.to_bar_evidence() for item in observations)
+        for operation_id, observations in observations_by_operation.items()
+    }
+    return [
+        replace(outcome, observations=adopted[outcome.operation_id])
+        if outcome.operation_id in adopted and outcome.execution.state == "succeeded"
+        else outcome
+        for outcome in outcomes
+    ]
+
+
+def _retained_claim_observations(
+    outcomes: Sequence[OperationOutcome], observation_keys: Sequence[str]
+) -> tuple[Mapping[str, object], ...]:
+    observations_by_key: dict[str, Mapping[str, object]] = {}
+    for outcome in outcomes:
+        for index, observation in enumerate(outcome.observations):
+            local_id = observation.get("id")
+            key = (
+                local_id
+                if isinstance(local_id, str) and local_id
+                else f"{outcome.operation_id}:{index}"
+            )
+            if key in observations_by_key:
+                raise ValueError("market claim observation keys must be unique")
+            observations_by_key[key] = observation
+    try:
+        return tuple(observations_by_key[key] for key in observation_keys)
+    except KeyError as error:
+        raise ValueError("market claim references unknown retained evidence") from error
+
+
+def _canonical_market_retrieved_at(
+    observations: Sequence[Mapping[str, object]],
+) -> str:
+    retrieved: list[datetime] = []
+    for observation in observations:
+        value = observation.get("retrieved_at")
+        try:
+            parsed = datetime.fromisoformat(cast(str, value))
+        except (TypeError, ValueError) as error:
+            raise ValueError("market claim retrieval boundary is invalid") from error
+        if parsed.utcoffset() is None:
+            raise ValueError("market claim retrieval boundary is invalid")
+        retrieved.append(parsed)
+    if not retrieved:
+        raise ValueError("market claim retrieval boundary is missing")
+    return max(retrieved).astimezone(CHINA_STANDARD_TIME).isoformat()
 
 
 def _completed_history_for_store(

@@ -843,6 +843,88 @@ class _NoIoHttpTransport:
         raise AssertionError("destination contract validation must not perform I/O")
 
 
+def _validate_workflow_default_operation_inventory(
+    result: Mapping[str, object],
+    *,
+    task_type: object,
+    source_policy: Mapping[str, object],
+) -> None:
+    """Bind generalized workflow leaves to their production operation registries."""
+
+    transport = _NoIoHttpTransport()
+    capability_id: str
+    expected_operation_ids: set[str]
+    if task_type == "research_content":
+        from .content_registry import build_default_content_operations
+
+        capability_id = "research_content_materials"
+        expected_operation_ids = {
+            item.operation_id
+            for item in build_default_content_operations(
+                transport,
+                allow_credentials=cast(bool, source_policy["allow_credentials"]),
+                allow_fallback=cast(bool, source_policy["allow_fallback"]),
+                research_now=None,
+            )
+        }
+    elif task_type == "capital_events":
+        from .capital_registry import build_default_capital_operations
+
+        capability_id = "capital_event_observations"
+        expected_operation_ids = {
+            item.operation_id for item in build_default_capital_operations(transport)
+        }
+    elif task_type == "market_signals":
+        from .market_signal_registry import build_default_market_signal_operations
+
+        capability_id = "market_signal_observations"
+        expected_operation_ids = {
+            item.operation_id
+            for item in build_default_market_signal_operations(transport)
+        }
+    else:
+        return
+
+    plan = result.get("plan")
+    registry = result.get("capability_registry")
+    coverage = result.get("coverage")
+    if not all(isinstance(item, Mapping) for item in (plan, registry, coverage)):
+        raise ValueError("workflow default operation inventory is invalid")
+    typed_plan = cast(Mapping[str, object], plan)
+    typed_registry = cast(Mapping[str, object], registry)
+    typed_coverage = cast(Mapping[str, object], coverage)
+    obligations = typed_plan.get("operation_obligations")
+    registered = typed_registry.get(capability_id)
+    covered = typed_coverage.get(capability_id)
+    if (
+        not isinstance(obligations, list)
+        or not isinstance(registered, Mapping)
+        or not isinstance(registered.get("operations"), list)
+        or not isinstance(covered, Mapping)
+        or not isinstance(covered.get("operations"), Mapping)
+    ):
+        raise ValueError("workflow default operation inventory is invalid")
+    producer_ids = {
+        item.get("producer_operation_id")
+        for item in obligations
+        if isinstance(item, Mapping) and item.get("capability_id") == capability_id
+    }
+    registry_ids = {
+        item.get("id")
+        for item in cast(list[object], registered["operations"])
+        if isinstance(item, Mapping)
+    }
+    coverage_ids = set(cast(Mapping[str, object], covered["operations"]))
+    if (
+        producer_ids != expected_operation_ids
+        or registry_ids != expected_operation_ids
+        or coverage_ids != expected_operation_ids
+    ):
+        raise ValueError("workflow default operation inventory contradicts its leaf")
+    if transport.calls:
+        raise AssertionError("workflow operation inventory construction performed I/O")
+
+
 def _validate_production_identity_dispositions(
     result: Mapping[str, object],
 ) -> None:
@@ -5176,6 +5258,78 @@ def _record_payload(record: Mapping[str, object]) -> dict[str, object]:
     return payload
 
 
+def _canonical_identity_subject_from_owned_official_observations(
+    observations: Sequence[Mapping[str, object]],
+    observation_ids: Collection[str],
+    *,
+    domain: str,
+) -> dict[str, object]:
+    candidates: dict[str, dict[str, object]] = {}
+    for record in observations:
+        if (
+            record.get("id") not in observation_ids
+            or record.get("capability_id") != "security_identity_resolution"
+        ):
+            continue
+        provider_payload = _record_payload(record)
+        observed_identity = provider_payload.get("observation")
+        provider_subject = provider_payload.get("subject")
+        if (
+            provider_payload.get("source_role") != "authoritative_disclosure"
+            or not isinstance(observed_identity, dict)
+            or not isinstance(provider_subject, dict)
+        ):
+            continue
+        exchange = observed_identity.get("exchange")
+        code = observed_identity.get("code")
+        security_type = observed_identity.get("security_type")
+        name = observed_identity.get("name")
+        issuer_name = provider_subject.get("issuer")
+        issuer_identifier = observed_identity.get("issuer_identifier")
+        relationship_verified = observed_identity.get("issuer_relationship_verified")
+        if (
+            set(provider_subject) != {"security", "issuer"}
+            or exchange not in {"SSE", "SZSE"}
+            or not isinstance(code, str)
+            or len(code) != 6
+            or not code.isascii()
+            or not code.isdigit()
+            or provider_subject.get("security") != f"{exchange}:{code}"
+            or security_type != "A_SHARE"
+            or not isinstance(name, str)
+            or not name
+            or (issuer_name is not None and not isinstance(issuer_name, str))
+            or issuer_name == ""
+            or (
+                issuer_identifier is not None and not isinstance(issuer_identifier, str)
+            )
+            or issuer_identifier == ""
+            or not isinstance(relationship_verified, bool)
+        ):
+            continue
+        candidate: dict[str, object] = {
+            "security": {
+                "exchange": exchange,
+                "code": code,
+                "type": security_type,
+            },
+            "name": name,
+            "issuer": {
+                "name": issuer_name,
+                "identifier": issuer_identifier,
+                "security_relationship": (
+                    "verified" if relationship_verified else "unverified"
+                ),
+            },
+        }
+        candidates[json.dumps(candidate, ensure_ascii=False, sort_keys=True)] = (
+            candidate
+        )
+    if len(candidates) != 1:
+        raise ValueError(f"{domain} subject identity lacks one official authority")
+    return next(iter(candidates.values()))
+
+
 def _validated_owned_identity_claim_payload(
     observations: Sequence[Mapping[str, object]],
     claims: Sequence[Mapping[str, object]],
@@ -5211,11 +5365,6 @@ def _validated_owned_identity_claim_payload(
         or issuer.get("security_relationship") not in {"verified", "unverified"}
     ):
         raise ValueError(f"{domain} subject identity claim is invalid")
-    records_by_id = {
-        cast(str, item["id"]): item
-        for item in observations
-        if isinstance(item.get("id"), str)
-    }
     evidence_adoptions = identity_claim.get("evidence_adoptions")
     if not isinstance(evidence_adoptions, list):
         raise ValueError(f"{domain} subject identity lacks owned supporting facts")
@@ -5227,39 +5376,14 @@ def _validated_owned_identity_claim_payload(
         and adoption.get("decision") == "adopted"
         and adoption.get("role") == "supporting"
     }
-    for observation_id in supporting_ids:
-        identity_record = records_by_id.get(observation_id)
-        if identity_record is None:
-            continue
-        provider_payload = _record_payload(identity_record)
-        observed_identity = provider_payload.get("observation")
-        provider_subject = provider_payload.get("subject")
-        if not isinstance(observed_identity, dict) or not isinstance(
-            provider_subject, dict
-        ):
-            continue
-        relationship_verified = observed_identity.get("issuer_relationship_verified")
-        expected_relationship = issuer.get("security_relationship")
-        exchange = observed_identity.get("exchange")
-        code = observed_identity.get("code")
-        if (
-            set(provider_subject) == {"security", "issuer"}
-            and exchange == security.get("exchange")
-            and code == security.get("code")
-            and provider_subject.get("security") == f"{exchange}:{code}"
-            and provider_subject.get("issuer") == issuer_name
-            and observed_identity.get("security_type") == security.get("type")
-            and observed_identity.get("name") == subject.get("name")
-            and observed_identity.get("issuer_identifier") == issuer_identifier
-            and (
-                expected_relationship == "verified"
-                and relationship_verified is True
-                or expected_relationship == "unverified"
-                and relationship_verified is False
-            )
-        ):
-            return subject
-    raise ValueError(f"{domain} subject identity lacks owned supporting facts")
+    expected_subject = _canonical_identity_subject_from_owned_official_observations(
+        observations,
+        supporting_ids,
+        domain=domain,
+    )
+    if subject != expected_subject:
+        raise ValueError(f"{domain} subject identity lacks owned supporting facts")
+    return subject
 
 
 def _nested_mapping(value: object, *path: str) -> dict[str, object]:
@@ -5934,6 +6058,7 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
 def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
     from .market_series import (
         _MARKET_OPERATION_ROLES,
+        _canonical_market_retrieved_at,
         _market_dispositions,
         _validate_market_evidence_storage_authority,
     )
@@ -5968,14 +6093,86 @@ def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
     if claim is None:
         return
     payload = _nested_mapping(claim, "payload")
+    if set(payload) != {
+        "subjects",
+        "research",
+        "window",
+        "series",
+        "metrics",
+        "conclusion",
+        "corporate_actions",
+    }:
+        raise ValueError("market summary payload shape is invalid")
+    subjects = payload.get("subjects")
+    research = payload.get("research")
+    claim_observation_ids = claim.get("observation_ids")
+    owned_observations = _owned_observations(result)
+    if (
+        not isinstance(subjects, list)
+        or not isinstance(research, Mapping)
+        or set(research) != {"as_of", "timezone", "retrieved_at", "adjustment"}
+        or not isinstance(claim_observation_ids, list)
+        or any(not isinstance(item, str) for item in claim_observation_ids)
+    ):
+        raise ValueError("market summary identity or research authority is invalid")
+    expected_subject = _canonical_identity_subject_from_owned_official_observations(
+        owned_observations,
+        cast(list[str], claim_observation_ids),
+        domain="market",
+    )
+    if subjects != [expected_subject]:
+        raise ValueError("market summary subject contradicts official identity")
+    observations_by_id = {
+        str(item["id"]): item for item in owned_observations if "id" in item
+    }
+    try:
+        claim_observations = [
+            _record_payload(observations_by_id[item])
+            for item in cast(list[str], claim_observation_ids)
+        ]
+    except KeyError as error:
+        raise ValueError("market summary research authority is invalid") from error
+    expected_retrieved_at = _canonical_market_retrieved_at(claim_observations)
+    anchor = cast(Mapping[str, object], result["research_anchor"])
+    if (
+        research.get("as_of") != anchor.get("as_of")
+        or research.get("timezone") != anchor.get("timezone")
+        or research.get("retrieved_at") != expected_retrieved_at
+        or research.get("adjustment") not in {"unadjusted", "forward_adjusted"}
+    ):
+        raise ValueError("market summary research contradicts its anchor")
     series = payload.get("series")
     metrics = payload.get("metrics")
-    if not isinstance(series, list) or len(series) < 2 or not isinstance(metrics, dict):
+    window = payload.get("window")
+    if (
+        not isinstance(series, list)
+        or len(series) < 2
+        or not isinstance(metrics, dict)
+        or not isinstance(window, Mapping)
+        or set(window)
+        != {
+            "requested_trading_days",
+            "actual_trading_days",
+            "start",
+            "end",
+        }
+    ):
         raise ValueError("market domain facts are incomplete")
-    observations_by_id = {str(item["id"]): item for item in _owned_observations(result)}
+    requested_trading_days = window.get("requested_trading_days")
+    actual_trading_days = window.get("actual_trading_days")
+    if (
+        not isinstance(requested_trading_days, int)
+        or isinstance(requested_trading_days, bool)
+        or not 2 <= requested_trading_days <= 250
+        or actual_trading_days != requested_trading_days
+        or len(series) != requested_trading_days
+    ):
+        raise ValueError("market trend window contradicts its selected sessions")
     closes: list[Decimal] = []
     volumes: list[Decimal] = []
     dates: list[str] = []
+    selected_owners: set[str] | None = None
+    expected_corporate_actions: list[dict[str, object]] = []
     for row in series:
         if not isinstance(row, dict):
             raise ValueError("market domain facts contain an invalid series row")
@@ -5985,6 +6182,16 @@ def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
         evidence = [observations_by_id.get(str(item)) for item in evidence_ids]
         if any(item is None for item in evidence):
             raise ValueError("market domain facts reference unknown row evidence")
+        row_owners = {
+            str(record["operation_id"]) for record in evidence if record is not None
+        }
+        if (
+            len(row_owners) != 2
+            or not row_owners.issubset(_MARKET_OPERATION_ROLES)
+            or (selected_owners is not None and row_owners != selected_owners)
+        ):
+            raise ValueError("market trend window lacks two stable source owners")
+        selected_owners = row_owners
         for record in evidence:
             assert record is not None
             observation_payload = _record_payload(record)
@@ -5999,11 +6206,42 @@ def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
                 )
             ):
                 raise ValueError("market domain facts contradict owned observations")
+            corporate_action = observation.get("corporate_action")
+            if corporate_action is not None:
+                expected_corporate_actions.append(
+                    {
+                        "trading_date": observation["trading_date"],
+                        "source_operation": record["operation_id"],
+                        "details": corporate_action,
+                        "evidence_id": record["id"],
+                    }
+                )
         dates.append(str(row["trading_date"]))
         closes.append(_decimal_fact(row["close"]))
         volumes.append(_decimal_fact(row["volume"]))
     if dates != sorted(dates) or len(dates) != len(set(dates)):
         raise ValueError("market domain facts contain invalid selected sessions")
+    if window.get("start") != dates[0] or window.get("end") != dates[-1]:
+        raise ValueError("market trend window contradicts its selected sessions")
+    adjustments = {row.get("adjustment") for row in series if isinstance(row, dict)}
+    if adjustments != {research.get("adjustment")}:
+        raise ValueError("market summary research adjustment contradicts its series")
+    assert selected_owners is not None
+    selected_dates = set(dates)
+    for operation_id in selected_owners:
+        retained = [
+            item
+            for item in observations_by_id.values()
+            if item.get("operation_id") == operation_id
+        ]
+        retained_dates = {
+            str(_nested_mapping(_record_payload(item), "observation")["trading_date"])
+            for item in retained
+        }
+        if len(retained) != requested_trading_days or retained_dates != selected_dates:
+            raise ValueError(
+                "market trend window contradicts retained owner observations"
+            )
     returns = [
         closes[index] / closes[index - 1] - Decimal(1)
         for index in range(1, len(closes))
@@ -6052,6 +6290,24 @@ def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
     }
     if metrics != expected_metrics:
         raise ValueError("market domain facts contain forged metrics")
+    close_trend = (
+        "up" if closes[-1] > closes[0] else "down" if closes[-1] < closes[0] else "flat"
+    )
+    expected_conclusion = {
+        "close_trend": close_trend,
+        "statement": (
+            f"The completed-session close trend is {close_trend} over the "
+            f"requested {requested_trading_days}-session window."
+        ),
+        "calculation_ids": [
+            "cumulative_return",
+            "maximum_drawdown",
+            "annualized_volatility",
+            "volume_change",
+        ],
+    }
+    if payload.get("conclusion") != expected_conclusion:
+        raise ValueError("market summary conclusion contradicts canonical facts")
     expected_formulas = {
         "cumulative_return": "(last_close / first_close - 1) * 100",
         "maximum_drawdown": "min(close / running_peak_close - 1) * 100",
@@ -6105,16 +6361,8 @@ def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
         if operands != expected_operands:
             raise ValueError("market domain facts contradict calculation inputs")
     corporate_actions = payload.get("corporate_actions")
-    if not isinstance(corporate_actions, list):
-        raise ValueError("market domain facts contain invalid corporate actions")
-    for action in corporate_actions:
-        if not isinstance(action, dict):
-            raise ValueError("market domain facts contain invalid corporate actions")
-        record = observations_by_id.get(str(action.get("evidence_id")))
-        if record is None or _nested_mapping(
-            _record_payload(record), "observation"
-        ).get("corporate_action") != action.get("details"):
-            raise ValueError("market domain facts forge a corporate action")
+    if corporate_actions != expected_corporate_actions:
+        raise ValueError("market domain facts forge a corporate action")
 
 
 def _validate_etf_domain_facts(result: Mapping[str, object]) -> None:

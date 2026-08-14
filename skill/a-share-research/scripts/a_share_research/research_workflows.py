@@ -8,12 +8,17 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
-from .research_result import UnifiedResearchResult, stable_result_id
+from .research_result import (
+    UnifiedResearchResult,
+    _validate_workflow_default_operation_inventory,
+    stable_result_id,
+)
 
 LeafTaskRunner = Callable[[dict[str, Any]], UnifiedResearchResult]
 
 WORKFLOW_VERSION = "1.0"
 WORKFLOW_IDS = {
+    "single_security_research",
     "single_security_valuation",
     "valuation_comparison",
     "theme_report_research",
@@ -74,6 +79,14 @@ def build_research_workflow_result(
             },
         )
         steps = [_execute_step(plan[0], leaf_request, run_leaf_task)]
+    elif workflow_id == "single_security_research":
+        plan = _single_security_plan()
+        steps = _run_single_security_workflow(
+            request,
+            inputs,
+            plan,
+            run_leaf_task,
+        )
     else:
         plan = _new_security_plan()
         steps = _run_new_security_workflow(
@@ -107,7 +120,40 @@ def _validate_workflow_request(
     if not isinstance(inputs, dict):
         raise ValueError("research_workflow parameters.inputs must be an object")
 
-    if workflow_id == "single_security_valuation":
+    if workflow_id == "single_security_research":
+        _require_subject_count(request["subjects"], minimum=1, maximum=1)
+        allowed_inputs = {"target_pe", "completeness_mode", "deep_extensions"}
+        if "target_pe" not in inputs or not set(inputs).issubset(allowed_inputs):
+            raise ValueError(
+                "single_security_research inputs do not match the workflow contract"
+            )
+        _require_target_pe(inputs["target_pe"])
+        completeness_mode = inputs.get("completeness_mode", "standard")
+        if not isinstance(completeness_mode, str) or completeness_mode not in {
+            "standard",
+            "fast",
+        }:
+            raise ValueError(
+                "single_security_research completeness_mode must be standard or fast"
+            )
+        deep_extensions = inputs.get("deep_extensions", [])
+        if (
+            not isinstance(deep_extensions, list)
+            or any(
+                not isinstance(item, str)
+                or item not in {"long_history", "large_materials"}
+                for item in deep_extensions
+            )
+            or len(set(deep_extensions)) != len(deep_extensions)
+        ):
+            raise ValueError(
+                "single_security_research deep_extensions contains an unsupported value"
+            )
+        if completeness_mode == "fast" and "large_materials" in deep_extensions:
+            raise ValueError(
+                "single_security_research fast cannot be combined with large_materials"
+            )
+    elif workflow_id == "single_security_valuation":
         _require_subject_count(request["subjects"], minimum=1, maximum=1)
         _require_inputs(inputs, {"target_pe"})
         _require_target_pe(inputs["target_pe"])
@@ -182,6 +228,168 @@ def _validate_workflow_request(
         _require_limit(inputs["limit"])
         _require_boolean(inputs["verify_documents"], "verify_documents")
     return workflow_id, inputs
+
+
+def _run_single_security_workflow(
+    request: dict[str, Any],
+    inputs: dict[str, Any],
+    plan: list[dict[str, Any]],
+    run_leaf_task: LeafTaskRunner,
+) -> list[dict[str, Any]]:
+    completeness_mode = cast(str, inputs.get("completeness_mode", "standard"))
+    identity_request = _leaf_request(
+        request,
+        task_type="security_identity",
+        subjects=[{"clue": request["subjects"][0]["clue"]}],
+        window=None,
+        parameters={},
+    )
+    identity_step = _execute_step(plan[0], identity_request, run_leaf_task)
+    identity_result = cast(UnifiedResearchResult, identity_step["result"])
+    canonical_subject = _canonical_subject(identity_result.to_dict())
+    if canonical_subject is None:
+        identity_step["state"] = "blocked"
+        identity_step["workflow_limitation"] = _identity_workflow_limitation()
+        remaining = [
+            (
+                _not_requested_step(item)
+                if completeness_mode == "fast"
+                and item["criticality"] == "standard_enrichment"
+                else _skipped_step(item, "identity")
+            )
+            for item in plan[1:]
+        ]
+        return [identity_step, *remaining]
+
+    plan_by_id = {item["step_id"]: item for item in plan}
+    specs_by_id = {
+        item[0]: item
+        for item in _single_security_child_specs(request, inputs, canonical_subject)
+    }
+    steps = [identity_step]
+    for plan_step in plan[1:]:
+        if (
+            completeness_mode == "fast"
+            and plan_step["criticality"] == "standard_enrichment"
+        ):
+            steps.append(_not_requested_step(plan_step))
+            continue
+        step_id, task_type, window, parameters, subjects = specs_by_id[
+            plan_step["step_id"]
+        ]
+        child_request = _leaf_request(
+            request,
+            task_type=task_type,
+            subjects=subjects,
+            window=window,
+            parameters=parameters,
+        )
+        steps.append(_execute_step(plan_by_id[step_id], child_request, run_leaf_task))
+    return steps
+
+
+def _single_security_child_specs(
+    request: Mapping[str, object],
+    inputs: Mapping[str, object],
+    canonical_subject: Mapping[str, object],
+) -> list[tuple[str, str, object, object, object]]:
+    security = cast(Mapping[str, object], canonical_subject["security"])
+    canonical_clue = f"{security['exchange']}:{security['code']}"
+    subject = cast(list[Mapping[str, object]], request["subjects"])[0]
+    as_of = date.fromisoformat(cast(str, request["as_of"]))
+    deep_extensions = cast(list[str], inputs.get("deep_extensions", []))
+    return [
+        (
+            "market_trend",
+            "market_trend",
+            {"trading_days": 250 if "long_history" in deep_extensions else 20},
+            {"adjustment": "unadjusted"},
+            [{"clue": canonical_clue}],
+        ),
+        (
+            "valuation",
+            "security_valuation",
+            None,
+            {"target_pe": inputs["target_pe"]},
+            [
+                {
+                    "clue": canonical_clue,
+                    "issuer_security_class_count": subject[
+                        "issuer_security_class_count"
+                    ],
+                }
+            ],
+        ),
+        (
+            "materials",
+            "research_content",
+            {
+                "published_from": (
+                    as_of
+                    - timedelta(
+                        days=365 if "large_materials" in deep_extensions else 90
+                    )
+                ).isoformat(),
+                "published_to": as_of.isoformat(),
+            },
+            {
+                "material_types": [
+                    "research_report",
+                    "issuer_profile",
+                    "consensus_material",
+                    "stock_news",
+                    "announcement",
+                    "investor_qa",
+                ],
+                "query": [],
+                "limit": 100 if "large_materials" in deep_extensions else 20,
+                "verify_documents": False,
+                "profile_categories": ["公司概况"],
+            },
+            [{"clue": canonical_clue}],
+        ),
+        (
+            "capital_activity",
+            "capital_events",
+            {
+                "observed_from": (as_of - timedelta(days=90)).isoformat(),
+                "observed_to": as_of.isoformat(),
+            },
+            {
+                "data_types": [
+                    "stock_fund_flow",
+                    "dragon_tiger",
+                    "margin_trading",
+                    "block_trade",
+                    "shareholder_count",
+                    "dividend",
+                ],
+                "period": "5d",
+                "limit": 20,
+            },
+            [{"clue": canonical_clue}],
+        ),
+        (
+            "lockup_events",
+            "capital_events",
+            {
+                "observed_from": as_of.isoformat(),
+                "observed_to": (as_of + timedelta(days=90)).isoformat(),
+            },
+            {"data_types": ["lockup"], "limit": 20},
+            [{"clue": canonical_clue}],
+        ),
+        (
+            "market_context",
+            "market_signals",
+            {
+                "observed_from": as_of.isoformat(),
+                "observed_to": as_of.isoformat(),
+            },
+            {"signal_types": ["security_board_membership"], "limit": 20},
+            [{"clue": canonical_clue}],
+        ),
+    ]
 
 
 def _run_new_security_workflow(
@@ -379,11 +587,12 @@ def _compiled_leaf_scope(
         )
     if canonical_subject is None:
         return None
-    spec = next(
-        item
-        for item in _new_security_child_specs(request, inputs, canonical_subject)
-        if item[0] == step_id
+    child_specs = (
+        _single_security_child_specs(request, inputs, canonical_subject)
+        if workflow_id == "single_security_research"
+        else _new_security_child_specs(request, inputs, canonical_subject)
     )
+    spec = next(item for item in child_specs if item[0] == step_id)
     _, task_type, window, leaf_parameters, subjects = spec
     return _leaf_request(
         cast(dict[str, Any], request),
@@ -481,6 +690,57 @@ def _validate_leaf_request_facts(
         payload_kind = "research_content_material"
         requested_kind_field = "material_type"
         requested_kinds = parameters["material_types"]
+    elif task_type == "market_trend":
+        if not isinstance(window, Mapping):
+            raise ValueError("workflow market trend window is invalid")
+        requested_trading_days = window.get("trading_days")
+        summaries = [
+            claim
+            for claim in cast(list[Mapping[str, object]], leaf["claims"])
+            if claim.get("kind") == "market_trend_summary"
+        ]
+        if len(summaries) > 1:
+            raise ValueError("workflow market trend window is ambiguous")
+        if summaries:
+            payload = summaries[0].get("payload")
+            selected_window = (
+                payload.get("window") if isinstance(payload, Mapping) else None
+            )
+            series = payload.get("series") if isinstance(payload, Mapping) else None
+            research = payload.get("research") if isinstance(payload, Mapping) else None
+            if (
+                not isinstance(selected_window, Mapping)
+                or not isinstance(series, list)
+                or not isinstance(research, Mapping)
+                or selected_window.get("requested_trading_days")
+                != requested_trading_days
+                or selected_window.get("actual_trading_days") != len(series)
+                or len(series) != requested_trading_days
+                or research.get("as_of") != request_scope["as_of"]
+                or research.get("timezone") != "Asia/Shanghai"
+                or research.get("adjustment") != parameters.get("adjustment")
+            ):
+                raise ValueError(
+                    "workflow market trend window contradicts its leaf facts"
+                )
+        for claim in cast(list[Mapping[str, object]], leaf["claims"]):
+            if claim.get("kind") != "market_trend_diagnostics":
+                continue
+            payload = claim.get("payload")
+            selected_count = (
+                payload.get("selected_session_count")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            if selected_count is not None and (
+                not isinstance(selected_count, int)
+                or isinstance(selected_count, bool)
+                or not isinstance(requested_trading_days, int)
+                or selected_count > requested_trading_days
+            ):
+                raise ValueError(
+                    "workflow market trend window contradicts its diagnostics"
+                )
     if expected_query_scope is not None:
         for observation in cast(list[Mapping[str, object]], leaf["observations"]):
             payload = observation.get("payload")
@@ -492,6 +752,31 @@ def _validate_leaf_request_facts(
                 or payload.get(cast(str, requested_kind_field)) not in requested_kinds
             ):
                 raise ValueError("workflow leaf facts contradict their request scope")
+    if task_type == "research_content" and "profile_categories" in parameters:
+        from .communication_sources import MootdxF10Operation
+        from .content_contract import valid_f10_profile_categories
+
+        profile_categories = parameters["profile_categories"]
+        if not valid_f10_profile_categories(profile_categories):
+            raise ValueError("workflow F10 profile categories are invalid")
+        typed_profile_categories = cast(Sequence[str], profile_categories)
+        for observation in cast(list[Mapping[str, object]], leaf["observations"]):
+            if observation.get("operation_id") != MootdxF10Operation.operation_id:
+                continue
+            payload = observation.get("payload")
+            attributes = (
+                payload.get("attributes") if isinstance(payload, Mapping) else None
+            )
+            if (
+                not isinstance(payload, Mapping)
+                or payload.get("material_type")
+                not in MootdxF10Operation.supported_material_types
+                or not isinstance(attributes, Mapping)
+                or attributes.get("category") not in typed_profile_categories
+            ):
+                raise ValueError(
+                    "workflow F10 profile category contradicts its request scope"
+                )
     coverage_kind: str | None = None
     coverage_field: str | None = None
     if task_type == "capital_events":
@@ -766,6 +1051,48 @@ def _new_security_plan() -> list[dict[str, Any]]:
     ]
 
 
+def _single_security_plan() -> list[dict[str, Any]]:
+    return [
+        _plan_step("identity", "security_identity", criticality="gate"),
+        _plan_step(
+            "market_trend",
+            "market_trend",
+            depends_on=["identity"],
+            criticality="core",
+        ),
+        _plan_step(
+            "valuation",
+            "security_valuation",
+            depends_on=["identity"],
+            criticality="standard_enrichment",
+        ),
+        _plan_step(
+            "materials",
+            "research_content",
+            depends_on=["identity"],
+            criticality="standard_enrichment",
+        ),
+        _plan_step(
+            "capital_activity",
+            "capital_events",
+            depends_on=["identity"],
+            criticality="standard_enrichment",
+        ),
+        _plan_step(
+            "lockup_events",
+            "capital_events",
+            depends_on=["identity"],
+            criticality="standard_enrichment",
+        ),
+        _plan_step(
+            "market_context",
+            "market_signals",
+            depends_on=["identity"],
+            criticality="standard_enrichment",
+        ),
+    ]
+
+
 def _plan_step(
     step_id: str,
     task_type: str,
@@ -806,6 +1133,15 @@ def _skipped_step(plan_step: dict[str, Any], dependency: str) -> dict[str, Any]:
         "result": None,
         "request_scope": None,
         "workflow_limitation": _dependency_skip_limitation(),
+    }
+
+
+def _not_requested_step(plan_step: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **copy.deepcopy(plan_step),
+        "state": "not_requested",
+        "result": None,
+        "request_scope": None,
     }
 
 
@@ -914,11 +1250,11 @@ def _derive_workflow_status(
     workflow_id: str, step_refs: Sequence[Mapping[str, object]]
 ) -> str:
     states = [item.get("state") for item in step_refs]
-    if workflow_id != "new_security_research":
+    if workflow_id not in {"new_security_research", "single_security_research"}:
         return cast(str, states[0])
     if states[0] == "blocked":
         return "blocked"
-    substantive = states[1:]
+    substantive = [state for state in states[1:] if state != "not_requested"]
     if states[0] == "supported" and all(item == "supported" for item in substantive):
         return "supported"
     if any(item in {"supported", "limited"} for item in substantive):
@@ -963,10 +1299,14 @@ def _fold_workflow_result(
                 "capability_registry": copy.deepcopy(leaf["capability_registry"]),
             }
         else:
-            limitation = cast(dict[str, object], executed["workflow_limitation"])
-            workflow_limitation_ids = _merge_records(
-                collections["limitations"], seen, [limitation], field="limitations"
-            )
+            limitation = executed.get("workflow_limitation")
+            if isinstance(limitation, dict):
+                workflow_limitation_ids = _merge_records(
+                    collections["limitations"],
+                    seen,
+                    [limitation],
+                    field="limitations",
+                )
             registries[step_id] = {
                 "step_id": step_id,
                 "task_type": executed["task_type"],
@@ -998,7 +1338,7 @@ def _fold_workflow_result(
             }
         )
         coverage[step_id] = {
-            "state": ("skipped_research_dependency" if result is None else "complete"),
+            "state": (cast(str, executed["state"]) if result is None else "complete"),
             "leaf": (
                 copy.deepcopy(result.to_dict()["coverage"])
                 if isinstance(result, UnifiedResearchResult)
@@ -1067,6 +1407,8 @@ def _expected_workflow_steps(workflow_id: str) -> list[dict[str, Any]]:
         return [_plan_step("comparison", "valuation_compare")]
     if workflow_id == "theme_report_research":
         return [_plan_step("report_research", "research_content")]
+    if workflow_id == "single_security_research":
+        return _single_security_plan()
     if workflow_id == "new_security_research":
         return _new_security_plan()
     raise ValueError("workflow result uses an unsupported workflow")
@@ -1301,6 +1643,11 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
     referenced_briefs: set[str] = set()
     derived_states: dict[str, object] = {}
     canonical_subject: Mapping[str, object] | None = None
+    workflow_inputs = cast(
+        Mapping[str, object],
+        cast(Mapping[str, object], request_scope["parameters"])["inputs"],
+    )
+    completeness_mode = workflow_inputs.get("completeness_mode", "standard")
     for contract, step_ref in zip(expected_steps, step_refs, strict=True):
         if not isinstance(step_ref, Mapping):
             raise ValueError("workflow step reference must be an object")
@@ -1349,8 +1696,9 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
         step_coverage = covered_steps.get(contract["step_id"])
         expected_coverage = {
             "state": (
-                "skipped_research_dependency"
-                if step_ref.get("state") == "skipped_research_dependency"
+                cast(str, step_ref["state"])
+                if step_ref.get("state")
+                in {"skipped_research_dependency", "not_requested"}
                 else "complete"
             ),
             "leaf": step_coverage.get("leaf")
@@ -1364,15 +1712,25 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
         }
         if step_coverage != expected_coverage:
             raise ValueError("workflow coverage contradicts its step references")
-        if step_ref.get("state") == "skipped_research_dependency":
+        if step_ref.get("state") in {
+            "skipped_research_dependency",
+            "not_requested",
+        }:
+            not_requested = step_ref.get("state") == "not_requested"
             expected_limitation = _dependency_skip_limitation()
             if (
-                not dependency_blocked
+                (not_requested and completeness_mode != "fast")
+                or (not_requested and contract["criticality"] != "standard_enrichment")
+                or (not not_requested and not dependency_blocked)
                 or brief_ids
                 or any(step_ref[field] for field in ref_fields)
-                or workflow_limitations != [expected_limitation["id"]]
-                or records["limitations"].get(cast(str, expected_limitation["id"]))
-                != expected_limitation
+                or workflow_limitations
+                != ([] if not_requested else [expected_limitation["id"]])
+                or (
+                    not not_requested
+                    and records["limitations"].get(cast(str, expected_limitation["id"]))
+                    != expected_limitation
+                )
                 or registered.get("leaf_request_scope") is not None
                 or registered.get("leaf_plan") is not None
                 or registered.get("capability_registry") != {}
@@ -1380,10 +1738,15 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
                 or step_coverage.get("leaf") != {}
             ):
                 raise ValueError("workflow dependency state contradicts its fixed plan")
-            derived_states[step_id] = "skipped_research_dependency"
+            derived_states[step_id] = step_ref.get("state")
         else:
             if dependency_blocked:
                 raise ValueError("workflow dependency state contradicts its fixed plan")
+            if (
+                completeness_mode == "fast"
+                and contract["criticality"] == "standard_enrichment"
+            ):
+                raise ValueError("workflow fast mode executed an enhancement")
             if len(brief_ids) != 1:
                 raise ValueError("completed workflow step requires one leaf brief")
             leaf_brief = briefs[cast(str, brief_ids[0])]
@@ -1457,6 +1820,14 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
                 briefs=(leaf_brief,),
             )
             serialized_leaf = leaf_result.to_dict()
+            if workflow_id == "single_security_research":
+                _validate_workflow_default_operation_inventory(
+                    serialized_leaf,
+                    task_type=leaf_task_type,
+                    source_policy=cast(
+                        Mapping[str, object], expected_scope["source_policy"]
+                    ),
+                )
             _validate_leaf_request_facts(serialized_leaf, expected_scope)
             expected_workflow_limitations: list[dict[str, object]] = []
             if step_id == "identity":

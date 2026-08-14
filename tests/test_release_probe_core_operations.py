@@ -2766,12 +2766,23 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 for request in by_task["research_workflow"]
             },
             {
+                "single_security_research",
                 "single_security_valuation",
                 "valuation_comparison",
                 "theme_report_research",
                 "new_security_research",
             },
         )
+        single_security = next(
+            profile
+            for profile in profiles
+            if profile.name == "workflow-single-security-research"
+        )
+        self.assertEqual(
+            single_security.request["parameters"]["inputs"],
+            {"target_pe": "30"},
+        )
+        self.assertEqual(single_security.harness_timeout_seconds, 1200)
         self.assertEqual(
             {
                 material_type

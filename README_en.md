@@ -140,16 +140,19 @@ The deterministic `intraday_replay` JSON contains only source facts, coverage de
 
 ### Preset research plans
 
-`research_workflow` provides four fixed, versioned request plans. They are convenient orchestrations for common research questions, not separate data capabilities, and callers cannot supply custom steps or dependency graphs:
+`research_workflow` provides five fixed, versioned request plans. They are convenient orchestrations for common research questions, not separate data capabilities, and callers cannot supply custom steps or dependency graphs:
 
 | Plan ID | Research question | Composition |
 | --- | --- | --- |
+| `single_security_research` | Research one security comprehensively | Identity → unadjusted trend → valuation → subject materials → capital and company events → future lockups → board membership |
 | `single_security_valuation` | Value one security | Runs the existing `security_valuation` task |
 | `valuation_comparison` | Compare several securities on one basis | Runs the existing `valuation_compare` task and preserves every row |
 | `theme_report_research` | Find reports about a theme | Runs the existing `research_content` task |
 | `new_security_research` | Perform a first systematic review of a security | Identity → institutional coverage → valuation → board membership → fund flow → dragon-tiger → lockup → margin trading |
 
-Every plan inherits the request's research date and source policy and preserves each leaf task's status, evidence, conflicts, source errors, and limitations. The new-security plan gates dependent work on canonical identity; other blocked steps do not stop independent work, but the overall result is never described as complete or supported when required evidence is missing.
+Every plan inherits the request's research date and source policy and preserves each leaf task's status, evidence, conflicts, source errors, and limitations. `single_security_research` defaults to `completeness_mode: "standard"`, which attempts the core trend and all standard enhancements. Explicit `fast` guarantees only identity and the core trend and records valuation, materials, capital events, lockups, and board membership as `not_requested`. `deep_extensions` accepts only `long_history` and `large_materials`: the former deepens the same trend step to 250 trading sessions, while the latter expands the same materials step to 365 days and a limit of 100. `fast` may combine with `long_history` but rejects `large_materials`. Existing completed-day minute history remains an explicit `intraday_replay` request. This workflow adds no five-level order-book or tick endpoint; those capabilities remain deferred.
+
+The comprehensive-single-security and new-security plans gate dependent work only on canonical identity. Other local source or step failures do not stop independent siblings, but the overall result is never described as complete or supported when required evidence is missing.
 
 ## Common uses
 
@@ -317,6 +320,7 @@ Run each vertical slice explicitly against live sources with versioned requests:
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-single-security.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-single-security-valuation.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json

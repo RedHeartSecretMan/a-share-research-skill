@@ -496,6 +496,17 @@ def build_release_request_profiles(
             window={"observed_from": replay_date, "observed_to": replay_date},
         ),
         profile(
+            "workflow-single-security-research",
+            "research_workflow",
+            subjects=[{"clue": "601138", "issuer_security_class_count": 1}],
+            parameters={
+                "workflow": {"id": "single_security_research", "version": "1.0"},
+                "inputs": {"target_pe": "30"},
+            },
+            window=None,
+            harness_timeout_seconds=1200,
+        ),
+        profile(
             "workflow-single-security-valuation",
             "research_workflow",
             subjects=[{"clue": "601138", "issuer_security_class_count": 1}],

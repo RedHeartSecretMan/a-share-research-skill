@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -73,7 +73,20 @@ def _json_response(payload: object) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode()
 
 
+def _workflow_daily_dates() -> list[str]:
+    current = date(2026, 7, 31)
+    values: list[str] = []
+    while len(values) < 250:
+        if current.weekday() < 5:
+            values.append(current.isoformat())
+        current -= timedelta(days=1)
+    return list(reversed(values))
+
+
 class ValuationFixtureTransport:
+    def __init__(self) -> None:
+        self._workflow_close_calls = {"sse": 0, "tencent": 0}
+
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         parsed = urlparse(url)
         query = parse_qs(parsed.query)
@@ -141,13 +154,23 @@ class ValuationFixtureTransport:
             code = parsed.path.split("/")[-1]
             security = SECURITIES[code]
             price = security["price"]
+            use_workflow_history = (
+                os.environ.get("A_SHARE_RESEARCH_TEST_SCENARIO")
+                in {"single_security_history", "single_security_history_conflict"}
+                and self._workflow_close_calls["sse"] == 0
+            )
+            self._workflow_close_calls["sse"] += 1
+            dates = _workflow_daily_dates() if use_workflow_history else ["2026-07-31"]
             body = _json_response(
                 {
                     "code": code,
-                    "total": 1,
+                    "total": len(dates),
                     "begin": 0,
-                    "end": 0,
-                    "kline": [["20260731", price, price, price, price, "1000000"]],
+                    "end": len(dates) - 1,
+                    "kline": [
+                        [day.replace("-", ""), price, price, price, price, "1000000"]
+                        for day in dates
+                    ],
                 }
             )
         elif "www.szse.cn" in parsed.netloc and "getHistoryData" in parsed.path:
@@ -190,20 +213,21 @@ class ValuationFixtureTransport:
             quote[44] = "910044.44"
             quote[45] = "910045.45"
             quote[46] = "910046.46"
+            use_workflow_history = (
+                os.environ.get("A_SHARE_RESEARCH_TEST_SCENARIO")
+                in {"single_security_history", "single_security_history_conflict"}
+                and self._workflow_close_calls["tencent"] == 0
+            )
+            self._workflow_close_calls["tencent"] += 1
+            dates = _workflow_daily_dates() if use_workflow_history else ["2026-07-31"]
             body = _json_response(
                 {
                     "code": 0,
                     "data": {
                         query_security: {
                             "day": [
-                                [
-                                    "2026-07-31",
-                                    price,
-                                    price,
-                                    price,
-                                    price,
-                                    "10000",
-                                ]
+                                [day, price, price, price, price, "10000"]
+                                for day in dates
                             ],
                             "qt": {query_security: quote},
                         }
@@ -248,7 +272,10 @@ class ValuationFixtureTransport:
             raise AssertionError(f"unexpected URL: {url}")
 
         scenario = os.environ.get("A_SHARE_RESEARCH_TEST_SCENARIO", "default")
-        if "eastmoney.com" in parsed.netloc and scenario == "provider_mcap_conflict":
+        if "eastmoney.com" in parsed.netloc and scenario in {
+            "provider_mcap_conflict",
+            "single_security_history_conflict",
+        }:
             payload = json.loads(body)
             payload["data"]["f116"] = "1"
             body = _json_response(payload)
