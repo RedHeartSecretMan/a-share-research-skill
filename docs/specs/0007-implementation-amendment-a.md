@@ -2,7 +2,7 @@
 
 ## 状态
 
-**Accepted by maintainer; tracker applied**，2026-08-10。A-08 两阶段修订于 2026-08-13 获维护者批准。
+**Accepted by maintainer; tracker applied**，2026-08-10。A-08 两阶段修订于 2026-08-13 获维护者批准。综合市场能力边界的最小产品修订于 2026-08-14 获维护者批准。
 
 2026-08-13 的后续裁决只调整 release evidence 的实施时序，不削弱 v0.3.0 release gate：原 A-08 拆为确定性的 A-08a 资格基线与最终 A-08b live attestation。来源组和综合计划先消费 A-08a，再由 A-08b 对全部生产变更完成后的冻结候选形成当次 release candidate 的脱敏 live evidence 与 durable matrix。开发 Ticket 不再因交易时段或临时上游状态等待；#72 仍在 A-08b 精确闭合前失败关闭。
 
@@ -40,6 +40,19 @@
 5. 在局部来源失败时继续获得不依赖该来源的有效来源观测、计算和研究判断；
 6. 显式启用研究证据存储，并在默认情况下保持无隐藏缓存和无持久化状态；
 7. 通过 `standard` 获取核心获取和标准增强，或在明确速度意图下通过 `fast` 只保证核心获取并看到未请求增强。
+
+### 综合市场能力边界
+
+`market_overview_research@1.0` 必须完整声明当前研究问题需要的固定市场能力清单，但只有已经进入 A-08a 44-owner 分母且具有 market/board scope 的正式 operations 可以执行。v0.3.0 实际执行的 core capabilities 只有：
+
+- `industry_board_breadth`：保留行业板块逐项涨跌、上涨数和下跌数，不称为全 A 股去重涨跌家数；
+- `limit_pools`：保留涨停、炸板、跌停、昨日涨停等已请求池及其 owner-local total、page、empty 和 partial 证明。
+
+`standard` 在 core 之外执行行业与题材轮动、市场热度、重点监控、严重异常波动、板块资金流、全市场龙虎榜、北向披露状态、市场快讯及其受控 fallback；`fast` 只执行 core，全部 standard enhancements 以固定 `not_requested` 记录保留。
+
+下列固定 capabilities 在 v0.3.0 中为 `unsupported`：`market_trading_session`、`major_broad_indices`、`whole_market_turnover`、`whole_market_margin`、`market_wide_intraday`。每项必须保留稳定 ID、明确 reason code 和 v0.4.0 gap route，不产生 operation obligation、coverage、observation、claim 或 calculation。显式请求 `market_wide_intraday` 深度扩展仍返回该 capability 的 `unsupported` 状态；未知深度扩展失败关闭。
+
+该边界不改变 A-08a 的 44-owner 分母，不重开固定 47 候选端点计划，也不新增 owner、endpoint、单证券、ETF、单一指数或板块 proxy、第二 registry/projector、#60 微观结构能力、筛选、全市场证券排名或投资行动能力。新增 market-wide owners 与相应资格审查留给未来 v0.4.0 Spec。
 
 ## 保留的 v0.3.0 产品承诺
 

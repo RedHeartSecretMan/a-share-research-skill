@@ -140,17 +140,20 @@ The deterministic `intraday_replay` JSON contains only source facts, coverage de
 
 ### Preset research plans
 
-`research_workflow` provides five fixed, versioned request plans. They are convenient orchestrations for common research questions, not separate data capabilities, and callers cannot supply custom steps or dependency graphs:
+`research_workflow` provides six fixed, versioned request plans. They are convenient orchestrations for common research questions, not separate data capabilities, and callers cannot supply custom steps or dependency graphs:
 
 | Plan ID | Research question | Composition |
 | --- | --- | --- |
 | `single_security_research` | Research one security comprehensively | Identity → unadjusted trend → valuation → subject materials → capital and company events → future lockups → board membership |
+| `market_overview_research` | Research a subject-free market overview | Industry-board breadth and limit pools → theme, capital, and flash enhancements |
 | `single_security_valuation` | Value one security | Runs the existing `security_valuation` task |
 | `valuation_comparison` | Compare several securities on one basis | Runs the existing `valuation_compare` task and preserves every row |
 | `theme_report_research` | Find reports about a theme | Runs the existing `research_content` task |
 | `new_security_research` | Perform a first systematic review of a security | Identity → institutional coverage → valuation → board membership → fund flow → dragon-tiger → lockup → margin trading |
 
 Every plan inherits the request's research date and source policy and preserves each leaf task's status, evidence, conflicts, source errors, and limitations. `single_security_research` defaults to `completeness_mode: "standard"`, which attempts the core trend and all standard enhancements. Explicit `fast` guarantees only identity and the core trend and records valuation, materials, capital events, lockups, and board membership as `not_requested`. `deep_extensions` accepts only `long_history` and `large_materials`: the former deepens the same trend step to 250 trading sessions, while the latter expands the same materials step to 365 days and a limit of 100. `fast` may combine with `long_history` but rejects `large_materials`. Existing completed-day minute history remains an explicit `intraday_replay` request. This workflow adds no five-level order-book or tick endpoint; those capabilities remain deferred.
+
+`market_overview_research@1.0` accepts no subjects. `standard` declares exactly 2 actual core capabilities, 8 standard enhancements, and 5 explicitly unsupported capabilities. The actual core is limited to per-industry-board change and up/down counts plus limit pools; the standard enhancements reuse the existing industry/theme rotation, heat, focus-monitoring, severe-abnormal-movement, board-flow, market-wide dragon-tiger, northbound-disclosure, and market-flash tasks. `fast` runs only the two actual core capabilities and fixes every standard enhancement at `not_requested`. Trading day/session, major broad indices, whole-market turnover, whole-market margin, and market-wide intraday remain `qualified_market_wide_owner_absent` / `v0.4.0_spec`. Explicit `market_wide_intraday` remains `unsupported` and compiles no child; unknown, duplicate, or legacy-shaped inputs fail closed. The plan never proxies a missing capability with one index or ranking and adds no owner, endpoint, proxy, or #60 five-level/tick path.
 
 The comprehensive-single-security and new-security plans gate dependent work only on canonical identity. Other local source or step failures do not stop independent siblings, but the overall result is never described as complete or supported when required evidence is missing.
 
@@ -205,6 +208,10 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 **Use the new-security research preset**
 
 > Use `$a-share-research` to run a complete new-security review for Industrial Fulian: establish identity, then review institutional reports and consensus, current valuation, provider board membership, latest five-session fund flow, dragon-tiger records, scheduled lockups over the next 90 days, and margin trading. Preserve evidence, source time, status, and limitations for every step. If one step is unavailable, continue steps that do not depend on it without describing the workflow as complete or supported.
+
+**Use the market-overview research preset**
+
+> Use `$a-share-research` with `market_overview_research@1.0` in `standard` mode for today's market. Preserve per-industry-board changes and up/down counts, limit pools, themes and market signals, board flow, market-wide dragon-tiger, northbound disclosure, and flashes with each step's local status. Keep session, broad-index, whole-market turnover, whole-market margin, and market-wide intraday gaps explicit instead of proxying them with one index, ranking, or a security-level five-level/tick feed.
 
 **Research a security's announcements and news**
 
@@ -325,6 +332,7 @@ Run each vertical slice explicitly against live sources with versioned requests:
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-market-overview-research.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json

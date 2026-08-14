@@ -2771,6 +2771,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 "valuation_comparison",
                 "theme_report_research",
                 "new_security_research",
+                "market_overview_research",
             },
         )
         single_security = next(
@@ -2783,6 +2784,34 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             {"target_pe": "30"},
         )
         self.assertEqual(single_security.harness_timeout_seconds, 1200)
+        market_overview = next(
+            profile
+            for profile in profiles
+            if profile.name == "workflow-market-overview-research-standard"
+        )
+        self.assertEqual(
+            market_overview.request,
+            {
+                "schema_version": "1.0",
+                "task_type": "research_workflow",
+                "subjects": [],
+                "as_of": "2026-08-12",
+                "window": None,
+                "parameters": {
+                    "workflow": {
+                        "id": "market_overview_research",
+                        "version": "1.0",
+                    },
+                    "inputs": {"completeness_mode": "standard"},
+                },
+                "source_policy": {
+                    "allow_experimental": True,
+                    "allow_credentials": False,
+                    "allow_fallback": True,
+                },
+            },
+        )
+        self.assertEqual(market_overview.harness_timeout_seconds, 1200)
         self.assertEqual(
             {
                 material_type

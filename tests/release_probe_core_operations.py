@@ -496,6 +496,21 @@ def build_release_request_profiles(
             window={"observed_from": replay_date, "observed_to": replay_date},
         ),
         profile(
+            "workflow-market-overview-research-standard",
+            "research_workflow",
+            subjects=[],
+            parameters={
+                "workflow": {
+                    "id": "market_overview_research",
+                    "version": "1.0",
+                },
+                "inputs": {"completeness_mode": "standard"},
+            },
+            window=None,
+            fallback=True,
+            harness_timeout_seconds=1200,
+        ),
+        profile(
             "workflow-single-security-research",
             "research_workflow",
             subjects=[{"clue": "601138", "issuer_security_class_count": 1}],

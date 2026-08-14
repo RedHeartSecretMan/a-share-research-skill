@@ -16,6 +16,18 @@ _Avoid_: 自动交易用户、代客投资对象
 围绕一个身份明确的 A 股证券和一个具体研究问题形成可信研究结果的过程，重点呈现证据、冲突、缺失与不确定性。
 _Avoid_: 个股诊断、荐股、股票预测
 
+**综合市场研究**:
+通过无证券主体的版本化 `market_overview_research@1.0` 组合现有 market/board scope 正式来源操作，对行业板块广度、涨跌停池和标准市场增强形成可信研究结果，并在同一固定能力清单中诚实披露 v0.3.0 不支持的市场基础能力；它不以单只证券、ETF、单一指数或板块数据代理整体市场。
+_Avoid_: 单一指数摘要、单一榜单摘要、证券代理市场、开放式选股、全市场证券排名
+
+**行业板块广度**:
+同一来源口径下逐个行业板块的涨跌、上涨数和下跌数观测；它保留板块粒度，不能称为全 A 股去重上涨、下跌或平盘证券家数。
+_Avoid_: 全市场涨跌家数、全 A 股广度、板块证券去重汇总
+
+**不支持市场能力**:
+`market_overview_research@1.0` 固定能力清单中因 v0.3.0 的 A-08a 44-owner 分母没有合格 market-wide owner 而明确标为 `unsupported` 的能力；当前固定为 `market_trading_session`、`major_broad_indices`、`whole_market_turnover`、`whole_market_margin` 和 `market_wide_intraday`，各自保留稳定 ID、reason code 与 v0.4.0 gap route，但不产生来源执行义务、coverage、观测、主张或计算。
+_Avoid_: 来源失败、未请求、虚构来源执行、证券或板块代理、候选端点
+
 **事实主张**:
 可信研究结果中能够被证实或证伪，并可能影响研究判断的陈述。
 _Avoid_: 观点、猜测、未经标注的推断

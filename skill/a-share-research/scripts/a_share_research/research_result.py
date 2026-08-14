@@ -17,7 +17,7 @@ from decimal import (
     localcontext,
 )
 from hashlib import sha256
-from typing import Collection, Literal, Mapping, NoReturn, Sequence, cast
+from typing import Any, Collection, Literal, Mapping, NoReturn, Sequence, cast
 
 CoverageState = Literal[
     "not_requested",
@@ -105,6 +105,12 @@ _DIAGNOSTIC_FORBIDDEN_FRAGMENTS = (
 )
 _MAX_DIAGNOSTIC_BYTES = 2_048
 _MAX_RESULT_BYTES = 2 * 1024 * 1024
+# Each of market_overview_research's four fixed leaves is first serialized through
+# the 2 MiB direct-result envelope in ``_execute_step``.  Folding can add at most
+# one further copy of leaf IDs/view/brief material plus fixed workflow metadata, so
+# a constant 16-direct-envelope bound closes this validated plan without weakening
+# any other direct or workflow result envelope.
+_MAX_MARKET_OVERVIEW_RESULT_BYTES = 16 * _MAX_RESULT_BYTES
 _SAFE_PUBLIC_LOCATOR = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*(?::[A-Za-z0-9_.+-]+)*$")
 _SAFE_PUBLIC_PROVIDER_ID = re.compile(r"^[A-Za-z0-9_.:@+-]+$")
 _UNSAFE_PUBLIC_REFERENCE_MARKERS = (
@@ -848,42 +854,39 @@ def _validate_workflow_default_operation_inventory(
     *,
     task_type: object,
     source_policy: Mapping[str, object],
-) -> None:
+) -> tuple[object, ...]:
     """Bind generalized workflow leaves to their production operation registries."""
 
     transport = _NoIoHttpTransport()
     capability_id: str
-    expected_operation_ids: set[str]
+    default_operations: tuple[object, ...]
     if task_type == "research_content":
         from .content_registry import build_default_content_operations
 
         capability_id = "research_content_materials"
-        expected_operation_ids = {
-            item.operation_id
-            for item in build_default_content_operations(
+        default_operations = tuple(
+            build_default_content_operations(
                 transport,
                 allow_credentials=cast(bool, source_policy["allow_credentials"]),
                 allow_fallback=cast(bool, source_policy["allow_fallback"]),
                 research_now=None,
             )
-        }
+        )
     elif task_type == "capital_events":
         from .capital_registry import build_default_capital_operations
 
         capability_id = "capital_event_observations"
-        expected_operation_ids = {
-            item.operation_id for item in build_default_capital_operations(transport)
-        }
+        default_operations = tuple(build_default_capital_operations(transport))
     elif task_type == "market_signals":
         from .market_signal_registry import build_default_market_signal_operations
 
         capability_id = "market_signal_observations"
-        expected_operation_ids = {
-            item.operation_id
-            for item in build_default_market_signal_operations(transport)
-        }
+        default_operations = tuple(build_default_market_signal_operations(transport))
     else:
-        return
+        return ()
+    expected_operation_ids = {
+        cast(str, cast(Any, item).operation_id) for item in default_operations
+    }
 
     plan = result.get("plan")
     registry = result.get("capability_registry")
@@ -923,6 +926,7 @@ def _validate_workflow_default_operation_inventory(
         raise ValueError("workflow default operation inventory contradicts its leaf")
     if transport.calls:
         raise AssertionError("workflow operation inventory construction performed I/O")
+    return default_operations
 
 
 def _validate_production_identity_dispositions(
@@ -1227,9 +1231,14 @@ class UnifiedResearchResult:
             },
             path="research result",
         )
-        bounded = _json_copy(
-            result, path="research result", max_bytes=_MAX_RESULT_BYTES
+        plan = cast(Mapping[str, object], result["plan"])
+        max_bytes = (
+            _MAX_MARKET_OVERVIEW_RESULT_BYTES
+            if plan.get("task_type") == "research_workflow"
+            and plan.get("workflow_id") == "market_overview_research"
+            else _MAX_RESULT_BYTES
         )
+        bounded = _json_copy(result, path="research result", max_bytes=max_bytes)
         if not isinstance(bounded, dict):
             raise ValueError("research result must be a JSON object")
         return cast(dict[str, object], bounded)

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from .research_result import (
     UnifiedResearchResult,
@@ -18,6 +19,7 @@ LeafTaskRunner = Callable[[dict[str, Any]], UnifiedResearchResult]
 
 WORKFLOW_VERSION = "1.0"
 WORKFLOW_IDS = {
+    "market_overview_research",
     "single_security_research",
     "single_security_valuation",
     "valuation_comparison",
@@ -32,6 +34,163 @@ _RECORD_FIELDS = (
     "limitations",
     "source_errors",
 )
+
+_CapabilityTier = Literal["core", "standard", "deep"]
+
+
+@dataclass(frozen=True)
+class _WorkflowCapabilityAuthority:
+    """Immutable capability truth compiled into one workflow registry."""
+
+    capability_id: str
+    tier: _CapabilityTier
+    step_ids: tuple[str, ...] = ()
+    reason_code: str | None = None
+    gap_route: str | None = None
+
+    def to_public_dict(self, *, completeness_mode: str) -> dict[str, object]:
+        unsupported = self.reason_code is not None
+        if unsupported != (self.gap_route is not None):
+            raise AssertionError("workflow capability gap authority is incomplete")
+        state = (
+            "unsupported"
+            if unsupported
+            else (
+                "not_requested"
+                if self.tier == "standard" and completeness_mode == "fast"
+                else "supported"
+            )
+        )
+        result: dict[str, object] = {
+            "capability_id": self.capability_id,
+            "tier": self.tier,
+            "state": state,
+            "step_ids": list(self.step_ids),
+        }
+        if unsupported:
+            result.update(
+                {
+                    "reason_code": self.reason_code,
+                    "gap_route": self.gap_route,
+                }
+            )
+        return result
+
+
+_MARKET_OVERVIEW_CAPABILITY_AUTHORITY = (
+    _WorkflowCapabilityAuthority(
+        "industry_board_breadth", "core", ("market_core_signals",)
+    ),
+    _WorkflowCapabilityAuthority("limit_pools", "core", ("market_core_signals",)),
+    _WorkflowCapabilityAuthority(
+        "industry_theme_rotation",
+        "standard",
+        ("market_signal_enhancements",),
+    ),
+    _WorkflowCapabilityAuthority(
+        "market_heat", "standard", ("market_signal_enhancements",)
+    ),
+    _WorkflowCapabilityAuthority(
+        "focus_monitoring", "standard", ("market_signal_enhancements",)
+    ),
+    _WorkflowCapabilityAuthority(
+        "severe_abnormal_movement",
+        "standard",
+        ("market_signal_enhancements",),
+    ),
+    _WorkflowCapabilityAuthority(
+        "board_fund_flow", "standard", ("market_capital_enhancements",)
+    ),
+    _WorkflowCapabilityAuthority(
+        "market_dragon_tiger", "standard", ("market_capital_enhancements",)
+    ),
+    _WorkflowCapabilityAuthority(
+        "northbound_disclosure", "standard", ("market_capital_enhancements",)
+    ),
+    _WorkflowCapabilityAuthority("market_flash", "standard", ("market_flash",)),
+    _WorkflowCapabilityAuthority(
+        "market_trading_session",
+        "core",
+        reason_code="qualified_market_wide_owner_absent",
+        gap_route="v0.4.0_spec",
+    ),
+    _WorkflowCapabilityAuthority(
+        "major_broad_indices",
+        "core",
+        reason_code="qualified_market_wide_owner_absent",
+        gap_route="v0.4.0_spec",
+    ),
+    _WorkflowCapabilityAuthority(
+        "whole_market_turnover",
+        "core",
+        reason_code="qualified_market_wide_owner_absent",
+        gap_route="v0.4.0_spec",
+    ),
+    _WorkflowCapabilityAuthority(
+        "whole_market_margin",
+        "standard",
+        reason_code="qualified_market_wide_owner_absent",
+        gap_route="v0.4.0_spec",
+    ),
+    _WorkflowCapabilityAuthority(
+        "market_wide_intraday",
+        "deep",
+        reason_code="qualified_market_wide_owner_absent",
+        gap_route="v0.4.0_spec",
+    ),
+)
+
+
+def _market_overview_capability_inventory(
+    inputs: Mapping[str, object],
+) -> list[dict[str, object]]:
+    completeness_mode = cast(str, inputs.get("completeness_mode", "standard"))
+    return [
+        item.to_public_dict(completeness_mode=completeness_mode)
+        for item in _MARKET_OVERVIEW_CAPABILITY_AUTHORITY
+    ]
+
+
+def _validate_market_overview_unsupported_facts(
+    result: Mapping[str, object],
+) -> None:
+    unsupported_ids = {
+        item.capability_id
+        for item in _MARKET_OVERVIEW_CAPABILITY_AUTHORITY
+        if item.reason_code is not None
+    }
+
+    def carries_unsupported_capability_id(value: object) -> bool:
+        if isinstance(value, Mapping):
+            return any(
+                (
+                    key == "capability_id"
+                    and isinstance(nested, str)
+                    and nested in unsupported_ids
+                )
+                or carries_unsupported_capability_id(nested)
+                for key, nested in value.items()
+            )
+        if isinstance(value, list):
+            return any(carries_unsupported_capability_id(item) for item in value)
+        return False
+
+    for field in ("claims", "calculations"):
+        values = result.get(field)
+        if not isinstance(values, list):
+            continue
+        for record in values:
+            if not isinstance(record, Mapping):
+                continue
+            kind = record.get("kind")
+            if not isinstance(kind, str):
+                raise ValueError("workflow formal fact kind must be a string")
+            if kind in unsupported_ids or carries_unsupported_capability_id(
+                record.get("payload")
+            ):
+                raise ValueError(
+                    "unsupported market overview capability escaped into formal facts"
+                )
 
 
 def build_research_workflow_result(
@@ -87,6 +246,14 @@ def build_research_workflow_result(
             plan,
             run_leaf_task,
         )
+    elif workflow_id == "market_overview_research":
+        plan = _market_overview_plan()
+        steps = _run_market_overview_workflow(
+            request,
+            inputs,
+            plan,
+            run_leaf_task,
+        )
     else:
         plan = _new_security_plan()
         steps = _run_new_security_workflow(
@@ -120,7 +287,31 @@ def _validate_workflow_request(
     if not isinstance(inputs, dict):
         raise ValueError("research_workflow parameters.inputs must be an object")
 
-    if workflow_id == "single_security_research":
+    if workflow_id == "market_overview_research":
+        if request["subjects"]:
+            raise ValueError("market_overview_research takes no subjects")
+        if not set(inputs).issubset({"completeness_mode", "deep_extensions"}):
+            raise ValueError(
+                "market_overview_research inputs do not match the workflow contract"
+            )
+        completeness_mode = inputs.get("completeness_mode", "standard")
+        if not isinstance(completeness_mode, str) or completeness_mode not in {
+            "standard",
+            "fast",
+        }:
+            raise ValueError(
+                "market_overview_research completeness_mode must be standard or fast"
+            )
+        deep_extensions = inputs.get("deep_extensions", [])
+        if (
+            not isinstance(deep_extensions, list)
+            or any(item != "market_wide_intraday" for item in deep_extensions)
+            or len(set(deep_extensions)) != len(deep_extensions)
+        ):
+            raise ValueError(
+                "market_overview_research deep_extensions contains an unsupported value"
+            )
+    elif workflow_id == "single_security_research":
         _require_subject_count(request["subjects"], minimum=1, maximum=1)
         allowed_inputs = {"target_pe", "completeness_mode", "deep_extensions"}
         if "target_pe" not in inputs or not set(inputs).issubset(allowed_inputs):
@@ -228,6 +419,95 @@ def _validate_workflow_request(
         _require_limit(inputs["limit"])
         _require_boolean(inputs["verify_documents"], "verify_documents")
     return workflow_id, inputs
+
+
+def _run_market_overview_workflow(
+    request: dict[str, Any],
+    inputs: dict[str, Any],
+    plan: list[dict[str, Any]],
+    run_leaf_task: LeafTaskRunner,
+) -> list[dict[str, Any]]:
+    completeness_mode = cast(str, inputs.get("completeness_mode", "standard"))
+    specs_by_id = {item[0]: item for item in _market_overview_child_specs(request)}
+    steps: list[dict[str, Any]] = []
+    for plan_step in plan:
+        if (
+            completeness_mode == "fast"
+            and plan_step["criticality"] == "standard_enrichment"
+        ):
+            steps.append(_not_requested_step(plan_step))
+            continue
+        step_id, task_type, window, parameters, subjects = specs_by_id[
+            plan_step["step_id"]
+        ]
+        child_request = _leaf_request(
+            request,
+            task_type=task_type,
+            subjects=subjects,
+            window=window,
+            parameters=parameters,
+        )
+        steps.append(_execute_step(plan_step, child_request, run_leaf_task))
+    return steps
+
+
+def _market_overview_child_specs(
+    request: Mapping[str, object],
+) -> list[tuple[str, str, object, object, object]]:
+    as_of = cast(str, request["as_of"])
+    one_day_window = {"observed_from": as_of, "observed_to": as_of}
+    return [
+        (
+            "market_core_signals",
+            "market_signals",
+            one_day_window,
+            {"signal_types": ["industry_rotation", "limit_state"], "limit": 100},
+            [],
+        ),
+        (
+            "market_signal_enhancements",
+            "market_signals",
+            one_day_window,
+            {
+                "signal_types": [
+                    "strong_stock_theme",
+                    "focus_monitoring",
+                    "severe_abnormal_movement",
+                    "market_heat",
+                ],
+                "limit": 100,
+            },
+            [],
+        ),
+        (
+            "market_capital_enhancements",
+            "capital_events",
+            one_day_window,
+            {
+                "data_types": [
+                    "board_fund_flow",
+                    "market_dragon_tiger",
+                    "northbound_flow",
+                ],
+                "board_type": "industry",
+                "period": "today",
+                "limit": 100,
+            },
+            [],
+        ),
+        (
+            "market_flash",
+            "research_content",
+            {"published_from": as_of, "published_to": as_of},
+            {
+                "material_types": ["market_flash"],
+                "query": [],
+                "limit": 100,
+                "verify_documents": False,
+            },
+            [],
+        ),
+    ]
 
 
 def _run_single_security_workflow(
@@ -571,6 +851,18 @@ def _compiled_leaf_scope(
                 "verify_documents": inputs["verify_documents"],
             },
         )
+    if workflow_id == "market_overview_research":
+        spec = next(
+            item for item in _market_overview_child_specs(request) if item[0] == step_id
+        )
+        _, task_type, window, leaf_parameters, subjects = spec
+        return _leaf_request(
+            cast(dict[str, Any], request),
+            task_type=task_type,
+            subjects=subjects,
+            window=window,
+            parameters=leaf_parameters,
+        )
     if step_id == "identity":
         return _leaf_request(
             cast(dict[str, Any], request),
@@ -639,7 +931,10 @@ def _validate_workflow_request_scope(
 
 
 def _validate_leaf_request_facts(
-    leaf: Mapping[str, object], request_scope: Mapping[str, object]
+    leaf: Mapping[str, object],
+    request_scope: Mapping[str, object],
+    *,
+    default_operations: Sequence[object] = (),
 ) -> None:
     task_type = request_scope["task_type"]
     parameters = cast(Mapping[str, object], request_scope["parameters"])
@@ -794,10 +1089,19 @@ def _validate_leaf_request_facts(
             if not isinstance(payload, Mapping):
                 raise ValueError("workflow leaf coverage contradicts its request scope")
             coverage_values.append(payload.get(cast(str, coverage_field)))
+        if not isinstance(requested_kinds, list):
+            raise ValueError("workflow leaf coverage contradicts its request scope")
         if (
-            not isinstance(requested_kinds, list)
-            or len(coverage_values) != len(requested_kinds)
+            len(coverage_values) != len(requested_kinds)
             or set(coverage_values) != set(requested_kinds)
+        ) and not (
+            not coverage_values
+            and _leaf_is_wholly_blocked_by_source_policy(
+                leaf,
+                request_scope,
+                requested_kinds=requested_kinds,
+                default_operations=default_operations,
+            )
         ):
             raise ValueError("workflow leaf coverage contradicts its request scope")
     if task_type in {"security_valuation", "valuation_compare"}:
@@ -813,6 +1117,7 @@ def _validate_leaf_request_facts(
                 or operands.get("target_pe") != target_pe
             ):
                 raise ValueError("workflow leaf facts contradict their request scope")
+
     subjects = request_scope["subjects"]
     if not isinstance(subjects, list) or not subjects:
         return
@@ -995,6 +1300,137 @@ def _validate_leaf_request_facts(
         raise ValueError("workflow leaf subject contradicts its request scope")
 
 
+def _leaf_is_wholly_blocked_by_source_policy(
+    leaf: Mapping[str, object],
+    request_scope: Mapping[str, object],
+    *,
+    requested_kinds: Sequence[object],
+    default_operations: Sequence[object],
+) -> bool:
+    """Recognize the sole legitimate no-calculation policy-blocked leaf."""
+
+    task_type = request_scope.get("task_type")
+    if task_type == "market_signals":
+        capability_id = "market_signal_observations"
+        supported_field = "supported_signal_types"
+        limitation_message = (
+            "market_signals currently requires experimental source operations"
+        )
+    elif task_type == "capital_events":
+        capability_id = "capital_event_observations"
+        supported_field = "supported_data_types"
+        limitation_message = (
+            "capital_events currently requires experimental source operations"
+        )
+    else:
+        return False
+    source_policy = request_scope.get("source_policy")
+    if (
+        leaf.get("status") != "blocked"
+        or not isinstance(source_policy, Mapping)
+        or source_policy.get("allow_experimental") is not False
+        or not default_operations
+        or any(
+            leaf.get(field) != []
+            for field in (
+                "observations",
+                "claims",
+                "calculations",
+                "conflicts",
+                "source_errors",
+            )
+        )
+    ):
+        return False
+    limitation_payload: dict[str, object] = {
+        "code": "source_policy_not_satisfied",
+        "message": limitation_message,
+        "references": [],
+    }
+    expected_limitation = {
+        "id": stable_result_id("limitation", limitation_payload),
+        **limitation_payload,
+    }
+    if leaf.get("limitations") != [expected_limitation]:
+        return False
+
+    coverage = leaf.get("coverage")
+    aggregate = coverage.get(capability_id) if isinstance(coverage, Mapping) else None
+    operations = aggregate.get("operations") if isinstance(aggregate, Mapping) else None
+    if not isinstance(operations, Mapping):
+        return False
+    operation_states: dict[str, object] = {}
+    for operation_id, operation_coverage in operations.items():
+        if not isinstance(operation_id, str) or not isinstance(
+            operation_coverage, Mapping
+        ):
+            return False
+        operation_states[operation_id] = operation_coverage.get("execution_state")
+
+    signal_query: object | None = None
+    if task_type == "market_signals":
+        from .market_signal_contract import MarketSignalQuery
+
+        window = request_scope.get("window")
+        parameters = request_scope.get("parameters")
+        subjects = request_scope.get("subjects")
+        if (
+            not isinstance(window, Mapping)
+            or not isinstance(parameters, Mapping)
+            or not isinstance(subjects, list)
+            or any(not isinstance(item, str) for item in requested_kinds)
+        ):
+            return False
+        subject = subjects[0] if subjects else None
+        if subject is not None and not isinstance(subject, dict):
+            return False
+        signal_query = MarketSignalQuery(
+            signal_types=tuple(cast(Sequence[str], requested_kinds)),
+            as_of=cast(str, request_scope["as_of"]),
+            observed_from=cast(str, window["observed_from"]),
+            observed_to=cast(str, window["observed_to"]),
+            limit=cast(int, parameters["limit"]),
+            subject=copy.deepcopy(subject),
+            parameters=copy.deepcopy(dict(parameters)),
+            allow_fallback=cast(bool, source_policy["allow_fallback"]),
+        )
+
+    applicable_owner_ids: set[str] = set()
+    for requested_kind in requested_kinds:
+        if not isinstance(requested_kind, str):
+            return False
+        owners_for_kind: set[str] = set()
+        for operation in default_operations:
+            operation_id = getattr(operation, "operation_id", None)
+            supported_kinds = getattr(operation, supported_field, None)
+            if (
+                not isinstance(operation_id, str)
+                or not isinstance(supported_kinds, frozenset)
+                or requested_kind not in supported_kinds
+            ):
+                continue
+            is_applicable = getattr(operation, "is_applicable", None)
+            if signal_query is not None and callable(is_applicable):
+                if not is_applicable(signal_query):
+                    continue
+            owners_for_kind.add(operation_id)
+        if not owners_for_kind or any(
+            operation_states.get(operation_id) != "skipped_policy"
+            for operation_id in owners_for_kind
+        ):
+            return False
+        applicable_owner_ids.update(owners_for_kind)
+    return all(
+        state
+        == (
+            "skipped_policy"
+            if operation_id in applicable_owner_ids
+            else "not_requested"
+        )
+        for operation_id, state in operation_states.items()
+    )
+
+
 def _securities_for_request_clues(
     leaf: Mapping[str, object], subjects: list[object]
 ) -> list[dict[str, object]] | None:
@@ -1048,6 +1484,31 @@ def _new_security_plan() -> list[dict[str, Any]]:
         _plan_step("dragon_tiger", "capital_events", depends_on=["identity"]),
         _plan_step("lockup", "capital_events", depends_on=["identity"]),
         _plan_step("margin_trading", "capital_events", depends_on=["identity"]),
+    ]
+
+
+def _market_overview_plan() -> list[dict[str, Any]]:
+    return [
+        _plan_step(
+            "market_core_signals",
+            "market_signals",
+            criticality="core",
+        ),
+        _plan_step(
+            "market_signal_enhancements",
+            "market_signals",
+            criticality="standard_enrichment",
+        ),
+        _plan_step(
+            "market_capital_enhancements",
+            "capital_events",
+            criticality="standard_enrichment",
+        ),
+        _plan_step(
+            "market_flash",
+            "research_content",
+            criticality="standard_enrichment",
+        ),
     ]
 
 
@@ -1250,6 +1711,8 @@ def _derive_workflow_status(
     workflow_id: str, step_refs: Sequence[Mapping[str, object]]
 ) -> str:
     states = [item.get("state") for item in step_refs]
+    if workflow_id == "market_overview_research":
+        return "blocked" if states[0] == "blocked" else "limited"
     if workflow_id not in {"new_security_research", "single_security_research"}:
         return cast(str, states[0])
     if states[0] == "blocked":
@@ -1380,12 +1843,24 @@ def _fold_workflow_result(
         **copy.deepcopy(all_ids),
         "brief_id": brief_id,
     }
+    workflow_registry: dict[str, object] = {
+        "id": workflow_id,
+        "version": WORKFLOW_VERSION,
+    }
+    if workflow_id == "market_overview_research":
+        inputs = cast(
+            Mapping[str, object],
+            cast(Mapping[str, object], request["parameters"])["inputs"],
+        )
+        workflow_registry["capability_inventory"] = (
+            _market_overview_capability_inventory(inputs)
+        )
     return UnifiedResearchResult(
         status=cast(Any, status),
         research_anchor={"as_of": request["as_of"], "timezone": "Asia/Shanghai"},
         plan=plan,
         capability_registry={
-            "workflow": {"id": workflow_id, "version": WORKFLOW_VERSION},
+            "workflow": workflow_registry,
             "steps": registries,
         },
         coverage={"steps": coverage},
@@ -1409,6 +1884,8 @@ def _expected_workflow_steps(workflow_id: str) -> list[dict[str, Any]]:
         return [_plan_step("report_research", "research_content")]
     if workflow_id == "single_security_research":
         return _single_security_plan()
+    if workflow_id == "market_overview_research":
+        return _market_overview_plan()
     if workflow_id == "new_security_research":
         return _new_security_plan()
     raise ValueError("workflow result uses an unsupported workflow")
@@ -1481,8 +1958,20 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
     workflow_registry = registry.get("workflow")
     registered_steps = registry.get("steps")
     covered_steps = coverage.get("steps")
+    workflow_inputs = cast(
+        Mapping[str, object],
+        cast(Mapping[str, object], request_scope["parameters"])["inputs"],
+    )
+    expected_workflow_registry: dict[str, object] = {
+        "id": workflow_id,
+        "version": WORKFLOW_VERSION,
+    }
+    if workflow_id == "market_overview_research":
+        expected_workflow_registry["capability_inventory"] = (
+            _market_overview_capability_inventory(workflow_inputs)
+        )
     if (
-        workflow_registry != {"id": workflow_id, "version": WORKFLOW_VERSION}
+        workflow_registry != expected_workflow_registry
         or not isinstance(registered_steps, Mapping)
         or not isinstance(covered_steps, Mapping)
     ):
@@ -1564,6 +2053,8 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
             raise ValueError("workflow claim IDs must be unique")
         claims[claim_id] = claim
     records["claims"] = claims
+    if workflow_id == "market_overview_research":
+        _validate_market_overview_unsupported_facts(result)
 
     errors_value = result.get("source_errors")
     if not isinstance(errors_value, list):
@@ -1643,10 +2134,6 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
     referenced_briefs: set[str] = set()
     derived_states: dict[str, object] = {}
     canonical_subject: Mapping[str, object] | None = None
-    workflow_inputs = cast(
-        Mapping[str, object],
-        cast(Mapping[str, object], request_scope["parameters"])["inputs"],
-    )
     completeness_mode = workflow_inputs.get("completeness_mode", "standard")
     for contract, step_ref in zip(expected_steps, step_refs, strict=True):
         if not isinstance(step_ref, Mapping):
@@ -1820,15 +2307,23 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
                 briefs=(leaf_brief,),
             )
             serialized_leaf = leaf_result.to_dict()
-            if workflow_id == "single_security_research":
-                _validate_workflow_default_operation_inventory(
+            default_operations: tuple[object, ...] = ()
+            if workflow_id in {
+                "single_security_research",
+                "market_overview_research",
+            }:
+                default_operations = _validate_workflow_default_operation_inventory(
                     serialized_leaf,
                     task_type=leaf_task_type,
                     source_policy=cast(
                         Mapping[str, object], expected_scope["source_policy"]
                     ),
                 )
-            _validate_leaf_request_facts(serialized_leaf, expected_scope)
+            _validate_leaf_request_facts(
+                serialized_leaf,
+                expected_scope,
+                default_operations=default_operations,
+            )
             expected_workflow_limitations: list[dict[str, object]] = []
             if step_id == "identity":
                 canonical_subject = _canonical_subject(serialized_leaf)

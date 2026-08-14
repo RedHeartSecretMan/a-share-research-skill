@@ -140,17 +140,20 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 
 ### 预置研究方案
 
-`research_workflow` 提供五个固定、版本化的请求方案。它们是常见研究问题的便捷编排，不是独立的数据能力，也不开放自定义步骤或依赖图：
+`research_workflow` 提供六个固定、版本化的请求方案。它们是常见研究问题的便捷编排，不是独立的数据能力，也不开放自定义步骤或依赖图：
 
 | 方案 ID | 适用问题 | 编排内容 |
 | --- | --- | --- |
 | `single_security_research` | 单只证券综合研究 | 身份 → 未复权走势 → 估值 → 个股材料 → 资金与公司事件 → 未来解禁 → 板块归属 |
+| `market_overview_research` | 无标的综合市场研究 | 行业板块广度与涨跌停池 → 题材、资金与快讯增强 |
 | `single_security_valuation` | 单只证券估值 | 调用现有 `security_valuation` 任务 |
 | `valuation_comparison` | 多只证券同口径比较 | 调用现有 `valuation_compare` 任务并保留全部行 |
 | `theme_report_research` | 主题研报检索 | 调用现有 `research_content` 任务 |
 | `new_security_research` | 新标的首次系统研究 | 身份 → 机构覆盖 → 估值 → 板块归属 → 资金流 → 龙虎榜 → 解禁 → 两融 |
 
 每个方案都继承请求的研究日期和来源策略，并完整保留叶子任务的状态、证据、冲突、来源错误与限制。`single_security_research` 默认使用 `completeness_mode: "standard"`，尝试核心走势和全部标准增强；显式 `fast` 只保证身份与核心走势，并把估值、材料、资金事件、解禁和板块增强标为 `not_requested`。`deep_extensions` 只接受 `long_history` 与 `large_materials`：前者把同一个走势步骤加深到 250 个交易日，后者把同一个材料步骤扩大到 365 天且上限 100；`fast` 可与 `long_history` 组合，但拒绝与 `large_materials` 组合。已有的已完成交易日分钟历史必须显式请求 `intraday_replay`；五档盘口和逐笔端点不由该方案新增，仍属延期范围。
+
+`market_overview_research@1.0` 不接受标的。`standard` 精确声明 2 项实际核心、8 项标准增强和 5 项显式不支持能力：实际核心仅为行业板块逐行涨跌及上涨/下跌计数、涨跌停池；标准增强复用现有的行业题材轮动、热度、重点监控、严重异常波动、板块资金、全市场龙虎榜、北向披露和市场快讯任务。`fast` 只执行两项实际核心，全部标准增强固定为 `not_requested`。交易日/会话、主要宽基指数、全市场成交额、全市场两融和全市场盘中统一标为 `qualified_market_wide_owner_absent` / `v0.4.0_spec`；显式请求 `market_wide_intraday` 仍为 `unsupported` 且不编译子任务，未知、重复或旧形状输入失败关闭。该方案不会用单一指数或榜单代理缺失能力，也不新增 owner、endpoint、proxy 或 #60 五档逐笔路径。
 
 综合单标的和新标的方案都以身份为唯一门禁；其他局部来源或步骤失败不停止独立同级研究，但整体结果不会被描述成完整或已支撑。
 
@@ -205,6 +208,10 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 **使用新标的研究预置方案**
 
 > 使用 `$a-share-research`，把工业富联作为新标的做一轮完整研究：先核验身份，再依次查看机构研报与一致预期、当前估值、供应商板块归属、最近 5 日资金流、龙虎榜、未来 90 日解禁和融资融券。每一步都保留证据时点、公开时点、获取时间、状态和限制；某一步不可用时继续执行不依赖它的步骤，但不要把流程说成完整或已支撑。
+
+**使用综合市场研究预置方案**
+
+> 使用 `$a-share-research`，以 `market_overview_research@1.0` 和 `standard` 模式研究当日市场：保留行业板块逐行涨跌与上涨/下跌计数、涨跌停池、题材与市场信号、板块资金、全市场龙虎榜、北向披露和快讯的逐步状态；将会话、宽基指数、全市场成交额、全市场两融和全市场盘中保留为显式缺口，不用单指数、榜单或个股五档逐笔代理。
 
 **研究个股公告与新闻**
 
@@ -325,6 +332,7 @@ mypy skill/a-share-research/scripts
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-market-overview-research.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json

@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "task_type": "research_workflow",
+  "subjects": [],
+  "as_of": "2026-08-03",
+  "window": null,
+  "parameters": {
+    "workflow": {
+      "id": "market_overview_research",
+      "version": "1.0"
+    },
+    "inputs": {
+      "completeness_mode": "standard"
+    }
+  },
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": true
+  }
+}
