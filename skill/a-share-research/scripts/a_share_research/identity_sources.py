@@ -291,6 +291,51 @@ class SseStockListOperation:
     )
     field_contract = IdentityFieldContract(
         dispositions=(
+            *(
+                FieldDisposition(
+                    field,
+                    "excluded",
+                    None,
+                    "provider_identity_field_not_retained",
+                )
+                for field in (
+                    "AREA_NAME_DESC",
+                    "CHANGEABLE_BOND_ABBR",
+                    "CHANGEABLE_BOND_CODE",
+                    "COMPANY_ABBR",
+                    "COMPANY_ADDRESS",
+                    "CSRC_CODE_DESC",
+                    "CSRC_GREAT_CODE_DESC",
+                    "CSRC_MIDDLE_CODE_DESC",
+                    "ENGLISH_ABBR",
+                    "E_MAIL_ADDRESS",
+                    "FOREIGN_LISTING_ADDRESS",
+                    "FOREIGN_LISTING_DESC",
+                    "FULL_NAME_IN_ENGLISH",
+                    "IF_PROFIT",
+                    "IF_VOTE_DIFFERENCE",
+                    "ISHLT",
+                    "LEGAL_REPRESENTATIVE",
+                    "OFFICE_ADDRESS",
+                    "OFFICE_ZIP",
+                    "OPERATION_SEQ",
+                    "OTHER_ABBR",
+                    "OTHER_CODE",
+                    "QIANYI_DATE",
+                    "REPR_PHONE",
+                    "SCU_TYPE",
+                    "SECURITY_30_DESC",
+                    "SECURITY_CODE_A_SZ",
+                    "SECURITY_CODE_B",
+                    "SEC_NAME_FULL",
+                    "SMALL_CLASS_NAME",
+                    "SSE_CODE_DESC",
+                    "STATE_CODE_B_DESC",
+                    "STATUS",
+                    "TYPE",
+                    "WWW_ADDRESS",
+                )
+            ),
             FieldDisposition(
                 "SECURITY_CODE_A",
                 "normalized",
@@ -442,6 +487,23 @@ class SzseStockListOperation:
     )
     field_contract = IdentityFieldContract(
         dispositions=(
+            *(
+                FieldDisposition(
+                    field,
+                    "excluded",
+                    None,
+                    "provider_identity_field_not_retained",
+                )
+                for field in (
+                    "agltgb",
+                    "agzgb",
+                    "bk",
+                    "gskzjglx",
+                    "sfjybjqcy",
+                    "sshymc",
+                    "ylbz",
+                )
+            ),
             FieldDisposition(
                 "agdm", "normalized", "observations[].payload.observation.code"
             ),

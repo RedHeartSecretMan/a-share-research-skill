@@ -443,6 +443,60 @@ class UnifiedIdentityPublicSeamTests(unittest.TestCase):
             self.assertEqual(operation["operation_id"], operation_id)
             self.assertIn("field_dispositions", operation)
             self.assertIn("diagnostics", operation)
+        sse_dispositions = {
+            item["field"]: item
+            for item in operations["sse_stock_list@1"]["field_dispositions"]
+        }
+        reviewed_live_excluded_fields = {
+            "AREA_NAME_DESC",
+            "CHANGEABLE_BOND_ABBR",
+            "CHANGEABLE_BOND_CODE",
+            "COMPANY_ABBR",
+            "COMPANY_ADDRESS",
+            "CSRC_CODE_DESC",
+            "CSRC_GREAT_CODE_DESC",
+            "CSRC_MIDDLE_CODE_DESC",
+            "ENGLISH_ABBR",
+            "E_MAIL_ADDRESS",
+            "FOREIGN_LISTING_ADDRESS",
+            "FOREIGN_LISTING_DESC",
+            "FULL_NAME_IN_ENGLISH",
+            "IF_PROFIT",
+            "IF_VOTE_DIFFERENCE",
+            "ISHLT",
+            "LEGAL_REPRESENTATIVE",
+            "OFFICE_ADDRESS",
+            "OFFICE_ZIP",
+            "OPERATION_SEQ",
+            "OTHER_ABBR",
+            "OTHER_CODE",
+            "QIANYI_DATE",
+            "REPR_PHONE",
+            "SCU_TYPE",
+            "SECURITY_30_DESC",
+            "SECURITY_CODE_A_SZ",
+            "SECURITY_CODE_B",
+            "SEC_NAME_FULL",
+            "SMALL_CLASS_NAME",
+            "SSE_CODE_DESC",
+            "STATE_CODE_B_DESC",
+            "STATUS",
+            "TYPE",
+            "WWW_ADDRESS",
+        }
+        self.assertEqual(
+            {field: sse_dispositions[field] for field in reviewed_live_excluded_fields},
+            {
+                field: {
+                    "field": field,
+                    "disposition": "excluded",
+                    "destination": None,
+                    "reason": "provider_identity_field_not_retained",
+                }
+                for field in reviewed_live_excluded_fields
+            },
+        )
+        self.assertNotIn("EXCLUDED_SSE_LIVE_FIELD_VALUE", completed.stdout)
         self.assertEqual(len(result["observations"]), 2)
         for observation in result["observations"]:
             owner = operations[observation["operation_id"]]
@@ -514,6 +568,119 @@ class UnifiedIdentityPublicSeamTests(unittest.TestCase):
             },
         )
         self.assertNotIn("gzmt", completed.stdout)
+
+    def test_installed_szse_identity_accepts_reviewed_live_field_inventory(
+        self,
+    ) -> None:
+        request_payload = identity_request(allow_experimental=True)
+        request_payload["subjects"] = [{"clue": "300058"}]
+        completed = invoke_installed_identity(
+            request_payload,
+            fixture_routes={
+                "query.sse.com.cn": "sse_empty.json",
+                "www.szse.cn": "szse_300058.json",
+                "www.cninfo.com.cn": "cninfo_current_orgs.json",
+            },
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "limited")
+        claim = result["claims"][0]
+        self.assertEqual(claim["payload"]["security"]["exchange"], "SZSE")
+        self.assertEqual(claim["payload"]["security"]["code"], "300058")
+        operation = result["coverage"]["security_identity_resolution"]["operations"][
+            "szse_stock_list@1"
+        ]
+        self.assertEqual(operation["execution_state"], "succeeded")
+        self.assertEqual(operation["state"], "complete")
+        dispositions = {item["field"]: item for item in operation["field_dispositions"]}
+        reviewed_live_excluded_fields = {
+            "agltgb",
+            "agzgb",
+            "bk",
+            "gskzjglx",
+            "sfjybjqcy",
+            "sshymc",
+            "ylbz",
+        }
+        self.assertEqual(
+            {field: dispositions[field] for field in reviewed_live_excluded_fields},
+            {
+                field: {
+                    "field": field,
+                    "disposition": "excluded",
+                    "destination": None,
+                    "reason": "provider_identity_field_not_retained",
+                }
+                for field in reviewed_live_excluded_fields
+            },
+        )
+        self.assertNotIn("EXCLUDED_SZSE_LIVE_FIELD_VALUE", completed.stdout)
+
+    def test_installed_identity_rejects_unreviewed_live_fields(self) -> None:
+        sse_payload = json.loads(
+            Path(IDENTITY_FIXTURES, "sse_600519.json").read_text(encoding="utf-8")
+        )
+        sse_payload["result"][0]["UNREVIEWED_SSE_FIELD"] = "UNREVIEWED_VALUE"
+        szse_payload = json.loads(
+            Path(IDENTITY_FIXTURES, "szse_300058.json").read_text(encoding="utf-8")
+        )
+        szse_payload[0]["data"][0]["unreviewed_szse_field"] = "UNREVIEWED_VALUE"
+        cases = (
+            (
+                "sse",
+                "600519",
+                "sse_stock_list@1",
+                {
+                    "query.sse.com.cn": sse_payload,
+                },
+                {
+                    "www.szse.cn": "szse_empty.json",
+                    "www.cninfo.com.cn": "cninfo_stocks.json",
+                },
+            ),
+            (
+                "szse",
+                "300058",
+                "szse_stock_list@1",
+                {
+                    "www.szse.cn": szse_payload,
+                },
+                {
+                    "query.sse.com.cn": "sse_empty.json",
+                    "www.cninfo.com.cn": "cninfo_current_orgs.json",
+                },
+            ),
+        )
+        for label, clue, operation_id, route_bodies, routes in cases:
+            with self.subTest(exchange=label):
+                request_payload = identity_request(allow_experimental=True)
+                request_payload["subjects"] = [{"clue": clue}]
+                completed = invoke_installed_identity(
+                    request_payload,
+                    fixture_routes=routes,
+                    fixture_route_bodies=route_bodies,
+                )
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(completed.stderr, "")
+                self.assertNotIn("UNREVIEWED_VALUE", completed.stdout)
+                result = json.loads(completed.stdout)
+                operation = result["coverage"]["security_identity_resolution"][
+                    "operations"
+                ][operation_id]
+                self.assertEqual(operation["execution_state"], "failed")
+                self.assertEqual(operation["state"], "failed")
+                self.assertIn(
+                    "unknown_schema",
+                    {
+                        error["code"]
+                        for error in result["source_errors"]
+                        if error["operation_id"] == operation_id
+                    },
+                )
 
     def test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market(
         self,
@@ -1073,9 +1240,9 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
                 )
 
                 self.assertEqual(outcome.coverage, "complete")
-                self.assertEqual(
-                    {item.field for item in outcome.field_dispositions},
+                self.assertLessEqual(
                     set(actual_row),
+                    {item.field for item in outcome.field_dispositions},
                 )
                 self.assertLessEqual(
                     {item.disposition for item in outcome.field_dispositions},

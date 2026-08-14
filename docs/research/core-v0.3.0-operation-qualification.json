@@ -979,7 +979,7 @@
         "qualification": "qualified_by_issue_58",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_identity_sources.py#test_sse_stock_list_normalizes_identity_observation",
+      "offline_contract_selector": "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/identity_sources.py#SseStockListOperation",
@@ -987,6 +987,7 @@
         "tests/test_identity_sources.py#test_sse_stock_list_normalizes_identity_observation",
         "tests/test_identity_sources.py#IdentitySourceOperationTests",
         "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+        "tests/test_unified_identity_runtime.py#test_installed_identity_rejects_unreviewed_live_fields",
         "tests/test_unified_identity_runtime.py#test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market",
         "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],
@@ -1075,7 +1076,7 @@
         "qualification": "qualified_by_issue_58",
         "request_bound": "profile_bounded"
       },
-      "offline_contract_selector": "tests/test_identity_sources.py#test_szse_stock_list_normalizes_identity_observation",
+      "offline_contract_selector": "tests/test_unified_identity_runtime.py#test_installed_szse_identity_accepts_reviewed_live_field_inventory",
       "offline_contract_result": "passed",
       "evidence_references": [
         "skill/a-share-research/scripts/a_share_research/identity_sources.py#SzseStockListOperation",
@@ -1083,6 +1084,8 @@
         "tests/test_identity_sources.py#test_szse_stock_list_normalizes_identity_observation",
         "tests/test_identity_sources.py#IdentitySourceOperationTests",
         "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+        "tests/test_unified_identity_runtime.py#test_installed_szse_identity_accepts_reviewed_live_field_inventory",
+        "tests/test_unified_identity_runtime.py#test_installed_identity_rejects_unreviewed_live_fields",
         "tests/test_unified_identity_runtime.py#test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market",
         "docs/specs/0007-implementation-amendment-a.md#A-08a"
       ],

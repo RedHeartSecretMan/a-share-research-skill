@@ -15,7 +15,14 @@
       {
         "agdm": "300058",
         "agjc": "<a href='https://www.szse.cn/?code=300058'><u>蓝色光标</u></a>",
-        "agssrq": "2010-02-26"
+        "agssrq": "2010-02-26",
+        "agltgb": "EXCLUDED_SZSE_LIVE_FIELD_VALUE",
+        "agzgb": "EXCLUDED_SZSE_LIVE_FIELD_VALUE",
+        "bk": "EXCLUDED_SZSE_LIVE_FIELD_VALUE",
+        "gskzjglx": "EXCLUDED_SZSE_LIVE_FIELD_VALUE",
+        "sfjybjqcy": "EXCLUDED_SZSE_LIVE_FIELD_VALUE",
+        "sshymc": "EXCLUDED_SZSE_LIVE_FIELD_VALUE",
+        "ylbz": "EXCLUDED_SZSE_LIVE_FIELD_VALUE"
       }
     ],
     "error": null

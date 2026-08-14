@@ -1364,8 +1364,8 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                     "disposition": "integrated",
                     "qualification": "qualified_by_issue_58",
                     "selector": (
-                        "tests/test_identity_sources.py#"
-                        "test_sse_stock_list_normalizes_identity_observation"
+                        "tests/test_unified_identity_runtime.py#"
+                        "test_installed_identity_success_retains_operation_owned_observations"
                     ),
                     "gap_issues": [],
                 },
@@ -1373,8 +1373,8 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                     "disposition": "integrated",
                     "qualification": "qualified_by_issue_58",
                     "selector": (
-                        "tests/test_identity_sources.py#"
-                        "test_szse_stock_list_normalizes_identity_observation"
+                        "tests/test_unified_identity_runtime.py#"
+                        "test_installed_szse_identity_accepts_reviewed_live_field_inventory"
                     ),
                     "gap_issues": [],
                 },
@@ -1397,6 +1397,24 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                     "gap_issues": [],
                 },
             },
+        )
+        self.assertTrue(
+            {
+                "tests/test_unified_identity_runtime.py#"
+                "test_installed_identity_success_retains_operation_owned_observations",
+                "tests/test_unified_identity_runtime.py#"
+                "test_installed_identity_rejects_unreviewed_live_fields",
+            }
+            <= set(entries["sse_stock_list@1"]["evidence_references"])
+        )
+        self.assertTrue(
+            {
+                "tests/test_unified_identity_runtime.py#"
+                "test_installed_szse_identity_accepts_reviewed_live_field_inventory",
+                "tests/test_unified_identity_runtime.py#"
+                "test_installed_identity_rejects_unreviewed_live_fields",
+            }
+            <= set(entries["szse_stock_list@1"]["evidence_references"])
         )
 
     def test_qualification_manifest_strictly_joins_plan_denominator(self) -> None:
