@@ -5272,12 +5272,13 @@ def _canonical_identity_subject_from_owned_official_observations(
     observation_ids: Collection[str],
     *,
     domain: str,
+    capability_id: str = "security_identity_resolution",
 ) -> dict[str, object]:
     candidates: dict[str, dict[str, object]] = {}
     for record in observations:
         if (
             record.get("id") not in observation_ids
-            or record.get("capability_id") != "security_identity_resolution"
+            or record.get("capability_id") != capability_id
         ):
             continue
         provider_payload = _record_payload(record)
@@ -7163,13 +7164,18 @@ def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
         return
     payload = _nested_mapping(claim, "payload")
     rows = payload.get("rows")
-    if not isinstance(rows, list):
+    subjects = payload.get("subjects")
+    if (
+        not isinstance(rows, list)
+        or not isinstance(subjects, list)
+        or len(subjects) != len(rows)
+    ):
         raise ValueError("comparison domain facts are incomplete")
     observations = _owned_observations(result)
     calculations = cast(list[dict[str, object]], result["calculations"])
     source_errors = cast(list[dict[str, object]], result["source_errors"])
-    for row in rows:
-        if not isinstance(row, dict) or not isinstance(row.get("member_id"), str):
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or row.get("member_id") != f"member-{index}":
             raise ValueError("comparison domain facts contain an invalid member")
         member_id = str(row["member_id"])
         member_observations = [
@@ -7192,6 +7198,7 @@ def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
             raise ValueError(
                 "comparison domain facts do not close over member evidence"
             )
+        expected_subject: dict[str, object]
         if member_calculations:
             security, name, trading_date, expected_metrics, _ = _valuation_owned_facts(
                 member_observations, member_calculations
@@ -7208,8 +7215,74 @@ def _validate_comparison_domain_facts(result: Mapping[str, object]) -> None:
                 )
             ):
                 raise ValueError("comparison domain facts contradict member outcomes")
-        elif not member_errors or row.get("status") != "blocked":
-            raise ValueError("comparison domain facts forge member status")
+            expected_subject = {"security": security, "name": name}
+        else:
+            limitation_codes = row.get("limitation_codes")
+            if (
+                not member_errors
+                or row.get("status") != "blocked"
+                or not isinstance(limitation_codes, list)
+                or not limitation_codes
+                or any(not isinstance(item, str) for item in limitation_codes)
+            ):
+                raise ValueError("comparison domain facts forge member status")
+            identity_unresolved = bool(
+                {"identity_not_resolved", "security_identity_not_resolved"}
+                & set(cast(list[str], limitation_codes))
+            )
+            if identity_unresolved:
+                try:
+                    _canonical_identity_subject_from_owned_official_observations(
+                        member_observations,
+                        evidence_ids,
+                        domain="comparison blocked member",
+                        capability_id="valuation_compare_metrics",
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError(
+                        "comparison domain facts discard an owned member identity"
+                    )
+                if (
+                    row.get("security") is not None
+                    or not isinstance(row.get("name"), str)
+                    or not row["name"]
+                ):
+                    raise ValueError(
+                        "comparison domain facts contain invalid unresolved identity"
+                    )
+                expected_subject = {"security": None, "name": row["name"]}
+            else:
+                try:
+                    canonical = (
+                        _canonical_identity_subject_from_owned_official_observations(
+                            member_observations,
+                            evidence_ids,
+                            domain="comparison blocked member",
+                            capability_id="valuation_compare_metrics",
+                        )
+                    )
+                except ValueError as error:
+                    raise ValueError(
+                        "comparison domain facts lack blocked member identity authority"
+                    ) from error
+                canonical_security = _nested_mapping(canonical, "security")
+                expected_subject = {
+                    "security": (
+                        f"{canonical_security['exchange']}:{canonical_security['code']}"
+                    ),
+                    "name": canonical["name"],
+                }
+                if {
+                    "security": row.get("security"),
+                    "name": row.get("name"),
+                } != expected_subject:
+                    raise ValueError(
+                        "comparison domain facts contradict blocked member identity"
+                    )
+        if subjects[index] != expected_subject:
+            raise ValueError("comparison domain facts contradict comparison subjects")
 
 
 def fold_direct_task_research_result(

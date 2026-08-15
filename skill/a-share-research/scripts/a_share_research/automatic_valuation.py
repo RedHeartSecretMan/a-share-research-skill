@@ -2188,7 +2188,13 @@ def _valuation_member_material(
     limitations: tuple[dict[str, Any], ...],
 ) -> ValuationMemberMaterial:
     member_claim = next(
-        (item for item in claims if item.kind == "security_valuation_metrics"), None
+        (
+            item
+            for item in claims
+            if item.kind
+            in {"security_valuation_metrics", "security_valuation_diagnostics"}
+        ),
+        None,
     )
     security: str | None = None
     name: str | None = None
@@ -2219,7 +2225,9 @@ def _valuation_member_material(
             metrics = {str(key): dict(value) for key, value in claim_metrics.items()}
     status: ResearchStatus = (
         "limited"
-        if task_type == "security_valuation" and member_claim is not None
+        if task_type == "security_valuation"
+        and member_claim is not None
+        and member_claim.kind == "security_valuation_metrics"
         else "blocked"
     )
     return ValuationMemberMaterial(

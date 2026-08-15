@@ -357,6 +357,37 @@ def invoke_copied_installed(
     return loaded
 
 
+def build_price_blocked_comparison() -> UnifiedResearchResult:
+    request = {
+        "schema_version": "1.0",
+        "task_type": "valuation_compare",
+        "subjects": [
+            {"clue": "601138", "issuer_security_class_count": 1},
+            {"clue": "000001", "issuer_security_class_count": 1},
+        ],
+        "as_of": "2026-08-02",
+        "window": None,
+        "parameters": {"target_pe": "30"},
+        "source_policy": {
+            "allow_experimental": True,
+            "allow_credentials": False,
+            "allow_fallback": True,
+        },
+    }
+    with patch.dict(
+        os.environ,
+        {"A_SHARE_RESEARCH_TEST_SCENARIO": "missing_price"},
+    ):
+        return build_valuation_comparison_result(
+            request,
+            load_fixture_transport(
+                VALUATION_FIXTURE_CLI,
+                "ValuationFixtureTransport",
+            ),
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        )
+
+
 def build_invariant_result(*, include_second_claim: bool = False):
     observation = {
         "id": "local-observation",
@@ -1905,6 +1936,131 @@ class DirectResultInvariantTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     result.to_dict()
 
+    def test_comparison_serializer_rejects_rehashed_blocked_row_identity_loss(
+        self,
+    ) -> None:
+        result = build_price_blocked_comparison()
+        baseline = result.to_dict()
+        claim_index = next(
+            index
+            for index, item in enumerate(result.claims)
+            if item["kind"] == "valuation_compare_members"
+        )
+        blocked = result.claims[claim_index]["payload"]["rows"][0]
+
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(blocked["security"], "SSE:601138")
+        self.assertEqual(
+            baseline["claims"][claim_index]["payload"]["subjects"][0],
+            {"security": "SSE:601138", "name": "工业富联"},
+        )
+        blocked["security"] = None
+        blocked["name"] = "601138"
+        rehash_direct_consumer(result, collection="claims", index=claim_index)
+
+        with self.assertRaisesRegex(ValueError, "comparison domain facts"):
+            result.to_dict()
+
+    def test_comparison_serializer_rejects_rehashed_blocked_subject_rebinding(
+        self,
+    ) -> None:
+        result = build_price_blocked_comparison()
+        result.to_dict()
+        claim_index = next(
+            index
+            for index, item in enumerate(result.claims)
+            if item["kind"] == "valuation_compare_members"
+        )
+        payload = result.claims[claim_index]["payload"]
+        forged_subject = {"security": "SSE:999999", "name": "错绑证券"}
+        payload["subjects"][0] = deepcopy(forged_subject)
+        payload["rows"][0]["security"] = forged_subject["security"]
+        payload["rows"][0]["name"] = forged_subject["name"]
+        rehash_direct_consumer(result, collection="claims", index=claim_index)
+
+        with self.assertRaisesRegex(ValueError, "comparison domain facts"):
+            result.to_dict()
+
+    def test_comparison_serializer_rejects_self_reported_blocked_member(self) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "valuation_compare",
+            "subjects": [
+                {"clue": "601138", "issuer_security_class_count": 1},
+                {"clue": "000001", "issuer_security_class_count": 1},
+            ],
+            "as_of": "2026-08-02",
+            "window": None,
+            "parameters": {"target_pe": "30"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        result = build_valuation_comparison_result(
+            request,
+            load_fixture_transport(
+                VALUATION_FIXTURE_CLI,
+                "ValuationFixtureTransport",
+            ),
+            datetime(2026, 8, 2, 18, 30, tzinfo=timezone(timedelta(hours=8))),
+        )
+        result.to_dict()
+        removed_ids = {
+            item["id"]
+            for item in result.calculations
+            if item["kind"].startswith("member-0::")
+        }
+        object.__setattr__(
+            result,
+            "calculations",
+            tuple(
+                item for item in result.calculations if item["id"] not in removed_ids
+            ),
+        )
+        result.task_views["valuation_compare"]["calculation_ids"] = [
+            item
+            for item in result.task_views["valuation_compare"]["calculation_ids"]
+            if item not in removed_ids
+        ]
+        result.briefs[0]["calculation_ids"] = [
+            item
+            for item in result.briefs[0]["calculation_ids"]
+            if item not in removed_ids
+        ]
+        claim_index = next(
+            index
+            for index, item in enumerate(result.claims)
+            if item["kind"] == "valuation_compare_members"
+        )
+        row = result.claims[claim_index]["payload"]["rows"][0]
+        row["status"] = "blocked"
+        row["trading_date"] = None
+        row["metrics"] = {
+            metric: {
+                "status": "not_calculable",
+                "reason": "valuation_price_not_established",
+            }
+            for metric in (
+                "market_capitalization",
+                "pe_ttm",
+                "pb_mrq",
+                "forward_pe",
+                "forecast_eps_growth",
+                "peg",
+                "pe_digestion_years",
+            )
+        }
+        row["limitation_codes"] = ["valuation_price_not_established"]
+        rehash_direct_consumer(result, collection="claims", index=claim_index)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "comparison domain facts forge member status",
+        ):
+            result.to_dict()
+
     def test_missing_shares_serializer_rejects_rehashed_calculated_claim_forgery(
         self,
     ) -> None:
@@ -2343,6 +2499,116 @@ class DirectResultInvariantTests(unittest.TestCase):
             if item["operation_id"].startswith("member-1::")
         }
         self.assertIn("member-1::ths_consensus_eps@1", member_one_operations)
+
+    def test_copied_installed_comparison_retains_price_blocked_member_identity(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "valuation_compare",
+            "subjects": [
+                {"clue": "601138", "issuer_security_class_count": 1},
+                {"clue": "000001", "issuer_security_class_count": 1},
+            ],
+            "as_of": "2026-08-15",
+            "window": None,
+            "parameters": {"target_pe": "30"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+
+        result = invoke_copied_installed(
+            request,
+            valuation_fixtures=True,
+            fixture_scenario="missing_price",
+            fixture_research_now="2026-08-15T18:30:00+08:00",
+        )
+
+        claim = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "valuation_compare_members"
+        )
+        self.assertEqual(
+            claim["payload"]["subjects"],
+            [
+                {"security": "SSE:601138", "name": "工业富联"},
+                {"security": "SZSE:000001", "name": "平安银行"},
+            ],
+        )
+        blocked, sibling = claim["payload"]["rows"]
+        self.assertEqual(
+            (blocked["security"], blocked["name"], blocked["status"]),
+            ("SSE:601138", "工业富联", "blocked"),
+        )
+        self.assertIn("valuation_price_not_established", blocked["limitation_codes"])
+        self.assertEqual(
+            (sibling["security"], sibling["name"], sibling["status"]),
+            ("SZSE:000001", "平安银行", "limited"),
+        )
+        self.assertEqual(
+            sibling["metrics"]["market_capitalization"]["status"], "calculated"
+        )
+        observation_ids = {item["id"] for item in result["observations"]}
+        self.assertTrue(set(blocked["evidence_ids"]).issubset(observation_ids))
+        self.assertTrue(set(sibling["evidence_ids"]).issubset(observation_ids))
+
+    def test_copied_installed_workflow_retains_price_blocked_comparison_member(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "research_workflow",
+            "subjects": [
+                {"clue": "601138", "issuer_security_class_count": 1},
+                {"clue": "000001", "issuer_security_class_count": 1},
+            ],
+            "as_of": "2026-08-15",
+            "window": None,
+            "parameters": {
+                "workflow": {"id": "valuation_comparison", "version": "1.0"},
+                "inputs": {"target_pe": "30"},
+            },
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+
+        result = invoke_copied_installed(
+            request,
+            valuation_fixtures=True,
+            fixture_scenario="missing_price",
+            fixture_research_now="2026-08-15T18:30:00+08:00",
+        )
+
+        self.assertEqual(result["plan"]["workflow_id"], "valuation_comparison")
+        claim = next(
+            item
+            for item in result["claims"]
+            if item["kind"] == "valuation_compare_members"
+        )
+        self.assertEqual(
+            [
+                (row["security"], row["name"], row["status"])
+                for row in claim["payload"]["rows"]
+            ],
+            [
+                ("SSE:601138", "工业富联", "blocked"),
+                ("SZSE:000001", "平安银行", "limited"),
+            ],
+        )
+        view = result["task_views"]["research_workflow"]
+        step = next(item for item in view["steps"] if item["step_id"] == "comparison")
+        self.assertIn(claim["id"], step["claim_ids"])
+        self.assertTrue(set(step["brief_ids"]))
+        self.assertTrue(
+            set(step["brief_ids"]).issubset({item["id"] for item in result["briefs"]})
+        )
 
     def test_valuation_missing_financials_keeps_other_owned_inputs(self) -> None:
         request = {
