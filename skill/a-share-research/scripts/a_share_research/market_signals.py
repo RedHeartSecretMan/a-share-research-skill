@@ -704,10 +704,10 @@ def _resolve_direct_provider_identities(
             },
             build_default_identity_operations(transport),
         )
-        namespace = hashlib.sha256(provider_code.encode()).hexdigest()[:12]
+        capability_id, consumer_id = monitoring_identity_application(provider_code)
+        namespace = capability_id.rpartition(".")[2]
         capability_map = {
-            item.capability_id: f"{item.capability_id}.monitoring.{namespace}"
-            for item in execution.plan.obligations
+            item.capability_id: capability_id for item in execution.plan.obligations
         }
         namespaced_outcomes, key_map = _namespace_identity_observations(
             execution.outcomes,
@@ -761,7 +761,6 @@ def _resolve_direct_provider_identities(
             key_map[key] for key in execution.material.observation_keys
         )
         identity_keys[provider_code] = material_keys
-        consumer_id = f"monitoring_intersection_identity:{provider_code}"
         claims.append(
             DirectTaskClaim(
                 consumer_id,
@@ -911,6 +910,59 @@ MARKET_WIDE_SIGNAL_TYPES = MARKET_SIGNAL_TYPES.difference(SUBJECT_SIGNAL_TYPES)
 DERIVED_SIGNAL_TYPE = "monitoring_intersection"
 DERIVATION_BASIS_TYPES = frozenset({"focus_monitoring", "severe_abnormal_movement"})
 COORDINATOR_OPERATION_ID = "market_signal_coordinator@1"
+_MONITORING_IDENTITY_CAPABILITY_PREFIX = "security_identity_resolution.monitoring."
+_MONITORING_IDENTITY_CONSUMER_PREFIX = "monitoring_intersection_identity:"
+
+
+def monitoring_identity_application(provider_code: str) -> tuple[str, str]:
+    """Return the owner-valid IDs for one runtime-discovered monitoring subject."""
+
+    if (
+        not isinstance(provider_code, str)
+        or len(provider_code) != 6
+        or not provider_code.isdigit()
+    ):
+        raise ValueError("monitoring identity provider code is invalid")
+    namespace = hashlib.sha256(provider_code.encode()).hexdigest()[:12]
+    return (
+        f"{_MONITORING_IDENTITY_CAPABILITY_PREFIX}{namespace}",
+        f"{_MONITORING_IDENTITY_CONSUMER_PREFIX}{provider_code}",
+    )
+
+
+def is_monitoring_identity_capability_id(value: object) -> bool:
+    """Return whether a value declares a runtime monitoring identity capability."""
+
+    return isinstance(value, str) and value.startswith(
+        _MONITORING_IDENTITY_CAPABILITY_PREFIX
+    )
+
+
+def is_monitoring_identity_consumer_id(value: object) -> bool:
+    """Return whether a value declares a runtime monitoring identity consumer."""
+
+    return isinstance(value, str) and value.startswith(
+        _MONITORING_IDENTITY_CONSUMER_PREFIX
+    )
+
+
+def monitoring_identity_application_provider_code(
+    capability_id: str, consumer_id: str
+) -> str:
+    """Validate and invert one monitoring identity application pair."""
+
+    if not is_monitoring_identity_consumer_id(consumer_id):
+        raise ValueError("monitoring identity application is invalid")
+    provider_code = consumer_id.removeprefix(_MONITORING_IDENTITY_CONSUMER_PREFIX)
+    try:
+        expected_capability, expected_consumer = monitoring_identity_application(
+            provider_code
+        )
+    except ValueError as error:
+        raise ValueError("monitoring identity application is invalid") from error
+    if capability_id != expected_capability or consumer_id != expected_consumer:
+        raise ValueError("monitoring identity application is invalid")
+    return provider_code
 
 
 def build_market_signals_result(

@@ -9,10 +9,11 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import Mapping, Sequence, cast
+from typing import Mapping, NoReturn, Sequence, cast
 
 _CANDIDATE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_PLAN_ID = re.compile(r"^plan-[0-9a-f]{24}$")
 _SAFE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$")
 _ATTEMPT_KEYS = {
     "schema_version",
@@ -361,15 +362,24 @@ def _attempt_plan_contracts(
     ):
         snapshot = _mapping(raw_snapshot, "release plan snapshot")
         profile = _reference(snapshot.get("request_profile"), "release request profile")
+        request_as_of = _request_as_of(snapshot.get("request_as_of"))
         result = _mapping(snapshot.get("result"), "release plan result")
         plan = _mapping(result.get("plan"), "release plan")
-        _add_plan_contract(contracts, ("plan", profile), deepcopy(dict(plan)))
+        stable_plan = _stable_plan_contract(
+            contracts,
+            profile=profile,
+            scope="direct",
+            plan=plan,
+            coverage=_mapping(result.get("coverage"), "release plan coverage"),
+            request_as_of=request_as_of,
+        )
+        _add_plan_contract(contracts, ("plan", profile), stable_plan)
         if plan.get("task_type") != "research_workflow":
             _add_direct_disposition_contracts(
                 contracts,
                 profile=profile,
                 scope="direct",
-                plan=plan,
+                plan=stable_plan,
                 coverage=_mapping(result.get("coverage"), "release plan coverage"),
             )
             continue
@@ -393,21 +403,374 @@ def _attempt_plan_contracts(
             if leaf_plan_value is None:
                 continue
             leaf_plan = _mapping(leaf_plan_value, "release workflow leaf plan")
-            leaf_key = ("leaf_plan", profile, step_id)
-            _add_plan_contract(contracts, leaf_key, deepcopy(dict(leaf_plan)))
             covered = _mapping(
                 coverage_steps.get(step_id), "release workflow covered step"
             )
-            _add_direct_disposition_contracts(
+            leaf_coverage = _mapping(
+                covered.get("leaf"), "release workflow leaf coverage"
+            )
+            stable_leaf_plan = _stable_plan_contract(
                 contracts,
                 profile=profile,
                 scope=step_id,
                 plan=leaf_plan,
-                coverage=_mapping(
-                    covered.get("leaf"), "release workflow leaf coverage"
-                ),
+                coverage=leaf_coverage,
+                request_as_of=request_as_of,
+            )
+            leaf_key = ("leaf_plan", profile, step_id)
+            _add_plan_contract(contracts, leaf_key, stable_leaf_plan)
+            _add_direct_disposition_contracts(
+                contracts,
+                profile=profile,
+                scope=step_id,
+                plan=stable_leaf_plan,
+                coverage=leaf_coverage,
             )
     return contracts
+
+
+class _NoIoIdentityTransport:
+    def get(self, url: str, headers: dict[str, str]) -> NoReturn:
+        raise AssertionError("release attempt authority construction performed I/O")
+
+
+def _stable_plan_contract(
+    contracts: dict[tuple[str, ...], object],
+    *,
+    profile: str,
+    scope: str,
+    plan: Mapping[str, object],
+    coverage: Mapping[str, object],
+    request_as_of: str,
+) -> dict[str, object]:
+    """Separate owner-valid runtime applications from one stable plan declaration."""
+
+    copied = deepcopy(dict(plan))
+    if plan.get("task_type") == "research_workflow":
+        _validate_workflow_plan_instance(
+            profile=profile,
+            plan=plan,
+            request_as_of=request_as_of,
+        )
+        copied.pop("id")
+        return copied
+    if plan.get("task_type") != "market_signals":
+        return copied
+    capabilities = [
+        _reference(item, "release capability id")
+        for item in _sequence(plan.get("capabilities"), "release plan capabilities")
+    ]
+    from a_share_research.market_signals import (
+        is_monitoring_identity_capability_id,
+        is_monitoring_identity_consumer_id,
+        monitoring_identity_application_provider_code,
+    )
+
+    dynamic_capabilities = {
+        capability_id
+        for capability_id in capabilities
+        if is_monitoring_identity_capability_id(capability_id)
+    }
+    if not dynamic_capabilities:
+        return copied
+    if sum(item in dynamic_capabilities for item in capabilities) != len(
+        dynamic_capabilities
+    ):
+        raise ValueError("release probe monitoring identity application is invalid")
+
+    from a_share_research.research_result import stable_result_id
+
+    obligations = [
+        _mapping(item, "release plan obligation")
+        for item in _sequence(
+            plan.get("operation_obligations"), "release plan obligations"
+        )
+    ]
+    dependencies = [
+        _mapping(item, "release research dependency")
+        for item in _sequence(
+            plan.get("research_dependencies"), "release research dependencies"
+        )
+    ]
+    matched_dependencies: dict[str, tuple[str, Mapping[str, object]]] = {}
+    for dependency in dependencies:
+        consumer_id = _reference(
+            dependency.get("consumer_id"), "release dependency consumer"
+        )
+        if not is_monitoring_identity_consumer_id(consumer_id):
+            continue
+        matches: list[tuple[str, str]] = []
+        for capability_id in dynamic_capabilities:
+            try:
+                provider_code = monitoring_identity_application_provider_code(
+                    capability_id, consumer_id
+                )
+            except ValueError:
+                continue
+            matches.append((capability_id, provider_code))
+        if len(matches) != 1 or matches[0][0] in matched_dependencies:
+            raise ValueError("release probe monitoring identity application is invalid")
+        matched_dependencies[matches[0][0]] = (matches[0][1], dependency)
+    if set(matched_dependencies) != dynamic_capabilities:
+        raise ValueError("release probe monitoring identity application is invalid")
+
+    _validate_sanitized_plan_id(plan, coverage)
+    for capability_id in sorted(dynamic_capabilities):
+        provider_code, owned_dependency = matched_dependencies[capability_id]
+        application = _monitoring_identity_application_contract(
+            capability_id=capability_id,
+            provider_code=provider_code,
+            dependency=owned_dependency,
+            obligations=obligations,
+            coverage=coverage,
+        )
+        _add_plan_contract(
+            contracts,
+            ("monitoring_identity_application", profile, scope, provider_code),
+            application,
+        )
+
+    stable_obligations = [
+        deepcopy(dict(obligation))
+        for obligation in obligations
+        if obligation.get("capability_id") not in dynamic_capabilities
+    ]
+    dynamic_consumers = {
+        cast(str, dependency[1]["consumer_id"])
+        for dependency in matched_dependencies.values()
+    }
+    stable_dependencies = [
+        deepcopy(dict(dependency))
+        for dependency in dependencies
+        if dependency.get("consumer_id") not in dynamic_consumers
+    ]
+    stable_capabilities = [
+        capability_id
+        for capability_id in capabilities
+        if capability_id not in dynamic_capabilities
+    ]
+    copied["capabilities"] = stable_capabilities
+    copied["operation_obligations"] = stable_obligations
+    copied["research_dependencies"] = stable_dependencies
+    copied["id"] = stable_result_id(
+        "plan",
+        _sanitized_plan_identity(
+            copied,
+            coverage,
+            obligations=stable_obligations,
+            dependencies=stable_dependencies,
+        ),
+    )
+    return copied
+
+
+def _validate_workflow_plan_instance(
+    *, profile: str, plan: Mapping[str, object], request_as_of: str
+) -> None:
+    from a_share_research.research_result import stable_result_id
+
+    from tests.release_probe_core_operations import build_release_request_profiles
+
+    if set(plan) != {"id", "version", "task_type", "workflow_id", "steps"}:
+        raise ValueError("release workflow plan contract is invalid")
+    plan_id = plan.get("id")
+    if not isinstance(plan_id, str) or _PLAN_ID.fullmatch(plan_id) is None:
+        raise ValueError("release workflow plan ID is invalid")
+    configured = {
+        item.name: item
+        for item in build_release_request_profiles(
+            as_of=request_as_of, replay_date=request_as_of
+        )
+    }.get(profile)
+    if configured is None or configured.request.get("task_type") != "research_workflow":
+        raise ValueError("release workflow plan profile is invalid")
+    expected = stable_result_id(
+        "plan",
+        {
+            "version": plan.get("version"),
+            "task_type": plan.get("task_type"),
+            "workflow_id": plan.get("workflow_id"),
+            "request_scope": deepcopy(dict(configured.request)),
+            "steps": deepcopy(plan.get("steps")),
+        },
+    )
+    if plan_id != expected:
+        raise ValueError("release workflow plan ID contradicts its request profile")
+
+
+def _validate_sanitized_plan_id(
+    plan: Mapping[str, object], coverage: Mapping[str, object]
+) -> None:
+    from a_share_research.research_result import stable_result_id
+
+    expected = stable_result_id("plan", _sanitized_plan_identity(plan, coverage))
+    if plan.get("id") != expected:
+        raise ValueError("release probe plan ID contradicts its contracts")
+
+
+def _sanitized_plan_identity(
+    plan: Mapping[str, object],
+    coverage: Mapping[str, object],
+    *,
+    obligations: Sequence[Mapping[str, object]] | None = None,
+    dependencies: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
+    owned_obligations = list(
+        obligations
+        if obligations is not None
+        else [
+            _mapping(item, "release plan obligation")
+            for item in _sequence(
+                plan.get("operation_obligations"), "release plan obligations"
+            )
+        ]
+    )
+    owned_dependencies = list(
+        dependencies
+        if dependencies is not None
+        else [
+            _mapping(item, "release research dependency")
+            for item in _sequence(
+                plan.get("research_dependencies"), "release research dependencies"
+            )
+        ]
+    )
+    disposition_contracts: list[dict[str, object]] = []
+    for obligation in owned_obligations:
+        capability_id = _reference(
+            obligation.get("capability_id"), "release capability id"
+        )
+        operation_id = _reference(
+            obligation.get("operation_id"), "release operation id"
+        )
+        operation = _mapping(
+            _mapping(
+                _mapping(
+                    coverage.get(capability_id), "release capability coverage"
+                ).get("operations"),
+                "release operation coverage",
+            ).get(operation_id),
+            "release owned operation coverage",
+        )
+        disposition_contracts.append(
+            {
+                "capability_id": capability_id,
+                "operation_id": operation_id,
+                "fields": deepcopy(
+                    list(
+                        _sequence(
+                            operation.get("field_dispositions"),
+                            "release field dispositions",
+                        )
+                    )
+                ),
+            }
+        )
+    identity: dict[str, object] = {
+        "version": plan.get("version"),
+        "task_type": plan.get("task_type"),
+        "operation_obligations": [
+            deepcopy(dict(obligation)) for obligation in owned_obligations
+        ],
+        "research_dependencies": [
+            deepcopy(dict(dependency)) for dependency in owned_dependencies
+        ],
+        "field_dispositions": disposition_contracts,
+    }
+    if plan.get("evidence_storage") is not None:
+        identity["evidence_storage"] = deepcopy(plan["evidence_storage"])
+    return identity
+
+
+def _monitoring_identity_application_contract(
+    *,
+    capability_id: str,
+    provider_code: str,
+    dependency: Mapping[str, object],
+    obligations: Sequence[Mapping[str, object]],
+    coverage: Mapping[str, object],
+) -> dict[str, object]:
+    from a_share_research.identity_sources import build_default_identity_operations
+    from a_share_research.market_signals import monitoring_identity_application
+
+    adapters = build_default_identity_operations(_NoIoIdentityTransport())
+    expected_capability, expected_consumer = monitoring_identity_application(
+        provider_code
+    )
+    expected_obligations: dict[str, dict[str, object]] = {}
+    expected_dispositions: dict[str, list[dict[str, object]]] = {}
+    for adapter in adapters:
+        obligation = adapter.obligation.to_dict()
+        obligation["capability_id"] = capability_id
+        operation_id = cast(str, obligation["operation_id"])
+        expected_obligations[operation_id] = obligation
+        expected_dispositions[operation_id] = [
+            item.to_dict() for item in adapter.field_dispositions
+        ]
+    owned_obligations = [
+        obligation
+        for obligation in obligations
+        if obligation.get("capability_id") == capability_id
+    ]
+    actual_obligations = {
+        _reference(obligation.get("operation_id"), "release operation id"): deepcopy(
+            dict(obligation)
+        )
+        for obligation in owned_obligations
+    }
+    aggregate = _mapping(
+        coverage.get(capability_id), "release monitoring identity coverage"
+    )
+    operations = _mapping(
+        aggregate.get("operations"), "release monitoring identity operations"
+    )
+    if (
+        len(owned_obligations) != len(expected_obligations)
+        or capability_id != expected_capability
+        or actual_obligations != expected_obligations
+        or set(operations) != set(expected_obligations)
+        or dict(dependency)
+        != {
+            "consumer_id": expected_consumer,
+            "evidence_use": "security_identity",
+            "minimum_supporting_observations": 1,
+            "core": True,
+        }
+    ):
+        raise ValueError("release probe monitoring identity application is invalid")
+    for operation_id, expected in expected_dispositions.items():
+        operation = _mapping(
+            operations.get(operation_id), "release monitoring identity operation"
+        )
+        if (
+            operation.get("capability_id") != capability_id
+            or operation.get("operation_id") != operation_id
+        ):
+            raise ValueError("release probe monitoring identity application is invalid")
+        actual = list(
+            _sequence(operation.get("field_dispositions"), "release field dispositions")
+        )
+        if actual != expected:
+            raise ValueError("release probe monitoring identity application is invalid")
+    return {
+        "capability_id": capability_id,
+        "provider_code": provider_code,
+        "operation_obligations": [
+            expected_obligations[operation_id]
+            for operation_id in sorted(expected_obligations)
+        ],
+        "research_dependency": deepcopy(dict(dependency)),
+        "field_dispositions": {
+            operation_id: expected_dispositions[operation_id]
+            for operation_id in sorted(expected_dispositions)
+        },
+    }
+
+
+def _request_as_of(value: object) -> str:
+    from a_share_research.operation_release_matrix import canonical_release_as_of
+
+    return canonical_release_as_of(value, "release plan request as_of")
 
 
 def _add_direct_disposition_contracts(

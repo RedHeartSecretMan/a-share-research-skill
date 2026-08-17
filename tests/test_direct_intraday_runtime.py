@@ -929,6 +929,63 @@ class DirectIntradayPublicSeamTests(unittest.TestCase):
                     item["destination"],
                 )
 
+    def test_replay_failure_still_attempts_independent_daily_boundary(self) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_replay", allow_experimental=True),
+            fixture=True,
+            fixture_environment={
+                "A_SHARE_INTRADAY_REPLAY_SCENARIO": (
+                    "formal_exchange_daily_source_failure"
+                )
+            },
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        operation = result["coverage"]["intraday_replay_daily_boundary"]["operations"][
+            "exchange_intraday_replay_daily@1"
+        ]
+        self.assertEqual(
+            (operation["execution_state"], operation["state"]),
+            ("succeeded", "complete"),
+        )
+        self.assertIn(
+            "exchange_intraday_replay_daily@1",
+            {item["operation_id"] for item in result["observations"]},
+        )
+
+    def test_daily_field_disposition_failure_is_isolated_from_replay(self) -> None:
+        result = invoke_copied_installed(
+            intraday_request("intraday_replay", allow_experimental=True),
+            fixture=True,
+            fixture_environment={
+                "A_SHARE_INTRADAY_REPLAY_SCENARIO": "daily_dispositions_failure"
+            },
+        )
+
+        self.assertEqual(result["status"], "limited")
+        daily = result["coverage"]["intraday_replay_daily_boundary"]["operations"][
+            "fixture_daily_boundary@1"
+        ]
+        replay = result["coverage"]["intraday_replay_sequence"]["operations"][
+            "fixture_intraday_replay@1"
+        ]
+        self.assertEqual(
+            (daily["execution_state"], daily["state"]), ("failed", "failed")
+        )
+        self.assertEqual(
+            (replay["execution_state"], replay["state"]), ("succeeded", "complete")
+        )
+        codes = {
+            item["code"]
+            for field in ("limitations", "source_errors")
+            for item in result[field]
+        }
+        self.assertIn("daily_operation_failure", codes)
+        self.assertIn(
+            "fixture_intraday_replay@1",
+            {item["operation_id"] for item in result["observations"]},
+        )
+
     def test_replay_authority_rejects_rehashed_existing_sibling_destination(
         self,
     ) -> None:

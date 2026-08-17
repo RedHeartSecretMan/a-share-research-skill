@@ -263,37 +263,18 @@ def _execute_security_valuation(
             evidence_store=evidence_store,
         )
 
-    close_execution = execute_close_research(
-        security, request["as_of"], transport, research_now
-    )
-    close_material = close_execution.validated_material()
-    outcomes.extend(close_execution.outcomes)
-    conflicts.extend(close_material.conflicts)
-    limitations.extend(close_material.limitations)
-    selected_close = close_material.selected_close
-    if close_material.status == "blocked" or selected_close is None:
-        return _blocked_execution(
-            request,
-            "valuation_price_not_established",
-            "A cross-checked completed-session valuation price is unavailable.",
-            subjects=[subject],
-            outcomes=tuple(outcomes),
-            conflicts=conflicts,
-            limitations=limitations,
-            metrics=_price_unavailable_metrics(),
-            evidence_store=evidence_store,
-        )
-
+    independent_outcomes: list[OperationOutcome] = []
+    independent_limitations: list[dict[str, Any]] = []
     stock_info: StockInfoObservation | None = None
     try:
         stock_info = (stock_info_operation or EastmoneyStockInfoOperation()).observe(
             security, transport
         )
     except SourceOperationError as error:
-        outcomes.append(
+        independent_outcomes.append(
             _valuation_outcome("eastmoney_stock_info@1", error=_source_error(error))
         )
-        limitations.append(
+        independent_limitations.append(
             {
                 "code": "effective_total_shares_unavailable",
                 "message": (
@@ -303,31 +284,12 @@ def _execute_security_valuation(
             }
         )
     else:
-        outcomes.append(
+        independent_outcomes.append(
             _valuation_outcome(
                 "eastmoney_stock_info@1",
                 observations=(stock_info.to_evidence(),),
                 diagnostics={"attempts": list(stock_info.degradations)},
             )
-        )
-
-    if stock_info is not None and stock_info.name != canonical_identity.name:
-        conflicts.append(
-            {
-                "code": "stock_information_identity_conflict",
-                "message": "The stock-information name disagrees with resolved identity.",
-                "evidence_ids": [stock_info.evidence_id],
-            }
-        )
-        return _blocked_execution(
-            request,
-            "automatic_valuation_evidence_conflict",
-            "A critical valuation observation identifies another security.",
-            subjects=[subject],
-            outcomes=tuple(outcomes),
-            conflicts=conflicts,
-            limitations=limitations,
-            evidence_store=evidence_store,
         )
 
     statements: dict[str, list[FinancialStatementObservation]] = {}
@@ -372,9 +334,9 @@ def _execute_security_valuation(
             statement_resolution.outcome,
             evidence_storage=statement_resolution.audit,
         )
-    outcomes.append(statement_outcome)
+    independent_outcomes.append(statement_outcome)
     if statement_outcome.execution.state != "succeeded":
-        limitations.append(
+        independent_limitations.append(
             {
                 "code": "reported_financial_statements_unavailable",
                 "message": "Reported PE and PB inputs are unavailable or inapplicable.",
@@ -390,12 +352,12 @@ def _execute_security_valuation(
                 "code": "reported_financial_periods_incompatible",
                 "message": str(error),
             }
-            outcomes.append(
+            independent_outcomes.append(
                 _valuation_outcome(
                     "reported_financial_selection@1", error=selection_error
                 )
             )
-            limitations.append(
+            independent_limitations.append(
                 {
                     "code": "reported_financial_statements_unavailable",
                     "message": (
@@ -412,19 +374,19 @@ def _execute_security_valuation(
             item for item in consensus.forecasts if item.year >= research_date.year
         ]
     except SourceOperationError as error:
-        outcomes.append(
+        independent_outcomes.append(
             _valuation_outcome("ths_consensus_eps@1", error=_source_error(error))
         )
         consensus = None
         forecasts = []
-        limitations.append(
+        independent_limitations.append(
             {
                 "code": "consensus_eps_forecast_unavailable",
                 "message": "Forward valuation metrics cannot be calculated.",
             }
         )
     else:
-        outcomes.append(
+        independent_outcomes.append(
             _valuation_outcome(
                 "ths_consensus_eps@1", observations=(consensus.to_evidence(),)
             )
@@ -442,18 +404,60 @@ def _execute_security_valuation(
                 "code": "consensus_forecast_inapplicable",
                 "message": str(error),
             }
-            outcomes.append(
+            independent_outcomes.append(
                 _valuation_outcome(
                     "consensus_forecast_selection@1", error=selection_error
                 )
             )
             forecasts = []
-            limitations.append(
+            independent_limitations.append(
                 {
                     "code": "consensus_eps_forecast_unavailable",
                     "message": "Forward valuation metrics cannot be calculated.",
                 }
             )
+
+    close_execution = execute_close_research(
+        security, request["as_of"], transport, research_now
+    )
+    close_material = close_execution.validated_material()
+    outcomes.extend(close_execution.outcomes)
+    outcomes.extend(independent_outcomes)
+    conflicts.extend(close_material.conflicts)
+    limitations.extend(close_material.limitations)
+    limitations.extend(independent_limitations)
+    selected_close = close_material.selected_close
+    if stock_info is not None and stock_info.name != canonical_identity.name:
+        conflicts.append(
+            {
+                "code": "stock_information_identity_conflict",
+                "message": "The stock-information name disagrees with resolved identity.",
+                "evidence_ids": [stock_info.evidence_id],
+            }
+        )
+        return _blocked_execution(
+            request,
+            "automatic_valuation_evidence_conflict",
+            "A critical valuation observation identifies another security.",
+            subjects=[subject],
+            outcomes=tuple(outcomes),
+            conflicts=conflicts,
+            limitations=limitations,
+            evidence_store=evidence_store,
+        )
+
+    if close_material.status == "blocked" or selected_close is None:
+        return _blocked_execution(
+            request,
+            "valuation_price_not_established",
+            "A cross-checked completed-session valuation price is unavailable.",
+            subjects=[subject],
+            outcomes=tuple(outcomes),
+            conflicts=conflicts,
+            limitations=limitations,
+            metrics=_price_unavailable_metrics(),
+            evidence_store=evidence_store,
+        )
 
     try:
         price = Decimal(selected_close.value)

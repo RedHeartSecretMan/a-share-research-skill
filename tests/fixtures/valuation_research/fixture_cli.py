@@ -279,10 +279,21 @@ class ValuationFixtureTransport:
             payload = json.loads(body)
             payload["data"]["f116"] = "1"
             body = _json_response(payload)
-        if "yunhq.sse.com.cn" in parsed.netloc and scenario == "missing_price":
+        if "yunhq.sse.com.cn" in parsed.netloc and scenario in {
+            "missing_price",
+            "missing_price_identity_conflict",
+        }:
             payload = json.loads(body)
             payload["total"] = 0
             payload["kline"] = []
+            body = _json_response(payload)
+        if (
+            parsed.netloc.endswith("eastmoney.com")
+            and "/api/qt/stock/get" in parsed.path
+            and scenario == "missing_price_identity_conflict"
+        ):
+            payload = json.loads(body)
+            payload["data"]["f58"] = "贵州茅台"
             body = _json_response(payload)
         if "eastmoney.com" in parsed.netloc and scenario == "missing_shares":
             body = _json_response({"data": None})

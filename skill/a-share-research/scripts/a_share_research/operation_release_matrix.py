@@ -6,7 +6,7 @@ import json
 import re
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from typing import Literal, Mapping, Sequence, cast
@@ -51,6 +51,7 @@ class ReleasePlanSnapshot:
     candidate_sha: str | None = None
     verified_at: str | None = None
     attempt_digest: str | None = None
+    request_as_of: str | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +201,7 @@ def load_release_probe_evidence(
         snapshot = _mapping(raw_snapshot, "release plan snapshot")
         if set(snapshot) != {
             "request_profile",
+            "request_as_of",
             "result",
             "candidate_sha",
             "verified_at",
@@ -218,6 +220,9 @@ def load_release_probe_evidence(
         ):
             raise ValueError("release plan snapshot provenance drifted")
         result = _mapping(snapshot.get("result"), "release plan result")
+        request_as_of = canonical_release_as_of(
+            snapshot.get("request_as_of"), "release plan snapshot as_of"
+        )
         _validate_sanitized_release_result(result)
         snapshots.append(
             ReleasePlanSnapshot(
@@ -228,6 +233,7 @@ def load_release_probe_evidence(
                 candidate_sha=candidate_sha,
                 verified_at=snapshot_verified_at,
                 attempt_digest=cast(str, snapshot["attempt_digest"]),
+                request_as_of=request_as_of,
             )
         )
     if {cast(str, snapshot.attempt_digest) for snapshot in snapshots} != set(
@@ -1713,6 +1719,19 @@ def _verified_at(value: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("release evidence verified_at requires a timezone")
     return parsed
+
+
+def canonical_release_as_of(value: object, label: str) -> str:
+    """Return one exact ISO request date used by release evidence authorities."""
+
+    text = _text(value, label)
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError as error:
+        raise ValueError(f"{label} is invalid") from error
+    if parsed.isoformat() != text:
+        raise ValueError(f"{label} is invalid")
+    return text
 
 
 def _strict_issue(value: object) -> int:

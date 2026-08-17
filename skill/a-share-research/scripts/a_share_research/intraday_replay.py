@@ -432,6 +432,156 @@ def _daily_outcome(
     )
 
 
+@dataclass(frozen=True)
+class _DailyBoundaryAcquisition:
+    configured: bool
+    outcome: OperationOutcome
+    batch: IntradayReplayDailySourceBatch | None
+    boundary: dict[str, Any]
+    blocks_adoption: bool = False
+
+
+def _acquire_daily_boundary(
+    request: dict[str, Any],
+    query: IntradayReplayQuery,
+    replay_operation_id: str,
+    daily_operations: Collection[IntradayReplayDailySourceOperation],
+) -> _DailyBoundaryAcquisition:
+    unavailable = build_unavailable_boundary(
+        "daily_boundary_source_unavailable",
+        "No independent daily boundary operation is configured.",
+    )
+    operation_list = list(daily_operations)
+    if not operation_list:
+        return _DailyBoundaryAcquisition(
+            configured=False,
+            outcome=_daily_outcome(
+                operation_id=_DEFAULT_DAILY_OPERATION,
+                skipped="skipped_research_dependency",
+                field_dispositions=_default_daily_field_dispositions(request),
+            ),
+            batch=None,
+            boundary=unavailable,
+        )
+    if len(operation_list) > 1:
+        safe_error = {
+            "source_operation": _DEFAULT_DAILY_OPERATION,
+            "code": "daily_boundary_requires_one_source_operation",
+            "message": (
+                "The replay daily boundary must use exactly one independent "
+                "source operation."
+            ),
+        }
+        return _DailyBoundaryAcquisition(
+            configured=True,
+            outcome=_daily_outcome(
+                operation_id=_DEFAULT_DAILY_OPERATION,
+                error=safe_error,
+                field_dispositions=_default_daily_field_dispositions(request),
+            ),
+            batch=None,
+            boundary=unavailable,
+            blocks_adoption=True,
+        )
+
+    operation = operation_list[0]
+    operation_id = getattr(operation, "operation_id", None)
+    if not isinstance(operation_id, str) or not _SAFE_OPERATION_ID.fullmatch(
+        operation_id
+    ):
+        safe_error = {
+            "source_operation": _DEFAULT_DAILY_OPERATION,
+            "code": "unsafe_daily_source_operation_id",
+            "message": (
+                "The daily source operation identifier is not in the safe vocabulary."
+            ),
+        }
+        return _DailyBoundaryAcquisition(
+            configured=True,
+            outcome=_daily_outcome(
+                operation_id=_DEFAULT_DAILY_OPERATION,
+                error=safe_error,
+                field_dispositions=_default_daily_field_dispositions(request),
+            ),
+            batch=None,
+            boundary=unavailable,
+            blocks_adoption=True,
+        )
+
+    dispositions_value = getattr(operation, "field_dispositions", None)
+    dispositions = _default_daily_field_dispositions(request)
+    try:
+        if callable(dispositions_value):
+            dispositions = tuple(dispositions_value(query))
+        elif isinstance(dispositions_value, tuple):
+            dispositions = tuple(dispositions_value)
+        batch = validate_daily_batch(
+            operation.collect(query),
+            operation_id,
+            replay_operation_id,
+            query,
+        )
+        if operation_id == _DEFAULT_DAILY_OPERATION:
+            from .intraday_replay_registry import exchange_daily_field_dispositions
+
+            dispositions = exchange_daily_field_dispositions(
+                query.exchange,
+                trading_status=batch.trading_status,
+            )
+        elif not callable(dispositions_value) and not isinstance(
+            dispositions_value, tuple
+        ):
+            dispositions = _default_daily_field_dispositions(
+                request,
+                trading_status=batch.trading_status,
+            )
+        return _DailyBoundaryAcquisition(
+            configured=True,
+            outcome=_daily_outcome(
+                operation_id=operation_id,
+                batch=batch,
+                field_dispositions=dispositions,
+            ),
+            batch=batch,
+            boundary=unavailable,
+        )
+    except IntradayReplaySourceError as error:
+        safe_error = _owned_source_error(operation_id, source_error_result(error))
+        return _DailyBoundaryAcquisition(
+            configured=True,
+            outcome=_daily_outcome(
+                operation_id=operation_id,
+                error=safe_error,
+                field_dispositions=dispositions,
+            ),
+            batch=None,
+            boundary=build_unavailable_boundary(
+                error.code,
+                "The independent daily boundary source was unavailable under its safe contract.",
+            ),
+            blocks_adoption=_daily_error_blocks(error.code),
+        )
+    except Exception:
+        safe_error = {
+            "source_operation": operation_id,
+            "code": "daily_operation_failure",
+            "message": "The daily boundary operation failed safely.",
+        }
+        return _DailyBoundaryAcquisition(
+            configured=True,
+            outcome=_daily_outcome(
+                operation_id=operation_id,
+                error=safe_error,
+                field_dispositions=dispositions,
+            ),
+            batch=None,
+            boundary=build_unavailable_boundary(
+                "daily_operation_failure",
+                "The independent daily boundary was not available.",
+            ),
+        )
+
+
 def build_intraday_replay_result(
     request: dict[str, Any],
     operations: Collection[IntradayReplaySourceOperation],
@@ -487,6 +637,12 @@ def build_intraday_replay_result(
         if isinstance(operation_dispositions, tuple)
         else _default_replay_field_dispositions()
     )
+    daily_acquisition = _acquire_daily_boundary(
+        request,
+        query,
+        operation_id,
+        daily_operations,
+    )
     try:
         batch = operation.collect(query)
         normalized_batch = _validate_batch(batch, operation_id, query)
@@ -507,6 +663,7 @@ def build_intraday_replay_result(
                     error=safe_error,
                     field_dispositions=replay_dispositions,
                 ),
+                daily_acquisition.outcome,
             ),
         )
     except Exception:
@@ -525,6 +682,7 @@ def build_intraday_replay_result(
                     error=safe_error,
                     field_dispositions=replay_dispositions,
                 ),
+                daily_acquisition.outcome,
             ),
         )
 
@@ -558,41 +716,21 @@ def build_intraday_replay_result(
             request,
             error.code,
             "The retained replay batch could not be adopted for this request.",
-            outcomes=(replay_outcome,),
+            outcomes=(replay_outcome, daily_acquisition.outcome),
         )
     except Exception:
         return _blocked_result(
             request,
             "intraday_replay_adjudication_failure",
             "The retained replay batch could not be adjudicated safely.",
-            outcomes=(replay_outcome,),
+            outcomes=(replay_outcome, daily_acquisition.outcome),
         )
-    outcomes: list[OperationOutcome] = [replay_outcome]
-
-    daily_boundary = build_unavailable_boundary(
-        "daily_boundary_source_unavailable",
-        "No independent daily boundary operation is configured.",
-    )
-    daily_batch: IntradayReplayDailySourceBatch | None = None
+    outcomes: list[OperationOutcome] = [replay_outcome, daily_acquisition.outcome]
+    daily_boundary = daily_acquisition.boundary
+    daily_batch = daily_acquisition.batch
     daily_unavailable_fields: list[dict[str, str]] = []
     daily_conflicts: list[dict[str, Any]] = []
-    daily_operation_list = list(daily_operations)
-    if len(daily_operation_list) > 1:
-        safe_error = {
-            "source_operation": _DEFAULT_DAILY_OPERATION,
-            "code": "daily_boundary_requires_one_source_operation",
-            "message": (
-                "The replay daily boundary must use exactly one independent "
-                "source operation."
-            ),
-        }
-        outcomes.append(
-            _daily_outcome(
-                operation_id=_DEFAULT_DAILY_OPERATION,
-                error=safe_error,
-                field_dispositions=_default_daily_field_dispositions(request),
-            )
-        )
+    if daily_acquisition.blocks_adoption:
         return _build_direct_result(
             request,
             query,
@@ -605,26 +743,41 @@ def build_intraday_replay_result(
             daily_boundary=daily_boundary,
             outcomes=tuple(outcomes),
         )
-    if daily_operation_list:
-        daily_operation = daily_operation_list[0]
-        daily_operation_id = getattr(daily_operation, "operation_id", None)
-        if not isinstance(daily_operation_id, str) or not _SAFE_OPERATION_ID.fullmatch(
-            daily_operation_id
-        ):
-            safe_error = {
-                "source_operation": _DEFAULT_DAILY_OPERATION,
-                "code": "unsafe_daily_source_operation_id",
-                "message": (
-                    "The daily source operation identifier is not in the safe "
-                    "vocabulary."
-                ),
-            }
-            outcomes.append(
-                _daily_outcome(
-                    operation_id=_DEFAULT_DAILY_OPERATION,
-                    error=safe_error,
-                    field_dispositions=_default_daily_field_dispositions(request),
-                )
+    if daily_batch is not None:
+        try:
+            assessment = assess_daily_boundary(
+                daily_batch,
+                query,
+                normalized_batch.operation_id,
+                [
+                    DailyBoundaryMinute(
+                        interval_start=row.interval_start,
+                        trading_phase=row.trading_phase,
+                        trade_state=row.trade_state,
+                        ohlc=row.ohlc,
+                        volume=row.volume["value"],
+                        amount=row.amount["value"],
+                        evidence_id=_normalized_replay_key(normalized_batch),
+                    )
+                    for row in rows
+                ],
+                normalized_batch.price_minimum_tick or normalized_batch.price_precision,
+                _daily_batch_key(daily_batch),
+            )
+            daily_boundary = assessment.boundary
+            daily_conflicts = assessment.conflicts
+            daily_unavailable_fields = assessment.unavailable_fields
+        except IntradayReplaySourceError as error:
+            daily_boundary = build_unavailable_boundary(
+                error.code,
+                "The retained daily boundary could not be adopted safely.",
+            )
+            daily_conflicts.append(
+                {
+                    "code": error.code,
+                    "message": "The retained daily boundary could not be adopted safely.",
+                    "evidence_ids": [],
+                }
             )
             return _build_direct_result(
                 request,
@@ -638,163 +791,23 @@ def build_intraday_replay_result(
                 daily_boundary=daily_boundary,
                 outcomes=tuple(outcomes),
             )
-        daily_dispositions_value = getattr(daily_operation, "field_dispositions", None)
-        if callable(daily_dispositions_value):
-            daily_dispositions = tuple(daily_dispositions_value(query))
-        elif isinstance(daily_dispositions_value, tuple):
-            daily_dispositions = tuple(daily_dispositions_value)
-        else:
-            daily_dispositions = _default_daily_field_dispositions(request)
-        try:
-            daily_batch = validate_daily_batch(
-                daily_operation.collect(query),
-                daily_operation_id,
-                normalized_batch.operation_id,
-                query,
-            )
-            if daily_operation_id == _DEFAULT_DAILY_OPERATION:
-                from .intraday_replay_registry import (
-                    exchange_daily_field_dispositions,
-                )
-
-                daily_dispositions = exchange_daily_field_dispositions(
-                    query.exchange,
-                    trading_status=daily_batch.trading_status,
-                )
-            elif callable(daily_dispositions_value):
-                daily_dispositions = tuple(daily_dispositions_value(query))
-            elif not isinstance(daily_dispositions_value, tuple):
-                daily_dispositions = _default_daily_field_dispositions(
-                    request,
-                    trading_status=daily_batch.trading_status,
-                )
-            outcomes.append(
-                _daily_outcome(
-                    operation_id=daily_operation_id,
-                    batch=daily_batch,
-                    field_dispositions=daily_dispositions,
-                )
-            )
-        except IntradayReplaySourceError as error:
-            safe_error = _owned_source_error(
-                daily_operation_id,
-                source_error_result(error),
-            )
-            outcomes.append(
-                _daily_outcome(
-                    operation_id=daily_operation_id,
-                    error=safe_error,
-                    field_dispositions=daily_dispositions,
-                )
-            )
-            daily_boundary = build_unavailable_boundary(
-                error.code,
-                "The independent daily boundary source was unavailable under its safe contract.",
-            )
-            if _daily_error_blocks(error.code):
-                return _build_direct_result(
-                    request,
-                    query,
-                    normalized_batch,
-                    rows,
-                    conflicts,
-                    coverage,
-                    duplicate_rows=duplicate_rows,
-                    status="blocked",
-                    daily_boundary=daily_boundary,
-                    outcomes=tuple(outcomes),
-                )
         except Exception:
-            safe_error = {
-                "source_operation": daily_operation_id,
-                "code": "daily_operation_failure",
-                "message": "The daily boundary operation failed safely.",
-            }
-            outcomes.append(
-                _daily_outcome(
-                    operation_id=daily_operation_id,
-                    error=safe_error,
-                    field_dispositions=daily_dispositions,
-                )
-            )
             daily_boundary = build_unavailable_boundary(
-                "daily_operation_failure",
-                "The independent daily boundary was not available.",
+                "daily_boundary_adjudication_failure",
+                "The retained daily boundary could not be adjudicated safely.",
             )
-        if daily_batch is not None:
-            try:
-                assessment = assess_daily_boundary(
-                    daily_batch,
-                    query,
-                    normalized_batch.operation_id,
-                    [
-                        DailyBoundaryMinute(
-                            interval_start=row.interval_start,
-                            trading_phase=row.trading_phase,
-                            trade_state=row.trade_state,
-                            ohlc=row.ohlc,
-                            volume=row.volume["value"],
-                            amount=row.amount["value"],
-                            evidence_id=_normalized_replay_key(normalized_batch),
-                        )
-                        for row in rows
-                    ],
-                    normalized_batch.price_minimum_tick
-                    or normalized_batch.price_precision,
-                    _daily_batch_key(daily_batch),
-                )
-                daily_boundary = assessment.boundary
-                daily_conflicts = assessment.conflicts
-                daily_unavailable_fields = assessment.unavailable_fields
-            except IntradayReplaySourceError as error:
-                daily_boundary = build_unavailable_boundary(
-                    error.code,
-                    "The retained daily boundary could not be adopted safely.",
-                )
-                daily_conflicts.append(
-                    {
-                        "code": error.code,
-                        "message": "The retained daily boundary could not be adopted safely.",
-                        "evidence_ids": [],
-                    }
-                )
-                return _build_direct_result(
-                    request,
-                    query,
-                    normalized_batch,
-                    rows,
-                    conflicts,
-                    coverage,
-                    duplicate_rows=duplicate_rows,
-                    status="blocked",
-                    daily_boundary=daily_boundary,
-                    outcomes=tuple(outcomes),
-                )
-            except Exception:
-                daily_boundary = build_unavailable_boundary(
-                    "daily_boundary_adjudication_failure",
-                    "The retained daily boundary could not be adjudicated safely.",
-                )
-                return _build_direct_result(
-                    request,
-                    query,
-                    normalized_batch,
-                    rows,
-                    conflicts,
-                    coverage,
-                    duplicate_rows=duplicate_rows,
-                    status="blocked",
-                    daily_boundary=daily_boundary,
-                    outcomes=tuple(outcomes),
-                )
-    else:
-        outcomes.append(
-            _daily_outcome(
-                operation_id=_DEFAULT_DAILY_OPERATION,
-                skipped="skipped_research_dependency",
-                field_dispositions=_default_daily_field_dispositions(request),
+            return _build_direct_result(
+                request,
+                query,
+                normalized_batch,
+                rows,
+                conflicts,
+                coverage,
+                duplicate_rows=duplicate_rows,
+                status="blocked",
+                daily_boundary=daily_boundary,
+                outcomes=tuple(outcomes),
             )
-        )
 
     if daily_conflicts:
         conflicts = [*conflicts, *daily_conflicts]
@@ -837,7 +850,10 @@ def build_intraday_replay_result(
         )
 
     if not rows:
-        if normalized_batch.trading_status == "traded" and not daily_operation_list:
+        if (
+            normalized_batch.trading_status == "traded"
+            and not daily_acquisition.configured
+        ):
             return _blocked_result(
                 request,
                 "empty_intraday_replay",

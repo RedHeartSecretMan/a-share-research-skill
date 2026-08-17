@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from io import StringIO
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
 from unittest.mock import patch
 
 from tests.skill_imports import add_skill_scripts_to_path
@@ -219,6 +219,7 @@ def _synthetic_attempt(
         "plan_snapshots": [
             {
                 "request_profile": "identity-fast",
+                "request_as_of": datetime.fromisoformat(verified_at).date().isoformat(),
                 "result": {
                     "schema_version": "1.0",
                     "plan": {
@@ -806,6 +807,332 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             self.assertEqual(summary["status"], "complete")
             self.assertEqual(summary["candidate_sha"], _RC_CANDIDATE_SHA)
             self.assertEqual(summary["attempt_count"], 2)
+
+    def test_attempt_union_accepts_owner_valid_dynamic_identity_applications(
+        self,
+    ) -> None:
+        from dataclasses import replace
+        from urllib.parse import urlparse
+
+        from a_share_research.identity_sources import HttpResponse
+        from a_share_research.market_signal_contract import (
+            SignalCoverage,
+            SignalSourceBatch,
+        )
+        from a_share_research.research_runtime import ResearchRuntime
+
+        from tests.test_market_signals import (
+            CHINA_STANDARD_TIME,
+            FixedOperation,
+            observation,
+            signal_request,
+        )
+
+        fixtures = REPOSITORY_ROOT / "tests" / "fixtures" / "identity_sources"
+
+        class IdentityTransport:
+            def __init__(self, code: str) -> None:
+                self.code = code
+
+            def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                host = urlparse(url).netloc
+                if host == "query.sse.com.cn":
+                    fixture = "sse_empty.json"
+                elif host == "www.szse.cn":
+                    fixture = f"szse_{self.code}.json"
+                elif host == "www.cninfo.com.cn":
+                    fixture = (
+                        "cninfo_current_orgs.json"
+                        if self.code == "300058"
+                        else "cninfo_stocks.json"
+                    )
+                else:
+                    raise AssertionError(f"unexpected identity URL: {url}")
+                return HttpResponse(
+                    status=200,
+                    content_type="application/json",
+                    body=(fixtures / fixture).read_bytes(),
+                    retrieved_at=datetime(
+                        2026, 8, 2, 18, 30, tzinfo=CHINA_STANDARD_TIME
+                    ),
+                )
+
+        class MonitoringOperation(FixedOperation):
+            supported_signal_types = frozenset(
+                {"focus_monitoring", "severe_abnormal_movement"}
+            )
+
+        def dynamic_attempt(
+            *, code: str, name: str, verified_at: str
+        ) -> dict[str, object]:
+            dimensions = {
+                "market_scope": "mainland_a_share",
+                "provider_security_code": code,
+                "provider_security_name": name,
+            }
+            focus = replace(
+                observation(
+                    signal_type="focus_monitoring", provider_security_code=code
+                ),
+                period={
+                    "start": "2026-07-01",
+                    "end": "2026-08-31",
+                    "frequency": "monitoring_window",
+                },
+                dimensions=dimensions,
+            )
+            severe = replace(
+                observation(
+                    signal_type="severe_abnormal_movement",
+                    provider_security_code=code,
+                ),
+                rule={"rule_code": "SZSE-SEVERE-01"},
+                dimensions=dimensions,
+            )
+            operation = MonitoringOperation(
+                SignalSourceBatch(
+                    operation_id="fixed_signal@1",
+                    observations=(focus, severe),
+                    coverage={
+                        "focus_monitoring": SignalCoverage(
+                            state="observed_nonempty", provider_total=1
+                        ),
+                        "severe_abnormal_movement": SignalCoverage(
+                            state="observed_nonempty", provider_total=1
+                        ),
+                    },
+                )
+            )
+            result = (
+                ResearchRuntime(
+                    identity_transport=IdentityTransport(code),
+                    market_signal_operations=(operation,),
+                )
+                .research(signal_request(["monitoring_intersection"]))
+                .to_dict()
+            )
+            snapshot, _ = release_probe.sanitize_public_result(
+                request_profile="signals-market",
+                request_as_of="2026-08-02",
+                result=result,
+                verified_at=verified_at,
+            )
+            dynamic_capabilities = [
+                capability_id
+                for capability_id in snapshot["result"]["plan"]["capabilities"]
+                if capability_id.startswith("security_identity_resolution.monitoring.")
+            ]
+            self.assertEqual(
+                len(dynamic_capabilities),
+                1,
+                {"plan": snapshot["result"]["plan"], "result": result},
+            )
+            attempt = _synthetic_attempt(
+                candidate_sha=_RC_CANDIDATE_SHA,
+                verified_at=verified_at,
+                attempted_producers=set(_reviewed_qualification_producers()),
+            )
+            attempt["plan_snapshots"] = [snapshot]
+            return _reseal_attempt(attempt)
+
+        first = dynamic_attempt(
+            code="300058",
+            name="蓝色光标",
+            verified_at="2026-08-12T09:35:00+08:00",
+        )
+        second = dynamic_attempt(
+            code="000001",
+            name="平安银行",
+            verified_at="2026-08-12T10:00:00+08:00",
+        )
+        self.assertNotEqual(
+            first["plan_snapshots"][0]["result"]["plan"],
+            second["plan_snapshots"][0]["result"]["plan"],
+        )
+
+        checked = release_probe.validate_release_probe_attempt_inputs(
+            (first, second),
+            candidate_sha=_RC_CANDIDATE_SHA,
+            assembled_at=_RC_VERIFIED_AT,
+        )
+
+        self.assertEqual(len(checked), 2)
+
+        from a_share_research.research_result import stable_result_id
+
+        def reseal_plan(attempt: dict[str, object]) -> dict[str, object]:
+            snapshot_result = attempt["plan_snapshots"][0]["result"]
+            plan = snapshot_result["plan"]
+            coverage = snapshot_result["coverage"]
+            plan["id"] = stable_result_id(
+                "plan",
+                {
+                    "version": plan["version"],
+                    "task_type": plan["task_type"],
+                    "operation_obligations": plan["operation_obligations"],
+                    "research_dependencies": plan["research_dependencies"],
+                    "field_dispositions": [
+                        {
+                            "capability_id": obligation["capability_id"],
+                            "operation_id": obligation["operation_id"],
+                            "fields": coverage[obligation["capability_id"]][
+                                "operations"
+                            ][obligation["operation_id"]]["field_dispositions"],
+                        }
+                        for obligation in plan["operation_obligations"]
+                    ],
+                },
+            )
+            return _reseal_attempt(attempt)
+
+        disposition_forge = deepcopy(second)
+        forged_result = disposition_forge["plan_snapshots"][0]["result"]
+        dynamic_capability = next(
+            item
+            for item in forged_result["plan"]["capabilities"]
+            if item.startswith("security_identity_resolution.monitoring.")
+        )
+        forged_result["coverage"][dynamic_capability]["operations"]["sse_stock_list@1"][
+            "field_dispositions"
+        ][0]["field"] = "forged_reviewed_field"
+
+        dependency_forge = deepcopy(second)
+        dependency = next(
+            item
+            for item in dependency_forge["plan_snapshots"][0]["result"]["plan"][
+                "research_dependencies"
+            ]
+            if item["consumer_id"].startswith("monitoring_intersection_identity:")
+        )
+        dependency["consumer_id"] = "monitoring_intersection_identity:999999"
+
+        application_forge = deepcopy(second)
+        application_result = application_forge["plan_snapshots"][0]["result"]
+        application_plan = application_result["plan"]
+        application_coverage = application_result["coverage"]
+        old_capability = next(
+            item
+            for item in application_plan["capabilities"]
+            if item.startswith("security_identity_resolution.monitoring.")
+        )
+        forged_provider = "not-a-security"
+        forged_namespace = sha256(forged_provider.encode()).hexdigest()[:12]
+        new_capability = f"security_identity_resolution.monitoring.{forged_namespace}"
+        new_consumer = f"monitoring_intersection_identity:{forged_provider}"
+        application_plan["capabilities"] = [
+            new_capability if item == old_capability else item
+            for item in application_plan["capabilities"]
+        ]
+        for obligation in application_plan["operation_obligations"]:
+            if obligation["capability_id"] == old_capability:
+                obligation["capability_id"] = new_capability
+        for application_dependency in application_plan["research_dependencies"]:
+            if application_dependency["consumer_id"].startswith(
+                "monitoring_intersection_identity:"
+            ):
+                application_dependency["consumer_id"] = new_consumer
+        application_coverage[new_capability] = application_coverage.pop(old_capability)
+        for operation in application_coverage[new_capability]["operations"].values():
+            operation["capability_id"] = new_capability
+
+        coverage_owner_forge = deepcopy(second)
+        coverage_result = coverage_owner_forge["plan_snapshots"][0]["result"]
+        coverage_capability = next(
+            item
+            for item in coverage_result["plan"]["capabilities"]
+            if item.startswith("security_identity_resolution.monitoring.")
+        )
+        coverage_result["coverage"][coverage_capability]["operations"][
+            "sse_stock_list@1"
+        ]["capability_id"] = "forged_identity_owner"
+
+        for name, forged in (
+            ("owner-disposition", reseal_plan(disposition_forge)),
+            ("provider-dependency", reseal_plan(dependency_forge)),
+            ("non-security-application", reseal_plan(application_forge)),
+            ("coverage-operation-owner", reseal_plan(coverage_owner_forge)),
+        ):
+            with (
+                self.subTest(forge=name),
+                self.assertRaisesRegex(ValueError, "monitoring identity application"),
+            ):
+                release_probe.validate_release_probe_attempt_inputs(
+                    (first, forged),
+                    candidate_sha=_RC_CANDIDATE_SHA,
+                    assembled_at=_RC_VERIFIED_AT,
+                )
+
+    def test_attempt_union_validates_request_scoped_workflow_plan_ids(self) -> None:
+        from tests.test_direct_market_valuation_runtime import invoke_copied_installed
+
+        def workflow_attempt(*, as_of: str, verified_at: str) -> dict[str, object]:
+            profile = next(
+                item
+                for item in release_probe.build_release_request_profiles(
+                    as_of=as_of, replay_date=as_of
+                )
+                if item.name == "workflow-valuation-comparison"
+            )
+            result = invoke_copied_installed(
+                dict(profile.request),
+                valuation_fixtures=True,
+                fixture_research_now=f"{as_of}T18:30:00+08:00",
+            )
+            snapshot, _ = release_probe.sanitize_public_result(
+                request_profile=profile.name,
+                request_as_of=as_of,
+                result=result,
+                verified_at=verified_at,
+            )
+            attempt = _synthetic_attempt(
+                candidate_sha=_RC_CANDIDATE_SHA,
+                verified_at=verified_at,
+                attempted_producers=set(_reviewed_qualification_producers()),
+            )
+            attempt["plan_snapshots"] = [snapshot]
+            return _reseal_attempt(attempt)
+
+        first = workflow_attempt(
+            as_of="2026-08-01",
+            verified_at="2026-08-02T09:35:00+08:00",
+        )
+        second = workflow_attempt(
+            as_of="2026-08-02",
+            verified_at="2026-08-02T10:00:00+08:00",
+        )
+        self.assertNotEqual(
+            first["plan_snapshots"][0]["result"]["plan"]["id"],
+            second["plan_snapshots"][0]["result"]["plan"]["id"],
+        )
+
+        checked = release_probe.validate_release_probe_attempt_inputs(
+            (first, second),
+            candidate_sha=_RC_CANDIDATE_SHA,
+            assembled_at="2026-08-02T10:30:00+08:00",
+        )
+        self.assertEqual(len(checked), 2)
+
+        forged = deepcopy(second)
+        forged["plan_snapshots"][0]["result"]["plan"]["id"] = (
+            "plan-000000000000000000000000"
+        )
+        forged = _reseal_attempt(forged)
+        with self.assertRaisesRegex(ValueError, "workflow plan ID contradicts"):
+            release_probe.validate_release_probe_attempt_inputs(
+                (first, forged),
+                candidate_sha=_RC_CANDIDATE_SHA,
+                assembled_at="2026-08-02T10:30:00+08:00",
+            )
+
+        forged_scope = deepcopy(second)
+        forged_scope["plan_snapshots"][0]["request_as_of"] = "2026-08-01"
+        forged_scope = _reseal_attempt(forged_scope)
+        with self.assertRaisesRegex(ValueError, "workflow plan ID contradicts"):
+            release_probe.validate_release_probe_attempt_inputs(
+                (first, forged_scope),
+                candidate_sha=_RC_CANDIDATE_SHA,
+                assembled_at="2026-08-02T10:30:00+08:00",
+            )
 
     def test_main_requires_a_fresh_attempt_artifact_before_any_public_process(
         self,
@@ -2461,6 +2788,25 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         calls: list[list[str]] = []
         sent_requests: list[dict[str, object]] = []
 
+        class UnavailableTransport:
+            def get(self, url: str, headers: dict[str, str]) -> object:
+                from a_share_research.identity_sources import HttpResponse
+
+                del url, headers
+                return HttpResponse(
+                    status=503,
+                    content_type="application/json",
+                    body=b"{}",
+                    retrieved_at=datetime(
+                        2026,
+                        8,
+                        12,
+                        18,
+                        0,
+                        tzinfo=timezone(timedelta(hours=8)),
+                    ),
+                )
+
         def execute(
             command: list[str], **_: object
         ) -> subprocess.CompletedProcess[str]:
@@ -2469,10 +2815,9 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps(health), "")
             request = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
             sent_requests.append(deepcopy(request))
-            request["source_policy"]["allow_experimental"] = False
             public = research(
                 request,
-                identity_transport=_NoIoHttpTransport(),
+                identity_transport=UnavailableTransport(),
                 research_now=datetime(
                     2026,
                     8,
@@ -2669,6 +3014,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
 
         snapshot, evidence = release_probe.sanitize_public_result(
             request_profile="workflow-valuation-comparison",
+            request_as_of="2026-08-02",
             result=result,
             verified_at="2026-08-12T09:30:00+08:00",
         )
@@ -2917,6 +3263,10 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         public_result = {
             "schema_version": "1.0",
             "status": "blocked",
+            "research_anchor": {
+                "as_of": "2026-08-12",
+                "timezone": "Asia/Shanghai",
+            },
             "plan": {
                 "id": "identity-standard",
                 "version": "1.0",
@@ -3047,6 +3397,22 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, serialized)
 
+        cast(dict[str, object], public_result["research_anchor"])["as_of"] = (
+            "2026-08-11"
+        )
+        with self.assertRaises(release_probe._ReleaseProbeFailure) as failure:
+            release_probe.run_release_probe_attempt(
+                skill_root=SKILL_ROOT,
+                profiles=(profile,),
+                verified_at="2026-08-12T09:30:00+08:00",
+                candidate_sha=_RC_CANDIDATE_SHA,
+                execute=execute,
+            )
+        self.assertEqual(failure.exception.progress.stage, "public_result")
+        self.assertEqual(
+            failure.exception.progress.failing_request_profile, "identity-standard"
+        )
+
     def test_copied_processes_inherit_only_validated_credential_free_routing(
         self,
     ) -> None:
@@ -3080,6 +3446,10 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         }
         result = {
             "schema_version": "1.0",
+            "research_anchor": {
+                "as_of": "2026-08-12",
+                "timezone": "Asia/Shanghai",
+            },
             "plan": {
                 "id": "identity-standard",
                 "version": "1.0",
@@ -3278,6 +3648,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
 
         snapshot, evidence = release_probe.sanitize_public_result(
             request_profile="content-credentialed",
+            request_as_of="2026-08-12",
             result=result,
             verified_at="2026-08-12T09:30:00+08:00",
         )
@@ -3285,7 +3656,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         serialized = json.dumps(
             {"snapshot": snapshot, "evidence": evidence}, ensure_ascii=False
         )
-        self.assertEqual(set(snapshot), {"request_profile", "result"})
+        self.assertEqual(set(snapshot), {"request_profile", "request_as_of", "result"})
         self.assertEqual(
             set(snapshot["result"]), {"schema_version", "plan", "coverage"}
         )
@@ -3393,6 +3764,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "public result contract"):
             release_probe.sanitize_public_result(
                 request_profile="broken",
+                request_as_of="2026-08-12",
                 result={"schema_version": "1.0", "plan": {}, "coverage": {}},
                 verified_at="2026-08-12T09:30:00+08:00",
             )

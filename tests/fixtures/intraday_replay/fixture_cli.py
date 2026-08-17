@@ -375,7 +375,7 @@ class FixtureIntradayReplayOperation:
                 "empty_response",
                 "Synthetic replay source returned no rows.",
             )
-        if scenario == "source_failure":
+        if scenario in {"source_failure", "formal_exchange_daily_source_failure"}:
             raise IntradayReplaySourceError(
                 self.operation_id,
                 "upstream_unavailable",
@@ -645,6 +645,12 @@ class FixtureIntradayReplayDailyOperation:
         )
 
 
+class FailingDispositionsDailyOperation(FixtureIntradayReplayDailyOperation):
+    def field_dispositions(self, query: object) -> tuple[object, ...]:
+        del query
+        raise RuntimeError("Synthetic daily field dispositions failed.")
+
+
 class _FormalExchangeDailyTransport:
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         del headers
@@ -689,46 +695,48 @@ class _FormalExchangeDailyTransport:
 
 
 def fixture_intraday_replay_daily_operation() -> object:
-    if os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO") in {
+    scenario = os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO")
+    if scenario in {
         "formal_exchange_daily",
+        "formal_exchange_daily_source_failure",
         "formal_exchange_suspended",
     }:
         return ExchangeReplayDailyBoundaryOperation(_FormalExchangeDailyTransport())
+    if scenario == "daily_dispositions_failure":
+        return FailingDispositionsDailyOperation()
+    if scenario == "daily_same_operation":
+        return FixtureIntradayReplayDailyOperation(
+            operation_id="fixture_intraday_replay@1"
+        )
     return FixtureIntradayReplayDailyOperation()
+
+
+_DAILY_BOUNDARY_SCENARIOS = {
+    "daily_agreement",
+    "daily_auction_explained",
+    "daily_conflict",
+    "daily_date_mismatch",
+    "daily_dispositions_failure",
+    "daily_qualified",
+    "daily_same_operation",
+    "daily_security_mismatch",
+    "daily_source_error",
+    "daily_unit_normalization",
+    "ex_right_only",
+    "formal_exchange_daily",
+    "formal_exchange_daily_source_failure",
+    "formal_exchange_suspended",
+    "single_source_suspension",
+    "suspension_confirmed",
+    "zero_volume",
+}
 
 
 if __name__ == "__main__":
     scenario = os.environ.get("A_SHARE_INTRADAY_REPLAY_SCENARIO")
     daily_operations = (
-        (
-            fixture_intraday_replay_daily_operation()
-            if scenario in {"formal_exchange_daily", "formal_exchange_suspended"}
-            else FixtureIntradayReplayDailyOperation(
-                operation_id=(
-                    "fixture_intraday_replay@1"
-                    if scenario == "daily_same_operation"
-                    else "fixture_daily_boundary@1"
-                )
-            ),
-        )
-        if scenario
-        in {
-            "daily_agreement",
-            "daily_conflict",
-            "daily_date_mismatch",
-            "daily_qualified",
-            "daily_security_mismatch",
-            "daily_unit_normalization",
-            "daily_auction_explained",
-            "daily_source_error",
-            "daily_same_operation",
-            "zero_volume",
-            "ex_right_only",
-            "single_source_suspension",
-            "suspension_confirmed",
-            "formal_exchange_daily",
-            "formal_exchange_suspended",
-        }
+        (fixture_intraday_replay_daily_operation(),)
+        if scenario in _DAILY_BOUNDARY_SCENARIOS
         else ()
     )
     raise SystemExit(

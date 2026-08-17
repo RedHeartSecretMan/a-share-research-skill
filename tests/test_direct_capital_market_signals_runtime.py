@@ -1593,6 +1593,7 @@ class DirectCapitalMarketSignalsRuntimeTests(unittest.TestCase):
                 "statistics_trading_days",
             )
         }
+        signal_dimensions["provider_security_code"] = "300058"
         signal_dimensions["market_scope"] = "mainland_a_share"
         signal_dimensions["pool_state"] = "limit_up"
         for production in build_default_market_signal_operations(NoNetwork()):  # type: ignore[arg-type]

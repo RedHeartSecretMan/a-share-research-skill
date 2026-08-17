@@ -29,6 +29,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 from a_share_research.operation_release_matrix import (  # noqa: E402
     ReleasePlanSnapshot,
     build_operation_release_matrix,
+    canonical_release_as_of,
     formal_producer_operation_ids,
     load_operation_qualification_manifest,
     load_release_probe_evidence,
@@ -748,6 +749,9 @@ def _execute_release_probe(
             try:
                 snapshot, evidence = sanitize_public_result(
                     request_profile=profile.name,
+                    request_as_of=canonical_release_as_of(
+                        profile.request.get("as_of"), "release request as_of"
+                    ),
                     result=_json_object(completed.stdout, "public result"),
                     verified_at=canonical_verified_at,
                 )
@@ -817,6 +821,7 @@ def _execute_release_probe(
 def sanitize_public_result(
     *,
     request_profile: str,
+    request_as_of: str,
     result: Mapping[str, object],
     verified_at: str,
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
@@ -827,6 +832,24 @@ def sanitize_public_result(
         raise ValueError("public result contract has an unsafe request profile")
     if result.get("schema_version") != "1.0":
         raise ValueError("public result contract uses an unsupported schema")
+    research_anchor = _mapping(
+        result.get("research_anchor"), "public result contract research anchor"
+    )
+    if (
+        set(research_anchor) != {"as_of", "timezone"}
+        or research_anchor.get("timezone") != "Asia/Shanghai"
+    ):
+        raise ValueError("public result contract research anchor is invalid")
+    canonical_request_as_of = canonical_release_as_of(
+        request_as_of, "release request as_of"
+    )
+    observed_as_of = canonical_release_as_of(
+        research_anchor.get("as_of"), "public result contract as_of"
+    )
+    if observed_as_of != canonical_request_as_of:
+        raise ValueError(
+            "public result contract research anchor contradicts its request"
+        )
     plan = _mapping(result.get("plan"), "public result contract plan")
     coverage = _mapping(result.get("coverage"), "public result contract coverage")
     error_codes = _source_error_codes(result.get("source_errors"))
@@ -842,7 +865,11 @@ def sanitize_public_result(
             verified_at=verified_at,
         )
         return (
-            {"request_profile": request_profile, "result": safe_result},
+            {
+                "request_profile": request_profile,
+                "request_as_of": canonical_request_as_of,
+                "result": safe_result,
+            },
             safe_evidence,
         )
     safe_plan, safe_coverage, safe_evidence = _sanitize_plan_contract(
@@ -854,6 +881,7 @@ def sanitize_public_result(
     return (
         {
             "request_profile": request_profile,
+            "request_as_of": canonical_request_as_of,
             "result": {
                 "schema_version": "1.0",
                 "plan": safe_plan,

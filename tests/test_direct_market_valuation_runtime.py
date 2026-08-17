@@ -2410,6 +2410,63 @@ class DirectResultInvariantTests(unittest.TestCase):
             )
         )
 
+    def test_price_failure_still_attempts_independent_valuation_sources(self) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "security_valuation",
+            "subjects": [{"clue": "工业富联", "issuer_security_class_count": 1}],
+            "as_of": "2026-08-15",
+            "window": None,
+            "parameters": {"target_pe": "30"},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+
+        result = invoke_copied_installed(
+            request,
+            valuation_fixtures=True,
+            fixture_scenario="missing_price",
+            fixture_research_now="2026-08-15T18:30:00+08:00",
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        operations = result["coverage"]["security_valuation_metrics"]["operations"]
+        independent_owners = {
+            "eastmoney_stock_info@1",
+            "sina_financial_statements@1",
+            "ths_consensus_eps@1",
+        }
+        self.assertEqual(
+            {
+                owner: (
+                    operations[owner]["execution_state"],
+                    operations[owner]["state"],
+                )
+                for owner in independent_owners
+            },
+            {owner: ("succeeded", "complete") for owner in independent_owners},
+        )
+        self.assertTrue(
+            independent_owners.issubset(
+                {item["operation_id"] for item in result["observations"]}
+            )
+        )
+
+        conflict = invoke_copied_installed(
+            request,
+            valuation_fixtures=True,
+            fixture_scenario="missing_price_identity_conflict",
+            fixture_research_now="2026-08-15T18:30:00+08:00",
+        )
+        self.assertEqual(conflict["status"], "blocked")
+        self.assertIn(
+            "stock_information_identity_conflict",
+            {item["code"] for item in conflict["conflicts"]},
+        )
+
     def test_copied_installed_valuation_compare_is_member_scoped_unified_result(
         self,
     ) -> None:

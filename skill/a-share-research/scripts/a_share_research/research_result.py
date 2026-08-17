@@ -942,6 +942,8 @@ def _validate_production_identity_dispositions(
     identity_capabilities = {"security_identity_resolution"}
     plan = result.get("plan")
     if isinstance(plan, Mapping) and plan.get("task_type") == "market_signals":
+        from .market_signals import monitoring_identity_application
+
         for observation in cast(Sequence[Mapping[str, object]], result["observations"]):
             payload = observation.get("payload")
             dimensions = (
@@ -953,10 +955,8 @@ def _validate_production_identity_dispositions(
                 else None
             )
             if isinstance(provider_code, str):
-                namespace = sha256(provider_code.encode()).hexdigest()[:12]
-                identity_capabilities.add(
-                    f"security_identity_resolution.monitoring.{namespace}"
-                )
+                capability_id, _ = monitoring_identity_application(provider_code)
+                identity_capabilities.add(capability_id)
     _require_known_operation_capability(
         result,
         authorities,
