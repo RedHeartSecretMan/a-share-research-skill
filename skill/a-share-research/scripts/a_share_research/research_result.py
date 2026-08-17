@@ -2632,9 +2632,13 @@ def validate_plan_operation_producer_authority(
                 raise ValueError("producer operation contradicts source authority")
         elif producer_operation_id != operation_id:
             raise ValueError("producer operation contradicts source authority")
-        # Market signals alone declares a deterministic coordinator.  Reuse its
+        if task_type in {"security_valuation", "valuation_compare"}:
+            from .automatic_valuation import valuation_operation_kind
+
+            expected_kind = valuation_operation_kind(producer_operation_id)
+        # Market signals also declares a deterministic coordinator.  Reuse its
         # owner-local identity instead of allowing a task-wide kind exemption.
-        if task_type == "market_signals":
+        elif task_type == "market_signals":
             from .market_signals import COORDINATOR_OPERATION_ID
 
             expected_kind = (

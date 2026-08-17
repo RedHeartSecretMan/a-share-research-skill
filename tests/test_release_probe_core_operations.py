@@ -3760,6 +3760,82 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "installation health"):
             load_release_probe_evidence(forged_health)
 
+    def test_sanitizer_excludes_valuation_local_selection_from_producer_evidence(
+        self,
+    ) -> None:
+        operation_id = "member-0::consensus_forecast_selection@1"
+        result = {
+            "schema_version": "1.0",
+            "research_anchor": {
+                "as_of": "2026-08-17",
+                "timezone": "Asia/Shanghai",
+            },
+            "plan": {
+                "id": "valuation-comparison-local-selection",
+                "version": "1.0",
+                "task_type": "valuation_compare",
+                "capabilities": ["valuation_compare_metrics"],
+                "operation_obligations": [
+                    {
+                        "capability_id": "valuation_compare_metrics",
+                        "operation_id": operation_id,
+                        "producer_operation_id": "consensus_forecast_selection@1",
+                        "operation_kind": "deterministic_coordinator",
+                        "source_role": "deterministic_selection",
+                        "experimental": True,
+                        "exchange": None,
+                        "evidence_uses": [
+                            {"use": "valuation_compare", "role": "supporting"}
+                        ],
+                    }
+                ],
+                "research_dependencies": [],
+            },
+            "coverage": {
+                "valuation_compare_metrics": {
+                    "operations": {
+                        operation_id: {
+                            "capability_id": "valuation_compare_metrics",
+                            "operation_id": operation_id,
+                            "execution_state": "failed",
+                            "state": "failed",
+                            "query_complete": None,
+                            "field_dispositions": [
+                                {
+                                    "field": "forecast_years",
+                                    "disposition": "normalized",
+                                    "destination": "observations.payload.forecast_years",
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+            "source_errors": [],
+        }
+
+        snapshot, evidence = release_probe.sanitize_public_result(
+            request_profile="valuation-comparison",
+            request_as_of="2026-08-17",
+            result=result,
+            verified_at="2026-08-17T17:49:00+08:00",
+        )
+
+        self.assertEqual(evidence, [])
+        obligation = snapshot["result"]["plan"]["operation_obligations"][0]
+        self.assertEqual(obligation["operation_kind"], "deterministic_coordinator")
+        forged = deepcopy(result)
+        forged["plan"]["operation_obligations"][0]["operation_kind"] = "external_source"
+        with self.assertRaisesRegex(
+            ValueError, "operation kind contradicts source authority"
+        ):
+            release_probe.sanitize_public_result(
+                request_profile="valuation-comparison",
+                request_as_of="2026-08-17",
+                result=forged,
+                verified_at="2026-08-17T17:49:00+08:00",
+            )
+
     def test_sanitizer_rejects_non_public_or_unowned_operation_results(self) -> None:
         with self.assertRaisesRegex(ValueError, "public result contract"):
             release_probe.sanitize_public_result(

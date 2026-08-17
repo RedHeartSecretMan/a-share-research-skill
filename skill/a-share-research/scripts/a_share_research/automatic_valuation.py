@@ -30,6 +30,7 @@ from .research_result import (
     EvidenceUsePolicy,
     FieldDisposition,
     OperationExecution,
+    OperationKind,
     OperationObligation,
     OperationOutcome,
     ResearchDependency,
@@ -70,6 +71,20 @@ COMPARISON_METRIC_ORDER = [
     "peg",
     "pe_digestion_years",
 ]
+_VALUATION_DETERMINISTIC_COORDINATOR_OPERATIONS = frozenset(
+    {
+        "reported_financial_selection@1",
+        "consensus_forecast_selection@1",
+    }
+)
+
+
+def valuation_operation_kind(producer_operation_id: str) -> OperationKind:
+    """Classify one valuation producer as an external source or local selector."""
+
+    if producer_operation_id in _VALUATION_DETERMINISTIC_COORDINATOR_OPERATIONS:
+        return "deterministic_coordinator"
+    return "external_source"
 
 
 @dataclass(frozen=True)
@@ -2091,6 +2106,7 @@ def _direct_valuation_execution(
                     ),
                 ),
                 producer_operation_id=base_operation,
+                operation_kind=valuation_operation_kind(base_operation),
             )
         )
     known_keys = {
