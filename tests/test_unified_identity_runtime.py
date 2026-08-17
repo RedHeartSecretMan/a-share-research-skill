@@ -187,7 +187,7 @@ def policy_blocked_identity_result() -> UnifiedResearchResult:
 
 
 def invoke_installed_identity(
-    request_payload: dict[str, object],
+    request_payload: dict[str, object] | bytes,
     *,
     fixture_routes: dict[str, str] | None = None,
     fixture_route_bodies: dict[str, object] | None = None,
@@ -203,7 +203,10 @@ def invoke_installed_identity(
         installed = temporary_root / "installed" / "a-share-research"
         shutil.copytree(SKILL_ROOT, installed)
         request = temporary_root / "request.json"
-        request.write_text(json.dumps(request_payload), encoding="utf-8")
+        if isinstance(request_payload, bytes):
+            request.write_bytes(request_payload)
+        else:
+            request.write_text(json.dumps(request_payload), encoding="utf-8")
         environment = os.environ.copy()
         environment.pop("PYTHONHOME", None)
         environment.pop("PYTHONPATH", None)
@@ -1000,6 +1003,43 @@ class UnifiedIdentityPublicSeamTests(unittest.TestCase):
                     completed.stderr.startswith("error: invalid research task:")
                 )
                 self.assertNotIn("SECRET_VALUE", completed.stderr)
+
+    def test_installed_public_seam_rejects_an_oversized_research_request(
+        self,
+    ) -> None:
+        request_payload = identity_request(allow_experimental=False)
+        request_payload["subjects"] = [{"clue": "6" * (2 * 1024 * 1024)}]
+
+        completed = invoke_installed_identity(request_payload)
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, "")
+        self.assertEqual(
+            completed.stderr,
+            "error: invalid research task: research request exceeds its bounded "
+            "JSON size\n",
+        )
+
+    def test_installed_public_seam_rejects_excessively_nested_json(self) -> None:
+        nested_clue = b"[" * 10_000 + b'"600519"' + b"]" * 10_000
+        request_bytes = (
+            b'{"schema_version":"1.0","task_type":"security_identity",'
+            b'"subjects":[{"clue":'
+            + nested_clue
+            + b'}],"as_of":"2026-08-17","window":null,"parameters":{},'
+            b'"source_policy":{"allow_experimental":false,'
+            b'"allow_credentials":false,"allow_fallback":false}}'
+        )
+
+        completed = invoke_installed_identity(request_bytes)
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, "")
+        self.assertEqual(
+            completed.stderr,
+            "error: invalid research task: research request exceeds its structural "
+            "bounds\n",
+        )
 
 
 class OperationOutcomeAdapterTests(unittest.TestCase):

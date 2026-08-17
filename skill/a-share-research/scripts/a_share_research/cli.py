@@ -29,6 +29,8 @@ from .research_result import UnifiedResearchResult
 from .research_runtime import research
 from .valuation import build_valuation_result
 
+_MAX_RESEARCH_REQUEST_BYTES = 2 * 1024 * 1024
+
 
 def _explicit_research_date(value: str) -> str:
     try:
@@ -119,8 +121,14 @@ def _reject_json_number(_: str) -> NoReturn:
 
 
 def _load_research_request(request_path: Path) -> dict[str, Any]:
-    with request_path.open(encoding="utf-8") as request_file:
-        loaded = json.load(request_file)
+    with request_path.open("rb") as request_file:
+        request_bytes = request_file.read(_MAX_RESEARCH_REQUEST_BYTES + 1)
+    if len(request_bytes) > _MAX_RESEARCH_REQUEST_BYTES:
+        raise ValueError("research request exceeds its bounded JSON size")
+    try:
+        loaded = json.loads(request_bytes)
+    except RecursionError:
+        raise ValueError("research request exceeds its structural bounds") from None
     if not isinstance(loaded, dict):
         raise ValueError("research request must be a JSON object")
     return loaded
