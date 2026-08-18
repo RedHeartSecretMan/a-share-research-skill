@@ -49,7 +49,7 @@ from tests.release_probe_attempts import (  # noqa: E402
 PROBE_ID = "tests/release_probe_core_operations.py"
 _COPIED_INSTALL_TIMEOUT_SECONDS = 1200
 DEFAULT_QUALIFICATION = (
-    REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-operation-qualification.json"
+    REPOSITORY_ROOT / "docs" / "research" / "v0.3.0-operation-qualification.json"
 )
 _SAFE_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _CREDENTIAL_FAILURE_CODES = {

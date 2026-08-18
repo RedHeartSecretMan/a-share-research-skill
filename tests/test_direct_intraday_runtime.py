@@ -31,7 +31,7 @@ REPLAY_FIXTURE = (
     REPOSITORY_ROOT / "tests" / "fixtures" / "intraday_replay" / "fixture_cli.py"
 )
 QUALIFICATION_PATH = (
-    REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-operation-qualification.json"
+    REPOSITORY_ROOT / "docs" / "research" / "v0.3.0-operation-qualification.json"
 )
 UNIFIED_RESULT_KEYS = {
     "schema_version",

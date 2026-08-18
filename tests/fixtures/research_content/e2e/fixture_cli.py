@@ -24,7 +24,7 @@ from a_share_research.identity_sources import (  # type: ignore[import-not-found
 )
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
-RETRIEVED_AT = datetime(2026, 8, 2, 19, 40, tzinfo=CHINA_STANDARD_TIME)
+RETRIEVED_AT = datetime(2026, 8, 18, 19, 40, tzinfo=CHINA_STANDARD_TIME)
 
 
 def _response(

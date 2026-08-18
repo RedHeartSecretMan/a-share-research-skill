@@ -6,10 +6,10 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
-[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0)
+[![Target: v0.3.0](https://img.shields.io/badge/target-v0.3.0-0F766E)](docs/research/v0.3.0-release-audit-2026-08-18.md)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[English](README_en.md) · [v0.3.0](#v030-发布状态) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
+[English](README_en.md) · [v0.3.0](#v030-发布准备状态) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
 
 </div>
 
@@ -17,15 +17,18 @@
 
 项目不把“接口返回了数据”当成“事实已经可信”，而是在证券身份、研究时点、来源、口径和假设明确后，提供可核验的研究分析。
 
-## v0.3.0 发布状态
+## v0.3.0 发布准备状态
 
 v0.3.0 已闭合计划驱动研究运行时的实现与发布证据：一个公共 `run --request` 入口承载 12 类版本化 ResearchTask、6 个固定研究方案和 42 份可执行请求示例。综合单标的与综合市场方案复用同一批窄任务；局部失败、空集、冲突和不支持能力都保留在统一结果中，不会被顶层摘要抹平。
 
+当前仓库处于 **v0.3.0 发布准备完成、正式 tag/GitHub Release 尚未创建** 的状态。历史 v0.0.1–v0.2.0 已有发布记录；当前文档不会把尚不存在的 v0.3.0 tag 写成已发布事实。正式发布后应再用远端 tag 与 GitHub Release 回读更新本节。
+
 冻结候选的最终 attestation 于 `2026-08-18T11:24:17+08:00` 完成：27/27 个发布请求画像形成有效公共计划，44/44 个正式来源 operation 均被实际尝试；正式 operation 去向、默认安装加载和 active-request 字段去向分别闭合为 44/44、44/44 和 740/740。这里的“已尝试”不等于“来源成功返回数据”——最终记录仍如实包含 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable`。
 
-- [最终脱敏 live evidence](docs/research/core-v0.3.0-release-probe-evidence.json)
-- [可复现的 operation release matrix](docs/research/core-v0.3.0-operation-release-matrix.json)
-- [矩阵口径与维护者复验说明](docs/research/core-v0.3.0-operation-release-matrix.md)
+- [v0.3.0 发布审计](docs/research/v0.3.0-release-audit-2026-08-18.md)
+- [最终脱敏 live evidence](docs/research/v0.3.0-release-probe-evidence.json)
+- [可复现的 operation release matrix](docs/research/v0.3.0-operation-release-matrix.json)
+- [矩阵口径与维护者复验说明](docs/research/v0.3.0-operation-release-matrix.md)
 
 ## 为什么需要它
 
@@ -87,8 +90,10 @@ CLI 负责证据、确定性计算、状态和限制；Agent 可以在未被整�
 
 唯一安装产物是 [`skill/a-share-research`](skill/a-share-research/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
 
+正式 v0.3.0 tag 创建前，从当前主分支取得冻结候选：
+
 ```text
-git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -97,6 +102,8 @@ git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartS
 ├── references/
 └── scripts/
 ```
+
+正式 tag 发布并经远端回读后，可将 clone 命令固定为 `--branch v0.3.0 --single-branch`，以获得不可移动的发布版本。
 
 核心运行时需要 Python 3.12 或更高版本。下文以 `<python>` 表示已经确认版本不低于 3.12 的解释器：Windows 通常使用 `py -3.12`，macOS 和 Linux 优先使用 `python3.12`；只有在 `python3 --version` 已确认满足要求时才使用 `python3`。复制完整目录后执行一次标准安装步骤；安装器从随 Skill 交付的锁定清单把核心运行依赖安装到该副本自己的 `.runtime`，无需按任务补包，并在结束前自动执行依赖加载与 operation 健康检查：
 
@@ -280,7 +287,7 @@ git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartS
 - [深交所完整交易日分时复盘（SZSE:000001）](examples/intraday-replay-szse.md)
 - [分时复盘的证据约束情景预测](examples/intraday-replay-prediction.md)
 
-蓝色光标和工业富联案例的固定记录均锚定 `2026-08-02`，并另行标注 `2026-08-03` 真实来源 smoke 的状态与缺口；盘中案例只记录请求契约，不保存来源响应。重新运行时应以新的显式研究日期和 CLI 返回证据为准。
+蓝色光标和工业富联案例已改为 v0.3.0 的中文请求与呈现模板，不再把 8 月初的历史 smoke 数字当成当前输出；42 份 JSON 请求样例统一锚定 v0.3.0 冻结基线，盘中案例只记录请求契约，不保存来源响应。重新运行时应使用适用的新研究日期，并只引用当次 CLI 返回的证据。
 
 ## 能力边界
 
@@ -304,7 +311,7 @@ git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartS
 
 - [`CONTEXT.md`](CONTEXT.md) 定义当前产品领域与术语；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 至 [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 保留 v0.0.1–v0.2.0 的演进契约。
 - [`Spec 0006`](docs/specs/0006-research-grade-intraday-replay.md) 定义已完成交易日分时复盘；[`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md) 定义 core-v0.3.0 的统一运行时、计划和发布门禁。
-- [`v0.2.0 发布审计`](docs/research/v0.2.0-release-audit-2026-08-03.md) 是历史基线；v0.3.0 的最终脱敏 evidence 与派生 matrix 已对冻结候选闭合 27/27 请求画像、44/44 正式 operations 和 740/740 active-request 字段去向。一次来源成功仍不等同于 operation 获得生产准入。
+- [`docs/research`](docs/research/README.md) 根目录只保留当前 v0.3.0 研究文档；[`v0.2.0 发布审计`](docs/research/history/v0.2.0-release-audit-2026-08-03.md) 等既有 release/tag 记录归档在 `history/`。v0.3.0 的最终脱敏 evidence 与派生 matrix 已对冻结候选闭合 27/27 请求画像、44/44 正式 operations 和 740/740 active-request 字段去向。一次来源成功仍不等同于 operation 获得生产准入。
 
 ## 仓库结构
 
@@ -351,9 +358,9 @@ mypy skill/a-share-research/scripts
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-f10.json
 ```
 
-`intraday-market-snapshot.json` 记录 v0.2.0 发布日的请求形态。以后运行前必须先复制它，并把 `as_of` 改成当次运行的北京时间当前日期；历史日期、非交易日和非适用会话会按契约返回 `blocked`。`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证默认安装的 `mootdx==0.11.7` F10 operation；软件缺失或错版应由安装健康报告 `installation_incomplete`，来源访问失败仍由研究结果表达。
+`intraday-market-snapshot.json` 记录 v0.3.0 冻结基线的请求形态。以后运行前必须先复制它，并把 `as_of` 改成当次运行的北京时间当前日期；历史日期、非交易日和非适用会话会按契约返回 `blocked`。`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证默认安装的 `mootdx==0.11.7` F10 operation；软件缺失或错版应由安装健康报告 `installation_incomplete`，来源访问失败仍由研究结果表达。
 
-市场信号 8 个场景的 2026-08-02 实际执行结果与环境限制记录在 [联网 smoke 记录](docs/research/market-signals-smoke-2026-08-02.md)。
+市场信号 8 个场景的历史执行结果与环境限制保留在 [v0.1.0 联网验证记录](docs/research/history/v0.1.0-market-signals-live-check-2026-08-02.md)；它是历史发布证据，不是 v0.3.0 当前行情。
 
 ## 许可证与来源
 

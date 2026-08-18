@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.0 — 2026-08-18
+
+- 将所有能力收敛到唯一公共入口 `scripts/entrypoint.py run --request`，统一 12 类版本化 ResearchTask 和精确 14 字段 ResearchResult；未知输入、身份错绑、owner 漂移和重哈希伪造均失败关闭。
+- 新增完整交易日 `intraday_replay`：保留规范分钟记录、会话 coverage、日级边界、可复算摘要、证据谱系和字段不可用原因；历史复盘与 Agent 层未来情景判断保持显式边界。
+- 新增 `single_security_research` 与 `market_overview_research`，使固定研究方案增至 6 个；综合方案复用既有窄任务，身份是唯一依赖门禁，局部失败、空集、冲突和不支持能力不会被顶层摘要抹平。
+- 明确综合市场方案的 15 项固定能力清单：2 项实际核心、8 项标准增强和 5 项因缺少合格全市场 owner 而显式不支持的能力；不使用单只证券、单一指数或榜单作为代理。
+- 完成研究内容、资金事件与市场信号 operation 的 owner-local 契约闭合，保留总量、分页、截断、空集、来源角色、单位、方向、时点、证券身份和字段去向。
+- 默认安装改为随 Skill 交付的锁定运行闭包，并提供 `installation_health.py`；安装健康、来源可访问性和 evidence adoption 资格分别表达。
+- 发布候选 attestation 闭合 27/27 个请求画像、44/44 个正式来源 operation、44/44 默认安装加载和 740/740 active-request 字段去向；来源结果仍如实区分 `complete`、`observed_empty`、`partial`、`credential_blocked` 与 `unavailable`。
+- 将 42 份请求样例和 6 份案例文档统一到 v0.3.0 基线；案例叙述使用中文，`docs/research` 根目录只保留当前版本文档，历史 release/tag 证据归档到 `docs/research/history/`。
+
 ## v0.2.0 — 2026-08-03
 
 - 新增 `intraday_market_signal` 研究级盘中快照：通过通达信基准与腾讯独立交叉 operation 保留规范证券、交易日、会话、价格类型、来源时点、单位、冲突和字段血缘；实验来源结果最高为 `limited`，缺失或不兼容时失败关闭。

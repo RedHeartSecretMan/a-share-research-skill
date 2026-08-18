@@ -6,10 +6,10 @@
       "clue": "工业富联"
     }
   ],
-  "as_of": "2026-08-02",
+  "as_of": "2026-08-18",
   "window": {
-    "published_from": "2026-05-01",
-    "published_to": "2026-08-02"
+    "published_from": "2026-05-18",
+    "published_to": "2026-08-18"
   },
   "parameters": {
     "material_types": ["announcement"],

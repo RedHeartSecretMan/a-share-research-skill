@@ -21,14 +21,22 @@ from a_share_research.identity_sources import (  # type: ignore[import-not-found
 )
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
-RETRIEVED_AT = datetime(2026, 8, 2, 19, 40, tzinfo=CHINA_STANDARD_TIME)
+RETRIEVED_AT = datetime(2026, 8, 18, 19, 40, tzinfo=CHINA_STANDARD_TIME)
 
 
 def _response(path: Path) -> HttpResponse:
+    body = path.read_bytes()
+    if path.name.startswith("margin_page_"):
+        for old_date, current_date in (
+            (b"2026-07-29", b"2026-08-13"),
+            (b"2026-07-30", b"2026-08-14"),
+            (b"2026-07-31", b"2026-08-17"),
+        ):
+            body = body.replace(old_date, current_date)
     return HttpResponse(
         status=200,
         content_type="application/json",
-        body=path.read_bytes(),
+        body=body,
         retrieved_at=RETRIEVED_AT,
     )
 

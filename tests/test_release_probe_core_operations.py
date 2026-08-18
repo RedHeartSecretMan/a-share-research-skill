@@ -88,7 +88,7 @@ def _reviewed_qualification_producers() -> tuple[str, ...]:
             REPOSITORY_ROOT
             / "docs"
             / "research"
-            / "core-v0.3.0-operation-qualification.json"
+            / "v0.3.0-operation-qualification.json"
         ).read_text(encoding="utf-8")
     )
     return tuple(
@@ -2955,7 +2955,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 REPOSITORY_ROOT
                 / "docs"
                 / "research"
-                / "core-v0.3.0-operation-qualification.json"
+                / "v0.3.0-operation-qualification.json"
             ).read_text(encoding="utf-8")
         )
         qualification = load_operation_qualification_manifest(

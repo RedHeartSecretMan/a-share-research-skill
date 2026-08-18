@@ -7,7 +7,7 @@
       "issuer_security_class_count": 1
     }
   ],
-  "as_of": "2026-08-02",
+  "as_of": "2026-08-18",
   "window": null,
   "parameters": {
     "workflow": {
@@ -17,16 +17,16 @@
     "inputs": {
       "target_pe": "30",
       "report_window": {
-        "published_from": "2026-05-05",
-        "published_to": "2026-08-02"
+        "published_from": "2026-05-18",
+        "published_to": "2026-08-18"
       },
       "market_window": {
-        "observed_from": "2026-07-01",
-        "observed_to": "2026-08-02"
+        "observed_from": "2026-07-18",
+        "observed_to": "2026-08-18"
       },
       "lockup_window": {
-        "observed_from": "2026-08-02",
-        "observed_to": "2026-10-31"
+        "observed_from": "2026-08-18",
+        "observed_to": "2026-11-16"
       },
       "fund_flow_period": "5d",
       "limit": 20,

@@ -45,7 +45,7 @@ from tests.test_unified_identity_runtime import (  # noqa: E402
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 QUALIFICATION_PATH = (
-    REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-operation-qualification.json"
+    REPOSITORY_ROOT / "docs" / "research" / "v0.3.0-operation-qualification.json"
 )
 
 

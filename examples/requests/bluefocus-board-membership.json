@@ -6,10 +6,10 @@
       "clue": "蓝色光标"
     }
   ],
-  "as_of": "2026-08-02",
+  "as_of": "2026-08-18",
   "window": {
-    "observed_from": "2026-08-02",
-    "observed_to": "2026-08-02"
+    "observed_from": "2026-08-18",
+    "observed_to": "2026-08-18"
   },
   "parameters": {
     "signal_types": ["security_board_membership"],

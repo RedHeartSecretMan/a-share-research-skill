@@ -20,7 +20,7 @@ from a_share_research.identity_sources import (  # type: ignore[import-not-found
 )
 
 CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
-RETRIEVED_AT = datetime(2026, 8, 2, 19, 40, tzinfo=CHINA_STANDARD_TIME)
+RETRIEVED_AT = datetime(2026, 8, 18, 19, 40, tzinfo=CHINA_STANDARD_TIME)
 
 
 def _response(payload: object) -> HttpResponse:
@@ -81,7 +81,7 @@ class FixtureTransport:
                                 "open_num": 0,
                                 "order_amount": "12000000",
                                 "high_days": "首板",
-                                "first_limit_up_time": 1785461400,
+                                "first_limit_up_time": 1786930200,
                                 "is_again_limit": 0,
                             }
                         ]

@@ -260,14 +260,13 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 / "workflow-market-overview-research.json"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual(
-            example,
-            market_overview_request(
-                inputs={"completeness_mode": "standard"},
-                allow_experimental=True,
-                allow_fallback=True,
-            ),
+        expected_example = market_overview_request(
+            inputs={"completeness_mode": "standard"},
+            allow_experimental=True,
+            allow_fallback=True,
         )
+        expected_example["as_of"] = "2026-08-18"
+        self.assertEqual(example, expected_example)
 
     def test_standard_declares_fixed_capability_inventory_without_fake_sources(
         self,

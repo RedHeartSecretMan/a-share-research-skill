@@ -8,7 +8,7 @@
     {"clue": "美的集团", "issuer_security_class_count": 1},
     {"clue": "五粮液", "issuer_security_class_count": 1}
   ],
-  "as_of": "2026-08-02",
+  "as_of": "2026-08-18",
   "window": null,
   "parameters": {"target_pe": "30"},
   "source_policy": {

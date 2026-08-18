@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate or byte-check the core-v0.3.0 operation release matrix."""
+"""Regenerate or byte-check the v0.3.0 operation release matrix."""
 
 from __future__ import annotations
 
@@ -25,13 +25,13 @@ from a_share_research.operation_release_matrix import (  # noqa: E402
 )
 
 DEFAULT_QUALIFICATION = (
-    REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-operation-qualification.json"
+    REPOSITORY_ROOT / "docs" / "research" / "v0.3.0-operation-qualification.json"
 )
 DEFAULT_RELEASE_EVIDENCE = (
-    REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-release-probe-evidence.json"
+    REPOSITORY_ROOT / "docs" / "research" / "v0.3.0-release-probe-evidence.json"
 )
 DEFAULT_MATRIX = (
-    REPOSITORY_ROOT / "docs" / "research" / "core-v0.3.0-operation-release-matrix.json"
+    REPOSITORY_ROOT / "docs" / "research" / "v0.3.0-operation-release-matrix.json"
 )
 
 

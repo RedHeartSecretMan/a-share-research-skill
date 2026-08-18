@@ -2,6 +2,8 @@
 
 Read this reference when selecting a command, invoking the bundled runtime, or interpreting its process and JSON contracts.
 
+This is the current v0.3.0 contract. Historical release commands and audit records live outside the installed Skill under `docs/research/history/`.
+
 ## Portable invocation
 
 The core runtime requires Python 3.12 or later. After copying the complete Skill, run `<python> <skill-root>/scripts/install.py` once; it installs the exact platform-applicable minimum runtime closure of the three released `mootdx` operations into that copy's real, non-symlinked `.runtime` and automatically runs `<python> <skill-root>/scripts/installation_health.py`. Unpublished and lazy `mootdx` utility/CLI dependencies are outside this lock, and generic upstream-package `pip check` semantics do not replace formal-operation health. Continue only when the installer exits zero with JSON `status: "complete"`. `installation_incomplete` reports only missing, version-mismatched, non-local, incomplete, or unloadable software. A complete installation does not claim source accessibility, credential or paid-permission availability, or evidence-adoption qualification. Select an interpreter available on the host and verify its version before installing or invoking the Skill:
@@ -73,7 +75,7 @@ A minimal standard request is versioned and subject-free:
   "schema_version": "1.0",
   "task_type": "research_workflow",
   "subjects": [],
-  "as_of": "2026-08-03",
+  "as_of": "2026-08-18",
   "window": null,
   "parameters": {
     "workflow": {"id": "market_overview_research", "version": "1.0"},

@@ -717,15 +717,13 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("when the question calls for interpretation", metadata)
         self.assertIn("the result is not blocked", metadata)
 
-    def test_installation_is_pinned_to_v030_release(self) -> None:
+    def test_installation_distinguishes_the_v030_candidate_from_its_future_tag(
+        self,
+    ) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
-                    "git clone --depth 1 --branch v0.3.0 --single-branch ",
-                    readme,
-                )
-                self.assertNotIn(
                     "git clone --depth 1 --branch main --single-branch ",
                     readme,
                 )
@@ -735,17 +733,14 @@ class SkillDistributionTests(unittest.TestCase):
                 )
                 self.assertIn(
                     (
-                        "v0.3.0 交付基线"
+                        "正式 tag/GitHub Release 尚未创建"
                         if readme_name == "README.md"
-                        else "v0.3.0 delivery baseline"
+                        else "formal tag and GitHub Release have not yet been created"
                     ),
                     readme,
                 )
-                self.assertIn(
-                    "https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0",
-                    readme,
-                )
-                self.assertNotIn("Release: v0.2.0", readme)
+                self.assertNotIn("tree/v0.3.0", readme)
+                self.assertNotIn("Release: v0.3.0", readme)
 
         chinese_readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
         english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
@@ -761,13 +756,13 @@ class SkillDistributionTests(unittest.TestCase):
             REPOSITORY_ROOT,
             "docs",
             "research",
-            "core-v0.3.0-release-probe-evidence.json",
+            "v0.3.0-release-probe-evidence.json",
         )
         matrix_path = Path(
             REPOSITORY_ROOT,
             "docs",
             "research",
-            "core-v0.3.0-operation-release-matrix.json",
+            "v0.3.0-operation-release-matrix.json",
         )
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
         matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
@@ -784,8 +779,8 @@ class SkillDistributionTests(unittest.TestCase):
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
-                self.assertIn("core-v0.3.0-release-probe-evidence.json", readme)
-                self.assertIn("core-v0.3.0-operation-release-matrix.json", readme)
+                self.assertIn("v0.3.0-release-probe-evidence.json", readme)
+                self.assertIn("v0.3.0-operation-release-matrix.json", readme)
                 self.assertIn("27/27", readme)
                 self.assertIn("44/44", readme)
                 self.assertIn("740/740", readme)
@@ -815,12 +810,14 @@ class SkillDistributionTests(unittest.TestCase):
         )
 
         link_pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
-        for document in (
+        documents = (
             chinese_path,
             english_path,
-            Path(REPOSITORY_ROOT, "examples", "README.md"),
             Path(SKILL_ROOT, "SKILL.md"),
-        ):
+            *Path(REPOSITORY_ROOT, "examples").glob("*.md"),
+            *Path(REPOSITORY_ROOT, "docs", "research").rglob("*.md"),
+        )
+        for document in documents:
             content = document.read_text(encoding="utf-8")
             for target in link_pattern.findall(content):
                 with self.subTest(document=document.name, target=target):
@@ -836,10 +833,11 @@ class SkillDistributionTests(unittest.TestCase):
         first_nonblank = next(
             line for line in examples_readme.splitlines() if line.strip()
         )
-        self.assertEqual(first_nonblank, "# v0.3.0 可执行案例")
+        self.assertEqual(first_nonblank, "# v0.3.0 中文可执行案例")
         self.assertIn("[盘中行情快照](intraday-snapshot.md)", examples_readme)
         self.assertIn(
-            "[盘中请求](requests/intraday-market-snapshot.json)", examples_readme
+            "[`intraday-market-snapshot.json`](requests/intraday-market-snapshot.json)",
+            examples_readme,
         )
 
         case = Path(REPOSITORY_ROOT, "examples", "intraday-snapshot.md").read_text(
@@ -872,8 +870,8 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertTrue(request["source_policy"]["allow_experimental"])
         self.assertFalse(request["source_policy"]["allow_fallback"])
 
-    def test_v020_release_audit_is_linked_from_both_readmes(self) -> None:
-        audit_relative_path = "docs/research/v0.2.0-release-audit-2026-08-03.md"
+    def test_historical_v020_release_audit_is_linked_from_both_readmes(self) -> None:
+        audit_relative_path = "docs/research/history/v0.2.0-release-audit-2026-08-03.md"
         audit = Path(REPOSITORY_ROOT, audit_relative_path)
         self.assertTrue(audit.is_file())
         self.assertTrue(
@@ -884,6 +882,68 @@ class SkillDistributionTests(unittest.TestCase):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(audit_relative_path, readme)
+
+    def test_research_docs_separate_current_v030_files_from_versioned_history(
+        self,
+    ) -> None:
+        research_root = Path(REPOSITORY_ROOT, "docs", "research")
+        current_files = {
+            path.name for path in research_root.iterdir() if path.is_file()
+        }
+        self.assertEqual(
+            current_files,
+            {
+                "README.md",
+                "v0.3.0-operation-qualification.json",
+                "v0.3.0-operation-release-matrix.json",
+                "v0.3.0-operation-release-matrix.md",
+                "v0.3.0-release-audit-2026-08-18.md",
+                "v0.3.0-release-probe-evidence.json",
+            },
+        )
+
+        history_files = {
+            path.name
+            for path in Path(research_root, "history").iterdir()
+            if path.is_file()
+        }
+        self.assertEqual(len(history_files), 8)
+        self.assertTrue(
+            all(re.fullmatch(r"v\d+\.\d+\.\d+-.+", name) for name in history_files)
+        )
+        self.assertFalse(any(name.startswith("core-v0.3.0-") for name in current_files))
+
+    def test_examples_index_every_versioned_request_exactly_once(self) -> None:
+        request_names = {
+            path.name
+            for path in Path(REPOSITORY_ROOT, "examples", "requests").glob("*.json")
+        }
+        examples_readme = Path(REPOSITORY_ROOT, "examples", "README.md").read_text(
+            encoding="utf-8"
+        )
+        indexed_names = re.findall(r"\(requests/([^)]+\.json)\)", examples_readme)
+
+        self.assertEqual(len(request_names), 42)
+        self.assertEqual(len(indexed_names), 42)
+        self.assertEqual(set(indexed_names), request_names)
+        self.assertEqual(len(indexed_names), len(set(indexed_names)))
+        self.assertIn("案例标题、问题和解释均使用中文", examples_readme)
+
+        for case_path in Path(REPOSITORY_ROOT, "examples").glob("*.md"):
+            with self.subTest(case=case_path.name):
+                case = case_path.read_text(encoding="utf-8")
+                headings = re.findall(r"^#{1,3} (.+)$", case, re.MULTILINE)
+                self.assertTrue(headings)
+                self.assertTrue(
+                    all(re.search(r"[\u4e00-\u9fff]", heading) for heading in headings)
+                )
+                for stale_heading in (
+                    "Offline intraday replay case",
+                    "Evidence-shaped output",
+                    "Prediction and refusal boundary",
+                    "Horizon: next",
+                ):
+                    self.assertNotIn(stale_heading, case)
 
     def test_release_demos_present_agent_judgment_and_conditional_triggers(
         self,
@@ -904,7 +964,7 @@ class SkillDistributionTests(unittest.TestCase):
                     line for line in demo.splitlines() if line.strip()
                 )
                 self.assertTrue(first_nonblank.startswith("# "))
-                self.assertIn("## Agent 研究判断", demo)
+                self.assertIn("## 研究判断（Agent 推断）", demo)
                 self.assertIn("**条件触发位**", demo)
                 self.assertIn("不是买入点、卖出点", demo)
 
@@ -1011,7 +1071,7 @@ class SkillDistributionTests(unittest.TestCase):
             REPOSITORY_ROOT, "examples", "intraday-replay-prediction.md"
         ).read_text(encoding="utf-8")
 
-        for document in (entry, boundary, case):
+        for document in (entry, boundary):
             with self.subTest(document=document[:32]):
                 self.assertIn("intraday_replay", document)
                 self.assertIn("explicit", document.lower())
@@ -1024,6 +1084,22 @@ class SkillDistributionTests(unittest.TestCase):
                 self.assertIn("downside", document)
                 self.assertIn("invalidation", document)
                 self.assertIn("uncertainty", document)
+
+        for required_text in (
+            "intraday_replay",
+            "明确要求未来判断",
+            "下一个交易日",
+            "未来 5 个交易日",
+            "延续",
+            "震荡",
+            "反转",
+            "上行",
+            "下行",
+            "失效条件",
+            "不确定性",
+        ):
+            with self.subTest(required_text=required_text):
+                self.assertIn(required_text, case)
 
         for required_gate in (
             "canonical identity",
@@ -1064,10 +1140,10 @@ class SkillDistributionTests(unittest.TestCase):
             with self.subTest(required_path=required_path):
                 self.assertIn(required_path, case)
 
-        self.assertIn("facts", case)
+        self.assertIn("正式 observations/claims", case)
         self.assertIn("calculations", case)
-        self.assertIn("replay analysis", case)
-        self.assertIn("prediction", case)
+        self.assertIn("复盘分析", case)
+        self.assertIn("预测", case)
 
     def test_intraday_replay_delivery_cases_cover_sse_and_szse(self) -> None:
         examples_readme = Path(REPOSITORY_ROOT, "examples", "README.md").read_text(
@@ -1098,19 +1174,19 @@ class SkillDistributionTests(unittest.TestCase):
                     '"task_type": "intraday_replay"',
                     "coverage",
                     "records",
-                    "normalized",
                     "summary",
-                    "evidence lineage",
-                    "limitations",
+                    "规范化",
+                    "证据谱系",
+                    "限制",
                     "unavailable_fields",
                     "fixture-only",
                     "installation_incomplete",
                     "security_identity",
-                    "next trading day",
-                    "next 5 trading days",
-                    "primary",
-                    "upside",
-                    "downside",
+                    "下一个交易日",
+                    "未来 5 个交易日",
+                    "主情景",
+                    "上行",
+                    "下行",
                     "blocked",
                 ):
                     self.assertIn(required_text, case)
@@ -1123,8 +1199,8 @@ class SkillDistributionTests(unittest.TestCase):
                 self.assertEqual(request["schema_version"], "1.0")
                 self.assertEqual(request["task_type"], "intraday_replay")
                 self.assertEqual(request["subjects"], [{"security": security}])
-                self.assertEqual(request["window"]["observed_from"], "2026-08-03")
-                self.assertEqual(request["window"]["observed_to"], "2026-08-03")
+                self.assertEqual(request["window"]["observed_from"], "2026-08-14")
+                self.assertEqual(request["window"]["observed_to"], "2026-08-14")
                 self.assertTrue(request["source_policy"]["allow_experimental"])
                 self.assertFalse(request["source_policy"]["allow_credentials"])
                 self.assertFalse(request["source_policy"]["allow_fallback"])

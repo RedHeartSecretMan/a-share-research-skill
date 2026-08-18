@@ -6,10 +6,10 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
-[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0)
+[![Target: v0.3.0](https://img.shields.io/badge/target-v0.3.0-0F766E)](docs/research/v0.3.0-release-audit-2026-08-18.md)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[中文](README.md) · [v0.3.0](#v030-release-status) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
+[中文](README.md) · [v0.3.0](#v030-release-preparation-status) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
 
 </div>
 
@@ -17,15 +17,18 @@
 
 The project does not treat “an endpoint returned data” as “the fact is trustworthy.” It provides auditable research analysis only after security identity, research time, provenance, basis, and assumptions are explicit.
 
-## v0.3.0 release status
+## v0.3.0 release-preparation status
 
 v0.3.0 closes the implementation and release evidence for the plan-driven research runtime. One public `run --request` entry point serves 12 versioned ResearchTask types, 6 fixed research plans, and 42 executable request examples. The comprehensive single-security and market-overview plans reuse the same narrow tasks; local failures, proven empty sets, conflicts, and unsupported capabilities remain visible in the unified result instead of disappearing behind an aggregate summary.
 
+The repository is currently **ready for the v0.3.0 release, but the formal tag and GitHub Release have not yet been created**. Historical v0.0.1–v0.2.0 releases already exist; these documents do not present a nonexistent v0.3.0 tag as published. After publication, update this section only after reading the remote tag and GitHub Release back.
+
 Final attestation for the frozen candidate completed at `2026-08-18T11:24:17+08:00`: 27/27 release request profiles formed valid public plans, and all 44/44 formal source operations were actually attempted. Formal-operation disposition, default-install loading, and active-request field destinations closed at 44/44, 44/44, and 740/740 respectively. “Attempted” does not mean “the source returned data successfully”: the final record still preserves `complete`, `observed_empty`, `partial`, `credential_blocked`, and `unavailable` source results.
 
-- [Final sanitized live evidence](docs/research/core-v0.3.0-release-probe-evidence.json)
-- [Reproducible operation release matrix](docs/research/core-v0.3.0-operation-release-matrix.json)
-- [Matrix definitions and maintainer verification](docs/research/core-v0.3.0-operation-release-matrix.md)
+- [v0.3.0 release audit](docs/research/v0.3.0-release-audit-2026-08-18.md)
+- [Final sanitized live evidence](docs/research/v0.3.0-release-probe-evidence.json)
+- [Reproducible operation release matrix](docs/research/v0.3.0-operation-release-matrix.json)
+- [Matrix definitions and maintainer verification](docs/research/v0.3.0-operation-release-matrix.md)
 
 ## Why it exists
 
@@ -87,8 +90,10 @@ This section is only a user-facing orientation. The normative rules for research
 
 The only installable artifact is [`skill/a-share-research`](skill/a-share-research/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
 
+Before the formal v0.3.0 tag is created, clone the frozen candidate from the current main branch:
+
 ```text
-git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -97,6 +102,8 @@ git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartS
 ├── references/
 └── scripts/
 ```
+
+After the remote tag is published and read back, replace the branch selector with `--branch v0.3.0 --single-branch` to obtain the immutable release.
 
 The core runtime requires Python 3.12 or later. Below, `<python>` means an interpreter already confirmed to be version 3.12 or later: Windows normally uses `py -3.12`; macOS and Linux should prefer `python3.12`, and should use `python3` only after `python3 --version` confirms the requirement. After copying the complete directory, run the one standard installation step. It installs the locked core dependencies from the bundled manifest into that Skill copy's own `.runtime`, so no task-specific package installation is needed, and finishes by checking dependency and operation loads:
 
@@ -280,7 +287,7 @@ The cases start from real user research questions. BlueFocus cross-explains a 10
 - [Complete SZSE-session intraday replay (SZSE:000001)](examples/intraday-replay-szse.md)
 - [Evidence-constrained intraday replay scenarios](examples/intraday-replay-prediction.md)
 
-The BlueFocus and Industrial Fulian cases keep fixed records anchored to `2026-08-02` and separately label the status and gaps of `2026-08-03` real-source smoke runs; the intraday case records only the request contract and stores no provider response. A rerun must use a new explicit research date and the evidence returned by the CLI.
+The BlueFocus and Industrial Fulian cases now use Chinese v0.3.0 request and presentation templates instead of presenting early-August smoke values as current output. All 42 JSON requests use the v0.3.0 frozen baseline; the intraday case records only its request contract and stores no provider response. A rerun must use an applicable new research date and cite only evidence returned by that invocation.
 
 ## Boundaries
 
@@ -304,7 +311,7 @@ The current version is deliberately conservative:
 
 - [`CONTEXT.md`](CONTEXT.md) defines the current product domain and terminology. [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) through [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) preserve the v0.0.1–v0.2.0 evolution contracts.
 - [`Spec 0006`](docs/specs/0006-research-grade-intraday-replay.md) defines completed-session intraday replay. [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md) defines the core-v0.3.0 unified runtime, plans, and release gates.
-- The [`v0.2.0 release audit`](docs/research/v0.2.0-release-audit-2026-08-03.md) remains a historical baseline. v0.3.0 final sanitized evidence and its derived matrix close 27/27 request profiles, 44/44 formal operations, and 740/740 active-request field destinations for the frozen candidate. One successful source response still does not qualify an operation for production.
+- The [`docs/research`](docs/research/README.md) root now contains only current v0.3.0 research documents. Existing release/tag records, including the [`v0.2.0 release audit`](docs/research/history/v0.2.0-release-audit-2026-08-03.md), live under `history/`. v0.3.0 final sanitized evidence and its derived matrix close 27/27 request profiles, 44/44 formal operations, and 740/740 active-request field destinations for the frozen candidate. One successful source response still does not qualify an operation for production.
 
 ## Repository layout
 
@@ -351,9 +358,9 @@ All versioned request examples are indexed in [`examples/README.md`](examples/RE
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-f10.json
 ```
 
-`intraday-market-snapshot.json` records the v0.2.0 release-date request shape. Before a later run, copy it and replace `as_of` with that run's current China Standard Time date; historical dates, non-trading dates, and non-applicable sessions intentionally return `blocked`. Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the default-installed `mootdx==0.11.7` F10 operation; missing or mismatched software is `installation_incomplete` health, while source-access failure remains a research-result fact.
+`intraday-market-snapshot.json` records the v0.3.0 frozen request shape. Before a later run, copy it and replace `as_of` with that run's current China Standard Time date; historical dates, non-trading dates, and non-applicable sessions intentionally return `blocked`. Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the default-installed `mootdx==0.11.7` F10 operation; missing or mismatched software is `installation_incomplete` health, while source-access failure remains a research-result fact.
 
-The dated results and environment limitations for all eight market-signal scenarios are recorded in the [2026-08-02 live smoke record](docs/research/market-signals-smoke-2026-08-02.md).
+Historical results and environment limitations for the eight market-signal scenarios remain in the [v0.1.0 live verification record](docs/research/history/v0.1.0-market-signals-live-check-2026-08-02.md). They are historical release evidence, not current v0.3.0 market data.
 
 ## License and provenance
 
