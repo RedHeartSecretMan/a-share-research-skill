@@ -5,17 +5,27 @@
 **让每个研究数字都带着身份、时点、来源和计算谱系。**
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Release: v0.2.0](https://img.shields.io/badge/release-v0.2.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.2.0)
+[![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
+[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[English](README_en.md) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
+[English](README_en.md) · [v0.3.0](#v030-发布状态) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
 
 </div>
 
 `a-share-research-skill` 是项目仓库名，可安装 Skill 名为 `$a-share-research`。它以 evidence-first 的方式处理 A 股研究：确定性 Python CLI 负责证券身份、研究时点、证据校验和估值计算，再由 Agent 把版本化 JSON 呈现为可核验的研究材料。
 
 项目不把“接口返回了数据”当成“事实已经可信”，而是在证券身份、研究时点、来源、口径和假设明确后，提供可核验的研究分析。
+
+## v0.3.0 发布状态
+
+v0.3.0 已闭合计划驱动研究运行时的实现与发布证据：一个公共 `run --request` 入口承载 12 类版本化 ResearchTask、6 个固定研究方案和 42 份可执行请求示例。综合单标的与综合市场方案复用同一批窄任务；局部失败、空集、冲突和不支持能力都保留在统一结果中，不会被顶层摘要抹平。
+
+冻结候选的最终 attestation 于 `2026-08-18T11:24:17+08:00` 完成：27/27 个发布请求画像形成有效公共计划，44/44 个正式来源 operation 均被实际尝试；正式 operation 去向、默认安装加载和 active-request 字段去向分别闭合为 44/44、44/44 和 740/740。这里的“已尝试”不等于“来源成功返回数据”——最终记录仍如实包含 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable`。
+
+- [最终脱敏 live evidence](docs/research/core-v0.3.0-release-probe-evidence.json)
+- [可复现的 operation release matrix](docs/research/core-v0.3.0-operation-release-matrix.json)
+- [矩阵口径与维护者复验说明](docs/research/core-v0.3.0-operation-release-matrix.md)
 
 ## 为什么需要它
 
@@ -48,7 +58,7 @@
 
 实验来源可以提供观测并暴露冲突，但尚未完成操作级资格审查，不能单独让事实主张达到 `supported`。
 
-这里的 **F10 资料**，是中国证券行情软件通常通过“F10”入口汇总展示的上市公司材料。v0.1.1 可检索最新提示、公司概况、财务分析、股东研究、股本结构、资本运作、业内点评、行业分析和公司大事。它们是供应商整理的文本材料，不是交易所统一数据标准，也不等同于公司法定披露或已经核验的公司事实。
+这里的 **F10 资料**，是中国证券行情软件通常通过“F10”入口汇总展示的上市公司材料。v0.3.0 可检索最新提示、公司概况、财务分析、股东研究、股本结构、资本运作、业内点评、行业分析和公司大事。它们是供应商整理的文本材料，不是交易所统一数据标准，也不等同于公司法定披露或已经核验的公司事实。
 
 ## 工作方式
 
@@ -78,7 +88,7 @@ CLI 负责证据、确定性计算、状态和限制；Agent 可以在未被整�
 唯一安装产物是 [`skill/a-share-research`](skill/a-share-research/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
 
 ```text
-git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -97,6 +107,12 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 成功安装以退出码 0 和 JSON `status: "complete"` 结束。也可随时执行 `<python> <skill-root>/scripts/installation_health.py` 复查；依赖缺失、版本不符或无法加载时返回非零退出码和 `status: "installation_incomplete"`。`mootdx==0.11.7` 是当前唯一直接的核心正式 operation 依赖；`requirements.lock` 精确锁定 F10、盘中快照和分时复盘三项正式 operations 的最小实际运行闭包以及各平台适用项，而不是 `mootdx` 未发布或 lazy utility/CLI 的全部 declared closure。安装器使用该完整最小闭包且不在安装时解析额外依赖；上游包的通用 `pip check` 语义不能代替本 Skill 的正式 operation 安装健康。安装健康只证明 artifact-local 软件文件、版本和 module/operation 可加载，不探测或承诺来源可访问性、凭据、付费权限或 evidence adoption 资格；这些事实继续由每次请求的来源策略和研究结果表达。
 
 `mootdx` 只为已发布的 F10、`intraday_market_signal` 与 `intraday_replay` operations 进入默认安装；它提供的其他候选行情接口不会因“同属一个库”进入默认来源、依赖范围或 fallback。每个来源 operation 仍必须分别完成身份、时点、单位、失败语义和许可资格审查；来源不足时失败关闭，不进行 silent source switch。完整调用约定见 [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md)。
+
+安装完成后，可在仓库根目录运行一个版本化示例验证公共入口：
+
+```text
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-single-security.json
+```
 
 ## CLI
 
@@ -126,11 +142,7 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 }
 ```
 
-当前只有 `market_trend`、`research_content` 和 `security_valuation` 接受这项采集策略。能力策略只允许复用已由来源 operation 明确建立许可边界的公告与研报、稳定的已发布财务报表，以及研究边界内已经完成的未复权或前复权历史日线；许可状态为 `not_established` 的内容只返回当前观测，不读写存储。新闻、市场快讯、互动问答、F10、共识资料、当前估值快照和盘中观测不进入存储。非许可的 `research_content` operation 仍正常执行并在 operation coverage 中报告 `not_permitted / not_written`，不会验证路径或访问文件系统；其他不支持该策略的任务在检查路径之前安全拒绝。盘中行情永远不会从持久化记录冒充当前观测。
-
-存储只包含有界的规范化 operation-owned evidence/outcome 及必要审计，不包含公共 claims、calculations、views、briefs、请求头、凭据或未获许可的完整供应商原始响应。对 `research_content`，记录还只保留当前 fold 所需的有界 limitation/degradation code，不保存其诊断消息或细节；命中时这些 code 必须在 operation audit 与重新生成的公共 limitations 中精确闭合，不能静默丢失或新增。命中记录仍须重验当前请求身份、范围、来源版本、研究时点、新鲜度、用途适用性和 operation owner，再由当前 fold/serializer 重新生成结果。`plan.evidence_storage` 披露已脱敏的策略与请求范围；对应 operation 的 `coverage...evidence_storage` 披露 `lookup_state`、`write_state`、原获取时间、当前结果获取时间、新鲜度和用途适用性，但绝不回显存储路径。这里的获取时间是 outcome 内规范化观测最晚 `retrieved_at` 所形成的 operation 完成边界，不是材料发布时间或事实时点。
-
-`delete` 只删除当前请求和 operation 对应的 canonical record，并保留同一文件中的其他记录；随后仍执行本次新鲜采集，但不会把它重新写入。对同一文件的更新使用跨进程锁和同目录原子替换，失败不会先截断已有内容。显式持久化当前只在能通过 anchored directory descriptor 防止父目录竞态的平台上启用；其他平台会在访问路径前失败关闭。显式路径为符号链接、reparse point、非普通文件，或其父目录边界无法安全证明时，运行时失败关闭且诊断不包含路径。这不影响默认无状态请求，也不影响非许可 operation 的当前采集与 formal audit。
+当前只有 `market_trend`、`research_content` 和 `security_valuation` 接受这项策略，而且只复用 operation 明确许可的历史日线、公告、研报和已发布财务报表。新闻、快讯、互动问答、F10、共识资料、当前估值快照和盘中观测不会从存储冒充当前事实。命中记录仍要重验请求范围、证券身份、owner、来源版本、研究时点、新鲜度和字段去向；存储路径、凭据和完整供应商原始响应不会进入公共结果。精确的许可清单、平台安全条件、审计字段和删除语义以 [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) 为准。
 
 盘中快照使用 `task_type: "intraday_market_signal"`，`subjects` 必须恰好包含一个已经规范化的 `SSE:<code>` 或 `SZSE:<code>` A 股，`as_of` 必须是当前北京时间交易日，`window` 为 `null`，并显式设置 `source_policy.allow_experimental: true`。`limited` 表示快照仍可回答但实验来源资格或其他限制必须披露；`blocked` 表示身份、会话、时点或核心来源证据不足。Agent 只能在非阻断结果上依据返回字段形成标注清楚的分析，不能把结果当作交易级行情或投资行动建议。
 
@@ -159,7 +171,9 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 
 ## 常见用法
 
-安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。以下用法与 v0.2.0 交付基线的实际任务契约一致。
+安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。以下用法与 v0.3.0 交付基线的实际任务契约一致。
+
+### 身份、行情与估值
 
 **找对证券**
 
@@ -201,6 +215,8 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 
 > 使用 `$a-share-research`，按同一个日期、未复权收盘价口径和 30 倍目标 PE，对比工业富联、贵州茅台、宁德时代、美的集团和五粮液。先确认每个发行主体的证券类别范围；保留每只股票的缺失项和限制，不要因为某项不可计算就删掉标的。
 
+### 研究方案与材料
+
 **使用主题研报预置方案**
 
 > 使用 `$a-share-research`，检索最近 90 天“人形机器人、丝杠、减速器”相关研报，按发布时间列出标题、作者、来源和 PDF 定位；合并同一文档的重复结果，并把机构观点与已披露事实分开。
@@ -224,6 +240,8 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 **查看互动易问答**
 
 > 使用 `$a-share-research`，整理蓝色光标最近 90 天互动易中投资者最常问的主题。先从原始问答提出候选主题，再用候选主题词做可复核的字面频次统计；分别保留提问时间、公司回复时间和原文定位，公司回复按署名陈述呈现，不自动当作已核验事实。
+
+### 资金、事件与市场信号
 
 **看个股与板块资金**
 
@@ -258,6 +276,9 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 - [蓝色光标（SZSE:300058）](examples/bluefocus.md)
 - [工业富联（SSE:601138）](examples/industrial-fulian.md)
 - [研究级盘中行情快照（SSE:600519）](examples/intraday-snapshot.md)
+- [上交所完整交易日分时复盘（SSE:600519）](examples/intraday-replay-sse.md)
+- [深交所完整交易日分时复盘（SZSE:000001）](examples/intraday-replay-szse.md)
+- [分时复盘的证据约束情景预测](examples/intraday-replay-prediction.md)
 
 蓝色光标和工业富联案例的固定记录均锚定 `2026-08-02`，并另行标注 `2026-08-03` 真实来源 smoke 的状态与缺口；盘中案例只记录请求契约，不保存来源响应。重新运行时应以新的显式研究日期和 CLI 返回证据为准。
 
@@ -276,10 +297,14 @@ git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartS
 - 题材、板块、行业轮动、涨跌停、监控、异常波动和热度也来自实验来源。供应商监控池不冒充交易所官方名单，编辑理由和热度标签不证明因果或基本面；只有完整空池才能报告 `observed_empty`，裸供应商代码不能用于监控异动交叉。
 - ETF 期权当前只覆盖 50ETF、300ETF、500ETF 与科创 50ETF 的实验来源快照。供应商报告 Greeks/IV 不是项目本地模型或交易所计算；权威合约总量、合约单位、调整条款和独立 fallback 尚不可用，`M` / `A` 系列、报价状态、单位、时点、来源与 coverage 必须原样披露。
 - 主题研报默认使用东财全市场研报流做标题关键词精确匹配；这不是语义搜索，也不证明主题宇宙完整。iWencai 语义检索仅是来源策略允许时的可选增强，并只从 `IWENCAI_API_KEY` 读取凭据；凭据不会进入请求 JSON 或输出。
-- 单只 SSE/SZSE A 股的研究级盘中行情快照和 ETF 交易所快照已经支持；尚不支持分钟、逐笔、持续行情、交易、新闻情绪评分、全量公司画像或批量选股。
+- 单只 SSE/SZSE A 股的研究级盘中快照、已完成交易日的分钟级 `intraday_replay` 和 ETF 交易所快照已经支持；当前交易日分钟流、五档盘口、逐笔、持续行情、自动交易、新闻情绪评分、全量公司画像和开放式批量选股仍不支持。
 - 研究分析与建议遵循安装产物的 [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md)；README 不另行定义第二套执行规则。
 
-完整产品领域与术语见 [`CONTEXT.md`](CONTEXT.md)；[`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) 是已被取代的 v0.0.1 早期估值内核方案；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 定义实际交付的 v0.0.1 可信证据内核；[`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) 定义完整 v0.1.0 能力与发布门槛；[`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) 定义 v0.1.1 的呈现边界与文档发布修订；[`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 定义已实现并可通过 `intraday_market_signal` 使用的 v0.2.0 研究级盘中行情快照。发布门禁与回读证据单独记录在 [`v0.2.0 发布审计`](docs/research/v0.2.0-release-audit-2026-08-03.md)；core-v0.3.0 的正式来源操作分母、A-08a 资格基线、最终 A-08b attestation 边界和可复现命令记录在 [`operation release matrix`](docs/research/core-v0.3.0-operation-release-matrix.md)。确定性资格基线不等待交易时段，最终发布仍必须闭合当次候选的 live evidence；两者都不把一次 live probe 当作来源生产准入。
+### 版本与发布证据
+
+- [`CONTEXT.md`](CONTEXT.md) 定义当前产品领域与术语；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 至 [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 保留 v0.0.1–v0.2.0 的演进契约。
+- [`Spec 0006`](docs/specs/0006-research-grade-intraday-replay.md) 定义已完成交易日分时复盘；[`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md) 定义 core-v0.3.0 的统一运行时、计划和发布门禁。
+- [`v0.2.0 发布审计`](docs/research/v0.2.0-release-audit-2026-08-03.md) 是历史基线；v0.3.0 的最终脱敏 evidence 与派生 matrix 已对冻结候选闭合 27/27 请求画像、44/44 正式 operations 和 740/740 active-request 字段去向。一次来源成功仍不等同于 operation 获得生产准入。
 
 ## 仓库结构
 
@@ -315,46 +340,15 @@ mypy skill/a-share-research/scripts
 
 完整交易日分时的显式 probe 是 `tests/live_probe_intraday_replay.py`，调用时还要传入 `--replay-date YYYY-MM-DD`。它同样覆盖一只 SSE 和一只 SZSE A 股，使用临时 home，只输出 allow-listed 脱敏状态和失败代码；不更新 fixtures，不保存来源响应，也不把一次成功观测描述为生产准入。
 
-各纵向切片可通过版本化请求做显式的真实联网 smoke：
+版本化请求示例统一收录在 [`examples/README.md`](examples/README.md)。下面六个入口覆盖最常见的窄任务与综合方案；真实联网运行仍会保留当次来源状态和限制：
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-market-snapshot.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-sse.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-szse.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-single-security.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-single-security-valuation.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-market-overview-research.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-f10.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-announcements-news.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-research-reports.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-announcements.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-flashes.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-investor-qa.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-5-day-fund-flow.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industry-board-5-day-fund-flow.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-dragon-tiger.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-lockup-90-day.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-capital-events.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-strong-stock-themes.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-board-membership.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-industry-rotation.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-limit-ecology.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-focus-monitoring.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-severe-abnormal-movements.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-monitoring-intersection.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
 `intraday-market-snapshot.json` 记录 v0.2.0 发布日的请求形态。以后运行前必须先复制它，并把 `as_of` 改成当次运行的北京时间当前日期；历史日期、非交易日和非适用会话会按契约返回 `blocked`。`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证默认安装的 `mootdx==0.11.7` F10 operation；软件缺失或错版应由安装健康报告 `installation_incomplete`，来源访问失败仍由研究结果表达。

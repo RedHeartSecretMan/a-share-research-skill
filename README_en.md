@@ -5,17 +5,27 @@
 **Every research number should carry an identity, time boundary, source, and calculation lineage.**
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Core runtime: stdlib](https://img.shields.io/badge/core%20runtime-stdlib-0F766E)](skill/a-share-research/)
-[![Release: v0.2.0](https://img.shields.io/badge/release-v0.2.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.2.0)
+[![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
+[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[中文](README.md) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
+[中文](README.md) · [v0.3.0](#v030-release-status) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
 
 </div>
 
 `a-share-research-skill` is the project repository name; the installable Skill is `$a-share-research`. It takes an evidence-first approach to mainland-China listed-security research: a deterministic Python CLI handles security identity, research time boundaries, evidence validation, and valuation calculations, then an Agent presents the versioned JSON as auditable research material.
 
 The project does not treat “an endpoint returned data” as “the fact is trustworthy.” It provides auditable research analysis only after security identity, research time, provenance, basis, and assumptions are explicit.
+
+## v0.3.0 release status
+
+v0.3.0 closes the implementation and release evidence for the plan-driven research runtime. One public `run --request` entry point serves 12 versioned ResearchTask types, 6 fixed research plans, and 42 executable request examples. The comprehensive single-security and market-overview plans reuse the same narrow tasks; local failures, proven empty sets, conflicts, and unsupported capabilities remain visible in the unified result instead of disappearing behind an aggregate summary.
+
+Final attestation for the frozen candidate completed at `2026-08-18T11:24:17+08:00`: 27/27 release request profiles formed valid public plans, and all 44/44 formal source operations were actually attempted. Formal-operation disposition, default-install loading, and active-request field destinations closed at 44/44, 44/44, and 740/740 respectively. “Attempted” does not mean “the source returned data successfully”: the final record still preserves `complete`, `observed_empty`, `partial`, `credential_blocked`, and `unavailable` source results.
+
+- [Final sanitized live evidence](docs/research/core-v0.3.0-release-probe-evidence.json)
+- [Reproducible operation release matrix](docs/research/core-v0.3.0-operation-release-matrix.json)
+- [Matrix definitions and maintainer verification](docs/research/core-v0.3.0-operation-release-matrix.md)
 
 ## Why it exists
 
@@ -48,7 +58,7 @@ An intraday market snapshot is one observation on the current China Standard Tim
 
 Experimental operations can provide observations and expose conflicts, but they have not completed operation-level qualification and cannot establish a `supported` factual claim alone.
 
-Here, **F10 material** means the issuer information conventionally opened through an “F10” entry in Chinese securities-market software. v0.1.1 can retrieve latest notices, company overview, financial analysis, shareholder research, capital structure, capital operations, industry commentary, industry analysis, and company events. These are provider-compiled text materials, not an exchange-standardized dataset, statutory company disclosure, or independently verified company fact.
+Here, **F10 material** means the issuer information conventionally opened through an “F10” entry in Chinese securities-market software. v0.3.0 can retrieve latest notices, company overview, financial analysis, shareholder research, capital structure, capital operations, industry commentary, industry analysis, and company events. These are provider-compiled text materials, not an exchange-standardized dataset, statutory company disclosure, or independently verified company fact.
 
 ## How it works
 
@@ -78,7 +88,7 @@ This section is only a user-facing orientation. The normative rules for research
 The only installable artifact is [`skill/a-share-research`](skill/a-share-research/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
 
 ```text
-git clone --depth 1 --branch v0.2.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -97,6 +107,12 @@ The core runtime requires Python 3.12 or later. Below, `<python>` means an inter
 A successful installation exits zero with JSON `status: "complete"`. Run `<python> <skill-root>/scripts/installation_health.py` at any time to recheck it; a missing, version-mismatched, or unloadable dependency exits nonzero with `status: "installation_incomplete"`. `mootdx==0.11.7` is currently the only direct extra dependency required by released core operations. `requirements.lock` exactly pins the minimum actual runtime closure, including platform-applicable entries, loaded by the released F10, intraday snapshot, and intraday replay operations; it is not the complete declared closure of unpublished or lazy `mootdx` utilities and CLI features. The installer consumes that complete minimum closure without resolving extra packages at install time. A generic upstream-package `pip check` is not a substitute for this Skill's formal-operation installation health. Installation health proves only that artifact-local software files, versions, modules, and operations load. It does not probe or promise source accessibility, credentials, paid permissions, or evidence-adoption qualification; request source policy and research results continue to express those facts.
 
 `mootdx` enters the default install only for the released F10, `intraday_market_signal`, and `intraday_replay` operations. Its other candidate quote interfaces do not become default sources, dependency scope, or fallbacks merely because they ship in the same library. Each source operation must still separately qualify identity, timing, units, failure semantics, and licensing; an unavailable source never triggers a silent switch. See [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) for the complete invocation contract.
+
+After installation, validate the public entry point with a versioned example from the repository root:
+
+```text
+<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-single-security.json
+```
 
 ## CLI
 
@@ -126,11 +142,7 @@ To reuse qualified normalized observations across requests, add the exact `evide
 }
 ```
 
-Only `market_trend`, `research_content`, and `security_valuation` accept this acquisition policy. Capability policy permits announcements and research reports only when their source operation explicitly establishes the license boundary, plus stable published financial statements and completed unadjusted or forward-adjusted historical daily bars. Content whose license status is `not_established` remains a current observation and neither reads nor writes the store. News, market flashes, investor Q&A, F10 profiles, consensus material, current valuation snapshots, and intraday observations are not persisted. Non-eligible content operations still run normally and report `not_permitted / not_written` without probing the path; unsupported tasks reject the policy before filesystem access. Intraday data is never served from persistence as current.
-
-Records contain only bounded normalized operation-owned evidence/outcome and required audit facts. They exclude public claims, calculations, views, briefs, credentials, request headers, and unlicensed complete provider raw payloads. For `research_content`, a record additionally retains only the bounded limitation/degradation codes required by the current fold, never their diagnostic messages or details; a hit must close those codes exactly between the operation audit and the rebuilt public limitations, without silently dropping or adding one. A hit revalidates request scope, identity, owner, source version, research boundary, freshness, fitness, and field dispositions before the current fold and serializer rebuild the result. Sanitized policy appears at `plan.evidence_storage`; operation lookup/write state, original/result acquisition times, freshness, and fitness appear at `coverage...evidence_storage`, without the path. Acquisition time is the operation completion boundary—the latest normalized observation `retrieved_at`—not publication, event, availability, or result-generation time.
-
-`delete` removes only the current canonical operation record, preserves unrelated records, and performs a fresh acquisition without rewriting it. Cross-process locking and same-directory atomic replacement protect updates. Explicit persistence is currently enabled only where anchored directory descriptors can prevent parent-directory replacement races; other platforms fail closed before accessing the configured path. Symlinks, reparse points, non-regular leaves, and filesystem boundaries that cannot be proven safe also fail closed without revealing the path. This does not affect default-stateless requests or the fresh acquisition and formal audit of non-permitted operations.
+Only `market_trend`, `research_content`, and `security_valuation` accept this policy, and only for historical daily bars, announcements, reports, and published financial statements whose operation explicitly permits reuse. News, flashes, investor Q&A, F10, consensus material, current valuation snapshots, and intraday observations are never served from storage as current facts. A hit still revalidates request scope, security identity, owner, source version, research boundary, freshness, and field destinations; paths, credentials, and complete provider payloads never enter the public result. The exact license list, platform safety conditions, audit fields, and delete semantics are normative in [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md).
 
 The intraday snapshot uses `task_type: "intraday_market_signal"`, exactly one canonical `SSE:<code>` or `SZSE:<code>` A-share, the current China Standard Time trading date, `window: null`, and `source_policy.allow_experimental: true`. `limited` means the snapshot remains answerable but experimental-source qualification or another disclosed limitation remains; `blocked` means identity, session, timing, or core-source evidence is insufficient. Agent analysis may interpret only a non-blocked result within the returned fields and limitations; it is not a trading feed, prediction, or action instruction.
 
@@ -159,7 +171,9 @@ The comprehensive-single-security and new-security plans gate dependent work onl
 
 ## Common uses
 
-Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The uses below match the task contracts in the v0.2.0 delivery baseline.
+Invoke the Skill explicitly with `$a-share-research`. You may say “today” or “current”; the Agent resolves it to a concrete China Standard Time date first. The uses below match the task contracts in the v0.3.0 delivery baseline.
+
+### Identity, market data, and valuation
 
 **Identify the right security**
 
@@ -201,6 +215,8 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 
 > Use `$a-share-research` to compare Industrial Fulian, Kweichow Moutai, CATL, Midea Group, and Wuliangye using the same date, unadjusted-close basis, and 30x target PE. Establish each issuer's class scope first and preserve every missing item and limitation instead of dropping a security.
 
+### Research plans and materials
+
 **Use the theme-report preset**
 
 > Use `$a-share-research` to find reports published in the last 90 days about humanoid robots, lead screws, and reducers. List publication time, title, author, source, and PDF locator; merge duplicate documents and keep institutional opinions separate from disclosed facts.
@@ -224,6 +240,8 @@ Invoke the Skill explicitly with `$a-share-research`. You may say “today” or
 **Review investor Q&A**
 
 > Use `$a-share-research` to group the most common themes in BlueFocus investor Q&A over the last 90 days. First propose candidate themes from the raw material, then rerun auditable literal-frequency counts for those labels. Keep question time, company reply time, and original locator separate; present company replies as attributed statements rather than automatically verified facts.
+
+### Capital, events, and market signals
 
 **Review stock and board fund flow**
 
@@ -258,6 +276,9 @@ The cases start from real user research questions. BlueFocus cross-explains a 10
 - [BlueFocus (SZSE:300058)](examples/bluefocus.md)
 - [Industrial Fulian (SSE:601138)](examples/industrial-fulian.md)
 - [Research-grade intraday snapshot (SSE:600519)](examples/intraday-snapshot.md)
+- [Complete SSE-session intraday replay (SSE:600519)](examples/intraday-replay-sse.md)
+- [Complete SZSE-session intraday replay (SZSE:000001)](examples/intraday-replay-szse.md)
+- [Evidence-constrained intraday replay scenarios](examples/intraday-replay-prediction.md)
 
 The BlueFocus and Industrial Fulian cases keep fixed records anchored to `2026-08-02` and separately label the status and gaps of `2026-08-03` real-source smoke runs; the intraday case records only the request contract and stores no provider response. A rerun must use a new explicit research date and the evidence returned by the CLI.
 
@@ -276,10 +297,14 @@ The current version is deliberately conservative:
 - Themes, board membership, industry rotation, limit pools, monitoring, abnormal movement, and heat also use experimental sources. A provider watchlist is not an official exchange list, and editorial reasons or popularity labels do not prove causality or fundamentals. Only a completely collected zero pool is `observed_empty`, and provider-local codes cannot establish a monitoring intersection.
 - ETF options currently cover experimental snapshots for 50ETF, 300ETF, 500ETF, and STAR 50ETF only. Provider-reported Greeks/IV are neither local-model nor exchange calculations; authoritative contract totals, contract units, adjustment terms, and an independent fallback remain unavailable. Preserve `M` / `A` series, quote state, units, timing, source, and coverage.
 - Theme-report research defaults to exact title-keyword filtering over the Eastmoney market-wide report feed; this is not semantic search and does not prove a complete theme universe. Semantic iWencai search is an optional enhancement when source policy permits it and reads credentials only from `IWENCAI_API_KEY`; values never enter request JSON or output.
-- Research-grade intraday snapshots for one SSE/SZSE A-share and ETF snapshots are supported; minute bars, ticks, continuous feeds, trading, news-sentiment scoring, full-company profiles, and batch screening are not.
+- Research-grade snapshots for one SSE/SZSE A-share, completed-session minute-level `intraday_replay`, and exchange ETF snapshots are supported. Current-session minute streams, five-level order books, ticks, continuous feeds, automated trading, news-sentiment scoring, full-company profiles, and open-ended batch screening remain unsupported.
 - Research analysis and advice follow the installed [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md); this README does not define a second operational policy.
 
-See [`CONTEXT.md`](CONTEXT.md) for the complete product domain and terminology. [`Spec 0001`](docs/specs/0001-current-valuation-evidence-brief.md) is the superseded early v0.0.1 valuation-kernel proposal; [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) defines the delivered v0.0.1 trustworthy-evidence kernel; [`Spec 0003`](docs/specs/0003-full-a-share-research-v0.1.0.md) defines the complete v0.1.0 capability and release gates; [`Spec 0004`](docs/specs/0004-a-share-research-v0.1.1-presentation.md) defines the v0.1.1 presentation-boundary and documentation release revision; and [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) defines the implemented v0.2.0 research-grade intraday snapshot available through `intraday_market_signal`. Release gates and read-back evidence are recorded separately in the [`v0.2.0 release audit`](docs/research/v0.2.0-release-audit-2026-08-03.md); the [`operation release matrix`](docs/research/core-v0.3.0-operation-release-matrix.md) records the core-v0.3.0 formal-operation denominator, the deterministic A-08a qualification baseline, the final A-08b attestation boundary, and reproducible maintainer commands. The qualification baseline does not wait for a market session, while final release still requires live evidence for the exact candidate; neither treats one live probe as production qualification for an experimental source.
+### Versions and release evidence
+
+- [`CONTEXT.md`](CONTEXT.md) defines the current product domain and terminology. [`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) through [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) preserve the v0.0.1–v0.2.0 evolution contracts.
+- [`Spec 0006`](docs/specs/0006-research-grade-intraday-replay.md) defines completed-session intraday replay. [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md) defines the core-v0.3.0 unified runtime, plans, and release gates.
+- The [`v0.2.0 release audit`](docs/research/v0.2.0-release-audit-2026-08-03.md) remains a historical baseline. v0.3.0 final sanitized evidence and its derived matrix close 27/27 request profiles, 44/44 formal operations, and 740/740 active-request field destinations for the frozen candidate. One successful source response still does not qualify an operation for production.
 
 ## Repository layout
 
@@ -315,46 +340,15 @@ It covers one SSE and one SZSE A-share and emits only a dated observation report
 
 The complete intraday replay probe is `tests/live_probe_intraday_replay.py`; it additionally requires `--replay-date YYYY-MM-DD`. It covers one SSE and one SZSE A-share, uses an ephemeral home, emits only allow-listed sanitized statuses and failure codes; operators must never update fixtures, persist provider responses, or promote one successful observation to production qualification.
 
-Run each vertical slice explicitly against live sources with versioned requests:
+All versioned request examples are indexed in [`examples/README.md`](examples/README.md). These six entries cover the most common narrow tasks and comprehensive plans; a live run still preserves that run's source states and limitations:
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-market-snapshot.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-sse.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-szse.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-etf-market.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510050-atm-options.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510300-atm-options.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/510500-atm-options.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/588000-atm-options.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-single-security.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-single-security-valuation.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-valuation-comparison.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-theme-report-research.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-new-security.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-market-overview-research.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-valuation.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/five-stock-valuation-compare.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/theme-report-search.json
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-f10.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-announcements-news.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-research-reports.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-announcements.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-flashes.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-investor-qa.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-5-day-fund-flow.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industry-board-5-day-fund-flow.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-dragon-tiger.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-lockup-90-day.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/industrial-fulian-capital-events.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-strong-stock-themes.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-board-membership.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-industry-rotation.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-limit-ecology.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-focus-monitoring.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-severe-abnormal-movements.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-monitoring-intersection.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/market-heat.json
 ```
 
 `intraday-market-snapshot.json` records the v0.2.0 release-date request shape. Before a later run, copy it and replace `as_of` with that run's current China Standard Time date; historical dates, non-trading dates, and non-applicable sessions intentionally return `blocked`. Without credentials, `theme-report-search.json` uses the limited Eastmoney title-keyword baseline. When source policy permits a local `IWENCAI_API_KEY`, iWencai is only an optional enhancement; no request may reuse or expose that value. `bluefocus-f10.json` exercises the default-installed `mootdx==0.11.7` F10 operation; missing or mismatched software is `installation_incomplete` health, while source-access failure remains a research-result fact.

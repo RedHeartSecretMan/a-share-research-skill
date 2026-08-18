@@ -717,12 +717,12 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("when the question calls for interpretation", metadata)
         self.assertIn("the result is not blocked", metadata)
 
-    def test_installation_is_pinned_to_v020_release(self) -> None:
+    def test_installation_is_pinned_to_v030_release(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
-                    "git clone --depth 1 --branch v0.2.0 --single-branch ",
+                    "git clone --depth 1 --branch v0.3.0 --single-branch ",
                     readme,
                 )
                 self.assertNotIn(
@@ -735,16 +735,17 @@ class SkillDistributionTests(unittest.TestCase):
                 )
                 self.assertIn(
                     (
-                        "v0.2.0 交付基线"
+                        "v0.3.0 交付基线"
                         if readme_name == "README.md"
-                        else "v0.2.0 delivery baseline"
+                        else "v0.3.0 delivery baseline"
                     ),
                     readme,
                 )
                 self.assertIn(
-                    "https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.2.0",
+                    "https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0",
                     readme,
                 )
+                self.assertNotIn("Release: v0.2.0", readme)
 
         chinese_readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
         english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
@@ -753,14 +754,89 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("mootdx", chinese_readme)
         self.assertIn("mootdx", english_readme)
 
-    def test_v020_examples_include_the_intraday_public_seam(self) -> None:
+    def test_v030_readmes_publish_closed_evidence_without_overstating_sources(
+        self,
+    ) -> None:
+        evidence_path = Path(
+            REPOSITORY_ROOT,
+            "docs",
+            "research",
+            "core-v0.3.0-release-probe-evidence.json",
+        )
+        matrix_path = Path(
+            REPOSITORY_ROOT,
+            "docs",
+            "research",
+            "core-v0.3.0-operation-release-matrix.json",
+        )
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(evidence["plan_snapshots"]), 27)
+        self.assertEqual(len(evidence["live_probes"]), 44)
+        self.assertTrue(all(item["attempted"] for item in evidence["live_probes"]))
+        self.assertEqual(len(matrix["operations"]), 44)
+        self.assertEqual(
+            matrix["summary"]["active_request_field_destination_rate"],
+            {"denominator": 740, "numerator": 740, "rate": "1.000000"},
+        )
+
+        for readme_name in ("README.md", "README_en.md"):
+            with self.subTest(readme=readme_name):
+                readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
+                self.assertIn("core-v0.3.0-release-probe-evidence.json", readme)
+                self.assertIn("core-v0.3.0-operation-release-matrix.json", readme)
+                self.assertIn("27/27", readme)
+                self.assertIn("44/44", readme)
+                self.assertIn("740/740", readme)
+                self.assertIn("observed_empty", readme)
+                self.assertIn("credential_blocked", readme)
+
+        self.assertIn(
+            "不等于“来源成功返回数据”",
+            Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "does not mean “the source returned data successfully”",
+            Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8"),
+        )
+
+    def test_release_entry_docs_keep_bilingual_structure_and_valid_local_links(
+        self,
+    ) -> None:
+        chinese_path = Path(REPOSITORY_ROOT, "README.md")
+        english_path = Path(REPOSITORY_ROOT, "README_en.md")
+        chinese = chinese_path.read_text(encoding="utf-8")
+        english = english_path.read_text(encoding="utf-8")
+        heading_pattern = re.compile(r"^(#{2,3}) ", re.MULTILINE)
+        self.assertEqual(
+            heading_pattern.findall(chinese),
+            heading_pattern.findall(english),
+        )
+
+        link_pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+        for document in (
+            chinese_path,
+            english_path,
+            Path(REPOSITORY_ROOT, "examples", "README.md"),
+            Path(SKILL_ROOT, "SKILL.md"),
+        ):
+            content = document.read_text(encoding="utf-8")
+            for target in link_pattern.findall(content):
+                with self.subTest(document=document.name, target=target):
+                    if target.startswith(("https://", "http://", "#")):
+                        continue
+                    relative_target = target.split("#", 1)[0]
+                    self.assertTrue((document.parent / relative_target).exists())
+
+    def test_v030_examples_include_the_intraday_public_seams(self) -> None:
         examples_readme = Path(REPOSITORY_ROOT, "examples", "README.md").read_text(
             encoding="utf-8"
         )
         first_nonblank = next(
             line for line in examples_readme.splitlines() if line.strip()
         )
-        self.assertEqual(first_nonblank, "# v0.2.0 真实案例")
+        self.assertEqual(first_nonblank, "# v0.3.0 可执行案例")
         self.assertIn("[盘中行情快照](intraday-snapshot.md)", examples_readme)
         self.assertIn(
             "[盘中请求](requests/intraday-market-snapshot.json)", examples_readme
@@ -1121,6 +1197,8 @@ class SkillDistributionTests(unittest.TestCase):
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
 
         self.assertLess(len(entry.split()), 1500)
+        self.assertIn("## Task routing", entry)
+        self.assertEqual(entry.count("## Intraday"), 1)
         self.assertNotIn("`parameters.market_heat_period` is `hour` by default", entry)
         self.assertNotIn("Gamma/Theta/Vega use unverified provider-native units", entry)
 
