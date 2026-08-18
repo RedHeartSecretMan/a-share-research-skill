@@ -6,10 +6,10 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
-[![Target: v0.3.0](https://img.shields.io/badge/target-v0.3.0-0F766E)](docs/research/v0.3.0-release-audit-2026-08-18.md)
+[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[中文](README.md) · [v0.3.0](#v030-release-preparation-status) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
+[中文](README.md) · [v0.3.0](#v030-release-status) · [Installation](#installation) · [Common uses](#common-uses) · [Case demos](#case-demos) · [Boundaries](#boundaries) · [Development](#development)
 
 </div>
 
@@ -17,11 +17,11 @@
 
 The project does not treat “an endpoint returned data” as “the fact is trustworthy.” It provides auditable research analysis only after security identity, research time, provenance, basis, and assumptions are explicit.
 
-## v0.3.0 release-preparation status
+## v0.3.0 release status
 
 v0.3.0 closes the implementation and release evidence for the plan-driven research runtime. One public `run --request` entry point serves 12 versioned ResearchTask types, 6 fixed research plans, and 42 executable request examples. The comprehensive single-security and market-overview plans reuse the same narrow tasks; local failures, proven empty sets, conflicts, and unsupported capabilities remain visible in the unified result instead of disappearing behind an aggregate summary.
 
-The repository is currently **ready for the v0.3.0 release, but the formal tag and GitHub Release have not yet been created**. Historical v0.0.1–v0.2.0 releases already exist; these documents do not present a nonexistent v0.3.0 tag as published. After publication, update this section only after reading the remote tag and GitHub Release back.
+**v0.3.0 is the current stable release.** The `v0.3.0` tag fixes this release's code, Skill, documentation, examples, and sanitized release evidence. Historical v0.0.1–v0.2.0 records remain available from their own tags and release pages. Installations and reproductions should prefer the immutable `v0.3.0` tag over the moving `main` branch.
 
 Final attestation for the frozen candidate completed at `2026-08-18T11:24:17+08:00`: 27/27 release request profiles formed valid public plans, and all 44/44 formal source operations were actually attempted. Formal-operation disposition, default-install loading, and active-request field destinations closed at 44/44, 44/44, and 740/740 respectively. “Attempted” does not mean “the source returned data successfully”: the final record still preserves `complete`, `observed_empty`, `partial`, `credential_blocked`, and `unavailable` source results.
 
@@ -90,10 +90,10 @@ This section is only a user-facing orientation. The normative rules for research
 
 The only installable artifact is [`skill/a-share-research`](skill/a-share-research/). Clone the repository, then copy the entire directory into a compatible Agent's Skill directory; do not copy `SKILL.md` alone.
 
-Before the formal v0.3.0 tag is created, clone the frozen candidate from the current main branch:
+Clone the current stable release from the formal `v0.3.0` tag:
 
 ```text
-git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -102,8 +102,6 @@ git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSec
 ├── references/
 └── scripts/
 ```
-
-After the remote tag is published and read back, replace the branch selector with `--branch v0.3.0 --single-branch` to obtain the immutable release.
 
 The core runtime requires Python 3.12 or later. Below, `<python>` means an interpreter already confirmed to be version 3.12 or later: Windows normally uses `py -3.12`; macOS and Linux should prefer `python3.12`, and should use `python3` only after `python3 --version` confirms the requirement. After copying the complete directory, run the one standard installation step. It installs the locked core dependencies from the bundled manifest into that Skill copy's own `.runtime`, so no task-specific package installation is needed, and finishes by checking dependency and operation loads:
 

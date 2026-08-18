@@ -6,7 +6,7 @@
 
 | 文件 | 用途 | 修改方式 |
 | --- | --- | --- |
-| [`v0.3.0-release-audit-2026-08-18.md`](v0.3.0-release-audit-2026-08-18.md) | 当前发布准备状态、范围与验证结论 | 人工维护，所有状态必须有仓库证据 |
+| [`v0.3.0-release-audit-2026-08-18.md`](v0.3.0-release-audit-2026-08-18.md) | 当前发布状态、范围与验证结论 | 人工维护，所有状态必须有仓库证据 |
 | [`v0.3.0-operation-qualification.json`](v0.3.0-operation-qualification.json) | 44 个正式来源操作的逐操作资格清单 | 只随资格审查更新 |
 | [`v0.3.0-release-probe-evidence.json`](v0.3.0-release-probe-evidence.json) | 冻结候选的最终脱敏联网验证证据 | 只由维护者验证工具生成 |
 | [`v0.3.0-operation-release-matrix.json`](v0.3.0-operation-release-matrix.json) | 由资格清单和联网证据派生的发布矩阵 | 只由生成器写入 |

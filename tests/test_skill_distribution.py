@@ -717,30 +717,21 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("when the question calls for interpretation", metadata)
         self.assertIn("the result is not blocked", metadata)
 
-    def test_installation_distinguishes_the_v030_candidate_from_its_future_tag(
-        self,
-    ) -> None:
+    def test_installation_uses_the_v030_release_tag(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
-                    "git clone --depth 1 --branch main --single-branch ",
+                    "git clone --depth 1 --branch v0.3.0 --single-branch ",
                     readme,
                 )
                 self.assertIn(
                     "https://github.com/RedHeartSecretMan/a-share-research-skill.git",
                     readme,
                 )
-                self.assertIn(
-                    (
-                        "正式 tag/GitHub Release 尚未创建"
-                        if readme_name == "README.md"
-                        else "formal tag and GitHub Release have not yet been created"
-                    ),
-                    readme,
-                )
-                self.assertNotIn("tree/v0.3.0", readme)
-                self.assertNotIn("Release: v0.3.0", readme)
+                self.assertIn("tree/v0.3.0", readme)
+                self.assertIn("Release: v0.3.0", readme)
+                self.assertNotIn("--branch main --single-branch", readme)
 
         chinese_readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
         english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(

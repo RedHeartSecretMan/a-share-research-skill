@@ -6,10 +6,10 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
-[![Target: v0.3.0](https://img.shields.io/badge/target-v0.3.0-0F766E)](docs/research/v0.3.0-release-audit-2026-08-18.md)
+[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[English](README_en.md) · [v0.3.0](#v030-发布准备状态) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
+[English](README_en.md) · [v0.3.0](#v030-发布状态) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
 
 </div>
 
@@ -17,11 +17,11 @@
 
 项目不把“接口返回了数据”当成“事实已经可信”，而是在证券身份、研究时点、来源、口径和假设明确后，提供可核验的研究分析。
 
-## v0.3.0 发布准备状态
+## v0.3.0 发布状态
 
 v0.3.0 已闭合计划驱动研究运行时的实现与发布证据：一个公共 `run --request` 入口承载 12 类版本化 ResearchTask、6 个固定研究方案和 42 份可执行请求示例。综合单标的与综合市场方案复用同一批窄任务；局部失败、空集、冲突和不支持能力都保留在统一结果中，不会被顶层摘要抹平。
 
-当前仓库处于 **v0.3.0 发布准备完成、正式 tag/GitHub Release 尚未创建** 的状态。历史 v0.0.1–v0.2.0 已有发布记录；当前文档不会把尚不存在的 v0.3.0 tag 写成已发布事实。正式发布后应再用远端 tag 与 GitHub Release 回读更新本节。
+**v0.3.0 是当前稳定发布版本。** `v0.3.0` 标签固定本次代码、Skill、文档、示例和脱敏发布证据；历史 v0.0.1–v0.2.0 的记录继续保留在各自标签与发布页中。安装和复现应优先使用不可移动的 `v0.3.0` 标签，而不是随开发继续前移的 `main`。
 
 冻结候选的最终 attestation 于 `2026-08-18T11:24:17+08:00` 完成：27/27 个发布请求画像形成有效公共计划，44/44 个正式来源 operation 均被实际尝试；正式 operation 去向、默认安装加载和 active-request 字段去向分别闭合为 44/44、44/44 和 740/740。这里的“已尝试”不等于“来源成功返回数据”——最终记录仍如实包含 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable`。
 
@@ -90,10 +90,10 @@ CLI 负责证据、确定性计算、状态和限制；Agent 可以在未被整�
 
 唯一安装产物是 [`skill/a-share-research`](skill/a-share-research/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
 
-正式 v0.3.0 tag 创建前，从当前主分支取得冻结候选：
+从正式 `v0.3.0` 标签取得当前稳定版本：
 
 ```text
-git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 
 <skills-directory>/a-share-research/
 ├── SKILL.md
@@ -102,8 +102,6 @@ git clone --depth 1 --branch main --single-branch https://github.com/RedHeartSec
 ├── references/
 └── scripts/
 ```
-
-正式 tag 发布并经远端回读后，可将 clone 命令固定为 `--branch v0.3.0 --single-branch`，以获得不可移动的发布版本。
 
 核心运行时需要 Python 3.12 或更高版本。下文以 `<python>` 表示已经确认版本不低于 3.12 的解释器：Windows 通常使用 `py -3.12`，macOS 和 Linux 优先使用 `python3.12`；只有在 `python3 --version` 已确认满足要求时才使用 `python3`。复制完整目录后执行一次标准安装步骤；安装器从随 Skill 交付的锁定清单把核心运行依赖安装到该副本自己的 `.runtime`，无需按任务补包，并在结束前自动执行依赖加载与 operation 健康检查：
 
