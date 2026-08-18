@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "task_type": "intraday_market_signal",
+  "subjects": [{"security": "REPLACE_SSE_OR_SZSE_CANONICAL_SECURITY"}],
+  "as_of": "REPLACE_CURRENT_CHINA_YYYY-MM-DD",
+  "window": null,
+  "parameters": {},
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": false
+  }
+}

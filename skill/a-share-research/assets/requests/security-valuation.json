@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "task_type": "security_valuation",
+  "subjects": [{
+    "clue": "REPLACE_SECURITY_CLUE",
+    "issuer_security_class_count": "REPLACE_INTEGER_AFTER_SCOPE_CHECK"
+  }],
+  "as_of": "REPLACE_CURRENT_CHINA_YYYY-MM-DD",
+  "window": null,
+  "parameters": {"target_pe": "REPLACE_POSITIVE_DECIMAL"},
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": true
+  }
+}

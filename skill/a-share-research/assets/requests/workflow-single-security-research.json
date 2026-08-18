@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "task_type": "research_workflow",
+  "subjects": [{"clue": "REPLACE_SECURITY_CLUE"}],
+  "as_of": "REPLACE_YYYY-MM-DD",
+  "window": null,
+  "parameters": {
+    "workflow": {"id": "single_security_research", "version": "1.0"},
+    "inputs": {
+      "target_pe": "REPLACE_POSITIVE_DECIMAL",
+      "completeness_mode": "REPLACE_standard_OR_fast"
+    }
+  },
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": true
+  }
+}

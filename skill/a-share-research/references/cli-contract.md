@@ -1,125 +1,71 @@
 # CLI contract
 
-Read this reference when selecting a command, invoking the bundled runtime, or interpreting its process and JSON contracts.
+Read this reference for installation, public invocation, process semantics, credentials, and the map to task-specific contracts. This is the current v0.3.0 contract.
 
-This is the current v0.3.0 contract. Historical release commands and audit records live outside the installed Skill under `docs/research/history/`.
+## Installation
 
-## Portable invocation
-
-The core runtime requires Python 3.12 or later. After copying the complete Skill, run `<python> <skill-root>/scripts/install.py` once; it installs the exact platform-applicable minimum runtime closure of the three released `mootdx` operations into that copy's real, non-symlinked `.runtime` and automatically runs `<python> <skill-root>/scripts/installation_health.py`. Unpublished and lazy `mootdx` utility/CLI dependencies are outside this lock, and generic upstream-package `pip check` semantics do not replace formal-operation health. Continue only when the installer exits zero with JSON `status: "complete"`. `installation_incomplete` reports only missing, version-mismatched, non-local, incomplete, or unloadable software. A complete installation does not claim source accessibility, credential or paid-permission availability, or evidence-adoption qualification. Select an interpreter available on the host and verify its version before installing or invoking the Skill:
+The core runtime requires Python 3.12 or later. Select and verify an interpreter before installing:
 
 - Windows: `py -3.12`
 - macOS: prefer `python3.12`; use `python3` only when it reports Python 3.12 or later
 - Linux: prefer `python3.12`; use `python3` only when it reports Python 3.12 or later
 
-In the commands below, `<python>` stands for that selected command, including both tokens in `py -3.12`. Run `<python> --version` and stop if the resolved interpreter is older than Python 3.12.
+In this documentation, `<python>` means the selected command, including both tokens in `py -3.12`. Resolve `<skill-root>` from the loaded `SKILL.md` location. After copying the complete Skill, run:
 
-Resolve `<skill-root>` from the loaded `SKILL.md` location. The Skill's only public runtime entry point is `<skill-root>/scripts/entrypoint.py`; modules under `<skill-root>/scripts/a_share_research/` are implementation details and must not be invoked directly. Do not assume a particular Agent, home directory, installation directory, working directory, or shell. Quote the resolved path when it contains spaces.
+```text
+<python> <skill-root>/scripts/install.py
+```
 
-Invoke the only supported public command:
+The installer creates a real, artifact-local `.runtime`, installs the platform-applicable minimum runtime closure from `requirements.lock`, and runs `<python> <skill-root>/scripts/installation_health.py`. Continue only after exit code 0 with `status: "complete"`. `installation_incomplete` means required software is missing, mismatched, non-local, incomplete, or unloadable. It says nothing about provider accessibility, credentials, paid permissions, or evidence fitness.
+
+The default lock includes `mootdx==0.11.7` for released F10, `intraday_market_signal`, and `intraday_replay` operations. Generic upstream `pip check` does not replace formal operation health. Other interfaces exposed by that package are not implicit sources or fallbacks.
+
+## Public invocation
+
+The only public runtime entry point is `<skill-root>/scripts/entrypoint.py`; modules under `scripts/a_share_research/` are implementation details. Invoke:
 
 ```text
 <python> <skill-root>/scripts/entrypoint.py run --request <research-task.json> [--output <file>]
 ```
 
-Use `pathlib.Path` or the host platform's normal path API when an Agent must construct the path programmatically. Do not manually replace `/` with `\` in user-supplied paths.
+The request has exactly these top-level concepts: `schema_version`, `task_type`, `subjects`, explicit `as_of`, `window`, `parameters`, and `source_policy`. Unknown fields, old shapes under the same version, malformed values, unsupported tasks, and unsafe JSON fail closed. Never pass natural-language text as the request document.
 
-## Public Research Interface
-
-- `run --request <research-task.json> [--output <file>]`: execute the stable `research(request) -> research result` Interface. The request object contains `schema_version`, `task_type`, `subjects`, explicit `as_of`, `window`, `parameters`, and `source_policy`. Unknown tasks and incomplete core Adapter installations return explicit `blocked` JSON results.
-
-The runtime is stateless by default. An absent `source_policy.evidence_store` creates and accesses no evidence file, lock, cache, database, user configuration, or global provider configuration. Opt-in reuse has one exact shape: `{"mode":"read_write","path":"<absolute-path>"}`; use `mode: "delete"` to remove only the current canonical operation records while preserving unrelated records. The parent must already exist as a real directory, the leaf must be absent or a regular file, and no ancestor, leaf, lock file, or reparse point may redirect access. The path is never copied into stdout or stderr.
-
-Explicit persistence is currently available only when the host supplies anchored directory-descriptor semantics that can prevent a parent-directory replacement race. On other platforms it fails closed before path, lock, read, write, or delete access; default-stateless requests and non-permitted operations remain available.
-
-Evidence persistence is capability policy, not a task parameter. It is currently accepted only by `market_trend`, `research_content`, and `security_valuation`. Eligible operation outcomes are announcements and research reports whose source operation explicitly establishes the license boundary, stable published financial statements, and completed unadjusted or forward-adjusted historical daily bars. Content with `license_boundary.status: not_established`, news, market flashes, investor Q&A, F10 profiles, consensus material, current valuation observations, and intraday observations remain freshly acquired or are rejected before filesystem access; they are never served from persistence as current. A non-eligible content operation reports `not_permitted / not_written` in formal operation coverage without touching the configured path.
-
-Each stored record contains only bounded normalized operation-owned evidence/outcome and the audit facts needed to revalidate it. It excludes public claims, calculations, views, briefs, credentials, request headers, and unlicensed complete provider raw payloads. A hit must revalidate request scope, subject identity, owner, source version, research boundary, freshness, fitness for use, and field dispositions, then run the current fold and serializer. `plan.evidence_storage` carries the sanitized policy and request scope; the operation's `coverage...evidence_storage` carries lookup/write states, source versions, original/result acquisition times, freshness, fitness, and a safe reason. Acquisition time means the operation completion boundary: the latest `retrieved_at` among the normalized observations in that outcome. It is not publication time, event time, availability time, or result-generation time.
-
-Current task types:
-
-- `security_identity`: one A-share name/code clue;
-- `market_trend`: one A-share clue, `window.trading_days` from 2 to 250, and `parameters.adjustment` of `unadjusted` or `forward_adjusted`;
-- `etf_market`: one six-digit SSE ETF code clue and a current/latest-completed market snapshot.
-- `intraday_market_signal`: exactly one canonical SSE/SZSE A-share on the current China Standard Time trading date, with `window: null` and `source_policy.allow_experimental: true`. It is a single research-grade snapshot, not a minute series or trading feed. Its released operation uses default-installed `mootdx==0.11.7`; an incomplete install is reported as `installation_incomplete`, independently from source coverage. No source switch is attempted. A valid `limited` or `blocked` result still exits zero.
-- `intraday_replay`: exactly one canonical SSE/SZSE A-share and one explicit completed trading date in `window.observed_from`/`observed_to`. It returns only the deterministic replay contract: normalized candidate rows, coverage, daily-boundary evidence, and a recomputable summary. The default-installed `mootdx==0.11.7` adapter remains experimental and fail-closed when timestamp, calendar, price, volume, amount, or auction semantics are not explicitly qualified; its presence never promotes a result to `supported` and it never silently falls back to another minute source.
-- `etf_options`: exactly one supported SSE ETF clue: `510050` (50ETF), `510300` (300ETF), `510500` (500ETF), or `588000` (STAR 50ETF). Use one explicit observation date and set `source_policy.allow_experimental` to `true`. `parameters.view` is `atm` or `chain`; `parameters.expiry` is `{"mode":"nearest_unexpired"}` or `{"mode":"exact","date":"YYYY-MM-DD"}`; `parameters.quote_mode` is `latest` or `latest_completed`. `atm` returns every equally near standard `M` call-put pair in the source-observed set; `chain` returns the selected expiry's bounded source-observed standard `M` and adjusted `A` series without merging them. Current contract-list coverage is `partial` because the source has no authoritative total. `latest_completed` requires a completed session, while `latest` may return an intraday observation.
-- `research_workflow`: a fixed, versioned orchestration of existing ResearchTasks. Top-level `window` must be `null`; `parameters` contains exactly `workflow` and `inputs`, and `workflow` contains `id` plus `version: "1.0"`. Supported IDs are `single_security_research`, `single_security_valuation`, `valuation_comparison`, `theme_report_research`, `new_security_research`, and `market_overview_research`. Callers cannot supply steps, a DAG, or another `research_workflow` as a child. The generalized `single_security_research` input requires `target_pe`, defaults `completeness_mode` to `standard`, and optionally accepts `completeness_mode: "fast"` plus a unique `deep_extensions` list containing only `long_history` and/or `large_materials`. `standard` attempts identity, one 20-session unadjusted trend, valuation, subject materials, subject capital activity, a separate future lockup window, and subject board membership. `fast` guarantees only identity and that trend and records every enhancement as `not_requested`; it may combine with `long_history`, which deepens that same trend acquisition to 250 sessions, but it rejects `large_materials`. In standard mode, `large_materials` deepens the same material acquisition to 365 days with a limit of 100. `market_overview_research` accepts no subjects; its inputs default `completeness_mode` to `standard` and may instead select `fast`, with an optional unique `deep_extensions` list containing only `market_wide_intraday`. The explicit deep request is retained in request scope but remains unsupported and compiles no child. Unknown keys, duplicate deep values, legacy-shaped inputs, and any other deep value fail closed. Single valuation and comparison inputs contain `target_pe`; theme-report inputs contain `query`, `published_from`, `published_to`, `limit`, and `verify_documents`; new-security inputs contain `target_pe`, explicit `report_window`, `market_window`, `lockup_window`, `fund_flow_period`, `limit`, and `verify_documents`. Every derived leaf task inherits the request's `as_of` and exact `source_policy`.
-
-`market_overview_research@1.0` has one fixed 15-entry capability inventory. Capability state describes the compiled plan; each executed leaf still keeps its own evidence-derived `supported`, `limited`, or `blocked` result and operation coverage.
-
-| Capability ID | Tier | `standard` / `fast` state | Existing leaf step |
-| --- | --- | --- | --- |
-| `industry_board_breadth` | core | `supported` / `supported` | `market_core_signals` |
-| `limit_pools` | core | `supported` / `supported` | `market_core_signals` |
-| `industry_theme_rotation` | standard | `supported` / `not_requested` | `market_signal_enhancements` |
-| `market_heat` | standard | `supported` / `not_requested` | `market_signal_enhancements` |
-| `focus_monitoring` | standard | `supported` / `not_requested` | `market_signal_enhancements` |
-| `severe_abnormal_movement` | standard | `supported` / `not_requested` | `market_signal_enhancements` |
-| `board_fund_flow` | standard | `supported` / `not_requested` | `market_capital_enhancements` |
-| `market_dragon_tiger` | standard | `supported` / `not_requested` | `market_capital_enhancements` |
-| `northbound_disclosure` | standard | `supported` / `not_requested` | `market_capital_enhancements` |
-| `market_flash` | standard | `supported` / `not_requested` | `market_flash` |
-| `market_trading_session` | core | `unsupported` / `unsupported` | none |
-| `major_broad_indices` | core | `unsupported` / `unsupported` | none |
-| `whole_market_turnover` | core | `unsupported` / `unsupported` | none |
-| `whole_market_margin` | standard | `unsupported` / `unsupported` | none |
-| `market_wide_intraday` | deep | `unsupported` / `unsupported` | none |
-
-The two actual core capabilities mean per-industry-board change plus up/down counts and owner-local limit-pool total/page/empty/partial facts. They do not establish deduplicated whole-A-share breadth. The eight standard enhancements reuse the existing market-wide signal, capital-event, and market-flash owners; direct requests for those narrow tasks remain narrow. The five unsupported entries always carry `reason_code: "qualified_market_wide_owner_absent"`, `gap_route: "v0.4.0_spec"`, and no step ID, operation obligation, outcome, observation, claim, calculation, or coverage. The workflow never substitutes one index, ranking, security-scoped owner, or #60 five-level/tick path for a missing market-wide capability and adds no owner, endpoint, or proxy. Local leaf failure, proven empty coverage, or partial coverage degrades only the corresponding step and capability while independent sibling evidence and stable references remain present.
-
-A minimal standard request is versioned and subject-free:
+Common source policy:
 
 ```json
 {
-  "schema_version": "1.0",
-  "task_type": "research_workflow",
-  "subjects": [],
-  "as_of": "2026-08-18",
-  "window": null,
-  "parameters": {
-    "workflow": {"id": "market_overview_research", "version": "1.0"},
-    "inputs": {"completeness_mode": "standard"}
-  },
-  "source_policy": {
-    "allow_experimental": true,
-    "allow_credentials": false,
-    "allow_fallback": true
-  }
+  "allow_experimental": true,
+  "allow_credentials": false,
+  "allow_fallback": true
 }
 ```
-- `security_valuation`: one A-share clue whose subject includes a positively established integer `issuer_security_class_count`, the current China Standard Time date, and a positive decimal-string `parameters.target_pe`; an absent class scope blocks instead of defaulting to one;
-- `valuation_compare`: two to ten unique A-share clues with an explicit class count per subject, on the same current date and `target_pe`; returns one ordered, same-basis comparison table without dropping limited or blocked rows.
-- `research_content`: a publication window plus one or more material types. `research_report` accepts one security clue or a theme query; the runtime resolves a clue internally and returns the canonical subject. A subject-free theme request has a no-credential Eastmoney baseline: it scans the provider-wide stock-report feed in fixed pages of 100 through the full requested publication window, retains titles containing any requested keyword as an exact substring, and only then applies `parameters.limit`. These results keep `subject: null` plus provider stock code/name attributes; the runtime does not infer an exchange from a code prefix. The limitations `title_keyword_filter_not_semantic_search` and `theme_report_universe_incomplete` distinguish this baseline from semantic search and a complete theme universe. Credentialed iWencai search remains an optional enhancement when `allow_credentials` permits it. `industry_report` requires `parameters.industry_code` and no subject; `market_flash` is a subject-free standalone request; `consensus_material`, `issuer_profile`, `stock_news`, `announcement`, and `investor_qa` require one security clue. `parameters.limit` accepts 1–100 and applies per material type. Every explicitly requested material type is required coverage: if any type has no usable material after all selected operations run, the result is `blocked` while retaining other materials and all source diagnostics. One usable observation from any selected operation can cover a type, but experimental aggregation remains capped at `limited` rather than `supported`. Run `issuer_profile` separately from historical `investor_qa`, because F10 is a current snapshot with unknown publication time. Its request window must include the current retrieval date; retrieval time is used for the window check without inventing publication metadata. For `investor_qa`, optional `parameters.theme_keywords` contains 1–20 candidate labels used only for local literal-frequency aggregation; it does not filter the source query. Set `parameters.verify_documents` to `true` only when PDF retrieval should be actively verified; ordinary discovery returns locators without downloading every document.
-- `capital_events`: an `observed_from`/`observed_to` window plus one or more data types. `stock_fund_flow`, `dragon_tiger`, `lockup`, `margin_trading`, `block_trade`, `shareholder_count`, and `dividend` require one A-share clue. `northbound_flow`, `board_fund_flow`, and `market_dragon_tiger` require no subject and cannot be mixed with subject-required types. `stock_fund_flow` uses `parameters.period` of `5d` or `10d`; `board_fund_flow` additionally requires `parameters.board_type` of `industry`, `concept`, or `region` and supports `today`, `5d`, or `10d`. Only a standalone `lockup` task may extend beyond `as_of`, and never beyond 90 days. `parameters.limit` accepts 1–100 per data type. Every observation carries an explicit period, metric units, directions, and market scope: market-wide observations use `dimensions.market_scope`, while subject-specific observations use the canonical `subject.security.exchange`. A provider-defined rolling board window may use `period.start: null` only with a matching `lookback_trading_days` and `period_start_not_exposed`; it never invents the first trading date. A board snapshot also preserves `session_completeness_unverified`, because its provider trading date does not prove the market session had ended. An observation whose first availability time is unknown is accepted only when `as_of` equals its China-time retrieval date. Unknown availability, exchange identity, disclosure gaps, empty windows and truncation remain visible. `brief.coverage` reports every explicitly requested data type as `observed_nonempty`, `observed_empty`, `partial`, or `indeterminate`. `observed_empty` requires a contract-complete, error-free source batch; an empty response, source failure, schema rejection, incomplete batch, or absent qualified source remains `indeterminate`. If any requested type is `indeterminate`, the whole task is `blocked` while observations, coverage and source errors for all other types remain present. A type with usable observations may be `partial` without blocking the task, and a failed source does not erase a contract-complete observation from another operation.
-- `market_signals`: an `observed_from`/`observed_to` window plus one or more signal types from `strong_stock_theme`, `security_board_membership`, `industry_rotation`, `limit_state`, `focus_monitoring`, `severe_abnormal_movement`, `monitoring_intersection`, and `market_heat`. Current operations are experimental, so the request must set `source_policy.allow_experimental` to `true`; otherwise the result is blocked with `source_policy_not_satisfied`. `security_board_membership` requires exactly one A-share clue; the other seven are market-wide, take no subject, and cannot be mixed with the subject-scoped type. `parameters.limit` accepts 1–100 per signal type. Current watchlist and popularity sources require a single current observation date; dated pools and rankings preserve their provider trading date and may reject unavailable historical snapshots. `limit_state` accepts an optional unique `parameters.limit_states` list containing `limit_up`, `limit_break`, `limit_down`, or `previous_limit_up`. For `market_heat`, optional `parameters.market_heat_period` accepts `hour` or `day` and defaults to `hour`; preserve the returned observation-time limitation rather than treating retrieval time as ranking time.
 
-Every market-signal observation preserves source role, source document identity, `observed_on`, optional `observed_at`, `available_at`, retrieval time, period, metrics, units, directions, rule, attribution provenance, market scope, locator, and limitations. `brief.coverage` uses four states: `observed_nonempty` means complete coverage with records; `observed_empty` means complete coverage with a proven zero total; `partial` means only part of the bounded pool was established; `indeterminate` means source, schema, permission, or identity evidence cannot determine the pool. Never translate `partial` or `indeterminate` into “none.” Editorial reasons and popularity tags are market-signal attributions, not issuer facts. `monitoring_intersection` is coordinator-derived only when focus-monitoring and severe-abnormal-movement evidence share a canonical security identity and overlapping monitoring date; its attribution cites both basis evidence IDs. Matching provider-local codes cannot establish the intersection. Cross-source disagreements in mutually exclusive pool state, rule, or monitoring window remain explicit conflicts.
-
-Every ETF-option contract preserves option type, contract month, expiry date, `M` / `A` series, strike, quote state, bid/ask/last, bid/ask sizes, volume, open interest, observation time, source operation, evidence locator, and units. ATM selection uses the underlying reference price and preserves tied nearest strikes. Delta is dimensionless and implied volatility is a decimal fraction; Gamma, Theta, and Vega retain `provider_native_unverified`. These analytics and any theoretical value have `provider_reported` origin: they are neither local BSM calculations nor exchange-calculated values. Current experimental sources do not expose an authoritative total contract count, a qualified complete contract-unit definition, or full adjustment terms and have no qualified independent fallback. Preserve those limitations and the four-state coverage; an incomplete, failed, wrong-underlying, or no-quote response must never be presented as an empty chain.
-
-A workflow returns the same exact 14-key formal result as every other research task: `schema_version`, `status`, `research_anchor`, `plan`, `capability_registry`, `coverage`, `observations`, `claims`, `calculations`, `conflicts`, `limitations`, `source_errors`, `task_views`, and `briefs`. Its `plan.request_scope` retains the validated workflow request and its fixed steps. Each step-scoped registry and coverage entry retains the formal compiled leaf request scope, leaf plan, capability registry, operation coverage, and stable references to the common top-level records and brief. A workflow never nests a leaf result or ResearchTask and never copies task-private payloads. `single_security_valuation`, `valuation_comparison`, and `theme_report_research` derive their status from their one leaf's formal records. `single_security_research` and `new_security_research` use canonical identity as their sole workflow gate; only a truly blocked identity dependency produces `skipped_research_dependency`. A local source failure or a blocked or limited non-identity leaf does not stop independent siblings, and completed sibling records, calculations, conflicts, errors, and briefs remain present. The generalized single-security path is identity, unadjusted trend, valuation, six subject material classes, six past capital/company-event classes, a separate future lockup request, and subject board membership. Its explicit narrow and deep extensions never invent another endpoint or duplicate an applicable leaf acquisition. The new-security path is identity, institutional reports and consensus, valuation, provider board membership, stock fund flow, dragon-tiger, future lockup, and margin trading. Every lockup task keeps its own explicit window and remains capped at 90 days.
-
-Never pass natural-language text as the request document. The Agent translates the user's question into a versioned research task and never places credentials in that document.
+Enable only what the question and user permit. A permitted fallback must be declared by the task's operation authority; `allow_fallback` never licenses an arbitrary source switch. For opt-in evidence reuse, read [persistence-contract.md](persistence-contract.md).
 
 ## Process and JSON semantics
 
-`stdout` contains exactly one compact JSON document with `schema_version`. Parse fields according to that version; do not infer a schema from prose examples.
+`stdout` contains exactly one compact JSON document with `schema_version`. A zero exit code means a valid contract result was formed; inspect its domain `status` separately:
 
-A zero exit code means the CLI formed a valid contract result. Inspect its domain `status` separately:
+- `supported`: material claims have evidence adopted for their use.
+- `limited`: the core question is answerable with disclosed gaps or limitations.
+- `blocked`: identity or critical evidence is insufficient for a substantive conclusion.
 
-- `supported`: every key claim meets the evidence contract;
-- `limited`: the core question remains answerable with disclosed limitations;
-- `blocked`: the result is valid, but identity or core evidence prevents a substantive answer.
+A nonzero exit means invocation, protocol, I/O, or internal processing prevented a valid result. Read the sanitized diagnostic from `stderr`; never convert it into a source fact. `--output` is opt-in result persistence: the same JSON remains on `stdout`, and no result file is created without it.
 
-For `research_workflow`, inspect both the overall status and every step. A skipped dependency or blocked leaf remains visible even when another independent step formed a usable result; workflow aggregation never promotes a leaf status or turns an unavailable source into “none.”
+Every valid result has the same 14 top-level keys: `schema_version`, `status`, `research_anchor`, `plan`, `capability_registry`, `coverage`, `observations`, `claims`, `calculations`, `conflicts`, `limitations`, `source_errors`, `task_views`, and `briefs`. Interpret them with [evidence-contract.md](evidence-contract.md). A workflow keeps each leaf and skipped step visible; it never turns an unavailable source into “none.”
 
-A nonzero exit means invocation, protocol, I/O, or internal processing prevented a valid research result. Read the sanitized diagnostic from `stderr`; do not turn it into a source fact. Diagnostics never replace JSON evidence.
+## Task-specific contracts
 
-`--output` is opt-in persistence. The same JSON remains on `stdout`; without `--output`, the runtime does not create a result file, cache, database, or global configuration.
+- Identity, trend, ETF, and ETF options: [market-contracts.md](market-contracts.md)
+- Current-session snapshot and completed-session replay: [intraday-contracts.md](intraday-contracts.md)
+- Valuation, materials, capital events, and market signals: [research-contracts.md](research-contracts.md)
+- Six fixed research plans: [workflow-contracts.md](workflow-contracts.md)
+- Explicit evidence reuse: [persistence-contract.md](persistence-contract.md)
+- Facts, claims, calculations, and coverage: [evidence-contract.md](evidence-contract.md)
+- Interpretation and action boundary: [analysis-boundary.md](analysis-boundary.md)
 
 ## Credentials and network behavior
 
-Most registered source operations are credential-free. The default installation includes only the locked dependencies of released core operations; candidate or unpublished operation dependencies are excluded. Semantic iWencai content search is enabled only when `source_policy.allow_credentials` is true and reads `IWENCAI_API_KEY`; `IWENCAI_BASE_URL` may select an explicitly configured compatible endpoint. The values never belong in a request document, command argument, log, result, example, or fixture. F10 retrieval, `intraday_market_signal`, and `intraday_replay` use default-installed `mootdx==0.11.7`; source request failure remains a source-policy fact rather than installation health. Other `mootdx` interfaces are not implicit sources or fallbacks: every operation must independently qualify identity, timing, units, failure semantics, and licensing before it can enter the evidence chain. ETF-option retrieval is credential-free but experimental, rate-limited, and has no qualified independent fallback. Every network research task uses capability-scoped source operations selected behind the `ResearchTask` Interface.
+Most registered operations are credential-free. Semantic iWencai search is enabled only when `source_policy.allow_credentials` is true and reads `IWENCAI_API_KEY`; `IWENCAI_BASE_URL` may select an explicitly configured compatible endpoint. Values never belong in request JSON, arguments, logs, results, examples, or fixtures.
 
-Default tests are offline and replace only the external network boundary with fixed responses. `tests/live_probe_close.py`, `tests/live_probe_intraday.py`, and `tests/live_probe_intraday_replay.py` belong to the development repository, not the installed Skill; a maintainer must invoke a probe explicitly for source diagnostics. The replay probe uses `--confirm-live --as-of YYYY-MM-DD --replay-date YYYY-MM-DD`, covers one SSE and one SZSE A-share, uses an ephemeral home, and emits only sanitized diagnostics. Live probes must never update fixtures, persist provider responses, credentials, server details, or raw provider payloads, or become an ordinary CI dependency. One successful probe does not qualify an experimental source operation for production.
+Network research uses capability-scoped operations behind the ResearchTask Interface. Source failure remains a source-result fact and never triggers a silent source switch. Default tests replace only the external boundary with fixed responses. Development-repository live probes are explicit maintainer diagnostics, never an ordinary CI dependency, and must never update fixtures, persist provider responses, or promote one successful response to production qualification.

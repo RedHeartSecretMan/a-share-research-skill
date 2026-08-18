@@ -20,7 +20,7 @@
 
 版本化请求见 [intraday-replay-sse.json](requests/intraday-replay-sse.json)。离线验收可让仓库夹具 CLI 使用 `A_SHARE_INTRADAY_REPLAY_SCENARIO=summary_metrics`，生成确定性的部分 coverage 和不可用的日级边界；`complete` 夹具路径则单独证明完整会话分母，并由公共复盘测试使用。
 
-标准 Skill 安装包含锁定的 `mootdx==0.11.7`。缺失、版本不符或无法加载时，安装健康返回 `installation_incomplete`；该软件事实不代表来源可访问或证据可采用，也不会触发来源切换。普通 `security_identity` 任务仍独立运行并报告自己的来源结果。
+标准安装器按 `requirements.lock` 配置运行依赖并执行安装健康检查。依赖缺失、版本不符或无法加载时返回 `installation_incomplete`；该软件事实不代表来源可访问或证据可采用，也不会触发来源切换。普通 `security_identity` 任务仍独立运行并报告自己的来源结果。
 
 ## 证据形状
 

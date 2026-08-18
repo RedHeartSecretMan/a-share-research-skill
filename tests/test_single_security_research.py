@@ -252,11 +252,11 @@ def direct_intraday_request() -> dict[str, Any]:
 class SingleSecurityResearchPublicSeamTests(unittest.TestCase):
     def test_public_docs_describe_the_versioned_single_security_contract(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        cli_contract = (SKILL_ROOT / "references" / "cli-contract.md").read_text(
-            encoding="utf-8"
-        )
+        workflow_contract = (
+            SKILL_ROOT / "references" / "workflow-contracts.md"
+        ).read_text(encoding="utf-8")
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        for document in (readme, cli_contract):
+        for document in (readme, workflow_contract):
             self.assertIn("single_security_research", document)
             self.assertIn("completeness_mode", document)
             self.assertIn("deep_extensions", document)

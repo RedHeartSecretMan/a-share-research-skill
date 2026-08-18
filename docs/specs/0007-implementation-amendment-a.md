@@ -2,11 +2,11 @@
 
 ## 状态
 
-**Accepted by maintainer; tracker applied**，2026-08-10。A-08 两阶段修订于 2026-08-13 获维护者批准。综合市场能力边界的最小产品修订于 2026-08-14 获维护者批准。
+**Delivered in v0.3.0**，2026-08-18。本修订于 2026-08-10 获维护者批准并应用 tracker；A-08 两阶段修订于 2026-08-13 获批准；综合市场能力边界的最小产品修订于 2026-08-14 获批准。最终实现、脱敏 live attestation、durable matrix、文档与发布门禁均已闭合，并由 `v0.3.0` annotated tag 和 GitHub Release 交付。
 
 2026-08-13 的后续裁决只调整 release evidence 的实施时序，不削弱 v0.3.0 release gate：原 A-08 拆为确定性的 A-08a 资格基线与最终 A-08b live attestation。来源组和综合计划先消费 A-08a，再由 A-08b 对全部生产变更完成后的冻结候选形成当次 release candidate 的脱敏 live evidence 与 durable matrix。开发 Ticket 不再因交易时段或临时上游状态等待；#72 仍在 A-08b 精确闭合前失败关闭。
 
-本修订案在维护者批准前不授权修改现有 Issue 状态、原生依赖边、生产代码、发布标签或 Release。批准后，它在与父 Spec #36 冲突的实施范围、实施架构、Ticket 处置和 v0.3.0 release gate 上具有优先权；未被本修订明确修改的产品承诺继续由父 Spec #36 管理。
+以下批准、DAG 和 tracker 条款保留其实施期语境：本修订案在维护者批准前不授权修改现有 Issue 状态、原生依赖边、生产代码、发布标签或 Release；批准后，它在与父 Spec #36 冲突的实施范围、实施架构、Ticket 处置和 v0.3.0 release gate 上具有优先权。v0.3.0 已交付后，这些条款用于追溯，不是新的待执行发布指令；未被本修订明确修改的产品承诺继续由父 Spec #36 管理。
 
 ## Parent 与修订原因
 
@@ -199,7 +199,7 @@ observation 和 source error 在 outcome 内按构造归属于 operation。运�
 
 以下 tracker 处置已经在维护者批准 Amendment 后应用。
 
-| Ticket | 当前状态 | Amendment A 处置 | v0.3.0 作用 |
+| Ticket | 批准时状态 | Amendment A 处置 | v0.3.0 作用 |
 |---|---:|---|---|
 | #37 | closed | 保持历史关闭；评论标记其 private tracer 路线已被 supersede，行为和 fixtures 由 A-01 选择性复用 | 不再计作架构完成证据 |
 | #38 | closed | 保持历史关闭；市场走势、ETF、ETF 期权行为由 A-03 重新通过直接结果路径验收 | 行为资产 |

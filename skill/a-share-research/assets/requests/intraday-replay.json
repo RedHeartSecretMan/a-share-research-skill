@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "task_type": "intraday_replay",
+  "subjects": [{"security": "REPLACE_SSE_OR_SZSE_CANONICAL_SECURITY"}],
+  "as_of": "REPLACE_RESEARCH_YYYY-MM-DD",
+  "window": {
+    "observed_from": "REPLACE_COMPLETED_SESSION_YYYY-MM-DD",
+    "observed_to": "REPLACE_COMPLETED_SESSION_YYYY-MM-DD"
+  },
+  "parameters": {},
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": false
+  }
+}

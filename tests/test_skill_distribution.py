@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -714,8 +715,8 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn('display_name: "A股研究技能"', metadata)
         self.assertIn("$a-share-research ", metadata)
         self.assertNotIn("$a-share-research-skill", metadata)
-        self.assertIn("when the question calls for interpretation", metadata)
-        self.assertIn("the result is not blocked", metadata)
+        self.assertIn("narrowest supported task", metadata)
+        self.assertIn("evidence-backed results and limitations", metadata)
 
     def test_installation_uses_the_v030_release_tag(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
@@ -729,7 +730,7 @@ class SkillDistributionTests(unittest.TestCase):
                     "https://github.com/RedHeartSecretMan/a-share-research-skill.git",
                     readme,
                 )
-                self.assertIn("tree/v0.3.0", readme)
+                self.assertIn("releases/tag/v0.3.0", readme)
                 self.assertIn("Release: v0.3.0", readme)
                 self.assertNotIn("--branch main --single-branch", readme)
 
@@ -737,8 +738,11 @@ class SkillDistributionTests(unittest.TestCase):
         english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("mootdx", chinese_readme)
-        self.assertIn("mootdx", english_readme)
+        for readme in (chinese_readme, english_readme):
+            self.assertIn("<skill-root>/scripts/install.py", readme)
+            self.assertNotIn("mootdx==", readme)
+            self.assertNotIn("$HOME/.agents/skills", readme)
+            self.assertNotIn("Codex", readme)
 
     def test_v030_readmes_publish_closed_evidence_without_overstating_sources(
         self,
@@ -767,22 +771,37 @@ class SkillDistributionTests(unittest.TestCase):
             {"denominator": 740, "numerator": 740, "rate": "1.000000"},
         )
 
+        audit = Path(
+            REPOSITORY_ROOT,
+            "docs",
+            "research",
+            "v0.3.0-release-audit-2026-08-18.md",
+        ).read_text(encoding="utf-8")
+        for required in (
+            "27/27",
+            "44/44",
+            "740/740",
+            "observed_empty",
+            "credential_blocked",
+            "83a088111f61c2aa3d29ba70fbe194a152283e65",
+            "e9b4fb83fac61ff8b1a22b898a58ae49faf9debb",
+            "releases/tag/v0.3.0",
+        ):
+            self.assertIn(required, audit)
+
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
-                self.assertIn("v0.3.0-release-probe-evidence.json", readme)
-                self.assertIn("v0.3.0-operation-release-matrix.json", readme)
-                self.assertIn("27/27", readme)
-                self.assertIn("44/44", readme)
-                self.assertIn("740/740", readme)
-                self.assertIn("observed_empty", readme)
-                self.assertIn("credential_blocked", readme)
+                self.assertIn("v0.3.0-release-audit-2026-08-18.md", readme)
+                self.assertIn("releases/tag/v0.3.0", readme)
+                self.assertNotIn("v0.3.0-release-probe-evidence.json", readme)
+                self.assertNotIn("v0.3.0-operation-release-matrix.json", readme)
 
-        self.assertIn(
+        self.assertNotIn(
             "不等于“来源成功返回数据”",
             Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8"),
         )
-        self.assertIn(
+        self.assertNotIn(
             "does not mean “the source returned data successfully”",
             Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8"),
         )
@@ -804,8 +823,10 @@ class SkillDistributionTests(unittest.TestCase):
         documents = (
             chinese_path,
             english_path,
+            Path(REPOSITORY_ROOT, "docs", "README.md"),
             Path(SKILL_ROOT, "SKILL.md"),
-            *Path(REPOSITORY_ROOT, "examples").glob("*.md"),
+            *Path(SKILL_ROOT, "references").glob("*.md"),
+            *Path(REPOSITORY_ROOT, "examples").rglob("*.md"),
             *Path(REPOSITORY_ROOT, "docs", "research").rglob("*.md"),
         )
         for document in documents:
@@ -824,7 +845,7 @@ class SkillDistributionTests(unittest.TestCase):
         first_nonblank = next(
             line for line in examples_readme.splitlines() if line.strip()
         )
-        self.assertEqual(first_nonblank, "# v0.3.0 中文可执行案例")
+        self.assertEqual(first_nonblank, "# v0.3.0 中文案例与请求模板")
         self.assertIn("[盘中行情快照](intraday-snapshot.md)", examples_readme)
         self.assertIn(
             "[`intraday-market-snapshot.json`](requests/intraday-market-snapshot.json)",
@@ -840,7 +861,8 @@ class SkillDistributionTests(unittest.TestCase):
             "当前北京时间交易日",
             "limited",
             "blocked",
-            "mootdx==0.11.7",
+            "requirements.lock",
+            "installation_health.py",
         ):
             with self.subTest(required_text=required_text):
                 self.assertIn(required_text, case)
@@ -860,6 +882,140 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertEqual(request["parameters"], {})
         self.assertTrue(request["source_policy"]["allow_experimental"])
         self.assertFalse(request["source_policy"]["allow_fallback"])
+
+    def test_real_run_example_preserves_actual_public_result_and_boundaries(
+        self,
+    ) -> None:
+        example_root = Path(REPOSITORY_ROOT, "examples", "real-runs")
+        request_path = example_root / "market-focus-monitoring-2026-08-19.request.json"
+        result_path = example_root / "market-focus-monitoring-2026-08-19.result.json"
+        case_path = example_root / "market-focus-monitoring-2026-08-19.md"
+        examples_readme = Path(REPOSITORY_ROOT, "examples", "README.md").read_text(
+            encoding="utf-8"
+        )
+
+        for path in (request_path, result_path, case_path):
+            with self.subTest(path=path.name):
+                self.assertTrue(path.is_file())
+                self.assertIn(f"real-runs/{path.name}", examples_readme)
+
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        self.assertEqual(request["schema_version"], "1.0")
+        self.assertEqual(request["task_type"], "market_signals")
+        self.assertEqual(request["subjects"], [])
+        self.assertEqual(request["as_of"], "2026-08-19")
+        self.assertEqual(request["parameters"]["signal_types"], ["focus_monitoring"])
+        self.assertFalse(request["source_policy"]["allow_credentials"])
+
+        raw_result = result_path.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(raw_result).hexdigest(),
+            "37b30eca9d6058f32378afb7671b89e5e0e20b67ecf4d0e9e80450259c06c34e",
+        )
+        result = json.loads(raw_result)
+        self.assertEqual(
+            set(result),
+            {
+                "schema_version",
+                "status",
+                "research_anchor",
+                "plan",
+                "capability_registry",
+                "coverage",
+                "observations",
+                "claims",
+                "calculations",
+                "conflicts",
+                "limitations",
+                "source_errors",
+                "task_views",
+                "briefs",
+            },
+        )
+        self.assertEqual(result["status"], "limited")
+        self.assertEqual(result["research_anchor"]["as_of"], "2026-08-19")
+        self.assertEqual(len(result["observations"]), 22)
+        self.assertEqual(len(result["claims"]), 22)
+        self.assertEqual(result["conflicts"], [])
+        self.assertEqual(result["source_errors"], [])
+
+        operations = result["coverage"]["market_signal_observations"]["operations"]
+        focus = operations["eastmoney_focus_monitoring@1"]
+        self.assertEqual(
+            (focus["execution_state"], focus["state"]),
+            ("succeeded", "complete"),
+        )
+        self.assertTrue(
+            all(
+                operation_id == "eastmoney_focus_monitoring@1"
+                or (material["execution_state"], material["state"])
+                == ("not_requested", "not_requested")
+                for operation_id, material in operations.items()
+            )
+        )
+
+        coverage = next(
+            item
+            for item in result["calculations"]
+            if item["kind"] == "market_signal_coverage"
+        )
+        self.assertEqual(
+            coverage["payload"],
+            {
+                "signal_type": "focus_monitoring",
+                "state": "observed_nonempty",
+                "observation_count": 22,
+                "sources": [
+                    {
+                        "source_operation": "eastmoney_focus_monitoring@1",
+                        "state": "observed_nonempty",
+                        "provider_total": 22,
+                        "pages_collected": 1,
+                        "pages_expected": 1,
+                    }
+                ],
+            },
+        )
+        limitation_codes = {item["code"] for item in result["limitations"]}
+        self.assertEqual(
+            limitation_codes,
+            {
+                "availability_time_unknown",
+                "experimental_market_signal_sources",
+                "monitoring_reason_unverified",
+                "provider_watchlist_not_official",
+                "security_exchange_unverified",
+                "security_type_unverified",
+                "no_qualified_independent_fallback",
+            },
+        )
+
+        lowered_result = raw_result.lower()
+        for secret_marker in (
+            b"api_key",
+            b"authorization",
+            b"cookie",
+            b"password",
+            b"localhost",
+            b"127.0.0.1",
+        ):
+            with self.subTest(secret_marker=secret_marker):
+                self.assertNotIn(secret_marker, lowered_result)
+
+        case = case_path.read_text(encoding="utf-8")
+        for required_text in (
+            "不是离线夹具",
+            "实际运行生成",
+            "`succeeded`",
+            "`complete`",
+            "`limited`",
+            "22 条",
+            "Agent 推断",
+            "provider_watchlist_not_official",
+            "不是评级、目标价或投资行动建议",
+        ):
+            with self.subTest(required_text=required_text):
+                self.assertIn(required_text, case)
 
     def test_historical_v020_release_audit_is_linked_from_both_readmes(self) -> None:
         audit_relative_path = "docs/research/history/v0.2.0-release-audit-2026-08-03.md"
@@ -914,15 +1070,38 @@ class SkillDistributionTests(unittest.TestCase):
         )
         indexed_names = re.findall(r"\(requests/([^)]+\.json)\)", examples_readme)
 
-        self.assertEqual(len(request_names), 42)
-        self.assertEqual(len(indexed_names), 42)
+        self.assertEqual(len(request_names), 43)
+        self.assertEqual(len(indexed_names), 43)
         self.assertEqual(set(indexed_names), request_names)
         self.assertEqual(len(indexed_names), len(set(indexed_names)))
         self.assertIn("案例标题、问题和解释均使用中文", examples_readme)
 
+        task_types = {
+            json.loads(path.read_text(encoding="utf-8"))["task_type"]
+            for path in Path(REPOSITORY_ROOT, "examples", "requests").glob("*.json")
+        }
+        self.assertEqual(
+            task_types,
+            {
+                "security_identity",
+                "market_trend",
+                "etf_market",
+                "etf_options",
+                "intraday_market_signal",
+                "intraday_replay",
+                "security_valuation",
+                "valuation_compare",
+                "research_content",
+                "capital_events",
+                "market_signals",
+                "research_workflow",
+            },
+        )
+
         for case_path in Path(REPOSITORY_ROOT, "examples").glob("*.md"):
             with self.subTest(case=case_path.name):
                 case = case_path.read_text(encoding="utf-8")
+                self.assertNotIn("mootdx==", case)
                 headings = re.findall(r"^#{1,3} (.+)$", case, re.MULTILINE)
                 self.assertTrue(headings)
                 self.assertTrue(
@@ -943,8 +1122,8 @@ class SkillDistributionTests(unittest.TestCase):
         english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("## 分析边界", readme)
-        self.assertIn("## Analysis boundary", english_readme)
+        self.assertIn("analysis-boundary.md", readme)
+        self.assertIn("analysis-boundary.md", english_readme)
 
         for demo_name in ("bluefocus.md", "industrial-fulian.md"):
             with self.subTest(demo=demo_name):
@@ -990,22 +1169,20 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("### Preset research plans", english)
         self.assertNotIn("| 四套研究流程 |", chinese)
         self.assertNotIn("| Four research workflows |", english)
-        self.assertIn("`run --request` 是唯一受支持的公共调用形式", chinese)
-        self.assertIn(
-            "`run --request` is the only supported public invocation", english
-        )
+        self.assertIn("唯一受支持的公共调用形式", chinese)
+        self.assertIn("the only supported public invocation", english)
 
     def test_entry_prevents_the_agent_from_inventing_absent_result_fields(
         self,
     ) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("Confirm the returned `task_type` and scope", entry)
+        self.assertIn("Confirm the returned `task_type` and request scope", entry)
         self.assertIn(
-            "no absent result field or wider capability has been inferred", entry
+            "No absent result field or wider capability may be inferred", entry
         )
         self.assertIn(
-            "Never invent a metric status or field that is absent from the CLI JSON",
+            "Never invent a metric status or field absent from the CLI JSON",
             entry,
         )
 
@@ -1033,21 +1210,21 @@ class SkillDistributionTests(unittest.TestCase):
         self,
     ) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
-        cli_contract = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
-            encoding="utf-8"
-        )
+        intraday_contract = Path(
+            SKILL_ROOT, "references", "intraday-contracts.md"
+        ).read_text(encoding="utf-8")
         boundary = Path(SKILL_ROOT, "references", "analysis-boundary.md").read_text(
             encoding="utf-8"
         )
 
-        for document in (entry, cli_contract, boundary):
+        for document in (entry, intraday_contract, boundary):
             with self.subTest(document=document[:24]):
                 self.assertIn("intraday_market_signal", document)
                 self.assertIn("limited", document)
                 self.assertIn("blocked", document)
 
-        self.assertIn("current China Standard Time trading date", cli_contract)
-        self.assertIn("canonical SSE/SZSE A-share", cli_contract)
+        self.assertIn("current China Standard Time trading date", intraday_contract)
+        self.assertIn("canonical SSE/SZSE A-share", intraday_contract)
         self.assertIn("Agent analysis", boundary)
         self.assertIn("research judgment", boundary)
 
@@ -1058,6 +1235,9 @@ class SkillDistributionTests(unittest.TestCase):
         boundary = Path(SKILL_ROOT, "references", "analysis-boundary.md").read_text(
             encoding="utf-8"
         )
+        intraday_contract = Path(
+            SKILL_ROOT, "references", "intraday-contracts.md"
+        ).read_text(encoding="utf-8")
         case = Path(
             REPOSITORY_ROOT, "examples", "intraday-replay-prediction.md"
         ).read_text(encoding="utf-8")
@@ -1107,8 +1287,8 @@ class SkillDistributionTests(unittest.TestCase):
             with self.subTest(required_gate=required_gate):
                 self.assertIn(required_gate, boundary)
 
-        self.assertIn("does not add prediction fields", entry)
-        self.assertIn("historical query or replay request", entry)
+        self.assertIn("does not add prediction fields", intraday_contract)
+        self.assertIn("historical query or replay request", intraday_contract)
         self.assertIn("optional context", boundary)
         self.assertIn("exact probabilities", boundary)
         self.assertIn("position sizing", boundary)
@@ -1202,16 +1382,21 @@ class SkillDistributionTests(unittest.TestCase):
         chinese = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
         english = Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8")
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
-        contract = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
+        cli_contract = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
             encoding="utf-8"
         )
+        intraday_contract = Path(
+            SKILL_ROOT, "references", "intraday-contracts.md"
+        ).read_text(encoding="utf-8")
 
-        for document in (chinese, english, entry, contract):
+        for document in (chinese, english, intraday_contract):
             with self.subTest(document=document[:32]):
                 self.assertIn("intraday_replay", document)
-                self.assertIn("mootdx==0.11.7", document)
                 self.assertIn("limited", document)
                 self.assertIn("blocked", document)
+        self.assertIn("mootdx==0.11.7", intraday_contract)
+        for document in (chinese, english, entry, cli_contract):
+            with self.subTest(document=document[:32]):
                 self.assertIn("--output", document)
 
         for probe_text in (
@@ -1222,17 +1407,16 @@ class SkillDistributionTests(unittest.TestCase):
             "production",
         ):
             with self.subTest(probe_text=probe_text):
-                self.assertIn(probe_text, english)
-                self.assertIn(probe_text, contract)
+                self.assertIn(probe_text, intraday_contract)
 
         for term in (
-            "A complete intraday trading-day series",
-            "intraday replay summary",
-            "intraday replay analysis",
-            "evidence-constrained scenario prediction",
+            "current-session snapshot",
+            "completed-session minute series",
+            "deterministic replay summary",
+            "future scenarios",
         ):
             with self.subTest(term=term):
-                self.assertIn(term, entry)
+                self.assertIn(term, intraday_contract)
 
     def test_installation_docs_default_locked_dependency_and_separate_health(
         self,
@@ -1240,34 +1424,87 @@ class SkillDistributionTests(unittest.TestCase):
         for readme_name in ("README.md", "README_en.md"):
             readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
             with self.subTest(readme=readme_name):
-                self.assertIn("mootdx==0.11.7", readme)
+                self.assertIn("requirements.lock", readme)
+                self.assertIn("<skill-root>/scripts/install.py", readme)
                 self.assertIn("scripts/install.py", readme)
                 self.assertIn("installation_health.py", readme)
                 self.assertIn("installation_incomplete", readme)
                 self.assertIn("intraday", readme)
-                self.assertIn("pip check", readme)
+                self.assertIn("Agent", readme)
+                self.assertNotIn("mootdx==", readme)
+                self.assertNotIn("Codex", readme)
+                self.assertNotIn(".agents/skills", readme)
                 if readme_name == "README.md":
-                    self.assertIn("最小实际运行闭包", readme)
                     self.assertIn("silent source switch", readme)
                 else:
-                    self.assertIn("minimum actual runtime closure", readme)
                     self.assertIn("never triggers a silent switch", readme)
+
+        cli_contract = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("upstream `pip check`", cli_contract)
 
         chinese = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
         english = Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8")
         for readme in (chinese, english):
-            self.assertIn("bluefocus-f10.json", readme)
             self.assertIn("installation_incomplete", readme)
             self.assertNotIn("optional `mootdx` dependency", readme)
+
+        examples_index = Path(REPOSITORY_ROOT, "examples", "README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("bluefocus-f10.json", examples_index)
 
     def test_skill_entry_remains_a_concise_router(self) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertLess(len(entry.split()), 1500)
+        self.assertLess(len(entry.split()), 900)
         self.assertIn("## Task routing", entry)
-        self.assertEqual(entry.count("## Intraday"), 1)
+        self.assertNotIn("## Intraday interpretation boundary", entry)
         self.assertNotIn("`parameters.market_heat_period` is `hour` by default", entry)
         self.assertNotIn("Gamma/Theta/Vega use unverified provider-native units", entry)
+        for reference_name in (
+            "market-contracts.md",
+            "intraday-contracts.md",
+            "research-contracts.md",
+            "workflow-contracts.md",
+            "persistence-contract.md",
+        ):
+            self.assertIn(f"references/{reference_name}", entry)
+
+    def test_installed_request_assets_cover_every_public_task_type(self) -> None:
+        entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
+        asset_paths = sorted(Path(SKILL_ROOT, "assets", "requests").glob("*.json"))
+
+        self.assertEqual(len(asset_paths), 13)
+        task_types: set[str] = set()
+        for asset_path in asset_paths:
+            with self.subTest(asset=asset_path.name):
+                content = asset_path.read_text(encoding="utf-8")
+                request = json.loads(content)
+                self.assertEqual(request["schema_version"], "1.0")
+                self.assertIn("REPLACE_", content)
+                self.assertIn(f"assets/requests/{asset_path.name}", entry)
+                task_types.add(request["task_type"])
+
+        self.assertEqual(
+            task_types,
+            {
+                "security_identity",
+                "market_trend",
+                "etf_market",
+                "etf_options",
+                "intraday_market_signal",
+                "intraday_replay",
+                "security_valuation",
+                "valuation_compare",
+                "research_content",
+                "capital_events",
+                "market_signals",
+                "research_workflow",
+            },
+        )
+        self.assertIn("no `REPLACE_*` value remains", entry)
 
     def test_cli_reference_explains_platform_neutral_invocation(self) -> None:
         reference = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
@@ -1285,7 +1522,7 @@ class SkillDistributionTests(unittest.TestCase):
                 self.assertIn(instruction, reference)
 
     def test_cli_reference_keeps_intraday_probe_out_of_normal_ci(self) -> None:
-        reference = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
+        reference = Path(SKILL_ROOT, "references", "intraday-contracts.md").read_text(
             encoding="utf-8"
         )
 

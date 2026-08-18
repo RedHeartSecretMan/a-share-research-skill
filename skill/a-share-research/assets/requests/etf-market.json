@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "task_type": "etf_market",
+  "subjects": [{"clue": "REPLACE_SSE_ETF_CODE"}],
+  "as_of": "REPLACE_YYYY-MM-DD",
+  "window": null,
+  "parameters": {},
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": true
+  }
+}

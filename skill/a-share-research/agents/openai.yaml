@@ -1,4 +1,4 @@
 interface:
   display_name: "A股研究技能"
-  short_description: "Auditable A-share research with evidence-backed analysis"
-  default_prompt: "Use $a-share-research to research an SSE or SZSE security as of an explicit date, preserve evidence limits, and provide an evidence-backed Agent judgment when the question calls for interpretation and the result is not blocked."
+  short_description: "以身份、时点和证据谱系约束的 A 股研究"
+  default_prompt: "Use $a-share-research to route my A-share or market question to the narrowest supported task, resolve dates explicitly, and present only evidence-backed results and limitations."

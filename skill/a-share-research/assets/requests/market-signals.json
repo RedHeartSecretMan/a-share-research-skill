@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "task_type": "market_signals",
+  "subjects": [],
+  "as_of": "REPLACE_YYYY-MM-DD",
+  "window": {
+    "observed_from": "REPLACE_YYYY-MM-DD",
+    "observed_to": "REPLACE_YYYY-MM-DD"
+  },
+  "parameters": {
+    "signal_types": ["REPLACE_DOCUMENTED_SIGNAL_TYPE"],
+    "limit": "REPLACE_INTEGER_1_TO_100"
+  },
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": true
+  }
+}

@@ -11,7 +11,7 @@
 <python> skill/a-share-research/scripts/entrypoint.py run --request <已更新日期的请求.json>
 ```
 
-`<python>` 必须是 Python 3.12 或更高版本。默认安装会把锁定的 `mootdx==0.11.7` 安装到 Skill 自身 `.runtime`；安装健康与来源可用性是两件不同的事。
+`<python>` 必须是 Python 3.12 或更高版本。默认安装器按 `requirements.lock` 配置 Skill 自身的 `.runtime` 并运行 `installation_health.py`；安装健康与来源可用性是两件不同的事。
 
 ## 请求契约
 

@@ -1,6 +1,6 @@
 # 研究与发布资料
 
-本目录以 v0.3.0 为当前版本。现行文件统一采用 `v0.3.0-<主题>` 命名；带日期的历史现场记录采用 `v<版本>-<主题>-YYYY-MM-DD.md`，并集中放在 [`history/`](history/) 中。
+本目录以 v0.3.0 为当前版本。现行文件统一采用 `v0.3.0-<主题>.<扩展名>` 命名；只有需要时间锚点的审计文件追加 `-YYYY-MM-DD`。带日期的历史现场记录采用 `v<版本>-<主题>-YYYY-MM-DD.md`，并集中放在 [`history/`](history/) 中。仓库级阅读顺序见 [`../README.md`](../README.md)。
 
 ## v0.3.0 当前资料
 
@@ -13,6 +13,8 @@
 | [`v0.3.0-operation-release-matrix.md`](v0.3.0-operation-release-matrix.md) | 证据口径、解释边界和维护者复验命令 | 人工维护 |
 
 JSON 证据是版本化发布产物，不是使用案例，也不得手工调整字段、计数或摘要。运行普通研究请求请从 [`examples/README.md`](../../examples/README.md) 选择请求文件。
+
+正式 GitHub Release 为 [`v0.3.0`](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.3.0)。发布提交、annotated tag 对象、冻结运行时候选和联网证据时点分别记录在发布审计中，不以同一个 SHA 代替四种事实。
 
 ## 命令约定
 

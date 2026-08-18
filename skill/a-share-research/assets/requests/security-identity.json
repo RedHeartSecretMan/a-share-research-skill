@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "task_type": "security_identity",
+  "subjects": [{"clue": "REPLACE_SECURITY_CLUE"}],
+  "as_of": "REPLACE_YYYY-MM-DD",
+  "window": null,
+  "parameters": {},
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": true
+  }
+}

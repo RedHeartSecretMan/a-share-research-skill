@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "task_type": "market_trend",
+  "subjects": [{"clue": "REPLACE_SECURITY_CLUE"}],
+  "as_of": "REPLACE_YYYY-MM-DD",
+  "window": {"trading_days": "REPLACE_INTEGER_2_TO_250"},
+  "parameters": {"adjustment": "REPLACE_unadjusted_OR_forward_adjusted"},
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": true
+  }
+}

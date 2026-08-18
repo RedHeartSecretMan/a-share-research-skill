@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "task_type": "etf_options",
+  "subjects": [{"clue": "REPLACE_510050_510300_510500_OR_588000"}],
+  "as_of": "REPLACE_YYYY-MM-DD",
+  "window": null,
+  "parameters": {
+    "view": "REPLACE_atm_OR_chain",
+    "expiry": {"mode": "nearest_unexpired"},
+    "quote_mode": "REPLACE_latest_OR_latest_completed"
+  },
+  "source_policy": {
+    "allow_experimental": true,
+    "allow_credentials": false,
+    "allow_fallback": false
+  }
+}

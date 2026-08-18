@@ -6,360 +6,148 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
-[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/tree/v0.3.0)
+[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.3.0)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[English](README_en.md) · [v0.3.0](#v030-发布状态) · [安装](#安装) · [常见用法](#常见用法) · [案例 Demo](#案例-demo) · [能力边界](#能力边界) · [开发验证](#开发验证)
+[English](README_en.md) · [快速开始](#快速开始) · [能力](#它能做什么) · [中文案例](examples/README.md) · [文档](docs/README.md) · [v0.3.0 发布审计](docs/research/v0.3.0-release-audit-2026-08-18.md)
 
 </div>
 
-`a-share-research-skill` 是项目仓库名，可安装 Skill 名为 `$a-share-research`。它以 evidence-first 的方式处理 A 股研究：确定性 Python CLI 负责证券身份、研究时点、证据校验和估值计算，再由 Agent 把版本化 JSON 呈现为可核验的研究材料。
+`a-share-research-skill` 是项目仓库名，可安装的 Skill 名为 `$a-share-research`。它把自然语言问题路由到确定性 Python CLI，以版本化 JSON 返回证券身份、研究时点、来源观测、计算谱系、冲突、覆盖和限制，再由 Agent 形成可核验的中文研究材料。
 
-项目不把“接口返回了数据”当成“事实已经可信”，而是在证券身份、研究时点、来源、口径和假设明确后，提供可核验的研究分析。
+当前稳定版本是 **v0.3.0**。它提供 12 类窄 ResearchTask、6 个固定研究方案和唯一公共入口 `run --request`；现有 GitHub Release 与标签均固定在 v0.3.0 发布树上。
 
-## v0.3.0 发布状态
+## 快速开始
 
-v0.3.0 已闭合计划驱动研究运行时的实现与发布证据：一个公共 `run --request` 入口承载 12 类版本化 ResearchTask、6 个固定研究方案和 42 份可执行请求示例。综合单标的与综合市场方案复用同一批窄任务；局部失败、空集、冲突和不支持能力都保留在统一结果中，不会被顶层摘要抹平。
+### 1. 获取并安装
 
-**v0.3.0 是当前稳定发布版本。** `v0.3.0` 标签固定本次代码、Skill、文档、示例和脱敏发布证据；历史 v0.0.1–v0.2.0 的记录继续保留在各自标签与发布页中。安装和复现应优先使用不可移动的 `v0.3.0` 标签，而不是随开发继续前移的 `main`。
-
-冻结候选的最终 attestation 于 `2026-08-18T11:24:17+08:00` 完成：27/27 个发布请求画像形成有效公共计划，44/44 个正式来源 operation 均被实际尝试；正式 operation 去向、默认安装加载和 active-request 字段去向分别闭合为 44/44、44/44 和 740/740。这里的“已尝试”不等于“来源成功返回数据”——最终记录仍如实包含 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable`。
-
-- [v0.3.0 发布审计](docs/research/v0.3.0-release-audit-2026-08-18.md)
-- [最终脱敏 live evidence](docs/research/v0.3.0-release-probe-evidence.json)
-- [可复现的 operation release matrix](docs/research/v0.3.0-operation-release-matrix.json)
-- [矩阵口径与维护者复验说明](docs/research/v0.3.0-operation-release-matrix.md)
-
-## 为什么需要它
-
-普通取数工具关注“能拿到多少数据”；本项目关注“这个数字能否进入研究结论”：
-
-- **身份明确**：证券与发行主体分离；名称、简称和裸代码只是线索，不能静默猜测交易所。
-- **时间明确**：每次研究锚定北京时间日期，区分证据时点、公开时点和获取时间，拒绝前视信息。
-- **来源明确**：事实主张必须关联来源定位和证据项；格式完整不等于来源已核验。
-- **计算可复算**：总市值、PE TTM 和 PB MRQ 使用 Decimal 与显式口径形成完整计算谱系。
-- **失败要诚实**：歧义、冲突、陈旧、错证券或关键证据缺失时返回 `limited` / `blocked`，不补猜数字。
-
-## 能力
-
-盘中行情快照只记录当前北京时间交易日的单一观测；完整交易日分时序列是已结束交易日内连续分钟的未复权实际成交记录；分时复盘摘要是从该序列复算的结果；分时复盘分析是 Agent 对已完成路径的解释；证据约束的情景预测只在用户明确请求未来判断且证据门槛满足时形成。它们不是同一个能力，也不共享未经核验的字段。
-
-| 能力 | 输入 | 输出与边界 |
-| --- | --- | --- |
-| 证券身份解析 | 名称、简称或代码线索 + 明确日期 | 交叉核验 SSE/SZSE 与巨潮观测；歧义、冲突和 BSE 输入失败关闭 |
-| 最近完成收盘价 | 规范的 `SSE:code` / `SZSE:code` + 明确日期 | 交叉核验交易所日线与腾讯观测，保留交易日、价格口径和冲突 |
-| 最近 N 日走势 | A 股线索 + 2–250 个交易日 + 未复权/前复权口径 | 双源 OHLCV、累计涨跌、最大回撤、年化波动、涨跌天数、量能变化与公司行动说明 |
-| 盘中行情快照 | 当前北京时间交易日 + 一只规范 `SSE:code` / `SZSE:code` A 股 | 通达信与腾讯实验操作交叉核验的单次盘中快照；保留会话、价格类型、来源时点、单位、冲突与 `limited` / `blocked` 限制 |
-| 完整交易日分时复盘 | 一只规范 SSE/SZSE A 股 + 一个明确已完成交易日 | 返回分钟记录、交易阶段、coverage、日级边界、分时复盘摘要、证据谱系和字段不可用原因；实验来源最高 `limited` |
-| ETF 行情 | 上交所 ETF 六位代码 + 明确日期 | 上交所 ETF 身份和快照、腾讯价格交叉、成交量手/股舍入差说明 |
-| ETF 期权 | 510050 / 510300 / 510500 / 588000 + 单一观测日 + ATM/期权链、到期日与行情时点模式 | 分开保留标准 `M` 与调整 `A` 系列、认购/认沽报价、并列 ATM、供应商报告 Greeks/IV、四态 coverage、来源时点与限制 |
-| 自动单票估值 | A 股线索 + 已确认证券类别数 + 当前北京时间日期 + 情景目标 PE | 保留三表完整数值行和季度序列，取得当前总股本快照与一致预期，计算总市值、PE TTM、PB MRQ、前向 PE、预测增长、PEG 与 PE 消化时间 |
-| 同口径批量估值 | 2–10 个不同 A 股线索 + 共同日期/目标 PE | 按输入顺序保留全部标的；统一价格与指标口径，显式呈现不可计算、无估值意义及阻断行 |
-| 研究内容检索 | 主题/行业或单只 A 股 + 发表时间窗 + 材料类型 | 个股/行业研报、一致预期、F10 上市公司资料、新闻、巨潮/上交所/深交所公告、市场快讯和互动易；保留观点角色、发布时间、获取时间、文档身份与定位 |
-| 资金、筹码与公司事件 | 单只 A 股或全市场/板块范围 + 观测时间窗 + 数据类型 | 北向披露缺口、个股/板块资金流、个股及全市场龙虎榜、未来 90 日解禁、两融、大宗、股东户数和分红送转；逐项保留周期、单位、方向与市场范围 |
-| 市场题材与交易信号 | 单只 A 股线索或全市场范围 + 明确观测日 + 信号类型 | 强势题材、个股板块归属、行业轮动、涨跌停池、重点监控、严重异常波动、规范身份交叉和市场热度；保留规则、归因来源、四态 coverage、冲突与限制 |
-
-实验来源可以提供观测并暴露冲突，但尚未完成操作级资格审查，不能单独让事实主张达到 `supported`。
-
-这里的 **F10 资料**，是中国证券行情软件通常通过“F10”入口汇总展示的上市公司材料。v0.3.0 可检索最新提示、公司概况、财务分析、股东研究、股本结构、资本运作、业内点评、行业分析和公司大事。它们是供应商整理的文本材料，不是交易所统一数据标准，也不等同于公司法定披露或已经核验的公司事实。
-
-## 工作方式
-
-```mermaid
-flowchart LR
-    A["自然语言研究问题"] --> B["SKILL.md<br/>解析意图与北京时间日期"]
-    B --> C["确定性 Python CLI"]
-    D["实验来源观测"] --> C
-    C --> F["版本化 JSON<br/>证据、计算、冲突、限制"]
-    F --> G["Agent 呈现研究材料"]
-```
-
-研究结果使用三个整体状态：
-
-- `supported`：关键事实主张均有适用且完成来源核验的证据。
-- `limited`：仍能回答核心问题，但存在必须披露的非关键缺口、冲突或来源限制。
-- `blocked`：身份或关键证据不足，必须停止实质结论。
-
-## 分析边界
-
-CLI 负责证据、确定性计算、状态和限制；Agent 可以在未被整体阻断且问题需要解释时给出研究判断、风险、失效条件、条件触发位和后续研究建议。身份核对等直接证据问题不附加无关判断，整体 `blocked` 时只说明缺口与继续研究所需证据。
-
-本节仅作用户导览。研究判断、条件触发位、外部署名观点和投资行动建议的规范执行边界，以安装产物中的 [`references/analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md) 为准；最终投资决策由研究者作出。
-
-## 安装
-
-唯一安装产物是 [`skill/a-share-research`](skill/a-share-research/)。克隆仓库后，将整个目录复制到兼容 Agent 的 Skill 目录；不要只复制 `SKILL.md`。
-
-从正式 `v0.3.0` 标签取得当前稳定版本：
+克隆仓库后，把完整的 `skill/a-share-research/` 目录复制到所用 Agent 支持的 Skills 目录；复制后的目录就是 `<skill-root>`。不同 Agent 的发现路径和启用方式可能不同，应以对应平台文档为准。如果目标目录已存在，请先检查内容并有意识地升级，不要直接覆盖未知文件。
 
 ```text
 git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
-
-<skills-directory>/a-share-research/
-├── SKILL.md
-├── agents/openai.yaml
-├── requirements.lock
-├── references/
-└── scripts/
-```
-
-核心运行时需要 Python 3.12 或更高版本。下文以 `<python>` 表示已经确认版本不低于 3.12 的解释器：Windows 通常使用 `py -3.12`，macOS 和 Linux 优先使用 `python3.12`；只有在 `python3 --version` 已确认满足要求时才使用 `python3`。复制完整目录后执行一次标准安装步骤；安装器从随 Skill 交付的锁定清单把核心运行依赖安装到该副本自己的 `.runtime`，无需按任务补包，并在结束前自动执行依赖加载与 operation 健康检查：
-
-```text
 <python> <skill-root>/scripts/install.py
 ```
 
-成功安装以退出码 0 和 JSON `status: "complete"` 结束。也可随时执行 `<python> <skill-root>/scripts/installation_health.py` 复查；依赖缺失、版本不符或无法加载时返回非零退出码和 `status: "installation_incomplete"`。`mootdx==0.11.7` 是当前唯一直接的核心正式 operation 依赖；`requirements.lock` 精确锁定 F10、盘中快照和分时复盘三项正式 operations 的最小实际运行闭包以及各平台适用项，而不是 `mootdx` 未发布或 lazy utility/CLI 的全部 declared closure。安装器使用该完整最小闭包且不在安装时解析额外依赖；上游包的通用 `pip check` 语义不能代替本 Skill 的正式 operation 安装健康。安装健康只证明 artifact-local 软件文件、版本和 module/operation 可加载，不探测或承诺来源可访问性、凭据、付费权限或 evidence adoption 资格；这些事实继续由每次请求的来源策略和研究结果表达。
+`<python>` 必须是 Python 3.12 或更高版本：macOS/Linux 通常为 `python3.12`，Windows 通常为 `py -3.12`。安装器根据 [`requirements.lock`](skill/a-share-research/requirements.lock) 安装运行依赖，并自动执行 `installation_health.py`。成功安装以退出码 0 和 `status: "complete"` 为准；`installation_incomplete` 表示软件安装问题，不代表某个数据来源当天可用。
 
-`mootdx` 只为已发布的 F10、`intraday_market_signal` 与 `intraday_replay` operations 进入默认安装；它提供的其他候选行情接口不会因“同属一个库”进入默认来源、依赖范围或 fallback。每个来源 operation 仍必须分别完成身份、时点、单位、失败语义和许可资格审查；来源不足时失败关闭，不进行 silent source switch。完整调用约定见 [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md)。
+也可以把完整的 [`skill/a-share-research`](skill/a-share-research/) 复制到其他兼容 Agent 的 Skills 目录。不要只复制 `SKILL.md`；`agents/`、`assets/`、`references/`、`scripts/` 和锁定依赖共同构成安装产物。来源不可访问时会在研究结果中失败关闭，绝不触发 silent source switch。
 
-安装完成后，可在仓库根目录运行一个版本化示例验证公共入口：
+### 2. 运行一个请求
 
-```text
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-single-security.json
-```
-
-## CLI
-
-所有能力统一通过稳定的研究任务 Interface 调用：
+仓库中的请求模板已固定到 v0.3.0 发布日期。先复制模板；凡是“当前”“今天”或盘中任务，都要把 `as_of` 改成实际的北京时间日期。
 
 ```text
-<python> <skill-root>/scripts/entrypoint.py run --request <research-task.json>
+<python> skill/a-share-research/scripts/entrypoint.py run \
+  --request examples/requests/security-identity.json
 ```
 
-`research-task.json` 是结构化任务，不是自然语言文本，包含版本、任务类型、标的、研究日期、窗口、参数和来源策略。未知任务、策略不允许的来源或缺失的可选 Adapter 依赖会返回明确的 `blocked` 结果。
+安装后唯一受支持的公共调用形式是：
 
-`run --request` 是唯一受支持的公共调用形式；调用者不需要了解来源端点、内部模块或历史子命令。`scripts/entrypoint.py` 是 Skill 唯一的公共运行入口，其他 Python 模块均为内部实现。CLI 不处理自然语言、不调用模型。`stdout` 只输出版本化 JSON，`stderr` 只输出诊断；有效的 `limited` 或 `blocked` 研究结果仍以零退出码返回。
-
-只有调用者明确传入 `--output <file>` 时才保存规范化 ResearchResult。未配置下述研究证据存储时，运行时仍保持默认无状态：不创建结果文件、隐式缓存、数据库、锁文件、用户配置或全局 provider 配置。
-
-需要在多次请求之间复用合格的规范化观测时，可在 `source_policy` 中显式增加严格的 `evidence_store` 对象；`path` 必须是绝对路径，父目录必须已经存在且不能经过符号链接，`mode` 只能是 `read_write` 或 `delete`：
-
-```json
-{
-  "allow_experimental": true,
-  "allow_credentials": false,
-  "allow_fallback": true,
-  "evidence_store": {
-    "mode": "read_write",
-    "path": "/absolute/path/to/research-evidence.json"
-  }
-}
+```text
+<python> <skill-root>/scripts/entrypoint.py run --request <research-task.json> [--output <file>]
 ```
 
-当前只有 `market_trend`、`research_content` 和 `security_valuation` 接受这项策略，而且只复用 operation 明确许可的历史日线、公告、研报和已发布财务报表。新闻、快讯、互动问答、F10、共识资料、当前估值快照和盘中观测不会从存储冒充当前事实。命中记录仍要重验请求范围、证券身份、owner、来源版本、研究时点、新鲜度和字段去向；存储路径、凭据和完整供应商原始响应不会进入公共结果。精确的许可清单、平台安全条件、审计字段和删除语义以 [`references/cli-contract.md`](skill/a-share-research/references/cli-contract.md) 为准。
+CLI 不接受自然语言，也不调用模型。`stdout` 只输出一个版本化 JSON；`stderr` 只输出诊断。有效的 `supported`、`limited` 或 `blocked` 研究结果都可能以退出码 0 返回，协议、I/O 或内部错误才使用非零退出码。
 
-盘中快照使用 `task_type: "intraday_market_signal"`，`subjects` 必须恰好包含一个已经规范化的 `SSE:<code>` 或 `SZSE:<code>` A 股，`as_of` 必须是当前北京时间交易日，`window` 为 `null`，并显式设置 `source_policy.allow_experimental: true`。`limited` 表示快照仍可回答但实验来源资格或其他限制必须披露；`blocked` 表示身份、会话、时点或核心来源证据不足。Agent 只能在非阻断结果上依据返回字段形成标注清楚的分析，不能把结果当作交易级行情或投资行动建议。
+## 它能做什么
 
-## 分时复盘情景预测（Agent 层）
+| 研究问题 | 直接任务 | v0.3.0 边界 |
+| --- | --- | --- |
+| 证券身份 | `security_identity` | 名称、简称和裸代码只是线索；歧义或交易所冲突失败关闭 |
+| 行情走势 | `market_trend` | 2–250 个完整交易日，未复权或前复权，保留双源 OHLCV 与冲突 |
+| ETF 与 ETF 期权 | `etf_market`、`etf_options` | 上交所 ETF；期权覆盖 510050、510300、510500、588000 |
+| 当前盘中快照 | `intraday_market_signal` | 仅一只规范 SSE/SZSE A 股和当前北京时间交易日；不是连续行情 |
+| 完整交易日分时复盘 | `intraday_replay` | 一只规范 A 股、一个明确已完成交易日；保留分钟覆盖与日级边界 |
+| 估值与比较 | `security_valuation`、`valuation_compare` | 先证明发行主体证券类别范围，再计算或保留不可计算状态 |
+| 研究材料 | `research_content` | 研报、一致预期、F10、新闻、公告、快讯和互动问答 |
+| 资金与事件 | `capital_events` | 资金流、龙虎榜、解禁、两融、大宗、股东户数和分红 |
+| 市场信号 | `market_signals` | 题材、板块、轮动、涨跌停、监控、异常和热度 |
+| 固定研究方案 | `research_workflow` | 编排既有窄任务，不开放自定义步骤或依赖图 |
 
-`intraday_replay` 的确定性 JSON 只包含来源事实、覆盖裁决和计算，不添加预测字段、方向判断或 Agent 观点。历史查询或复盘请求不等于预测请求；只有用户明确提出未来判断时，安装后的 Skill 才能在呈现复盘证据后形成证据约束的情景预测。最低门槛是规范身份、非阻断且收盘阶段可用的复盘、截至复盘日连续 20 个完整日线交易日、证券/日期/未复权收盘口径一致且无未解决核心冲突。覆盖不可判定、缺收盘、缺整个上午或下午、日线不完整、确认全天停牌时拒绝预测并列出所需证据；边界明确的部分覆盖最多为 `limited`，必须披露缺口。下一交易日与未来 5 个交易日分别给出延续/震荡/反转主情景及上下行替代情景，逐项写明依据、反向证据、假设、触发、失效和不确定性；缺少公告、新闻、资金流等可选上下文时，只谈价格行为，不虚构原因。没有真实样本外验证模型不写精确概率，不生成评级、目标价或投资行动建议。
+实验来源可以贡献观测并暴露冲突，但不能独自把结论提升为 `supported`。F10 是供应商整理的上市公司资料入口，不等同于交易所法定披露；供应商报告的期权 Greeks/IV 也不是项目本地模型或交易所计算值。
 
 ### 预置研究方案
 
-`research_workflow` 提供六个固定、版本化的请求方案。它们是常见研究问题的便捷编排，不是独立的数据能力，也不开放自定义步骤或依赖图：
-
-| 方案 ID | 适用问题 | 编排内容 |
+| 方案 ID | 用途 | 关键边界 |
 | --- | --- | --- |
-| `single_security_research` | 单只证券综合研究 | 身份 → 未复权走势 → 估值 → 个股材料 → 资金与公司事件 → 未来解禁 → 板块归属 |
-| `market_overview_research` | 无标的综合市场研究 | 行业板块广度与涨跌停池 → 题材、资金与快讯增强 |
-| `single_security_valuation` | 单只证券估值 | 调用现有 `security_valuation` 任务 |
-| `valuation_comparison` | 多只证券同口径比较 | 调用现有 `valuation_compare` 任务并保留全部行 |
-| `theme_report_research` | 主题研报检索 | 调用现有 `research_content` 任务 |
-| `new_security_research` | 新标的首次系统研究 | 身份 → 机构覆盖 → 估值 → 板块归属 → 资金流 → 龙虎榜 → 解禁 → 两融 |
+| `single_security_research` | 综合单标的研究 | `standard` 执行核心与增强；`fast` 只保证身份和走势；仅支持 `long_history`、`large_materials` 深化 |
+| `market_overview_research` | 无标的综合市场研究 | 2 项实际核心、8 项标准增强和 5 项显式不支持能力；不以单证券或单指数代理缺口 |
+| `single_security_valuation` | 单票估值 | 复用 `security_valuation` |
+| `valuation_comparison` | 多票同口径比较 | 复用 `valuation_compare`，不丢弃受阻标的 |
+| `theme_report_research` | 主题研报检索 | 复用 `research_content` |
+| `new_security_research` | 新标的系统研究 | 身份是唯一门禁，其他局部失败不停止独立同级步骤 |
 
-每个方案都继承请求的研究日期和来源策略，并完整保留叶子任务的状态、证据、冲突、来源错误与限制。`single_security_research` 默认使用 `completeness_mode: "standard"`，尝试核心走势和全部标准增强；显式 `fast` 只保证身份与核心走势，并把估值、材料、资金事件、解禁和板块增强标为 `not_requested`。`deep_extensions` 只接受 `long_history` 与 `large_materials`：前者把同一个走势步骤加深到 250 个交易日，后者把同一个材料步骤扩大到 365 天且上限 100；`fast` 可与 `long_history` 组合，但拒绝与 `large_materials` 组合。已有的已完成交易日分钟历史必须显式请求 `intraday_replay`；五档盘口和逐笔端点不由该方案新增，仍属延期范围。
+`single_security_research` 的 `completeness_mode` 默认为 `standard`；`deep_extensions` 只接受 `long_history` 和 `large_materials`。`market_overview_research` 固定保留 `market_trading_session`、`major_broad_indices`、`whole_market_turnover`、`whole_market_margin` 和 `market_wide_intraday` 五项 v0.3.0 缺口，不伪造 observation、claim 或 calculation。
 
-`market_overview_research@1.0` 不接受标的。`standard` 精确声明 2 项实际核心、8 项标准增强和 5 项显式不支持能力：实际核心仅为行业板块逐行涨跌及上涨/下跌计数、涨跌停池；标准增强复用现有的行业题材轮动、热度、重点监控、严重异常波动、板块资金、全市场龙虎榜、北向披露和市场快讯任务。`fast` 只执行两项实际核心，全部标准增强固定为 `not_requested`。交易日/会话、主要宽基指数、全市场成交额、全市场两融和全市场盘中统一标为 `qualified_market_wide_owner_absent` / `v0.4.0_spec`；显式请求 `market_wide_intraday` 仍为 `unsupported` 且不编译子任务，未知、重复或旧形状输入失败关闭。该方案不会用单一指数或榜单代理缺失能力，也不新增 owner、endpoint、proxy 或 #60 五档逐笔路径。
+## 如何读取结果
 
-综合单标的和新标的方案都以身份为唯一门禁；其他局部来源或步骤失败不停止独立同级研究，但整体结果不会被描述成完整或已支撑。
+整体状态只有三种：
 
-## 常见用法
+- `supported`：关键主张具有适用且已完成用途采纳的证据。
+- `limited`：核心问题仍可回答，但非关键缺口、冲突或来源限制必须披露。
+- `blocked`：身份或关键证据不足，不能形成实质结论。
 
-安装后使用 `$a-share-research` 显式调用 Skill；你可以使用“今天”或“当前”，Agent 会先将其解析为具体的北京时间日期。以下用法与 v0.3.0 交付基线的实际任务契约一致。
+请同时查看 `plan`、`records`、`coverage`、`source_errors`、`conflicts`、`limitations`、`claims`、`calculations` 和 `briefs`，不要只读顶层状态。来源状态中的 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable` 含义不同；来源失败不能改写为零或“没有记录”。
 
-### 身份、行情与估值
+CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻断且问题确实需要解释时给出明确标注的研究判断、风险、失效条件和条件触发位；身份查询等直接证据问题不附加无关观点。详细边界见安装产物中的 [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md)。
 
-**找对证券**
+## 常见中文问题
 
-> 使用 `$a-share-research`，帮我确认“贵州茅台（600519）”对应哪个交易所和规范证券代码，并说明结果截至哪一天。
+> 使用 `$a-share-research`，确认“工业富联（601138）”的交易所和规范证券身份，并说明结果截至哪一天。
 
-**查询最近收盘价**
+> 使用 `$a-share-research`，研究蓝色光标最近 10 个完整交易日的未复权走势，列出证据、冲突、主要风险和失效条件。
 
-> 使用 `$a-share-research`，查询 `SSE:600519` 截至今天最近一个完整交易日的未复权收盘价，并告诉我数据来源、是否一致以及有哪些限制。
+> 使用 `$a-share-research`，按同一日期和口径比较工业富联、贵州茅台、宁德时代、美的集团和五粮液的估值，保留每只股票的缺失项与限制。
 
-**查询盘中行情快照**
+> 使用 `$a-share-research`，以 `single_security_research@1.0` 的 `standard` 模式完成工业富联综合研究；一个材料来源失败时继续不依赖它的步骤。
 
-> 使用 `$a-share-research`，查询 `SSE:600519` 今天当前时点的研究级盘中行情快照。保留交易会话、价格类型、两路来源观测时间、最新价、开高低、昨收语义、累计成交量和成交额、字段血缘、冲突与限制；如果当前不是适用盘中会话，或任一来源证据不足，返回 `blocked`，不要用最近收盘价替代。
+> 使用 `$a-share-research`，以 `market_overview_research@1.0` 研究今天的市场，保留行业板块、涨跌停池、题材、资金和快讯的局部状态，并明确列出 v0.3.0 不支持的市场能力。
 
-**研究最近走势**
-
-> 使用 `$a-share-research`，研究蓝色光标截至今天最近 10 个完整交易日的未复权走势，给出 OHLCV、累计涨跌、最大回撤、波动、涨跌天数和量能变化，并基于这些证据解释趋势、主要风险和判断失效条件。将结论标为 Agent 推断；如给出条件触发位，说明规则和研究周期，不要写成买卖指令。
-
-**查询 ETF 行情**
-
-> 使用 `$a-share-research`，查询 510050 上证 50ETF 截至今天的当前或最近完成行情，告诉我现价、涨跌幅、成交量、成交额、观测时间、两源是否一致以及限制。
-
-**研究 ETF 期权**
-
-> 使用 `$a-share-research`，查看 510050 上证 50ETF 最近未到期月份、最近完整交易时点的 ATM 认购和认沽，保留报价状态、买卖价、最新价、成交量、持仓量、供应商报告 Greeks/IV、单位、观测时间、来源与限制。
-
-> 使用 `$a-share-research`，查看 510300 沪深 300ETF 在指定到期日由来源观察到的期权链，使用最近完整行情；将标准 `M` 与调整 `A` 系列分开，并保留同距并列 ATM 和合约总量限制。
-
-> 使用 `$a-share-research`，查看 510500 中证 500ETF 最近未到期月份由来源观察到的期权链，允许最新日内行情，并明确交易时段是否完成以及覆盖是否完整。
-
-> 使用 `$a-share-research`，查看 588000 科创 50ETF 在指定到期日的 ATM 期权，允许最新日内行情；如果来源返回了其他 ETF、缺少合约或无可用报价，直接阻断而不是回退或补猜。
-
-这里的“供应商报告”表示 Delta、Gamma、Theta、Vega 和隐含波动率由来源直接给出，不是本项目本地运行 BSM，也不是交易所计算值。Gamma、Theta、Vega 的供应商原生单位尚未独立核验；IV 使用小数比例。当前来源不提供权威合约总量、完整合约单位或调整条款，也没有合格的独立 fallback，因此结果必须保留 coverage 与限制。
-
-**使用单票估值预置方案**
-
-> 使用 `$a-share-research`，研究工业富联截至今天的估值。先确认发行主体是否只有一个需要计价的普通股证券类别；以最近完整交易日未复权收盘价为准，计算总市值、PE TTM、PB MRQ、首个预测年度前向 PE、预测 EPS 增长、PEG，以及回落到 30 倍 PE 的理论消化时间；区分镜像财务观测、机构一致预期和情景假设，并基于明确基准解释估值压力、关键假设与重新评估条件。
-
-**使用批量估值对比预置方案**
-
-> 使用 `$a-share-research`，按同一个日期、未复权收盘价口径和 30 倍目标 PE，对比工业富联、贵州茅台、宁德时代、美的集团和五粮液。先确认每个发行主体的证券类别范围；保留每只股票的缺失项和限制，不要因为某项不可计算就删掉标的。
-
-### 研究方案与材料
-
-**使用主题研报预置方案**
-
-> 使用 `$a-share-research`，检索最近 90 天“人形机器人、丝杠、减速器”相关研报，按发布时间列出标题、作者、来源和 PDF 定位；合并同一文档的重复结果，并把机构观点与已披露事实分开。
-
-**使用新标的研究预置方案**
-
-> 使用 `$a-share-research`，把工业富联作为新标的做一轮完整研究：先核验身份，再依次查看机构研报与一致预期、当前估值、供应商板块归属、最近 5 日资金流、龙虎榜、未来 90 日解禁和融资融券。每一步都保留证据时点、公开时点、获取时间、状态和限制；某一步不可用时继续执行不依赖它的步骤，但不要把流程说成完整或已支撑。
-
-**使用综合市场研究预置方案**
-
-> 使用 `$a-share-research`，以 `market_overview_research@1.0` 和 `standard` 模式研究当日市场：保留行业板块逐行涨跌与上涨/下跌计数、涨跌停池、题材与市场信号、板块资金、全市场龙虎榜、北向披露和快讯的逐步状态；将会话、宽基指数、全市场成交额、全市场两融和全市场盘中保留为显式缺口，不用单指数、榜单或个股五档逐笔代理。
-
-**研究个股公告与新闻**
-
-> 使用 `$a-share-research`，查询蓝色光标最近 30 天的公司公告和个股新闻。公告优先保留巨潮或交易所原文定位，按时间说明发生了什么、哪些只是媒体报道，以及目前证据还有什么缺口。
-
-**看市场快讯**
-
-> 使用 `$a-share-research`，汇总今天截至当前获取时间的市场快讯，保留每条快讯的原始发布时间和来源；不要把来源失败解释成“今天没有消息”。
-
-**查看互动易问答**
-
-> 使用 `$a-share-research`，整理蓝色光标最近 90 天互动易中投资者最常问的主题。先从原始问答提出候选主题，再用候选主题词做可复核的字面频次统计；分别保留提问时间、公司回复时间和原文定位，公司回复按署名陈述呈现，不自动当作已核验事实。
-
-### 资金、事件与市场信号
-
-**看个股与板块资金**
-
-> 使用 `$a-share-research`，分两次运行：查看工业富联最近 5 个完整交易日的主力及分档资金净流入；再列出供应商当前榜单所对应交易日的行业板块主力净流入前 10 名。分别说明统计周期、金额单位、正负方向、适用市场、榜单获取时间和交易时段完整性是否可确认；不要把供应商资金分类当作公司基本面事实。
-
-**查龙虎榜和解禁**
-
-> 使用 `$a-share-research`，检查蓝色光标最近 30 天是否上过龙虎榜，列出最近一次买卖席位 TOP5 和机构净额；再单独检查未来 90 天限售解禁。保留上榜原因、席位金额单位、解禁股数及占比口径，来源为空时不要回答“没有”。
-
-**研究两融、筹码和分红**
-
-> 使用 `$a-share-research`，整理工业富联最近的融资融券余额、大宗交易、股东户数变化和历史分红送转。区分交易日、报告期和实施日，逐个指标给出单位与方向；股东户数变化只描述筹码分布现象，不推断主力行为。
-
-**核对北向披露边界**
-
-> 使用 `$a-share-research`，告诉我当前公开口径下还能核验哪些北向资金数据、哪些净流入字段已经不再披露。缺失字段必须标为披露不可用，不得把空值或 0 当作净流入为零。
-
-**研究题材、板块与行业轮动**
-
-> 使用 `$a-share-research`，分开查询最近完整交易日的强势股票及来源给出的题材理由、蓝色光标当前属于哪些供应商板块，以及当日行业涨跌排名。区分编辑性理由、板块归属和市场快照，不要把题材标签写成公司基本面事实。
-
-**查看涨跌停、监控、异常与热度**
-
-> 使用 `$a-share-research`，分别查看最近完整交易日的涨停、炸板、跌停和连板生态，当前供应商重点监控池，带规则代码的严重异常波动记录，以及当前市场热度。只有规范证券身份和监控窗口重叠时才形成监控异动交叉；来源失败或覆盖不完整时不要回答“没有”。
-
-这些预置方案没有新的取数捷径，只按版本化计划编排已有研究任务；顶层 `limited` / `blocked` 与逐步缺口必须同时呈现。新标的方案中的未来解禁使用独立且不超过 90 天的显式窗口。
-
-## 案例 Demo
-
-案例从真实用户研究问题出发。蓝色光标覆盖 10 日走势与龙虎榜、解禁、板块、公告新闻的交叉解释；工业富联使用新标的预置方案，覆盖身份、机构材料、估值、板块、资金、龙虎榜、解禁与两融：
-
-- [蓝色光标（SZSE:300058）](examples/bluefocus.md)
-- [工业富联（SSE:601138）](examples/industrial-fulian.md)
-- [研究级盘中行情快照（SSE:600519）](examples/intraday-snapshot.md)
-- [上交所完整交易日分时复盘（SSE:600519）](examples/intraday-replay-sse.md)
-- [深交所完整交易日分时复盘（SZSE:000001）](examples/intraday-replay-szse.md)
-- [分时复盘的证据约束情景预测](examples/intraday-replay-prediction.md)
-
-蓝色光标和工业富联案例已改为 v0.3.0 的中文请求与呈现模板，不再把 8 月初的历史 smoke 数字当成当前输出；42 份 JSON 请求样例统一锚定 v0.3.0 冻结基线，盘中案例只记录请求契约，不保存来源响应。重新运行时应使用适用的新研究日期，并只引用当次 CLI 返回的证据。
+真实运行案例、中文请求模板与边界说明见 [`examples/README.md`](examples/README.md)。其中 `real-runs/` 保存带日期的实际公共 CLI 结果；`requests/` 是可编辑请求，不是实时行情或当前研究结论。
 
 ## 能力边界
 
-当前版本有意保持保守：
+- 身份与行情网络路径只覆盖 SSE/SZSE；BSE 不会回退到其他市场。
+- 估值必须证明证券类别范围；A/H、A/B 或其他多类别范围不明时阻断发行主体级估值。
+- 当前盘中快照不是交易级行情、分钟流、五档盘口或逐笔数据；`intraday_replay` 只复盘已完成交易日。
+- ETF 期权没有权威完整合约总数、完整合约单位定义、调整条款或合格独立 fallback，必须保留 coverage 和限制。
+- 研报、新闻、F10、资金流、题材和热度中的外部归因保持署名观点或市场信号角色，不自动升级为公司事实。
+- 当前不支持开放式选股、持续行情、自动交易、仓位/杠杆建议、项目评级或目标价。
+- `market_overview_research` 不支持交易会话、主要宽基指数、全市场成交额、全市场两融和全市场盘中微观结构；这些属于未来规格。
 
-- 联网身份与收盘价 tracer 仅覆盖 SSE、SZSE；BSE 不会回退到其他市场。
-- 免费联网操作均为实验来源，不等于正式生产 Adapter。
-- 自动估值当前只接受当日研究边界；股本、财务与一致预期来源仍属实验操作，结果最高为 `limited`。
-- 当前股本是“获取时观察到的当前快照”，不是已核验生效事件；财务三表来自供应商镜像，报告更正/替代语义尚未独立核验，二者必须作为限制披露。
-- 发行主体证券类别数不允许默认猜测；缺少明确范围或存在 A/H、A/B 等多类别时，发行主体整体估值阻断。
-- 一致预期是机构观点聚合，不是公司已披露事实；目标 PE 是用户情景参数，不是公允价值结论。
-- 研报、新闻、公告、快讯、互动易和 F10 资料当前是实验来源，结果最高为 `limited`。F10 是供应商整理的当前快照，公开时间、文档身份和版本替代语义尚未核验；PDF 定位不等于已下载或解析，只有显式开启文档验证后才能声称完成获取检查。
-- 资金流、龙虎榜、解禁、两融、大宗、股东户数和分红当前也属于实验来源；供应商派生的资金方向是市场信号，不是权威披露。滚动板块资金不暴露首个交易日时会保留 `period.start: null`；来源不暴露首次公开时间时只允许当前获取日研究，不得倒用于历史回测。2024 年 8 月 19 日起无法按旧口径取得北向每日净买额时，任务会显式阻断而不是补零。
-- 题材、板块、行业轮动、涨跌停、监控、异常波动和热度也来自实验来源。供应商监控池不冒充交易所官方名单，编辑理由和热度标签不证明因果或基本面；只有完整空池才能报告 `observed_empty`，裸供应商代码不能用于监控异动交叉。
-- ETF 期权当前只覆盖 50ETF、300ETF、500ETF 与科创 50ETF 的实验来源快照。供应商报告 Greeks/IV 不是项目本地模型或交易所计算；权威合约总量、合约单位、调整条款和独立 fallback 尚不可用，`M` / `A` 系列、报价状态、单位、时点、来源与 coverage 必须原样披露。
-- 主题研报默认使用东财全市场研报流做标题关键词精确匹配；这不是语义搜索，也不证明主题宇宙完整。iWencai 语义检索仅是来源策略允许时的可选增强，并只从 `IWENCAI_API_KEY` 读取凭据；凭据不会进入请求 JSON 或输出。
-- 单只 SSE/SZSE A 股的研究级盘中快照、已完成交易日的分钟级 `intraday_replay` 和 ETF 交易所快照已经支持；当前交易日分钟流、五档盘口、逐笔、持续行情、自动交易、新闻情绪评分、全量公司画像和开放式批量选股仍不支持。
-- 研究分析与建议遵循安装产物的 [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md)；README 不另行定义第二套执行规则。
+## 文档与案例
 
-### 版本与发布证据
+- [`docs/README.md`](docs/README.md)：文档入口、版本状态和阅读顺序。
+- [`examples/README.md`](examples/README.md)：真实运行案例、中文请求模板和边界说明。
+- [`skill/a-share-research/SKILL.md`](skill/a-share-research/SKILL.md)：安装后 Agent 使用的简洁路由。
+- [`skill/a-share-research/references/`](skill/a-share-research/references/)：按任务域拆分的精确契约。
+- [`CONTEXT.md`](CONTEXT.md)：领域术语与产品边界。
+- [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md)：v0.3.0 实施与验收权威。
 
-- [`CONTEXT.md`](CONTEXT.md) 定义当前产品领域与术语；[`Spec 0002`](docs/specs/0002-trustworthy-a-share-research-foundation.md) 至 [`Spec 0005`](docs/specs/0005-research-grade-intraday-snapshot.md) 保留 v0.0.1–v0.2.0 的演进契约。
-- [`Spec 0006`](docs/specs/0006-research-grade-intraday-replay.md) 定义已完成交易日分时复盘；[`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md) 定义 core-v0.3.0 的统一运行时、计划和发布门禁。
-- [`docs/research`](docs/research/README.md) 根目录只保留当前 v0.3.0 研究文档；[`v0.2.0 发布审计`](docs/research/history/v0.2.0-release-audit-2026-08-03.md) 等既有 release/tag 记录归档在 `history/`。v0.3.0 的最终脱敏 evidence 与派生 matrix 已对冻结候选闭合 27/27 请求画像、44/44 正式 operations 和 740/740 active-request 字段去向。一次来源成功仍不等同于 operation 获得生产准入。
+## 版本与发布证据
 
-## 仓库结构
+v0.3.0 已于 2026-08-18 发布。发布审计记录代码提交、annotated tag、GitHub Release 与冻结运行时 attestation 的对应关系；大型 JSON 证据放在研究文档目录，不占用 README 的主阅读路径。
 
-```text
-skill/a-share-research/        唯一安装产物
-tests/                         离线契约、回归与分发测试
-examples/                      版本化请求与真实证券研究案例
-docs/adr/                      架构决策
-docs/research/                 带时间锚的来源可行性调查
-docs/specs/                    产品与实现规格
-CONTEXT.md                     领域语言与边界
-```
+- [GitHub Release v0.3.0](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.3.0)
+- [v0.3.0 发布审计](docs/research/v0.3.0-release-audit-2026-08-18.md)
+- [v0.3.0 矩阵口径与复验](docs/research/v0.3.0-operation-release-matrix.md)
+- [研究与发布资料索引](docs/research/README.md)
+- [v0.2.0 历史发布审计](docs/research/history/v0.2.0-release-audit-2026-08-03.md)
 
 ## 开发验证
 
-默认测试完全离线；真实来源探针必须显式运行，不属于普通 CI 门禁。
+默认测试完全离线；live probe 只供维护者显式诊断，不属于普通 CI，也不能用单次成功替代 operation 资格审查。
 
 ```text
 <python> -m unittest discover -s tests -p "test_*.py"
 ruff check .
 ruff format --check .
-mypy skill/a-share-research/scripts
+mypy --strict skill/a-share-research/scripts
 <python> /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research
 ```
 
-真实来源诊断入口为 `tests/live_probe_close.py`；盘中双交易所诊断入口为 `tests/live_probe_intraday.py`，必须由维护者显式确认并传入研究日期，例如：
-
-```text
-<python> tests/live_probe_intraday.py --confirm-live --as-of YYYY-MM-DD
-```
-
-该 probe 明确覆盖一只 SSE 和一只 SZSE A 股，只输出带日期的来源身份、观测时间、会话、价格一致性、单位、状态和脱敏失败；它不属于普通 CI，不写夹具、不持久化 provider response、不读取或输出凭据，也不创建项目全局配置。
-
-完整交易日分时的显式 probe 是 `tests/live_probe_intraday_replay.py`，调用时还要传入 `--replay-date YYYY-MM-DD`。它同样覆盖一只 SSE 和一只 SZSE A 股，使用临时 home，只输出 allow-listed 脱敏状态和失败代码；不更新 fixtures，不保存来源响应，也不把一次成功观测描述为生产准入。
-
-版本化请求示例统一收录在 [`examples/README.md`](examples/README.md)。下面六个入口覆盖最常见的窄任务与综合方案；真实联网运行仍会保留当次来源状态和限制：
-
-```text
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-10-day-trend.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-market-snapshot.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/intraday-replay-sse.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-industrial-fulian-single-security.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-market-overview-research.json
-<python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/bluefocus-f10.json
-```
-
-`intraday-market-snapshot.json` 记录 v0.3.0 冻结基线的请求形态。以后运行前必须先复制它，并把 `as_of` 改成当次运行的北京时间当前日期；历史日期、非交易日和非适用会话会按契约返回 `blocked`。`theme-report-search.json` 在没有凭据时使用受限的东财标题关键词基线；若调用者允许凭据型来源并通过 `IWENCAI_API_KEY` 提供本地凭据，iWencai 只作为可选增强，任何请求都不得复用或输出该值。`bluefocus-f10.json` 用于验证默认安装的 `mootdx==0.11.7` F10 operation；软件缺失或错版应由安装健康报告 `installation_incomplete`，来源访问失败仍由研究结果表达。
-
-市场信号 8 个场景的历史执行结果与环境限制保留在 [v0.1.0 联网验证记录](docs/research/history/v0.1.0-market-signals-live-check-2026-08-02.md)；它是历史发布证据，不是 v0.3.0 当前行情。
+维护者命令、live probe 约束和发布证据生成规则见 [`docs/README.md`](docs/README.md) 与 [`docs/research/README.md`](docs/research/README.md)。
 
 ## 许可证与来源
 
-项目采用 [Apache-2.0](https://github.com/RedHeartSecretMan/a-share-research-skill/blob/main/LICENSE) 许可证。项目源自 [simonlin1212/a-stock-data](https://github.com/simonlin1212/a-stock-data)，并保留其版权与归属；当前实现根据可信证据契约重新构建，并作为独立项目维护。
+项目使用 [Apache-2.0](LICENSE) 许可证。项目源自 [`simonlin1212/a-stock-data`](https://github.com/simonlin1212/a-stock-data)，保留其版权与署名；当前实现围绕 evidence-first 契约独立重建和维护。

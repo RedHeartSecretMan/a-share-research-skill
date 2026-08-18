@@ -1,8 +1,25 @@
-# v0.3.0 中文可执行案例
+# v0.3.0 中文案例与请求模板
 
-本目录提供 42 份版本化请求和 6 篇中文说明。案例标题、问题和解释均使用中文；JSON 中的 `task_type`、字段名和枚举值属于 v0.3.0 公共协议，必须保留原始英文标识，不能翻译后提交给 CLI。
+本目录提供 1 份真实运行案例、43 份版本化请求和 6 篇呈现或边界说明，覆盖全部 12 类 ResearchTask。案例标题、问题和解释均使用中文；JSON 中的 `task_type`、字段名和枚举值属于 v0.3.0 公共协议，必须保留原始英文标识，不能翻译后提交给 CLI。
 
-所有固定日期都用于复现请求口径，不是“当前行情”。实际使用时，先把“今天”“最近”等相对时间解析为明确的北京时间日期，再复制请求并更新 `as_of` 与相应窗口。结果必须以当次 CLI 返回的身份、来源、覆盖、冲突、错误和限制为准。
+`requests/` 中的文件是**请求模板**，不是保存的 live 结果。固定日期用于复现 v0.3.0 请求口径，不代表“当前行情”。`real-runs/` 保存明确日期、请求、完整结果和人类解释；它是实际公共 CLI 输出的不可变快照，同样不代表阅读时的当前市场。其余 Markdown 是组合指南、契约说明或明确标注的离线夹具案例。
+
+## 真实运行案例
+
+| 案例 | 运行时间 | 实际状态 | 完整材料 |
+| --- | --- | --- | --- |
+| [重点监控市场信号](real-runs/market-focus-monitoring-2026-08-19.md) | 2026-08-19 00:04:24 `+08:00` | `limited` | [请求](real-runs/market-focus-monitoring-2026-08-19.request.json) · [结果](real-runs/market-focus-monitoring-2026-08-19.result.json) |
+
+该真实结果保留 22 条供应商名单观测和完整 coverage，同时明确说明名单并非官方监管名单、证券身份与监控原因未验证且没有合格独立 fallback。它展示了“operation 完成”与“研究结果仍为 `limited`”可以同时成立。
+
+## 推荐先看
+
+1. `real-runs/market-focus-monitoring-2026-08-19.md`：真实公共 CLI 结果及证据约束。
+2. `security-identity.json`：最小身份任务，适合确认安装与公共入口。
+3. `bluefocus-10-day-trend.json`：带交易日窗口的窄行情任务。
+4. `industrial-fulian-valuation.json`：带证券类别范围的估值任务。
+5. `workflow-industrial-fulian-single-security.json`：综合单标的方案。
+6. `workflow-market-overview-research.json`：无标的综合市场方案及显式能力缺口。
 
 ## 运行方式
 
@@ -14,16 +31,16 @@
 
 `<python>` 表示已经确认版本不低于 3.12 的解释器。仓库案例使用仓库相对路径；安装后的 Skill 则使用 `<python> <skill-root>/scripts/entrypoint.py run --request <research-task.json>`。两者都只通过 `run --request` 进入公共研究接口。
 
-## 中文说明案例
+## 呈现与边界说明
 
-| 案例 | 规范证券 | 说明重点 |
+| 文档 | 适用范围 | 文档性质 |
 | --- | --- | --- |
-| [蓝色光标多证据交叉](bluefocus.md) | `SZSE:300058` | 走势、交易事件、板块归属和披露材料如何分开取证与解释 |
-| [工业富联综合研究](industrial-fulian.md) | `SSE:601138` | 综合单标的与新标的固定方案如何保留局部失败和兄弟步骤 |
-| [盘中行情快照](intraday-snapshot.md) | `SSE:600519` | 当前北京时间交易日的一次快照以及会话失败关闭 |
-| [分时复盘情景边界](intraday-replay-prediction.md) | `SSE:600519` | 只有用户明确请求未来判断时，Agent 才能在证据门槛内形成情景 |
-| [上交所分时复盘](intraday-replay-sse.md) | `SSE:600519` | 离线测试夹具中的分钟记录、覆盖状态、摘要和证据谱系 |
-| [深交所分时复盘](intraday-replay-szse.md) | `SZSE:000001` | 同一复盘契约在深交所规范证券上的应用 |
+| [蓝色光标多证据交叉](bluefocus.md) | `SZSE:300058` | 组合与呈现指南，不保存运行结果 |
+| [工业富联综合研究](industrial-fulian.md) | `SSE:601138` | 固定方案阅读指南，不保存运行结果 |
+| [盘中行情快照](intraday-snapshot.md) | `SSE:600519` | 请求和会话边界，不保存行情数字 |
+| [分时复盘情景边界](intraday-replay-prediction.md) | `SSE:600519` | Agent 回答结构，不保存来源响应 |
+| [上交所分时复盘](intraday-replay-sse.md) | `SSE:600519` | 明确标注的离线夹具案例 |
+| [深交所分时复盘](intraday-replay-szse.md) | `SZSE:000001` | 明确标注的离线夹具案例 |
 
 ## 固定研究方案（6）
 
@@ -38,10 +55,11 @@
 
 综合单标的方案的 `standard` 模式尝试身份、20 个完整交易日走势和全部标准增强；`fast` 只执行身份与走势。综合市场方案固定声明 15 项能力，其中 5 项在 v0.3.0 明确为不支持，不会伪造来源。调用者不能提交自定义步骤或依赖图。
 
-## 行情与估值窄任务（4）
+## 身份、行情与估值窄任务（5）
 
 | 中文用途 | 请求文件 |
 | --- | --- |
+| 确认工业富联规范证券身份 | [`security-identity.json`](requests/security-identity.json) |
 | 50ETF 行情 | [`510050-etf-market.json`](requests/510050-etf-market.json) |
 | 蓝色光标最近 10 个完整交易日走势 | [`bluefocus-10-day-trend.json`](requests/bluefocus-10-day-trend.json) |
 | 五只股票同口径估值比较 | [`five-stock-valuation-compare.json`](requests/five-stock-valuation-compare.json) |

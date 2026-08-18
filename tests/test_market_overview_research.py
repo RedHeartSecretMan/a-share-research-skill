@@ -212,7 +212,7 @@ class MarketOverviewResearchTests(unittest.TestCase):
         chinese = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         english = (REPOSITORY_ROOT / "README_en.md").read_text(encoding="utf-8")
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        contract = (SKILL_ROOT / "references" / "cli-contract.md").read_text(
+        contract = (SKILL_ROOT / "references" / "workflow-contracts.md").read_text(
             encoding="utf-8"
         )
         examples_index = (REPOSITORY_ROOT / "examples" / "README.md").read_text(
@@ -228,7 +228,8 @@ class MarketOverviewResearchTests(unittest.TestCase):
             "explicitly unsupported capabilities",
             english,
         )
-        self.assertIn("Completion for this branch", skill)
+        self.assertIn("completion additionally requires empty subjects", skill)
+        self.assertIn("Completion for this branch", contract)
         self.assertIn("requests/workflow-market-overview-research.json", examples_index)
         for capability_id in (
             "industry_board_breadth",
