@@ -111,6 +111,12 @@ _MAX_RESULT_BYTES = 2 * 1024 * 1024
 # a constant 16-direct-envelope bound closes this validated plan without weakening
 # any other direct or workflow result envelope.
 _MAX_MARKET_OVERVIEW_RESULT_BYTES = 16 * _MAX_RESULT_BYTES
+# valuation_comparison has one fixed leaf that must itself pass the 2 MiB direct
+# envelope in ``_execute_step``.  Folding retains each leaf collection once and
+# adds only the strict workflow request, stable references, and fixed metadata;
+# four direct envelopes therefore bound that exact one-leaf workflow without
+# weakening direct tasks or any other workflow.
+_MAX_VALUATION_COMPARISON_RESULT_BYTES = 4 * _MAX_RESULT_BYTES
 _SAFE_PUBLIC_LOCATOR = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*(?::[A-Za-z0-9_.+-]+)*$")
 _SAFE_PUBLIC_PROVIDER_ID = re.compile(r"^[A-Za-z0-9_.:@+-]+$")
 _UNSAFE_PUBLIC_REFERENCE_MARKERS = (
@@ -1232,12 +1238,18 @@ class UnifiedResearchResult:
             path="research result",
         )
         plan = cast(Mapping[str, object], result["plan"])
-        max_bytes = (
-            _MAX_MARKET_OVERVIEW_RESULT_BYTES
-            if plan.get("task_type") == "research_workflow"
+        if (
+            plan.get("task_type") == "research_workflow"
             and plan.get("workflow_id") == "market_overview_research"
-            else _MAX_RESULT_BYTES
-        )
+        ):
+            max_bytes = _MAX_MARKET_OVERVIEW_RESULT_BYTES
+        elif (
+            plan.get("task_type") == "research_workflow"
+            and plan.get("workflow_id") == "valuation_comparison"
+        ):
+            max_bytes = _MAX_VALUATION_COMPARISON_RESULT_BYTES
+        else:
+            max_bytes = _MAX_RESULT_BYTES
         bounded = _json_copy(result, path="research result", max_bytes=max_bytes)
         if not isinstance(bounded, dict):
             raise ValueError("research result must be a JSON object")

@@ -2667,6 +2667,73 @@ class DirectResultInvariantTests(unittest.TestCase):
             set(step["brief_ids"]).issubset({item["id"] for item in result["briefs"]})
         )
 
+    def test_valuation_comparison_workflow_preserves_a_bounded_full_leaf(self) -> None:
+        common_request = {
+            "schema_version": "1.0",
+            "subjects": [
+                {"clue": "601138", "issuer_security_class_count": 1},
+                {"clue": "000001", "issuer_security_class_count": 1},
+            ],
+            "as_of": "2026-08-15",
+            "window": None,
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": True,
+            },
+        }
+        direct = invoke_copied_installed(
+            {
+                **common_request,
+                "task_type": "valuation_compare",
+                "parameters": {"target_pe": "30"},
+            },
+            valuation_fixtures=True,
+            fixture_scenario="near_envelope_comparison",
+            fixture_research_now="2026-08-15T18:30:00+08:00",
+        )
+        direct_bytes = len(
+            json.dumps(
+                direct,
+                allow_nan=False,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        self.assertLessEqual(direct_bytes, 2 * 1024 * 1024)
+
+        workflow = invoke_copied_installed(
+            {
+                **common_request,
+                "task_type": "research_workflow",
+                "parameters": {
+                    "workflow": {"id": "valuation_comparison", "version": "1.0"},
+                    "inputs": {"target_pe": "30"},
+                },
+            },
+            valuation_fixtures=True,
+            fixture_scenario="near_envelope_comparison",
+            fixture_research_now="2026-08-15T18:30:00+08:00",
+        )
+        workflow_bytes = len(
+            json.dumps(
+                workflow,
+                allow_nan=False,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        self.assertGreater(workflow_bytes, 2 * 1024 * 1024)
+        self.assertLessEqual(workflow_bytes, 8 * 1024 * 1024)
+        self.assertEqual(workflow["plan"]["workflow_id"], "valuation_comparison")
+        self.assertEqual(
+            [item["step_id"] for item in workflow["plan"]["steps"]],
+            ["comparison"],
+        )
+        self.assertEqual(len(workflow["observations"]), len(direct["observations"]))
+
     def test_valuation_missing_financials_keeps_other_owned_inputs(self) -> None:
         request = {
             "schema_version": "1.0",

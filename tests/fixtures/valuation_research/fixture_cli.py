@@ -73,6 +73,49 @@ def _json_response(payload: object) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode()
 
 
+def _near_envelope_financial_payload(payload: object) -> object:
+    if not isinstance(payload, dict):
+        raise AssertionError("financial fixture payload must be an object")
+    result = payload.get("result")
+    data = result.get("data") if isinstance(result, dict) else None
+    report_list = data.get("report_list") if isinstance(data, dict) else None
+    if not isinstance(report_list, dict) or not report_list:
+        raise AssertionError("financial fixture report list is missing")
+    template = next(iter(report_list.values()))
+    if not isinstance(template, dict) or not isinstance(template.get("data"), list):
+        raise AssertionError("financial fixture report template is invalid")
+    periods = (
+        "20260331",
+        "20251231",
+        "20250930",
+        "20250630",
+        "20250331",
+        "20241231",
+        "20240930",
+        "20240630",
+    )
+    data["report_list"] = {
+        period: {
+            **template,
+            "publish_date": "20260801",
+            "update_time": 1785542400 + index,
+            "data": [
+                *template["data"],
+                *[
+                    {
+                        "item_title": f"未使用扩展科目{period}-{item_index:04d}",
+                        "item_value": "1",
+                        "item_tongbi": None,
+                    }
+                    for item_index in range(557)
+                ],
+            ],
+        }
+        for index, period in enumerate(periods)
+    }
+    return payload
+
+
 def _workflow_daily_dates() -> list[str]:
     current = date(2026, 7, 31)
     values: list[str] = []
@@ -339,6 +382,12 @@ class ValuationFixtureTransport:
             or (scenario == "one_missing_forecast" and "/601138/" in parsed.path)
         ):
             body = b"<html><body><p>No forecast coverage</p></body></html>"
+        if (
+            filename is not None
+            and filename.startswith("sina_")
+            and scenario == "near_envelope_comparison"
+        ):
+            body = _json_response(_near_envelope_financial_payload(json.loads(body)))
         return HttpResponse(
             status=200,
             content_type=content_type,
