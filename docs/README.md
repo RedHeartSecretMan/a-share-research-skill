@@ -19,7 +19,7 @@
 
 - [`../CONTEXT.md`](../CONTEXT.md)：领域术语、边界和非目标。
 - [`specs/0007-implementation-amendment-a.md`](specs/0007-implementation-amendment-a.md)：v0.3.0 实施、DAG 与最终验收权威；状态为已交付。
-- [`specs/0008-v0.4.0-market-foundation-and-screening.md`](specs/0008-v0.4.0-market-foundation-and-screening.md)：已批准的 v0.4.0 综合市场基础、全 A 股筛选、结果包和 Ticket DAG；处于持续实施阶段，不改变当前 v0.3.0 稳定能力。
+- [`specs/0008-v0.4.0-market-foundation-and-screening.md`](specs/0008-v0.4.0-market-foundation-and-screening.md)：已批准的 v0.4.0 综合市场基础、全 A 股筛选、结果包和 Ticket DAG；处于 DAG entry gate，tracker 回读闭合后才启动实现，不改变当前 v0.3.0 稳定能力。
 - [`adr/`](adr/)：架构决策。文件按四位编号加短横线主题命名；带 frontmatter 的 ADR 必须把 frontmatter 放在文件第一行。
 - [`research/README.md`](research/README.md)：当前发布证据、命令占位符和历史资料索引。
 - [`agents/`](agents/)：Issue tracker、triage 和领域文档规则。
