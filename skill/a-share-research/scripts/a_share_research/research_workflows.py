@@ -6,7 +6,6 @@ import copy
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, cast
 
 from .research_result import (
@@ -14,18 +13,14 @@ from .research_result import (
     _validate_workflow_default_operation_inventory,
     stable_result_id,
 )
+from .workflow_contracts import (
+    validate_registered_workflow_public_scope,
+    validate_registered_workflow_request,
+)
 
 LeafTaskRunner = Callable[[dict[str, Any]], UnifiedResearchResult]
 
-WORKFLOW_VERSION = "1.0"
-WORKFLOW_IDS = {
-    "market_overview_research",
-    "single_security_research",
-    "single_security_valuation",
-    "valuation_comparison",
-    "theme_report_research",
-    "new_security_research",
-}
+WORKFLOW_STEP_VERSION = "1.0"
 _RECORD_FIELDS = (
     "observations",
     "claims",
@@ -199,7 +194,11 @@ def build_research_workflow_result(
 ) -> UnifiedResearchResult:
     """Compile and execute one approved workflow through leaf ResearchTasks."""
 
-    workflow_id, inputs = _validate_workflow_request(request)
+    validated_request = validate_registered_workflow_request(request)
+    request = validated_request.public_request_copy()
+    workflow_id = validated_request.workflow_id
+    workflow_version = validated_request.workflow_version
+    inputs = validated_request.inputs_copy()
     if workflow_id == "single_security_valuation":
         plan = [_plan_step("valuation", "security_valuation")]
         leaf_request = _leaf_request(
@@ -254,7 +253,7 @@ def build_research_workflow_result(
             plan,
             run_leaf_task,
         )
-    else:
+    elif workflow_id == "new_security_research":
         plan = _new_security_plan()
         steps = _run_new_security_workflow(
             request,
@@ -262,163 +261,15 @@ def build_research_workflow_result(
             plan,
             run_leaf_task,
         )
-    return _fold_workflow_result(request, workflow_id, plan, steps)
-
-
-def _validate_workflow_request(
-    request: dict[str, Any],
-) -> tuple[str, dict[str, Any]]:
-    if request["window"] is not None:
-        raise ValueError("research_workflow window must be null")
-    parameters = request["parameters"]
-    if set(parameters) != {"workflow", "inputs"}:
-        raise ValueError(
-            "research_workflow parameters must contain only workflow and inputs"
-        )
-    workflow = parameters["workflow"]
-    inputs = parameters["inputs"]
-    if not isinstance(workflow, dict) or set(workflow) != {"id", "version"}:
-        raise ValueError("research_workflow parameters.workflow is invalid")
-    workflow_id = workflow["id"]
-    if not isinstance(workflow_id, str) or workflow_id not in WORKFLOW_IDS:
-        raise ValueError("research_workflow id is not supported")
-    if workflow["version"] != WORKFLOW_VERSION:
-        raise ValueError("research_workflow version is not supported")
-    if not isinstance(inputs, dict):
-        raise ValueError("research_workflow parameters.inputs must be an object")
-
-    if workflow_id == "market_overview_research":
-        if request["subjects"]:
-            raise ValueError("market_overview_research takes no subjects")
-        if not set(inputs).issubset({"completeness_mode", "deep_extensions"}):
-            raise ValueError(
-                "market_overview_research inputs do not match the workflow contract"
-            )
-        completeness_mode = inputs.get("completeness_mode", "standard")
-        if not isinstance(completeness_mode, str) or completeness_mode not in {
-            "standard",
-            "fast",
-        }:
-            raise ValueError(
-                "market_overview_research completeness_mode must be standard or fast"
-            )
-        deep_extensions = inputs.get("deep_extensions", [])
-        if (
-            not isinstance(deep_extensions, list)
-            or any(item != "market_wide_intraday" for item in deep_extensions)
-            or len(set(deep_extensions)) != len(deep_extensions)
-        ):
-            raise ValueError(
-                "market_overview_research deep_extensions contains an unsupported value"
-            )
-    elif workflow_id == "single_security_research":
-        _require_subject_count(request["subjects"], minimum=1, maximum=1)
-        allowed_inputs = {"target_pe", "completeness_mode", "deep_extensions"}
-        if "target_pe" not in inputs or not set(inputs).issubset(allowed_inputs):
-            raise ValueError(
-                "single_security_research inputs do not match the workflow contract"
-            )
-        _require_target_pe(inputs["target_pe"])
-        completeness_mode = inputs.get("completeness_mode", "standard")
-        if not isinstance(completeness_mode, str) or completeness_mode not in {
-            "standard",
-            "fast",
-        }:
-            raise ValueError(
-                "single_security_research completeness_mode must be standard or fast"
-            )
-        deep_extensions = inputs.get("deep_extensions", [])
-        if (
-            not isinstance(deep_extensions, list)
-            or any(
-                not isinstance(item, str)
-                or item not in {"long_history", "large_materials"}
-                for item in deep_extensions
-            )
-            or len(set(deep_extensions)) != len(deep_extensions)
-        ):
-            raise ValueError(
-                "single_security_research deep_extensions contains an unsupported value"
-            )
-        if completeness_mode == "fast" and "large_materials" in deep_extensions:
-            raise ValueError(
-                "single_security_research fast cannot be combined with large_materials"
-            )
-    elif workflow_id == "single_security_valuation":
-        _require_subject_count(request["subjects"], minimum=1, maximum=1)
-        _require_inputs(inputs, {"target_pe"})
-        _require_target_pe(inputs["target_pe"])
-    elif workflow_id == "valuation_comparison":
-        _require_subject_count(request["subjects"], minimum=2, maximum=10)
-        _require_inputs(inputs, {"target_pe"})
-        _require_target_pe(inputs["target_pe"])
-    elif workflow_id == "theme_report_research":
-        if request["subjects"]:
-            raise ValueError("theme_report_research takes no subjects")
-        _require_inputs(
-            inputs,
-            {
-                "query",
-                "published_from",
-                "published_to",
-                "limit",
-                "verify_documents",
-            },
-        )
-        _require_string_array(inputs["query"], "theme_report_research query")
-        _require_window(
-            inputs,
-            start_field="published_from",
-            end_field="published_to",
-            as_of=request["as_of"],
-            allow_future_days=0,
-        )
-        _require_limit(inputs["limit"])
-        _require_boolean(inputs["verify_documents"], "verify_documents")
     else:
-        _require_subject_count(request["subjects"], minimum=1, maximum=1)
-        _require_inputs(
-            inputs,
-            {
-                "target_pe",
-                "report_window",
-                "market_window",
-                "lockup_window",
-                "fund_flow_period",
-                "limit",
-                "verify_documents",
-            },
-        )
-        _require_target_pe(inputs["target_pe"])
-        _require_nested_window(
-            inputs["report_window"],
-            start_field="published_from",
-            end_field="published_to",
-            as_of=request["as_of"],
-            allow_future_days=0,
-            name="report_window",
-        )
-        _require_nested_window(
-            inputs["market_window"],
-            start_field="observed_from",
-            end_field="observed_to",
-            as_of=request["as_of"],
-            allow_future_days=0,
-            name="market_window",
-        )
-        _require_nested_window(
-            inputs["lockup_window"],
-            start_field="observed_from",
-            end_field="observed_to",
-            as_of=request["as_of"],
-            allow_future_days=90,
-            name="lockup_window",
-        )
-        if inputs["fund_flow_period"] not in {"5d", "10d"}:
-            raise ValueError("new_security_research fund_flow_period must be 5d or 10d")
-        _require_limit(inputs["limit"])
-        _require_boolean(inputs["verify_documents"], "verify_documents")
-    return workflow_id, inputs
+        raise AssertionError("registered workflow has no execution implementation")
+    return _fold_workflow_result(
+        request,
+        workflow_id,
+        workflow_version,
+        plan,
+        steps,
+    )
 
 
 def _run_market_overview_workflow(
@@ -897,37 +748,13 @@ def _compiled_leaf_scope(
 
 def _validate_workflow_request_scope(
     request_scope: object, workflow_id: str
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     if not isinstance(request_scope, dict):
         raise ValueError("workflow plan request scope must be an object")
-    if set(request_scope) != {
-        "schema_version",
-        "task_type",
-        "subjects",
-        "as_of",
-        "window",
-        "parameters",
-        "source_policy",
-    }:
-        raise ValueError("workflow plan request scope is invalid")
-    policy = request_scope.get("source_policy")
-    if (
-        request_scope.get("schema_version") != "1.0"
-        or request_scope.get("task_type") != "research_workflow"
-        or not isinstance(request_scope.get("subjects"), list)
-        or not isinstance(request_scope.get("as_of"), str)
-        or request_scope.get("window") is not None
-        or not isinstance(request_scope.get("parameters"), dict)
-        or not isinstance(policy, dict)
-        or set(policy) != {"allow_experimental", "allow_credentials", "allow_fallback"}
-        or any(not isinstance(value, bool) for value in policy.values())
-    ):
-        raise ValueError("workflow plan request scope is invalid")
-    _strict_date(request_scope["as_of"], "as_of")
-    compiled_workflow_id, _ = _validate_workflow_request(request_scope)
-    if compiled_workflow_id != workflow_id:
+    validated = validate_registered_workflow_public_scope(request_scope)
+    if validated.workflow_id != workflow_id:
         raise ValueError("workflow plan request scope contradicts its workflow")
-    return request_scope
+    return validated.public_request_copy(), validated.workflow_version
 
 
 def _validate_leaf_request_facts(
@@ -1563,7 +1390,7 @@ def _plan_step(
 ) -> dict[str, Any]:
     return {
         "step_id": step_id,
-        "version": WORKFLOW_VERSION,
+        "version": WORKFLOW_STEP_VERSION,
         "task_type": task_type,
         "criticality": criticality,
         "depends_on": [] if depends_on is None else depends_on,
@@ -1728,6 +1555,7 @@ def _derive_workflow_status(
 def _fold_workflow_result(
     request: Mapping[str, object],
     workflow_id: str,
+    workflow_version: str,
     plan_steps: Sequence[Mapping[str, object]],
     executed_steps: Sequence[Mapping[str, object]],
 ) -> UnifiedResearchResult:
@@ -1821,7 +1649,7 @@ def _fold_workflow_result(
         for field, values in collections.items()
     }
     plan_payload: dict[str, object] = {
-        "version": WORKFLOW_VERSION,
+        "version": workflow_version,
         "task_type": "research_workflow",
         "workflow_id": workflow_id,
         "request_scope": copy.deepcopy(dict(request)),
@@ -1838,14 +1666,14 @@ def _fold_workflow_result(
     view = {
         "status": status,
         "workflow_id": workflow_id,
-        "workflow_version": WORKFLOW_VERSION,
+        "workflow_version": workflow_version,
         "steps": step_refs,
         **copy.deepcopy(all_ids),
         "brief_id": brief_id,
     }
     workflow_registry: dict[str, object] = {
         "id": workflow_id,
-        "version": WORKFLOW_VERSION,
+        "version": workflow_version,
     }
     if workflow_id == "market_overview_research":
         inputs = cast(
@@ -1929,7 +1757,7 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
     workflow_id = plan.get("workflow_id")
     if not isinstance(workflow_id, str):
         raise ValueError("workflow plan identity is invalid")
-    request_scope = _validate_workflow_request_scope(
+    request_scope, workflow_version = _validate_workflow_request_scope(
         plan.get("request_scope"), workflow_id
     )
     if result.get("research_anchor") != {
@@ -1939,7 +1767,7 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
         raise ValueError("workflow research anchor contradicts its request scope")
     expected_steps = _expected_workflow_steps(workflow_id)
     if (
-        plan.get("version") != WORKFLOW_VERSION
+        plan.get("version") != workflow_version
         or plan.get("task_type") != "research_workflow"
         or plan.get("steps") != expected_steps
         or plan.get("id")
@@ -1964,7 +1792,7 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
     )
     expected_workflow_registry: dict[str, object] = {
         "id": workflow_id,
-        "version": WORKFLOW_VERSION,
+        "version": workflow_version,
     }
     if workflow_id == "market_overview_research":
         expected_workflow_registry["capability_inventory"] = (
@@ -2357,7 +2185,7 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
         result.get("status") != derived_status
         or view.get("status") != derived_status
         or view.get("workflow_id") != workflow_id
-        or view.get("workflow_version") != WORKFLOW_VERSION
+        or view.get("workflow_version") != workflow_version
     ):
         raise ValueError("workflow status or identity contradicts its steps")
     main_brief = briefs[main_brief_id]
@@ -2374,115 +2202,3 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
             or main_brief.get(reference_field) != expected_ids
         ):
             raise ValueError("workflow task view or brief omitted formal records")
-
-
-def _require_inputs(inputs: dict[str, Any], fields: set[str]) -> None:
-    if set(inputs) != fields:
-        raise ValueError("research_workflow inputs do not match the workflow contract")
-
-
-def _require_subject_count(subjects: object, *, minimum: int, maximum: int) -> None:
-    if not isinstance(subjects, list) or not minimum <= len(subjects) <= maximum:
-        raise ValueError(
-            "research_workflow subjects do not match the workflow contract"
-        )
-    for subject in subjects:
-        _require_workflow_subject(subject)
-
-
-def _require_workflow_subject(subject: object) -> None:
-    if not isinstance(subject, dict) or set(subject) != {
-        "clue",
-        "issuer_security_class_count",
-    }:
-        raise ValueError("workflow subject contains unknown fields")
-    clue = subject.get("clue")
-    class_count = subject.get("issuer_security_class_count")
-    if not isinstance(clue, str) or not clue.strip():
-        raise ValueError("workflow subject requires a non-empty clue")
-    if (
-        not isinstance(class_count, int)
-        or isinstance(class_count, bool)
-        or class_count < 1
-    ):
-        raise ValueError(
-            "workflow subject requires a positive issuer_security_class_count"
-        )
-
-
-def _require_target_pe(value: object) -> None:
-    if not isinstance(value, str):
-        raise ValueError("workflow target_pe must be a decimal string")
-    try:
-        parsed = Decimal(value)
-    except InvalidOperation as error:
-        raise ValueError("workflow target_pe must be a decimal string") from error
-    if not parsed.is_finite() or parsed <= 0:
-        raise ValueError("workflow target_pe must be positive")
-
-
-def _require_string_array(value: object, name: str) -> None:
-    if (
-        not isinstance(value, list)
-        or not value
-        or any(not isinstance(item, str) or not item.strip() for item in value)
-    ):
-        raise ValueError(f"{name} must be a non-empty string array")
-
-
-def _require_limit(value: object) -> None:
-    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
-        raise ValueError("workflow limit must be from 1 to 100")
-
-
-def _require_boolean(value: object, name: str) -> None:
-    if not isinstance(value, bool):
-        raise ValueError(f"workflow {name} must be boolean")
-
-
-def _require_nested_window(
-    value: object,
-    *,
-    start_field: str,
-    end_field: str,
-    as_of: str,
-    allow_future_days: int,
-    name: str,
-) -> None:
-    if not isinstance(value, dict) or set(value) != {start_field, end_field}:
-        raise ValueError(f"new_security_research {name} is invalid")
-    _require_window(
-        value,
-        start_field=start_field,
-        end_field=end_field,
-        as_of=as_of,
-        allow_future_days=allow_future_days,
-    )
-
-
-def _require_window(
-    value: dict[str, Any],
-    *,
-    start_field: str,
-    end_field: str,
-    as_of: str,
-    allow_future_days: int,
-) -> None:
-    start = _strict_date(value.get(start_field), start_field)
-    end = _strict_date(value.get(end_field), end_field)
-    if start > end:
-        raise ValueError("workflow window starts after it ends")
-    if end > date.fromisoformat(as_of) + timedelta(days=allow_future_days):
-        raise ValueError("workflow window exceeds its research boundary")
-
-
-def _strict_date(value: object, field: str) -> date:
-    if not isinstance(value, str):
-        raise ValueError(f"workflow {field} must use YYYY-MM-DD")
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError as error:
-        raise ValueError(f"workflow {field} must use YYYY-MM-DD") from error
-    if parsed.isoformat() != value:
-        raise ValueError(f"workflow {field} must use YYYY-MM-DD")
-    return parsed

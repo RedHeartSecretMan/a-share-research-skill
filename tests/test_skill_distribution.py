@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = REPOSITORY_ROOT / "skill" / "a-share-research"
@@ -17,6 +18,9 @@ _LOCKED_REQUIREMENT = re.compile(
     r"^([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+!-]+)"
     r'(?:\s*;\s*sys_platform\s*==\s*"([^"]+)")?$'
 )
+_WORKFLOW_SNAPSHOT_MAX_DEPTH = 32
+_WORKFLOW_SNAPSHOT_MAX_ITEMS = 10_000
+_FUTURE_SCREEN_STRUCTURAL_PROBE_FIXED_ITEMS = 23
 
 
 def _applicable_locked_requirements(
@@ -1589,6 +1593,297 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertEqual(
             result["limitations"][0]["code"], "source_policy_not_satisfied"
         )
+
+    def test_installed_copy_keeps_workflow_cutover_contracts_unregistered(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "installed" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            requests = {
+                "current": {
+                    "schema_version": "1.0",
+                    "task_type": "research_workflow",
+                    "subjects": [],
+                    "as_of": "2026-08-21",
+                    "window": None,
+                    "parameters": {
+                        "workflow": {
+                            "id": "market_overview_research",
+                            "version": "1.0",
+                        },
+                        "inputs": {"completeness_mode": "fast"},
+                    },
+                    "source_policy": {
+                        "allow_experimental": False,
+                        "allow_credentials": False,
+                        "allow_fallback": True,
+                    },
+                },
+                "future_overview": {
+                    "schema_version": "1.0",
+                    "task_type": "research_workflow",
+                    "subjects": [],
+                    "as_of": "2026-08-21",
+                    "window": None,
+                    "parameters": {
+                        "workflow": {
+                            "id": "market_overview_research",
+                            "version": "2.0",
+                        },
+                        "inputs": {"completeness_mode": "fast"},
+                    },
+                    "source_policy": {
+                        "allow_experimental": False,
+                        "allow_credentials": False,
+                        "allow_fallback": True,
+                    },
+                },
+                "future_screen": {
+                    "schema_version": "1.0",
+                    "task_type": "research_workflow",
+                    "subjects": [],
+                    "as_of": "2026-08-21",
+                    "window": None,
+                    "parameters": {
+                        "workflow": {
+                            "id": "market_screen_research",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "screening_plan": {
+                                "id": "fundamental_research_priority",
+                                "version": "1.0",
+                            },
+                            "completeness_mode": "fast",
+                            "result_artifact": {
+                                "path": str(temporary_root / "screen-result"),
+                                "mode": "create",
+                            },
+                        },
+                    },
+                    "source_policy": {
+                        "allow_experimental": False,
+                        "allow_credentials": False,
+                        "allow_fallback": True,
+                    },
+                },
+                "future_screen_malformed": {
+                    "schema_version": "1.0",
+                    "task_type": "research_workflow",
+                    "subjects": [],
+                    "as_of": "2026-08-21",
+                    "window": None,
+                    "parameters": {
+                        "workflow": {
+                            "id": "market_screen_research",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "screening_plan": {
+                                "id": "caller_formula",
+                                "version": "9.0",
+                            },
+                            "completeness_mode": "standard",
+                            "candidate_limit": 999,
+                            "result_artifact": {
+                                "path": "relative/secret-future-path",
+                                "mode": "overwrite",
+                            },
+                        },
+                    },
+                    "source_policy": {
+                        "allow_experimental": False,
+                        "allow_credentials": False,
+                        "allow_fallback": True,
+                    },
+                },
+            }
+            completed: dict[str, subprocess.CompletedProcess[str]] = {}
+            for name, payload in requests.items():
+                request_path = temporary_root / f"{name}.json"
+                request_path.write_text(json.dumps(payload), encoding="utf-8")
+                completed[name] = subprocess.run(
+                    [
+                        sys.executable,
+                        "-I",
+                        str(installed / "scripts" / "entrypoint.py"),
+                        "run",
+                        "--request",
+                        str(request_path),
+                    ],
+                    cwd=temporary_root,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            self.assertTrue(temporary_root.exists())
+            self.assertFalse((temporary_root / "screen-result").exists())
+
+        current = completed["current"]
+        self.assertEqual(current.returncode, 0, current.stderr)
+        self.assertEqual(current.stderr, "")
+        current_result = json.loads(current.stdout)
+        self.assertEqual(current_result["plan"]["version"], "1.0")
+        self.assertEqual(
+            current_result["capability_registry"]["workflow"]["version"], "1.0"
+        )
+        for name in (
+            "future_overview",
+            "future_screen",
+            "future_screen_malformed",
+        ):
+            with self.subTest(name=name):
+                rejected = completed[name]
+                self.assertEqual(rejected.returncode, 2, rejected.stdout)
+                self.assertEqual(rejected.stdout, "")
+                self.assertIn("not supported", rejected.stderr)
+                self.assertNotIn("implementation_pending", rejected.stderr)
+                self.assertNotIn(str(temporary_root), rejected.stderr)
+                self.assertNotIn("secret-future-path", rejected.stderr)
+
+    def test_installed_copy_sanitizes_workflow_snapshot_structure_bounds(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            installed = temporary_root / "candidate-install" / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            artifact_path = temporary_root / "future-screen-artifact"
+            entrypoint = installed / "scripts" / "entrypoint.py"
+            recursion_probe = """
+import runpy
+import sys
+
+entrypoint = sys.argv[2]
+request_path = sys.argv[3]
+runpy.run_path(entrypoint, run_name="__recursion_probe_preload__")
+sys.setrecursionlimit(int(sys.argv[1]))
+sys.argv = [entrypoint, "run", "--request", request_path]
+runpy.run_path(entrypoint, run_name="__main__")
+"""
+
+            def nested_probe(deepest_request_depth: int) -> object:
+                nested: object = None
+                # Root -> parameters -> inputs -> structural_probe is depth 3.
+                for _ in range(deepest_request_depth - 3):
+                    nested = [nested]
+                return nested
+
+            def future_screen_request(probe: object) -> dict[str, Any]:
+                return {
+                    "schema_version": "1.0",
+                    "task_type": "research_workflow",
+                    "subjects": [],
+                    "as_of": "2026-08-21",
+                    "window": None,
+                    "parameters": {
+                        "workflow": {
+                            "id": "market_screen_research",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "screening_plan": {
+                                "id": "fundamental_research_priority",
+                                "version": "1.0",
+                            },
+                            "completeness_mode": "fast",
+                            "result_artifact": {
+                                "path": str(artifact_path),
+                                "mode": "create",
+                            },
+                            "structural_probe": probe,
+                        },
+                    },
+                    "source_policy": {
+                        "allow_experimental": False,
+                        "allow_credentials": False,
+                        "allow_fallback": True,
+                    },
+                }
+
+            cases = {
+                "depth_at_limit": (
+                    future_screen_request(nested_probe(_WORKFLOW_SNAPSHOT_MAX_DEPTH)),
+                    "error: invalid research task: research_workflow id is not supported\n",
+                ),
+                "depth_one_over": (
+                    future_screen_request(
+                        nested_probe(_WORKFLOW_SNAPSHOT_MAX_DEPTH + 1)
+                    ),
+                    "error: invalid research task: research_workflow request exceeds its structural bounds\n",
+                ),
+                "items_at_limit": (
+                    future_screen_request(
+                        [
+                            None
+                            for _ in range(
+                                _WORKFLOW_SNAPSHOT_MAX_ITEMS
+                                - _FUTURE_SCREEN_STRUCTURAL_PROBE_FIXED_ITEMS
+                            )
+                        ]
+                    ),
+                    "error: invalid research task: research_workflow id is not supported\n",
+                ),
+                "items_one_over": (
+                    future_screen_request(
+                        [
+                            None
+                            for _ in range(
+                                _WORKFLOW_SNAPSHOT_MAX_ITEMS
+                                - _FUTURE_SCREEN_STRUCTURAL_PROBE_FIXED_ITEMS
+                                + 1
+                            )
+                        ]
+                    ),
+                    "error: invalid research task: research_workflow request exceeds its structural bounds\n",
+                ),
+                "deep_acyclic": (
+                    future_screen_request(
+                        nested_probe(_WORKFLOW_SNAPSHOT_MAX_DEPTH * 16)
+                    ),
+                    "error: invalid research task: research_workflow request exceeds its structural bounds\n",
+                ),
+            }
+
+            for name, (payload, expected_error) in cases.items():
+                request_path = temporary_root / f"{name}.json"
+                request_path.write_text(json.dumps(payload), encoding="utf-8")
+                for recursion_limit in (60, 80):
+                    with self.subTest(
+                        name=name,
+                        recursion_limit=recursion_limit,
+                    ):
+                        completed = subprocess.run(
+                            [
+                                sys.executable,
+                                "-I",
+                                "-c",
+                                recursion_probe,
+                                str(recursion_limit),
+                                str(entrypoint),
+                                str(request_path),
+                            ],
+                            cwd=temporary_root,
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        )
+
+                        self.assertEqual(completed.returncode, 2, completed.stdout)
+                        self.assertEqual(completed.stdout, "")
+                        self.assertEqual(completed.stderr, expected_error)
+                        for forbidden in (
+                            "Traceback",
+                            "RecursionError",
+                            str(temporary_root),
+                            str(installed),
+                            str(request_path),
+                            str(artifact_path),
+                        ):
+                            self.assertNotIn(forbidden, completed.stderr)
+                        self.assertFalse(artifact_path.exists())
 
     def test_installed_copy_rejects_repository_maintenance_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
