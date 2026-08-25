@@ -21,11 +21,19 @@ _SAFE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@#-]{0,255}$")
 _CANDIDATE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _ATTEMPT_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _MAX_LIVE_EVIDENCE_AGE = timedelta(days=7)
-_FAILURE_SOURCE_RESULTS = {
+_SOURCE_RESULT_PRECEDENCE = (
+    "complete",
+    "partial",
+    "observed_empty",
     "credential_blocked",
-    "failed",
-    "rate_limited",
     "unavailable",
+)
+_RELEASE_SOURCE_RESULTS = frozenset(_SOURCE_RESULT_PRECEDENCE)
+_CREDENTIAL_FAILURE_CODES = {
+    "credential_not_allowed",
+    "credentials_not_allowed",
+    "missing_credential",
+    "permission_denied",
 }
 _SENSITIVE_KEY_TOKENS = {
     "access_token",
@@ -70,6 +78,7 @@ class OperationQualificationEvidence:
     offline_contract_selector: str
     offline_contract_result: str
     evidence_references: tuple[str, ...]
+    capability_ids: tuple[str, ...] = ()
     gap_issues: tuple[int, ...] = ()
 
 
@@ -121,12 +130,12 @@ class OperationReleaseMatrix:
         ).encode("utf-8")
 
 
-def formal_producer_operation_ids(
+def formal_operation_applications(
     plan_snapshots: Sequence[ReleasePlanSnapshot],
-) -> tuple[str, ...]:
-    """Derive the sole formal denominator from public plan obligations."""
+) -> tuple[OperationOwner, ...]:
+    """Derive exact capability-to-producer applications from public plans."""
 
-    producer_ids: set[str] = set()
+    applications: set[OperationOwner] = set()
     for snapshot in plan_snapshots:
         _safe_release_reference(snapshot.request_profile, "request profile")
         for plan, _, _ in _release_plan_views(snapshot.result):
@@ -143,15 +152,29 @@ def formal_producer_operation_ids(
                     continue
                 if operation_kind != "external_source":
                     raise ValueError("release operation kind is unsupported")
-                producer_ids.add(
-                    _text(
-                        obligation.get("producer_operation_id"),
-                        "formal producer operation id",
+                applications.add(
+                    (
+                        _safe_release_reference(
+                            obligation.get("capability_id"), "formal capability id"
+                        ),
+                        _safe_release_reference(
+                            obligation.get("producer_operation_id"),
+                            "formal producer operation id",
+                        ),
                     )
                 )
-    if not producer_ids:
+    if not applications:
         raise ValueError("release matrix requires formal plan operations")
-    return tuple(sorted(producer_ids))
+    return tuple(sorted(applications))
+
+
+def formal_producer_operation_ids(
+    plan_snapshots: Sequence[ReleasePlanSnapshot],
+) -> tuple[str, ...]:
+    """Project the unique-producer denominator from formal applications."""
+
+    applications = formal_operation_applications(plan_snapshots)
+    return tuple(sorted({producer for _, producer in applications}))
 
 
 def load_release_probe_evidence(
@@ -292,6 +315,9 @@ def load_release_probe_evidence(
         age = assembled_time - probe_time
         if age < timedelta(0) or age > _MAX_LIVE_EVIDENCE_AGE:
             raise ValueError("release live probe evidence is stale")
+        source_result = _text(probe.get("source_result"), "live probe source result")
+        if source_result not in _RELEASE_SOURCE_RESULTS:
+            raise ValueError("live probe source result is unsupported")
         live_probes.append(
             LiveProbeEvidence(
                 producer_operation_id=_text(
@@ -300,9 +326,7 @@ def load_release_probe_evidence(
                 probe=_safe_release_reference(probe.get("probe"), "live probe"),
                 probe_status=_text(probe.get("probe_status"), "live probe status"),
                 attempted=_boolean(probe.get("attempted"), "live probe attempted"),
-                source_result=_text(
-                    probe.get("source_result"), "live probe source result"
-                ),
+                source_result=source_result,
                 verified_at=probe_verified_at,
                 candidate_sha=candidate_sha,
                 request_profile=_safe_release_reference(
@@ -355,13 +379,15 @@ def load_operation_qualification_manifest(
     payload: Mapping[str, object],
     *,
     expected_producer_operation_ids: Sequence[str],
+    expected_operation_applications: Sequence[OperationOwner] | None = None,
 ) -> tuple[OperationQualificationEvidence, ...]:
     """Load reviewed semantics and exactly join a plan-derived denominator."""
 
-    if (
-        set(payload) != {"schema_version", "operations"}
-        or payload.get("schema_version") != "1.0"
-    ):
+    schema_version = payload.get("schema_version")
+    if set(payload) != {"schema_version", "operations"} or schema_version not in {
+        "1.0",
+        "2.0",
+    }:
         raise ValueError("operation qualification manifest is invalid")
     values = _sequence(payload.get("operations"), "qualification operations")
     evidence: list[OperationQualificationEvidence] = []
@@ -380,10 +406,25 @@ def load_operation_qualification_manifest(
         "evidence_references",
         "gap_issues",
     }
+    if schema_version == "2.0":
+        expected_keys.add("capability_ids")
     for raw_value in values:
         value = _mapping(raw_value, "qualification operation")
         if set(value) != expected_keys:
             raise ValueError("operation qualification entry is invalid")
+        capability_ids: tuple[str, ...] = ()
+        if schema_version == "2.0":
+            capability_ids = tuple(
+                _safe_release_reference(item, "qualification capability id")
+                for item in _sequence(
+                    value.get("capability_ids"), "qualification capability ids"
+                )
+            )
+            if (
+                not capability_ids
+                or tuple(sorted(set(capability_ids))) != capability_ids
+            ):
+                raise ValueError("qualification capability ids are invalid")
         disposition = value.get("disposition")
         if disposition not in {"integrated", "experimental", "pending_dependency"}:
             raise ValueError("operation qualification disposition is invalid")
@@ -450,6 +491,7 @@ def load_operation_qualification_manifest(
                     "offline contract result",
                 ),
                 evidence_references=references,
+                capability_ids=capability_ids,
                 gap_issues=gap_issues,
             )
         )
@@ -463,6 +505,22 @@ def load_operation_qualification_manifest(
         or set(indexed) != expected
     ):
         raise ValueError("qualification evidence does not close the denominator")
+    reviewed_applications = {
+        (capability_id, item.producer_operation_id)
+        for item in evidence
+        for capability_id in item.capability_ids
+    }
+    if expected_operation_applications is not None:
+        expected_applications = tuple(
+            _operation_application(item, "expected operation application")
+            for item in expected_operation_applications
+        )
+        if len(set(expected_applications)) != len(
+            expected_applications
+        ) or reviewed_applications != set(expected_applications):
+            raise ValueError(
+                "qualification application authority does not close the plan"
+            )
     for item in evidence:
         _validate_qualification(item)
     return tuple(sorted(evidence, key=lambda item: item.producer_operation_id))
@@ -481,6 +539,7 @@ def build_operation_release_matrix(
     installation_health = _validated_installation_health(installation_health)
 
     producers: dict[str, dict[str, object]] = {}
+    formal_applications: set[OperationOwner] = set()
     active_release_applications: dict[str, set[tuple[str, str, str, str]]] = {}
     snapshot_candidate_shas: set[str] = set()
     snapshot_attempt_digests: set[str] = set()
@@ -529,6 +588,7 @@ def build_operation_release_matrix(
                     continue
                 if operation_kind != "external_source":
                     raise ValueError("release operation kind is unsupported")
+                formal_applications.add((application_owner[0], producer_operation_id))
                 capability = _mapping(
                     coverage.get(application_owner[0]), "release capability coverage"
                 )
@@ -610,11 +670,22 @@ def build_operation_release_matrix(
 
     if not producers:
         raise ValueError("release matrix requires formal plan operations")
+    for item in qualification_evidence:
+        _validate_qualification(item)
+        if not item.capability_ids:
+            raise ValueError("qualification capability ids are invalid")
     qualification_by_producer = _unique_evidence(
         qualification_evidence, "qualification evidence"
     )
     install_by_producer = _unique_evidence(installation_loads, "installation load")
     live_by_owner = _unique_evidence(live_probes, "live probe")
+    reviewed_applications = {
+        (capability_id, item.producer_operation_id)
+        for item in qualification_evidence
+        for capability_id in item.capability_ids
+    }
+    if reviewed_applications != formal_applications:
+        raise ValueError("qualification application authority does not close the plan")
     if set(qualification_by_producer) != set(producers):
         raise ValueError("qualification evidence does not close the denominator")
     if set(install_by_producer) != set(producers):
@@ -707,15 +778,7 @@ def build_operation_release_matrix(
         if not live.attempted:
             raise ValueError("live probe source must be attempted")
         _safe_release_reference(live.probe, "live probe")
-        if live.source_result not in {
-            "complete",
-            "observed_empty",
-            "partial",
-            "unavailable",
-            "credential_blocked",
-            "rate_limited",
-            "failed",
-        }:
+        if live.source_result not in _RELEASE_SOURCE_RESULTS:
             raise ValueError("live probe source result is unsupported")
         _verified_at(live.verified_at)
         _safe_release_reference(install.selector, "installation selector")
@@ -1261,6 +1324,7 @@ def _validate_sanitized_direct_contract(
                 "execution_state",
                 "state",
                 "query_complete",
+                "source_error_codes",
                 "field_dispositions",
             }:
                 raise ValueError("sanitized release operation is invalid")
@@ -1271,7 +1335,7 @@ def _validate_sanitized_direct_contract(
             _text(operation.get("state"), "release coverage state")
             if operation.get("query_complete") not in {None, True, False}:
                 raise ValueError("sanitized release query completeness is invalid")
-            _operation_source_result_options(operation)
+            derive_release_source_result((operation,))
             fields = _sequence(
                 operation.get("field_dispositions"), "release field dispositions"
             )
@@ -1356,46 +1420,69 @@ def _validate_live_probe_application_truth(
             raise ValueError(
                 "live probe attempted fact contradicts application execution"
             )
-        possible_results = _combined_source_result_options(operations)
-        if live.source_result not in possible_results:
+        expected_result = derive_release_source_result(operations)
+        if live.source_result != expected_result:
             raise ValueError(
                 "live probe source result contradicts application execution"
             )
 
 
-def _combined_source_result_options(
+def canonical_release_source_error_codes(value: object) -> tuple[str, ...]:
+    """Retain only the finite credential-class facts safe to seal."""
+
+    codes = {
+        item
+        for item in _sequence(value, "release source error codes")
+        if isinstance(item, str) and item in _CREDENTIAL_FAILURE_CODES
+    }
+    return tuple(sorted(codes))
+
+
+def derive_release_source_result(
     operations: Sequence[Mapping[str, object]],
-) -> set[str]:
-    options = [_operation_source_result_options(operation) for operation in operations]
-    for result in ("complete", "partial", "observed_empty"):
-        if any(result in item for item in options):
-            return {result}
-    if any(operation.get("execution_state") == "failed" for operation in operations):
-        return set(_FAILURE_SOURCE_RESULTS)
-    return {"unavailable"}
+) -> str:
+    """Derive one exact result from sanitized public applications."""
+
+    if not operations:
+        raise ValueError("release operation applications are missing")
+    observed = {_operation_source_result(operation) for operation in operations}
+    for result in _SOURCE_RESULT_PRECEDENCE:
+        if result in observed:
+            return result
+    raise ValueError("release operation source results are invalid")
 
 
-def _operation_source_result_options(operation: Mapping[str, object]) -> set[str]:
+def _operation_source_result(operation: Mapping[str, object]) -> str:
+    raw_error_codes = _sequence(
+        operation.get("source_error_codes"), "release source error codes"
+    )
+    source_error_codes = canonical_release_source_error_codes(raw_error_codes)
+    if tuple(raw_error_codes) != source_error_codes:
+        raise ValueError("release source error codes are not canonical")
     execution_state = _text(operation.get("execution_state"), "release execution state")
+    if execution_state != "failed" and source_error_codes:
+        raise ValueError("release source error codes require failed execution")
     coverage_state = _text(operation.get("state"), "release coverage state")
     query_complete = operation.get("query_complete")
     if execution_state == "succeeded":
         if query_complete is True and coverage_state in {"complete", "observed_empty"}:
-            return {coverage_state}
+            return coverage_state
         if query_complete is False and coverage_state == "partial":
-            return {"partial"}
+            return "partial"
     elif execution_state == "failed":
         if query_complete is None and coverage_state == "partial":
-            return {"partial"}
+            return "partial"
         if query_complete is None and coverage_state == "failed":
-            return set(_FAILURE_SOURCE_RESULTS)
+            if source_error_codes:
+                return "credential_blocked"
+            return "unavailable"
     elif execution_state in {
         "not_requested",
         "skipped_policy",
         "skipped_research_dependency",
     }:
         if query_complete is None and coverage_state == execution_state:
-            return {"unavailable"}
+            return "unavailable"
     raise ValueError("release operation execution facts are invalid")
 
 
@@ -1423,6 +1510,15 @@ def _unique_evidence(
 
 
 def _validate_qualification(value: OperationQualificationEvidence) -> None:
+    if not isinstance(value.capability_ids, tuple):
+        raise ValueError("qualification capability ids are invalid")
+    if value.capability_ids:
+        canonical_capability_ids = tuple(
+            _safe_release_reference(item, "qualification capability id")
+            for item in value.capability_ids
+        )
+        if tuple(sorted(set(canonical_capability_ids))) != canonical_capability_ids:
+            raise ValueError("qualification capability ids are invalid")
     if value.disposition not in {
         "integrated",
         "experimental",
@@ -1732,6 +1828,16 @@ def canonical_release_as_of(value: object, label: str) -> str:
     if parsed.isoformat() != text:
         raise ValueError(f"{label} is invalid")
     return text
+
+
+def _operation_application(value: object, label: str) -> OperationOwner:
+    application = _sequence(value, label)
+    if len(application) != 2:
+        raise ValueError(f"{label} is invalid")
+    return (
+        _safe_release_reference(application[0], f"{label} capability id"),
+        _safe_release_reference(application[1], f"{label} producer operation id"),
+    )
 
 
 def _strict_issue(value: object) -> int:

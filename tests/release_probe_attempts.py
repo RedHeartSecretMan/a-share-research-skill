@@ -43,8 +43,6 @@ _SOURCE_RESULTS = {
     "partial",
     "unavailable",
     "credential_blocked",
-    "rate_limited",
-    "failed",
 }
 _BASE_SAMPLE_KEYS = {
     "producer_operation_id",

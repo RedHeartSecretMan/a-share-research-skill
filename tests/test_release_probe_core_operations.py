@@ -9,16 +9,29 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from io import StringIO
 from pathlib import Path
-from typing import Callable, cast
+from typing import Callable, Mapping, cast
 from unittest.mock import patch
 
 from tests.skill_imports import add_skill_scripts_to_path
 
 add_skill_scripts_to_path()
+
+from a_share_research.research_result import (  # noqa: E402
+    DirectTaskPlan,
+    EvidenceUsePolicy,
+    FieldDisposition,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+    ResearchDependency,
+    fold_direct_task_research_result,
+    stable_result_id,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PROBE_PATH = REPOSITORY_ROOT / "tests" / "release_probe_core_operations.py"
@@ -40,6 +53,40 @@ _IDENTITY_PRODUCERS = (
     "cninfo_security_dictionary@1",
     "sse_stock_list@1",
     "szse_stock_list@1",
+)
+_NONFAILED_CREDENTIAL_CONTRADICTIONS = (
+    (
+        "succeeded-observed-empty",
+        "succeeded",
+        "observed_empty",
+        True,
+        True,
+        "observed_empty",
+    ),
+    (
+        "not-requested",
+        "not_requested",
+        "not_requested",
+        None,
+        False,
+        "unavailable",
+    ),
+    (
+        "skipped-policy",
+        "skipped_policy",
+        "skipped_policy",
+        None,
+        False,
+        "unavailable",
+    ),
+    (
+        "skipped-research-dependency",
+        "skipped_research_dependency",
+        "skipped_research_dependency",
+        None,
+        False,
+        "unavailable",
+    ),
 )
 
 
@@ -173,11 +220,19 @@ def _synthetic_attempt(
     candidate_sha: str,
     verified_at: str,
     attempted_producers: set[str],
+    capabilities_by_producer: dict[str, tuple[str, ...]] | None = None,
 ) -> dict[str, object]:
     """Build one bounded attempt fixture from the reviewed literal denominator."""
 
     producers = _reviewed_qualification_producers()
-    capability_id = "synthetic_release_contract"
+    if capabilities_by_producer is None:
+        capabilities_by_producer = {
+            producer: ("synthetic_release_contract",) for producer in producers
+        }
+    if set(capabilities_by_producer) != set(producers) or any(
+        not capability_ids for capability_ids in capabilities_by_producer.values()
+    ):
+        raise ValueError("synthetic release capability authority is invalid")
     obligations = [
         {
             "capability_id": capability_id,
@@ -190,25 +245,42 @@ def _synthetic_attempt(
             "evidence_uses": [{"use": "release_test", "role": "primary"}],
         }
         for producer in producers
+        for capability_id in capabilities_by_producer[producer]
     ]
-    operations = {
-        producer: {
-            "capability_id": capability_id,
-            "operation_id": producer,
-            "execution_state": (
-                "failed" if producer in attempted_producers else "not_requested"
-            ),
-            "state": "failed" if producer in attempted_producers else "not_requested",
-            "query_complete": None,
-            "field_dispositions": [
-                {
-                    "field": "payload",
-                    "disposition": "normalized",
-                    "destination": "observations[].payload",
-                }
-            ],
+    capability_ids = sorted(
+        {
+            capability_id
+            for reviewed in capabilities_by_producer.values()
+            for capability_id in reviewed
         }
-        for producer in producers
+    )
+    coverage = {
+        capability_id: {
+            "operations": {
+                producer: {
+                    "capability_id": capability_id,
+                    "operation_id": producer,
+                    "execution_state": (
+                        "failed" if producer in attempted_producers else "not_requested"
+                    ),
+                    "state": (
+                        "failed" if producer in attempted_producers else "not_requested"
+                    ),
+                    "query_complete": None,
+                    "source_error_codes": [],
+                    "field_dispositions": [
+                        {
+                            "field": "payload",
+                            "disposition": "normalized",
+                            "destination": "observations[].payload",
+                        }
+                    ],
+                }
+                for producer in producers
+                if capability_id in capabilities_by_producer[producer]
+            }
+        }
+        for capability_id in capability_ids
     }
     core: dict[str, object] = {
         "schema_version": "1.0",
@@ -226,11 +298,11 @@ def _synthetic_attempt(
                         "id": "synthetic-release-plan",
                         "version": "1.0",
                         "task_type": "synthetic_release",
-                        "capabilities": [capability_id],
+                        "capabilities": capability_ids,
                         "operation_obligations": obligations,
                         "research_dependencies": [],
                     },
-                    "coverage": {capability_id: {"operations": operations}},
+                    "coverage": coverage,
                 },
             }
         ],
@@ -271,6 +343,29 @@ def _synthetic_attempt(
     return core
 
 
+def _reviewed_application_attempt(
+    *,
+    candidate_sha: str,
+    verified_at: str,
+    attempted_producers: set[str],
+) -> dict[str, object]:
+    """Build a success fixture from checked-in static application authority."""
+
+    payload = json.loads(
+        release_probe.DEFAULT_QUALIFICATION.read_text(encoding="utf-8")
+    )
+    capabilities_by_producer = {
+        item["producer_operation_id"]: tuple(item["capability_ids"])
+        for item in payload["operations"]
+    }
+    return _synthetic_attempt(
+        candidate_sha=candidate_sha,
+        verified_at=verified_at,
+        attempted_producers=attempted_producers,
+        capabilities_by_producer=capabilities_by_producer,
+    )
+
+
 def _reseal_attempt(value: dict[str, object]) -> dict[str, object]:
     return release_probe.create_release_probe_attempt(
         candidate_sha=value["candidate_sha"],
@@ -293,6 +388,116 @@ def _reseal_attempt(value: dict[str, object]) -> dict[str, object]:
             for item in value["probe_samples"]
         ],
     )
+
+
+def _failed_public_source_attempt(*, source_error_code: str) -> dict[str, object]:
+    """Seal one failed application from the sanitizer's honest subtype."""
+
+    capability_id = "failure_subtype_contract"
+    producer_operation_id = _reviewed_qualification_producers()[0]
+    request_profile = "failure-subtype"
+    verified_at = "2026-08-12T09:30:00+08:00"
+    source_error = _public_source_error(
+        capability_id=capability_id,
+        operation_id=producer_operation_id,
+        code=source_error_code,
+        message="Release source failed.",
+    )
+    snapshot, evidence = release_probe.sanitize_public_result(
+        request_profile=request_profile,
+        request_as_of="2026-08-12",
+        result={
+            "schema_version": "1.0",
+            "research_anchor": {
+                "as_of": "2026-08-12",
+                "timezone": "Asia/Shanghai",
+            },
+            "plan": {
+                "id": "plan-failure-subtype",
+                "version": "1.0",
+                "task_type": "failure_subtype_test",
+                "capabilities": [capability_id],
+                "operation_obligations": [
+                    {
+                        "capability_id": capability_id,
+                        "operation_id": producer_operation_id,
+                        "producer_operation_id": producer_operation_id,
+                        "operation_kind": "external_source",
+                        "source_role": "release_test",
+                        "experimental": True,
+                        "exchange": None,
+                        "evidence_uses": [{"use": "release_test", "role": "primary"}],
+                    }
+                ],
+                "research_dependencies": [],
+            },
+            "coverage": {
+                capability_id: {
+                    "operations": {
+                        producer_operation_id: {
+                            "capability_id": capability_id,
+                            "operation_id": producer_operation_id,
+                            "execution_state": "failed",
+                            "state": "failed",
+                            "query_complete": None,
+                            "source_error_ids": [source_error["id"]],
+                            "field_dispositions": [
+                                {
+                                    "field": "payload",
+                                    "disposition": "normalized",
+                                    "destination": "observations[].payload",
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+            "source_errors": [source_error],
+        },
+        verified_at=verified_at,
+    )
+    return release_probe.create_release_probe_attempt(
+        candidate_sha=_RC_CANDIDATE_SHA,
+        verified_at=verified_at,
+        installation_health=_complete_installation_health(),
+        plan_snapshots=[snapshot],
+        installation_loads=[
+            {
+                "producer_operation_id": producer_operation_id,
+                "origin": "copied_install_plan",
+                "status": "complete",
+                "selector": request_profile,
+            }
+        ],
+        probe_samples=[
+            {key: value for key, value in evidence[0].items() if key != "verified_at"}
+            | {"request_profile": request_profile}
+        ],
+    )
+
+
+def _final_report_from_attempt(attempt: dict[str, object]) -> dict[str, object]:
+    """Decorate one already sealed attempt as a final public artifact fixture."""
+
+    digest = attempt["attempt_digest"]
+    return {
+        "schema_version": "1.0",
+        "candidate_sha": attempt["candidate_sha"],
+        "verified_at": attempt["verified_at"],
+        "attempt_digests": [digest],
+        "installation_health": deepcopy(attempt["installation_health"]),
+        "plan_snapshots": [
+            {
+                **deepcopy(snapshot),
+                "candidate_sha": attempt["candidate_sha"],
+                "verified_at": attempt["verified_at"],
+                "attempt_digest": digest,
+            }
+            for snapshot in attempt["plan_snapshots"]
+        ],
+        "installation_loads": deepcopy(attempt["installation_loads"]),
+        "live_probes": deepcopy(attempt["probe_samples"]),
+    }
 
 
 def _offline_identity_result(
@@ -379,6 +584,144 @@ def _invoke_offline_identity_main(
         ),
     ):
         return _invoke_main(output, failure_output)
+
+
+def _source_error_leaf(
+    *,
+    producer_operation_id: str,
+    execution_state: str,
+    state: str,
+    query_complete: bool | None,
+    source_error_ids: list[str],
+    task_type: str = "research_content",
+    capability_id: str = "shared_source_error_contract",
+) -> tuple[dict[str, object], dict[str, object]]:
+    plan = {
+        "id": f"plan-{execution_state}",
+        "version": "1.0",
+        "task_type": task_type,
+        "capabilities": [capability_id],
+        "operation_obligations": [
+            {
+                "capability_id": capability_id,
+                "operation_id": producer_operation_id,
+                "producer_operation_id": producer_operation_id,
+                "operation_kind": "external_source",
+                "source_role": "declared_per_observation",
+                "experimental": True,
+                "exchange": None,
+                "evidence_uses": [
+                    {
+                        "use": "research_content_material",
+                        "role": "supporting",
+                    }
+                ],
+            }
+        ],
+        "research_dependencies": [],
+    }
+    coverage = {
+        capability_id: {
+            "operations": {
+                producer_operation_id: {
+                    "capability_id": capability_id,
+                    "operation_id": producer_operation_id,
+                    "execution_state": execution_state,
+                    "state": state,
+                    "query_complete": query_complete,
+                    "observation_ids": [],
+                    "source_error_ids": source_error_ids,
+                    "field_dispositions": [
+                        {
+                            "field": "document",
+                            "disposition": "normalized",
+                            "destination": "observations[].payload.content",
+                        }
+                    ],
+                }
+            }
+        }
+    }
+    return plan, coverage
+
+
+def _public_source_error(
+    *,
+    capability_id: str,
+    operation_id: str,
+    code: str,
+    message: str,
+    details: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "capability_id": capability_id,
+        "operation_id": operation_id,
+        "code": code,
+        "message": message,
+    }
+    if details is not None:
+        payload["details"] = dict(details)
+    return {"id": stable_result_id("source-error", payload), **payload}
+
+
+def _built_failed_source_error_result(
+    *errors: Mapping[str, object],
+    task_type: str = "release_source_error_test",
+    capability_id: str = "shared_source_error_contract",
+) -> dict[str, object]:
+    """Build a real public result whose error-reference order is operation-local."""
+
+    operation_id = _reviewed_qualification_producers()[0]
+    outcome = OperationOutcome(
+        capability_id=capability_id,
+        operation_id=operation_id,
+        execution=OperationExecution("failed"),
+        source_errors=tuple(
+            {
+                "source_operation": operation_id,
+                "code": error["code"],
+                "message": error["message"],
+                **({"details": error["details"]} if "details" in error else {}),
+            }
+            for error in errors
+        ),
+        field_dispositions=(
+            FieldDisposition(
+                "payload",
+                "normalized",
+                "observations[].payload",
+            ),
+        ),
+    )
+    result = fold_direct_task_research_result(
+        DirectTaskPlan(
+            task_type=task_type,
+            as_of="2026-08-12",
+            obligations=(
+                OperationObligation(
+                    capability_id=capability_id,
+                    operation_id=operation_id,
+                    source_role="release_test",
+                    experimental=True,
+                    exchange=None,
+                    evidence_uses=(EvidenceUsePolicy("release_test", "supporting"),),
+                ),
+            ),
+            dependencies=(ResearchDependency("release_test", "release_test", 1, True),),
+        ),
+        (outcome,),
+        summary="Release source-error contract fixture.",
+    )
+    return result.to_dict()
+
+
+def _credential_source_error(producer_operation_id: str) -> dict[str, object]:
+    return _public_source_error(
+        capability_id="shared_source_error_contract",
+        operation_id=producer_operation_id,
+        code="missing_credential",
+        message="Authorization: Bearer workflow-secret",
+    )
 
 
 class CoreOperationReleaseProbeTests(unittest.TestCase):
@@ -652,7 +995,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
     def test_main_writes_only_sanitized_evidence_and_prints_digest_summary(
         self,
     ) -> None:
-        attempt = _synthetic_attempt(
+        attempt = _reviewed_application_attempt(
             candidate_sha=_RC_CANDIDATE_SHA,
             verified_at=_RC_VERIFIED_AT,
             attempted_producers=set(_reviewed_qualification_producers()),
@@ -721,12 +1064,12 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         producers = _reviewed_qualification_producers()
         prior_attempted = set(producers[:22])
         current_attempted = set(producers[22:])
-        prior = _synthetic_attempt(
+        prior = _reviewed_application_attempt(
             candidate_sha=_RC_CANDIDATE_SHA,
             verified_at="2026-08-12T09:35:00+08:00",
             attempted_producers=prior_attempted,
         )
-        current = _synthetic_attempt(
+        current = _reviewed_application_attempt(
             candidate_sha=_RC_CANDIDATE_SHA,
             verified_at=_RC_VERIFIED_AT,
             attempted_producers=current_attempted,
@@ -1384,7 +1727,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 verified_at="2026-08-12T01:35:00+00:00",
                 attempted_producers=producers,
             )
-            second["probe_samples"][0]["source_result"] = "rate_limited"
+            second["probe_samples"][0]["source_result"] = "credential_blocked"
             return first, _reseal_attempt(second)
 
         def plan_contract_drift() -> tuple[dict[str, object], dict[str, object]]:
@@ -1497,6 +1840,40 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), _ORIGINAL_FINAL)
             self.assertEqual(attempt_output.read_bytes(), original_attempt)
 
+    def test_attempt_contract_rejects_non_v040_source_result_states(self) -> None:
+        attempt = _synthetic_attempt(
+            candidate_sha=_RC_CANDIDATE_SHA,
+            verified_at=_RC_VERIFIED_AT,
+            attempted_producers=set(_reviewed_qualification_producers()),
+        )
+
+        for source_result in ("failed", "rate_limited"):
+            forged = deepcopy(attempt)
+            forged["probe_samples"][0]["source_result"] = source_result
+            with (
+                self.subTest(source_result=source_result),
+                self.assertRaisesRegex(ValueError, "sample is invalid"),
+            ):
+                _reseal_attempt(forged)
+
+    def test_attempt_contract_rejects_empty_or_duplicate_owners(self) -> None:
+        attempt = _synthetic_attempt(
+            candidate_sha=_RC_CANDIDATE_SHA,
+            verified_at=_RC_VERIFIED_AT,
+            attempted_producers=set(_reviewed_qualification_producers()),
+        )
+        first_owner = attempt["probe_samples"][0]["producer_operation_id"]
+        cases = (
+            ("empty", 0, ""),
+            ("duplicate", 1, first_owner),
+        )
+
+        for name, sample_index, owner in cases:
+            forged = deepcopy(attempt)
+            forged["probe_samples"][sample_index]["producer_operation_id"] = owner
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                _reseal_attempt(forged)
+
     def test_attempt_digest_covers_samples_and_sanitized_plan_contracts(self) -> None:
         attempt = _synthetic_attempt(
             candidate_sha=_RC_CANDIDATE_SHA,
@@ -1505,7 +1882,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         )
         mutations = (
             lambda value: value["probe_samples"][0].__setitem__(
-                "source_result", "failed"
+                "source_result", "partial"
             ),
             lambda value: value["plan_snapshots"][0]["result"]["plan"].__setitem__(
                 "id", "tampered-plan"
@@ -2003,6 +2380,230 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), _ORIGINAL_FINAL)
             self.assertFalse(attempt_output.exists())
 
+    def test_failed_source_subtype_cannot_be_relabelled_after_resealing(
+        self,
+    ) -> None:
+        from a_share_research.operation_release_matrix import (
+            OperationQualificationEvidence,
+        )
+
+        qualification = (
+            OperationQualificationEvidence(
+                producer_operation_id=_reviewed_qualification_producers()[0],
+                disposition="experimental",
+                temporal_semantics={"basis": "observed_at"},
+                unit_semantics={"payload": "source_declared"},
+                failure_semantics="failed_with_source_error",
+                empty_result_semantics="complete_query_zero_records",
+                acquisition_role="primary",
+                credential_policy="optional",
+                rate_limit_policy={"scope": "provider", "max_requests": 1},
+                offline_contract_selector="tests.failure_subtype",
+                offline_contract_result="passed",
+                evidence_references=("tests.failure_subtype",),
+                capability_ids=("failure_subtype_contract",),
+            ),
+        )
+
+        for source_error_code, honest_result, forged_result in (
+            ("missing_credential", "credential_blocked", "unavailable"),
+            ("rate_limited", "unavailable", "credential_blocked"),
+        ):
+            with self.subTest(
+                direction=f"{honest_result}->{forged_result}", stage="honest"
+            ):
+                honest_attempt = _failed_public_source_attempt(
+                    source_error_code=source_error_code
+                )
+                self.assertEqual(
+                    honest_attempt["probe_samples"][0]["source_result"],
+                    honest_result,
+                )
+                release_probe._validate_attempt_contract(honest_attempt)
+                honest_final = release_probe.assemble_release_probe_evidence(
+                    (honest_attempt,),
+                    candidate_sha=_RC_CANDIDATE_SHA,
+                    assembled_at=honest_attempt["verified_at"],
+                )
+                snapshots, installation_loads, installation_health, live_probes = (
+                    release_probe.load_release_probe_evidence(honest_final)
+                )
+                release_probe.build_operation_release_matrix(
+                    plan_snapshots=snapshots,
+                    qualification_evidence=qualification,
+                    installation_loads=installation_loads,
+                    installation_health=installation_health,
+                    live_probes=live_probes,
+                )
+
+            forged_attempt = deepcopy(honest_attempt)
+            forged_attempt["probe_samples"][0]["source_result"] = forged_result
+            forged_attempt = _reseal_attempt(forged_attempt)
+            forged_digest = forged_attempt["attempt_digest"]
+            self.assertNotEqual(
+                forged_digest,
+                honest_attempt["attempt_digest"],
+            )
+            forged_final = _final_report_from_attempt(forged_attempt)
+            forged_snapshots = tuple(
+                replace(snapshot, attempt_digest=forged_digest)
+                for snapshot in snapshots
+            )
+            forged_live_probes = tuple(
+                replace(
+                    live_probe,
+                    source_result=forged_result,
+                    attempt_digest=forged_digest,
+                )
+                for live_probe in live_probes
+            )
+            for gate in (
+                "direct-attempt-contract",
+                "attempt-union",
+                "final-loader-truth",
+                "matrix",
+            ):
+                with (
+                    self.subTest(
+                        direction=f"{honest_result}->{forged_result}", gate=gate
+                    ),
+                    self.assertRaises(ValueError),
+                ):
+                    if gate == "direct-attempt-contract":
+                        release_probe._validate_attempt_contract(forged_attempt)
+                    elif gate == "attempt-union":
+                        release_probe.assemble_release_probe_evidence(
+                            (forged_attempt,),
+                            candidate_sha=_RC_CANDIDATE_SHA,
+                            assembled_at=forged_attempt["verified_at"],
+                        )
+                    elif gate == "final-loader-truth":
+                        release_probe.load_release_probe_evidence(forged_final)
+                    else:
+                        release_probe.build_operation_release_matrix(
+                            plan_snapshots=forged_snapshots,
+                            qualification_evidence=qualification,
+                            installation_loads=installation_loads,
+                            installation_health=installation_health,
+                            live_probes=forged_live_probes,
+                        )
+
+    def test_attempt_contract_rejects_noncanonical_source_error_codes(
+        self,
+    ) -> None:
+        for name, source_error_codes in (
+            ("missing", None),
+            ("unknown", ["rate_limited"]),
+            ("duplicate", ["missing_credential", "missing_credential"]),
+            ("unsorted", ["permission_denied", "missing_credential"]),
+        ):
+            with self.subTest(name=name):
+                attempt = _failed_public_source_attempt(
+                    source_error_code="missing_credential"
+                )
+                operation = attempt["plan_snapshots"][0]["result"]["coverage"][
+                    "failure_subtype_contract"
+                ]["operations"][_reviewed_qualification_producers()[0]]
+                if source_error_codes is None:
+                    operation.pop("source_error_codes")
+                else:
+                    operation["source_error_codes"] = source_error_codes
+                forged = _reseal_attempt(attempt)
+
+                with self.assertRaises(ValueError):
+                    release_probe._validate_attempt_contract(forged)
+
+    def test_public_sanitizer_rejects_credential_codes_outside_failed_execution(
+        self,
+    ) -> None:
+        producer = _reviewed_qualification_producers()[0]
+        for (
+            name,
+            execution_state,
+            coverage_state,
+            query_complete,
+            _,
+            _,
+        ) in _NONFAILED_CREDENTIAL_CONTRADICTIONS:
+            with self.subTest(name=name):
+                attempt = _synthetic_attempt(
+                    candidate_sha=_RC_CANDIDATE_SHA,
+                    verified_at=_RC_VERIFIED_AT,
+                    attempted_producers=set(),
+                )
+                result = deepcopy(attempt["plan_snapshots"][0]["result"])
+                result["research_anchor"] = {
+                    "as_of": _RC_AS_OF,
+                    "timezone": "Asia/Shanghai",
+                }
+                operation = result["coverage"]["synthetic_release_contract"][
+                    "operations"
+                ][producer]
+                operation["execution_state"] = execution_state
+                operation["state"] = coverage_state
+                operation["query_complete"] = query_complete
+                source_error = _public_source_error(
+                    capability_id="synthetic_release_contract",
+                    operation_id=producer,
+                    code="missing_credential",
+                    message="Missing release credential.",
+                )
+                operation["source_error_ids"] = [source_error["id"]]
+                result["source_errors"] = [source_error]
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "release source error codes require failed execution",
+                ):
+                    release_probe.sanitize_public_result(
+                        request_profile=f"credential-contradiction-{name}",
+                        request_as_of=_RC_AS_OF,
+                        result=result,
+                        verified_at=_RC_VERIFIED_AT,
+                    )
+
+    def test_sealed_attempt_and_final_loader_reject_credential_codes_outside_failed(
+        self,
+    ) -> None:
+        producers = _reviewed_qualification_producers()
+        producer = producers[0]
+        for (
+            name,
+            execution_state,
+            coverage_state,
+            query_complete,
+            attempted,
+            source_result,
+        ) in _NONFAILED_CREDENTIAL_CONTRADICTIONS:
+            attempt = _synthetic_attempt(
+                candidate_sha=_RC_CANDIDATE_SHA,
+                verified_at=_RC_VERIFIED_AT,
+                attempted_producers=set(producers),
+            )
+            operation = attempt["plan_snapshots"][0]["result"]["coverage"][
+                "synthetic_release_contract"
+            ]["operations"][producer]
+            operation["execution_state"] = execution_state
+            operation["state"] = coverage_state
+            operation["query_complete"] = query_complete
+            operation["source_error_codes"] = ["missing_credential"]
+            sample = next(
+                item
+                for item in attempt["probe_samples"]
+                if item["producer_operation_id"] == producer
+            )
+            sample["attempted"] = attempted
+            sample["source_result"] = source_result
+            sealed_attempt = _reseal_attempt(attempt)
+            final_report = _final_report_from_attempt(sealed_attempt)
+
+            for gate in ("sealed-attempt", "final-loader"):
+                with self.subTest(name=name, gate=gate), self.assertRaises(ValueError):
+                    if gate == "sealed-attempt":
+                        release_probe._validate_attempt_contract(sealed_attempt)
+                    else:
+                        release_probe.load_release_probe_evidence(final_report)
+
     def test_main_rejects_other_resealed_prior_contract_drift_before_process(
         self,
     ) -> None:
@@ -2126,7 +2727,11 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         second["verified_at"] = "2026-08-13T01:35:00+00:00"
         for sample in second["probe_samples"]:
             sample["verified_at"] = second["verified_at"]
-        second["probe_samples"][0]["source_result"] = "rate_limited"
+        second["probe_samples"][0]["source_result"] = "credential_blocked"
+        producer = second["probe_samples"][0]["producer_operation_id"]
+        second["plan_snapshots"][0]["result"]["coverage"]["synthetic_release_contract"][
+            "operations"
+        ][producer]["source_error_codes"] = ["missing_credential"]
         second = _reseal_attempt(second)
 
         with self.assertRaisesRegex(ValueError, "conflicting live facts"):
@@ -2150,7 +2755,9 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             verified_at="2026-08-13T10:00:00+08:00",
             attempted_producers=set(),
         )
-        skipped["plan_snapshots"][0]["request_profile"] = "skipped-profile"
+        skipped_profile_snapshot = deepcopy(skipped["plan_snapshots"][0])
+        skipped_profile_snapshot["request_profile"] = "skipped-profile"
+        skipped["plan_snapshots"].append(skipped_profile_snapshot)
         for sample in skipped["probe_samples"]:
             sample["request_profile"] = "skipped-profile"
         skipped = _reseal_attempt(skipped)
@@ -2184,6 +2791,117 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "attempt digests"):
             release_probe.load_release_probe_evidence(forged)
 
+    def test_five_public_source_results_survive_attempt_union_loader_and_matrix(
+        self,
+    ) -> None:
+        producers = _reviewed_qualification_producers()
+        source_results = dict(
+            zip(
+                producers[:5],
+                (
+                    "complete",
+                    "observed_empty",
+                    "partial",
+                    "credential_blocked",
+                    "unavailable",
+                ),
+                strict=True,
+            )
+        )
+        attempt = _synthetic_attempt(
+            candidate_sha=_RC_CANDIDATE_SHA,
+            verified_at=_RC_VERIFIED_AT,
+            attempted_producers=set(producers),
+        )
+        operations = attempt["plan_snapshots"][0]["result"]["coverage"][
+            "synthetic_release_contract"
+        ]["operations"]
+        execution_facts = {
+            "complete": ("succeeded", "complete", True),
+            "observed_empty": ("succeeded", "observed_empty", True),
+            "partial": ("succeeded", "partial", False),
+            "credential_blocked": ("failed", "failed", None),
+            "unavailable": ("failed", "failed", None),
+        }
+        for producer, source_result in source_results.items():
+            execution_state, state, query_complete = execution_facts[source_result]
+            operations[producer]["execution_state"] = execution_state
+            operations[producer]["state"] = state
+            operations[producer]["query_complete"] = query_complete
+            operations[producer]["source_error_codes"] = (
+                ["missing_credential"] if source_result == "credential_blocked" else []
+            )
+            sample = next(
+                item
+                for item in attempt["probe_samples"]
+                if item["producer_operation_id"] == producer
+            )
+            sample["source_result"] = source_result
+
+        sealed_attempt = _reseal_attempt(attempt)
+        final = release_probe.assemble_release_probe_evidence(
+            (sealed_attempt,),
+            candidate_sha=_RC_CANDIDATE_SHA,
+            assembled_at=_RC_VERIFIED_AT,
+        )
+        snapshots, installation_loads, installation_health, live_probes = (
+            release_probe.load_release_probe_evidence(final)
+        )
+        qualification_payload = json.loads(
+            (
+                REPOSITORY_ROOT
+                / "docs"
+                / "research"
+                / "v0.3.0-operation-qualification.json"
+            ).read_text(encoding="utf-8")
+        )
+        qualification_payload["schema_version"] = "2.0"
+        for operation in qualification_payload["operations"]:
+            operation["capability_ids"] = ["synthetic_release_contract"]
+        qualification = release_probe.load_operation_qualification_manifest(
+            qualification_payload,
+            expected_producer_operation_ids=producers,
+            expected_operation_applications=tuple(
+                ("synthetic_release_contract", producer) for producer in producers
+            ),
+        )
+        matrix = release_probe.build_operation_release_matrix(
+            plan_snapshots=snapshots,
+            qualification_evidence=qualification,
+            installation_loads=installation_loads,
+            installation_health=installation_health,
+            live_probes=live_probes,
+        ).to_dict()
+        matrix_results = {
+            item["producer_operation_id"]: item["live_probe"]["source_result"]
+            for item in matrix["operations"]
+        }
+        self.assertEqual(
+            {producer: matrix_results[producer] for producer in source_results},
+            source_results,
+        )
+
+    def test_final_loader_rejects_non_v040_source_result_states(self) -> None:
+        attempt = _synthetic_attempt(
+            candidate_sha=_RC_CANDIDATE_SHA,
+            verified_at=_RC_VERIFIED_AT,
+            attempted_producers=set(_reviewed_qualification_producers()),
+        )
+        final = release_probe.assemble_release_probe_evidence(
+            (attempt,),
+            candidate_sha=_RC_CANDIDATE_SHA,
+            assembled_at=_RC_VERIFIED_AT,
+        )
+
+        for source_result in ("failed", "rate_limited"):
+            forged = deepcopy(final)
+            forged["live_probes"][0]["source_result"] = source_result
+            with (
+                self.subTest(source_result=source_result),
+                self.assertRaisesRegex(ValueError, "source result is unsupported"),
+            ):
+                release_probe.load_release_probe_evidence(forged)
+
     def test_attempt_loader_safely_rejects_excessive_json_depth(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "deep.attempt.json"
@@ -2216,6 +2934,29 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                     expected_candidate_sha=_RC_CANDIDATE_SHA,
                     assembled_at=_RC_VERIFIED_AT,
                 )
+
+    def test_attempt_loader_rejects_expired_or_future_attempts(self) -> None:
+        for name, verified_at in (
+            ("expired", "2026-08-01T09:35:00+08:00"),
+            ("future", "2026-08-14T09:35:00+08:00"),
+        ):
+            attempt = _synthetic_attempt(
+                candidate_sha=_RC_CANDIDATE_SHA,
+                verified_at=verified_at,
+                attempted_producers=set(_reviewed_qualification_producers()),
+            )
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / f"{name}.attempt.json"
+                path.write_text(
+                    json.dumps(attempt, ensure_ascii=False, sort_keys=True),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "stale"):
+                    release_probe.load_release_probe_attempt(
+                        path,
+                        expected_candidate_sha=_RC_CANDIDATE_SHA,
+                        assembled_at=_RC_VERIFIED_AT,
+                    )
 
     def test_final_loader_rejects_fully_rehashed_stale_live_provenance(self) -> None:
         attempt = _synthetic_attempt(
@@ -2711,7 +3452,111 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             )
             self.assertEqual(output.read_bytes(), original)
 
-    def test_all_profiles_use_public_calls_and_close_44_producer_evidence(
+    def test_reviewed_authority_uses_manifest_set_not_historical_numeric_total(
+        self,
+    ) -> None:
+        payload = json.loads(
+            (
+                REPOSITORY_ROOT
+                / "docs"
+                / "research"
+                / "v0.3.0-operation-qualification.json"
+            ).read_text(encoding="utf-8")
+        )
+        payload["operations"] = payload["operations"][:3]
+        expected = tuple(
+            sorted(item["producer_operation_id"] for item in payload["operations"])
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            authority = Path(temporary) / "static-operation-qualification.json"
+            authority.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            with patch.object(
+                release_probe,
+                "DEFAULT_QUALIFICATION",
+                authority,
+            ):
+                reviewed = release_probe._reviewed_producer_operation_ids()
+
+        self.assertEqual(reviewed, expected)
+
+    def test_maintainer_probe_defaults_to_static_v040_qualification_authority(
+        self,
+    ) -> None:
+        expected = (
+            REPOSITORY_ROOT
+            / "docs"
+            / "research"
+            / "v0.4.0-operation-qualification.json"
+        )
+        self.assertEqual(release_probe.DEFAULT_QUALIFICATION, expected)
+        payload = json.loads(expected.read_text(encoding="utf-8"))
+        self.assertEqual(payload["schema_version"], "2.0")
+        self.assertTrue(payload["operations"])
+        self.assertTrue(all(item["capability_ids"] for item in payload["operations"]))
+
+    def test_reviewed_application_authority_exactly_closes_historical_plans(
+        self,
+    ) -> None:
+        from a_share_research.operation_release_matrix import (
+            ReleasePlanSnapshot,
+            formal_operation_applications,
+            formal_producer_operation_ids,
+            load_operation_qualification_manifest,
+        )
+
+        historical = json.loads(
+            (
+                REPOSITORY_ROOT
+                / "docs"
+                / "research"
+                / "v0.3.0-release-probe-evidence.json"
+            ).read_text(encoding="utf-8")
+        )
+        snapshots = tuple(
+            ReleasePlanSnapshot(
+                result=item["result"],
+                request_profile=item["request_profile"],
+            )
+            for item in historical["plan_snapshots"]
+        )
+        plan_authority = set(formal_operation_applications(snapshots))
+        reviewed_manifest = json.loads(
+            release_probe.DEFAULT_QUALIFICATION.read_text(encoding="utf-8")
+        )
+        reviewed_authority = {
+            (capability_id, operation["producer_operation_id"])
+            for operation in reviewed_manifest["operations"]
+            for capability_id in operation["capability_ids"]
+        }
+
+        self.assertEqual(
+            reviewed_authority,
+            plan_authority,
+            msg=(
+                f"actual={len(plan_authority)}, reviewed={len(reviewed_authority)}, "
+                f"extras={sorted(reviewed_authority - plan_authority)!r}, "
+                f"missing={sorted(plan_authority - reviewed_authority)!r}"
+            ),
+        )
+        qualification = load_operation_qualification_manifest(
+            reviewed_manifest,
+            expected_producer_operation_ids=formal_producer_operation_ids(snapshots),
+            expected_operation_applications=tuple(sorted(plan_authority)),
+        )
+        self.assertEqual(
+            {
+                (capability_id, item.producer_operation_id)
+                for item in qualification
+                for capability_id in item.capability_ids
+            },
+            plan_authority,
+        )
+
+    def test_all_profiles_use_public_calls_and_close_plan_derived_producer_evidence(
         self,
     ) -> None:
         from a_share_research.adjusted_series_sources import (
@@ -2748,6 +3593,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         )
         from a_share_research.operation_release_matrix import (
             ReleasePlanSnapshot,
+            formal_operation_applications,
             formal_producer_operation_ids,
             load_operation_qualification_manifest,
         )
@@ -2847,7 +3693,12 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             candidate_sha=_RC_CANDIDATE_SHA,
             assembled_at="2026-08-12T09:30:00+08:00",
         )
-        release_probe._validate_release_report(report)
+        # This synthetic current run reaches only 53 applications.  It must not
+        # finalize against the reviewed 59-application historical authority.
+        with self.assertRaisesRegex(
+            ValueError, "qualification application authority does not close the plan"
+        ):
+            release_probe._validate_release_report(report)
 
         self.assertEqual(len(calls), len(profiles) + 1)
         self.assertEqual(sent_requests[0]["task_type"], "intraday_market_signal")
@@ -2866,8 +3717,6 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             [item["request_profile"] for item in report["plan_snapshots"]],
             sorted(profile.name for profile in profiles),
         )
-        self.assertEqual(len(report["live_probes"]), 44)
-        self.assertEqual(len(report["installation_loads"]), 44)
         self.assertEqual(
             {
                 item["producer_operation_id"]
@@ -2937,32 +3786,43 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             *(item.operation_id for item in replay_operations),
             *(item.operation_id for item in replay_daily_operations),
         }
-        plan_derived_producers = set(
-            formal_producer_operation_ids(
-                tuple(
-                    ReleasePlanSnapshot(
-                        result=item["result"],
-                        request_profile=item["request_profile"],
-                    )
-                    for item in report["plan_snapshots"]
-                )
+        snapshots = tuple(
+            ReleasePlanSnapshot(
+                result=item["result"],
+                request_profile=item["request_profile"],
             )
+            for item in report["plan_snapshots"]
         )
-        self.assertEqual(len(default_producer_authorities), 44)
+        plan_derived_producers = set(formal_producer_operation_ids(snapshots))
+        plan_derived_applications = formal_operation_applications(snapshots)
+        self.assertEqual(
+            {item["producer_operation_id"] for item in report["live_probes"]},
+            plan_derived_producers,
+        )
+        self.assertEqual(
+            {item["producer_operation_id"] for item in report["installation_loads"]},
+            plan_derived_producers,
+        )
         self.assertEqual(plan_derived_producers, default_producer_authorities)
         qualification_payload = json.loads(
-            (
-                REPOSITORY_ROOT
-                / "docs"
-                / "research"
-                / "v0.3.0-operation-qualification.json"
-            ).read_text(encoding="utf-8")
+            release_probe.DEFAULT_QUALIFICATION.read_text(encoding="utf-8")
         )
+        with self.assertRaisesRegex(
+            ValueError, "qualification application authority does not close the plan"
+        ):
+            load_operation_qualification_manifest(
+                qualification_payload,
+                expected_producer_operation_ids=tuple(plan_derived_producers),
+                expected_operation_applications=plan_derived_applications,
+            )
         qualification = load_operation_qualification_manifest(
             qualification_payload,
             expected_producer_operation_ids=tuple(plan_derived_producers),
         )
-        self.assertEqual(len(qualification), 44)
+        self.assertEqual(
+            {item.producer_operation_id for item in qualification},
+            plan_derived_producers,
+        )
 
         incomplete = deepcopy(report)
         missing_owner = "tencent_intraday_snapshot@1"
@@ -3567,12 +4427,607 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         self.assertIsInstance(value, str)
         self.assertEqual(value, "2026-08-12T01:30:00+00:00")
 
+    def test_sanitizer_accepts_builder_source_error_reference_order(self) -> None:
+        result = _built_failed_source_error_result(
+            {
+                "code": "missing_credential",
+                "message": "Missing release credential.",
+            },
+            {
+                "code": "permission_denied",
+                "message": "Release credential lacks permission.",
+            },
+        )
+        source_error_ids = [item["id"] for item in result["source_errors"]]
+        producer = _reviewed_qualification_producers()[0]
+        operation = result["coverage"]["shared_source_error_contract"]["operations"][
+            producer
+        ]
+
+        self.assertEqual(source_error_ids, sorted(source_error_ids, reverse=True))
+        self.assertEqual(operation["source_error_ids"], source_error_ids)
+
+        snapshot, evidence = release_probe.sanitize_public_result(
+            request_profile="builder-source-error-order",
+            request_as_of="2026-08-12",
+            result=result,
+            verified_at="2026-08-12T09:30:00+08:00",
+        )
+
+        safe_operation = snapshot["result"]["coverage"]["shared_source_error_contract"][
+            "operations"
+        ][producer]
+        self.assertEqual(
+            safe_operation["source_error_codes"],
+            ["missing_credential", "permission_denied"],
+        )
+        self.assertEqual(evidence[0]["source_result"], "credential_blocked")
+        serialized = json.dumps(
+            {"snapshot": snapshot, "evidence": evidence}, ensure_ascii=False
+        )
+        for forbidden in (
+            *source_error_ids,
+            "Release credential lacks permission.",
+            "Missing release credential.",
+        ):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_sanitizer_accepts_public_builder_source_error_string_values(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "credential-257-message",
+                "missing_credential",
+                "m" * 257,
+                ["missing_credential"],
+                "credential_blocked",
+            ),
+            (
+                "credential-longer-bounded-message",
+                "missing_credential",
+                "long bounded public message " * 256,
+                ["missing_credential"],
+                "credential_blocked",
+            ),
+            (
+                "credential-empty-message",
+                "missing_credential",
+                "",
+                ["missing_credential"],
+                "credential_blocked",
+            ),
+            (
+                "credential-escaped-control-message",
+                "missing_credential",
+                "public diagnostic\u0001message",
+                ["missing_credential"],
+                "credential_blocked",
+            ),
+            (
+                "unknown-long-code",
+                "u" * 257,
+                "Public unknown source failure.",
+                [],
+                "unavailable",
+            ),
+        )
+        producer = _reviewed_qualification_producers()[0]
+
+        for name, code, message, expected_codes, expected_source_result in cases:
+            with self.subTest(name=name):
+                result = _built_failed_source_error_result(
+                    {"code": code, "message": message}
+                )
+                canonical_payload = {
+                    "capability_id": "shared_source_error_contract",
+                    "operation_id": producer,
+                    "code": code,
+                    "message": message,
+                }
+                source_error = result["source_errors"][0]
+                self.assertEqual(
+                    source_error,
+                    {
+                        "id": stable_result_id("source-error", canonical_payload),
+                        **canonical_payload,
+                    },
+                )
+
+                snapshot, evidence = release_probe.sanitize_public_result(
+                    request_profile=name,
+                    request_as_of="2026-08-12",
+                    result=result,
+                    verified_at="2026-08-12T09:30:00+08:00",
+                )
+
+                operation = snapshot["result"]["coverage"][
+                    "shared_source_error_contract"
+                ]["operations"][producer]
+                self.assertEqual(operation["source_error_codes"], expected_codes)
+                self.assertEqual(evidence[0]["source_result"], expected_source_result)
+                self.assertTrue(evidence[0]["attempted"])
+                self.assertNotIn("source_errors", snapshot["result"])
+                serialized = json.dumps(
+                    {"snapshot": snapshot, "evidence": evidence}, ensure_ascii=False
+                )
+                self.assertNotIn(str(source_error["id"]), serialized)
+                if message:
+                    self.assertNotIn(message, serialized)
+                    self.assertNotIn(
+                        json.dumps(message, ensure_ascii=False)[1:-1], serialized
+                    )
+                if not expected_codes:
+                    self.assertNotIn(code, serialized)
+
+    def test_sanitizer_rejects_orphaned_direct_source_error(self) -> None:
+        result = _built_failed_source_error_result(
+            {
+                "code": "missing_credential",
+                "message": "Missing release credential.",
+            }
+        )
+        producer = _reviewed_qualification_producers()[0]
+        operation = result["coverage"]["shared_source_error_contract"]["operations"][
+            producer
+        ]
+        self.assertEqual(
+            operation["source_error_ids"],
+            [result["source_errors"][0]["id"]],
+        )
+        operation["source_error_ids"] = []
+
+        with self.assertRaisesRegex(ValueError, "source error IDs do not close"):
+            release_probe.sanitize_public_result(
+                request_profile="orphaned-direct-source-error",
+                request_as_of="2026-08-12",
+                result=result,
+                verified_at="2026-08-12T09:30:00+08:00",
+            )
+
+    def test_sanitizer_rejects_builder_source_error_id_payload_drift(self) -> None:
+        result = _built_failed_source_error_result(
+            {
+                "code": "rate_limited",
+                "message": "Release source rate limited.",
+            }
+        )
+
+        snapshot, evidence = release_probe.sanitize_public_result(
+            request_profile="builder-source-error-canonical",
+            request_as_of="2026-08-12",
+            result=result,
+            verified_at="2026-08-12T09:30:00+08:00",
+        )
+        producer = _reviewed_qualification_producers()[0]
+        safe_operation = snapshot["result"]["coverage"]["shared_source_error_contract"][
+            "operations"
+        ][producer]
+        self.assertEqual(safe_operation["source_error_codes"], [])
+        self.assertEqual(evidence[0]["source_result"], "unavailable")
+
+        tampered = deepcopy(result)
+        original_id = tampered["source_errors"][0]["id"]
+        tampered["source_errors"][0]["code"] = "missing_credential"
+
+        with self.assertRaisesRegex(
+            ValueError, "source-error ID contradicts its canonical payload"
+        ):
+            release_probe.sanitize_public_result(
+                request_profile="builder-source-error-tampered",
+                request_as_of="2026-08-12",
+                result=tampered,
+                verified_at="2026-08-12T09:30:00+08:00",
+            )
+        self.assertEqual(tampered["source_errors"][0]["id"], original_id)
+
+    def test_sanitizer_rejects_source_error_details_rejected_by_public_builder(
+        self,
+    ) -> None:
+        details = {"contract_codes": ["19999999"]}
+        with self.assertRaisesRegex(
+            ValueError, "source error scope is invalid for this task"
+        ):
+            _built_failed_source_error_result(
+                {
+                    "code": "missing_credential",
+                    "message": "Missing release credential.",
+                    "details": details,
+                }
+            )
+
+        result = _built_failed_source_error_result(
+            {
+                "code": "missing_credential",
+                "message": "Missing release credential.",
+            }
+        )
+        producer = _reviewed_qualification_producers()[0]
+        source_error = _public_source_error(
+            capability_id="shared_source_error_contract",
+            operation_id=producer,
+            code="missing_credential",
+            message="Missing release credential.",
+            details=details,
+        )
+        result["source_errors"] = [source_error]
+        result["coverage"]["shared_source_error_contract"]["operations"][producer][
+            "source_error_ids"
+        ] = [source_error["id"]]
+
+        try:
+            snapshot, evidence = release_probe.sanitize_public_result(
+                request_profile="wrong-task-contract-code-source-error",
+                request_as_of="2026-08-12",
+                result=result,
+                verified_at="2026-08-12T09:30:00+08:00",
+            )
+        except ValueError as error:
+            self.assertEqual(str(error), "source error scope is invalid for this task")
+        else:
+            operation = snapshot["result"]["coverage"]["shared_source_error_contract"][
+                "operations"
+            ][producer]
+            self.assertEqual(operation["source_error_codes"], ["missing_credential"])
+            self.assertEqual(evidence[0]["source_result"], "credential_blocked")
+            self.fail("sanitizer accepted details rejected by the public builder")
+
+    def test_sanitizer_matches_public_source_error_detail_owner_rules(self) -> None:
+        from a_share_research.capital_contract import (
+            CapitalQuery,
+            CapitalSourceBatch,
+            CapitalSourceFailure,
+        )
+        from a_share_research.etf_option_contract import OptionSourceFailure
+        from a_share_research.market_signal_contract import (
+            SignalCoverage,
+            SignalSourceBatch,
+            SignalSourceFailure,
+        )
+
+        from tests.test_capital_events import (
+            BluefocusIdentityTransport,
+            build_capital_events_result,
+            capital_request,
+        )
+        from tests.test_etf_options import (
+            FixedOptionOperation,
+            build_etf_options_result,
+            complete_batch,
+            contract,
+            option_request,
+        )
+        from tests.test_market_signals import (
+            FixedOperation,
+            NoIdentityTransport,
+            build_market_signals_result,
+            signal_request,
+        )
+
+        class FailedCapitalOperation:
+            operation_id = "failed_capital_scope@1"
+            supported_data_types = frozenset({"market_dragon_tiger"})
+            raw_fields = ("result.data[]", "TRADE_DATE", "NET_DEAL_AMT")
+
+            def collect(self, query: CapitalQuery) -> CapitalSourceBatch:
+                return CapitalSourceBatch(
+                    operation_id=self.operation_id,
+                    source_errors=(
+                        CapitalSourceFailure(
+                            self.operation_id,
+                            "missing_credential",
+                            "Missing release credential.",
+                            {"data_type": "market_dragon_tiger"},
+                        ),
+                    ),
+                    complete=False,
+                )
+
+        capital_result = build_capital_events_result(
+            capital_request(["market_dragon_tiger"]),
+            [FailedCapitalOperation()],
+            BluefocusIdentityTransport(),
+        )
+        market_result = build_market_signals_result(
+            signal_request(["strong_stock_theme"]),
+            [
+                FixedOperation(
+                    SignalSourceBatch(
+                        operation_id="fixed_signal@1",
+                        coverage={
+                            "strong_stock_theme": SignalCoverage("indeterminate")
+                        },
+                        source_errors=(
+                            SignalSourceFailure(
+                                "fixed_signal@1",
+                                "missing_credential",
+                                "Missing release credential.",
+                                {"signal_types": ["strong_stock_theme"]},
+                            ),
+                        ),
+                    )
+                )
+            ],
+            NoIdentityTransport(),
+        )
+        option_batch = complete_batch(
+            contract("10000001", "call", "3.00", delta="0.55"),
+            contract("10000002", "put", "3.00", delta="-0.45"),
+        )
+        option_result = build_etf_options_result(
+            option_request(),
+            [
+                FixedOptionOperation(
+                    replace(
+                        option_batch,
+                        source_errors=(
+                            OptionSourceFailure(
+                                "fixed_options@1",
+                                "missing_credential",
+                                "Missing release credential.",
+                                {"contract_codes": ["10000001"]},
+                            ),
+                        ),
+                    )
+                )
+            ],
+        )
+        correct_results = (
+            ("data-type", capital_result, "data_type", "credential_blocked"),
+            ("signal-types", market_result, "signal_types", "credential_blocked"),
+            ("contract-codes", option_result, "contract_codes", "partial"),
+        )
+        producer = _reviewed_qualification_producers()[0]
+
+        for name, result, detail_key, expected_source_result in correct_results:
+            with self.subTest(name=name):
+                source_error = next(
+                    item
+                    for item in result["source_errors"]
+                    if detail_key in item.get("details", {})
+                )
+                canonical_payload = {
+                    key: value for key, value in source_error.items() if key != "id"
+                }
+                self.assertEqual(
+                    source_error["id"],
+                    stable_result_id("source-error", canonical_payload),
+                )
+                snapshot, evidence = release_probe.sanitize_public_result(
+                    request_profile=f"correct-{name}-source-error",
+                    request_as_of=str(result["research_anchor"]["as_of"]),
+                    result=result,
+                    verified_at="2026-08-12T09:30:00+08:00",
+                )
+                capability_id = str(source_error["capability_id"])
+                operation_id = str(source_error["operation_id"])
+                operation = snapshot["result"]["coverage"][capability_id]["operations"][
+                    operation_id
+                ]
+                self.assertEqual(
+                    operation["source_error_codes"], ["missing_credential"]
+                )
+                operation_evidence = next(
+                    item
+                    for item in evidence
+                    if item["producer_operation_id"] == operation_id
+                )
+                self.assertEqual(
+                    operation_evidence["source_result"], expected_source_result
+                )
+                serialized = json.dumps(
+                    {"snapshot": snapshot, "evidence": evidence}, ensure_ascii=False
+                )
+                self.assertNotIn(str(source_error["id"]), serialized)
+                self.assertNotIn("Missing release credential.", serialized)
+                details = source_error["details"]
+                for private_value in details.values():
+                    values = (
+                        private_value
+                        if isinstance(private_value, list)
+                        else [private_value]
+                    )
+                    for value in values:
+                        self.assertNotIn(str(value), serialized)
+
+        scope_cases = (
+            (
+                "data-type",
+                "capital_events",
+                "capital_event_observations",
+                {"data_type": "market_dragon_tiger"},
+            ),
+            (
+                "signal-types",
+                "market_signals",
+                "market_signal_observations",
+                {"signal_types": ["strong_stock_theme"]},
+            ),
+            (
+                "contract-codes",
+                "etf_options",
+                "etf_option_contracts",
+                {"contract_codes": ["10000001"]},
+            ),
+        )
+        for name, task_type, capability_id, details in scope_cases:
+            for mismatch, invalid_task_type, invalid_capability_id in (
+                ("wrong-task", "release_source_error_test", capability_id),
+                ("wrong-capability", task_type, "shared_source_error_contract"),
+            ):
+                with self.subTest(name=name, mismatch=mismatch):
+                    invalid_error = _public_source_error(
+                        capability_id=invalid_capability_id,
+                        operation_id=producer,
+                        code="missing_credential",
+                        message="Missing release credential.",
+                        details=details,
+                    )
+                    invalid_plan, invalid_coverage = _source_error_leaf(
+                        producer_operation_id=producer,
+                        execution_state="failed",
+                        state="failed",
+                        query_complete=None,
+                        source_error_ids=[str(invalid_error["id"])],
+                        task_type=invalid_task_type,
+                        capability_id=invalid_capability_id,
+                    )
+                    invalid = {
+                        "schema_version": "1.0",
+                        "research_anchor": {
+                            "as_of": "2026-08-12",
+                            "timezone": "Asia/Shanghai",
+                        },
+                        "plan": invalid_plan,
+                        "coverage": invalid_coverage,
+                        "source_errors": [invalid_error],
+                    }
+                    with self.assertRaisesRegex(
+                        ValueError, "source error scope is invalid for this task"
+                    ):
+                        release_probe.sanitize_public_result(
+                            request_profile=f"{mismatch}-{name}-source-error",
+                            request_as_of="2026-08-12",
+                            result=invalid,
+                            verified_at="2026-08-12T09:30:00+08:00",
+                        )
+
+    def test_workflow_leaf_enforces_source_error_detail_owner_scope(self) -> None:
+        producer = _reviewed_qualification_producers()[0]
+        details = {"contract_codes": ["19999999"]}
+
+        def workflow_result(task_type: str, capability_id: str) -> dict[str, object]:
+            source_error = _public_source_error(
+                capability_id=capability_id,
+                operation_id=producer,
+                code="missing_credential",
+                message="Missing release credential.",
+                details=details,
+            )
+            leaf_plan, leaf_coverage = _source_error_leaf(
+                producer_operation_id=producer,
+                execution_state="failed",
+                state="failed",
+                query_complete=None,
+                source_error_ids=[str(source_error["id"])],
+                task_type=task_type,
+                capability_id=capability_id,
+            )
+            return {
+                "schema_version": "1.0",
+                "research_anchor": {
+                    "as_of": "2026-08-12",
+                    "timezone": "Asia/Shanghai",
+                },
+                "plan": {
+                    "id": "workflow-source-error-detail-scope",
+                    "version": "1.0",
+                    "task_type": "research_workflow",
+                    "workflow_id": "source-error-detail-scope",
+                    "steps": [
+                        {
+                            "step_id": "scoped-source-error",
+                            "version": "1.0",
+                            "task_type": task_type,
+                            "criticality": "supporting",
+                            "depends_on": [],
+                        }
+                    ],
+                },
+                "capability_registry": {
+                    "steps": {
+                        "scoped-source-error": {
+                            "step_id": "scoped-source-error",
+                            "version": "1.0",
+                            "task_type": task_type,
+                            "leaf_plan": leaf_plan,
+                        }
+                    }
+                },
+                "coverage": {"steps": {"scoped-source-error": {"leaf": leaf_coverage}}},
+                "source_errors": [source_error],
+            }
+
+        valid = workflow_result("etf_options", "etf_option_contracts")
+        snapshot, evidence = release_probe.sanitize_public_result(
+            request_profile="workflow-correct-contract-code-source-error",
+            request_as_of="2026-08-12",
+            result=valid,
+            verified_at="2026-08-12T09:30:00+08:00",
+        )
+        operation = snapshot["result"]["coverage"]["steps"]["scoped-source-error"][
+            "leaf"
+        ]["etf_option_contracts"]["operations"][producer]
+        self.assertEqual(operation["source_error_codes"], ["missing_credential"])
+        self.assertEqual(evidence[0]["source_result"], "credential_blocked")
+
+        for name, task_type, capability_id in (
+            ("wrong-task", "research_content", "etf_option_contracts"),
+            ("wrong-capability", "etf_options", "shared_source_error_contract"),
+        ):
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(
+                    ValueError, "source error scope is invalid for this task"
+                ),
+            ):
+                release_probe.sanitize_public_result(
+                    request_profile=f"workflow-{name}-source-error",
+                    request_as_of="2026-08-12",
+                    result=workflow_result(task_type, capability_id),
+                    verified_at="2026-08-12T09:30:00+08:00",
+                )
+
+    def test_sanitizer_enforces_exact_source_error_schema_and_details(self) -> None:
+        result = _built_failed_source_error_result(
+            {
+                "code": "missing_credential",
+                "message": "Missing release credential.",
+            }
+        )
+
+        for name, mutate, expected_error in (
+            (
+                "missing-message",
+                lambda error: error.pop("message"),
+                "strict result schema",
+            ),
+            (
+                "extra-key",
+                lambda error: error.__setitem__("raw_payload", "private"),
+                "strict result schema",
+            ),
+            (
+                "invalid-details",
+                lambda error: error.__setitem__("details", {"raw_payload": "private"}),
+                "scope material",
+            ),
+        ):
+            with self.subTest(name=name):
+                invalid = deepcopy(result)
+                mutate(invalid["source_errors"][0])
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    release_probe.sanitize_public_result(
+                        request_profile=f"source-error-schema-{name}",
+                        request_as_of="2026-08-12",
+                        result=invalid,
+                        verified_at="2026-08-12T09:30:00+08:00",
+                    )
+
     def test_sanitizer_keeps_only_plan_contract_and_safe_operation_result(self) -> None:
         from a_share_research.operation_release_matrix import (
             load_release_probe_evidence,
         )
 
-        producer_operation_id = "credentialed_source@1"
+        producer_operation_id = _reviewed_qualification_producers()[0]
+        capability_id = "capital_event_observations"
+        source_error = _public_source_error(
+            capability_id=capability_id,
+            operation_id=producer_operation_id,
+            code="missing_credential",
+            message="Authorization: Bearer secret-value",
+            details={"data_type": "full provider body"},
+        )
         result = {
             "schema_version": "1.0",
             "status": "blocked",
@@ -3583,11 +5038,11 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             "plan": {
                 "id": "plan-safe",
                 "version": "1.0",
-                "task_type": "research_content",
-                "capabilities": ["research_content_materials"],
+                "task_type": "capital_events",
+                "capabilities": [capability_id],
                 "operation_obligations": [
                     {
-                        "capability_id": "research_content_materials",
+                        "capability_id": capability_id,
                         "operation_id": producer_operation_id,
                         "producer_operation_id": producer_operation_id,
                         "operation_kind": "external_source",
@@ -3605,17 +5060,17 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 "research_dependencies": [],
             },
             "coverage": {
-                "research_content_materials": {
+                capability_id: {
                     "state": "failed",
                     "operations": {
                         producer_operation_id: {
-                            "capability_id": "research_content_materials",
+                            "capability_id": capability_id,
                             "operation_id": producer_operation_id,
                             "execution_state": "failed",
                             "state": "failed",
                             "query_complete": None,
                             "observation_ids": [],
-                            "source_error_ids": ["source-error-secret"],
+                            "source_error_ids": [source_error["id"]],
                             "field_dispositions": [
                                 {
                                     "field": "document",
@@ -3628,16 +5083,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                     },
                 }
             },
-            "source_errors": [
-                {
-                    "id": "source-error-secret",
-                    "capability_id": "research_content_materials",
-                    "operation_id": producer_operation_id,
-                    "code": "missing_credential",
-                    "message": "Authorization: Bearer secret-value",
-                    "details": {"raw_payload": "full provider body"},
-                }
-            ],
+            "source_errors": [source_error],
             "observations": [
                 {
                     "locator": {"uri": "https://provider.example/private"},
@@ -3660,9 +5106,9 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         self.assertEqual(
             set(snapshot["result"]), {"schema_version", "plan", "coverage"}
         )
-        operation = snapshot["result"]["coverage"]["research_content_materials"][
-            "operations"
-        ][producer_operation_id]
+        operation = snapshot["result"]["coverage"][capability_id]["operations"][
+            producer_operation_id
+        ]
         self.assertEqual(
             set(operation),
             {
@@ -3671,9 +5117,11 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 "execution_state",
                 "state",
                 "query_complete",
+                "source_error_codes",
                 "field_dispositions",
             },
         )
+        self.assertEqual(operation["source_error_codes"], ["missing_credential"])
         self.assertEqual(
             evidence,
             [
@@ -3687,6 +5135,44 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 }
             ],
         )
+        rate_limited = deepcopy(result)
+        rate_limited_error = _public_source_error(
+            capability_id=capability_id,
+            operation_id=producer_operation_id,
+            code="rate_limited",
+            message="Authorization: Bearer secret-value",
+            details={"data_type": "full provider body"},
+        )
+        rate_limited["source_errors"] = [rate_limited_error]
+        rate_limited["coverage"][capability_id]["operations"][producer_operation_id][
+            "source_error_ids"
+        ] = [rate_limited_error["id"]]
+        rate_limited_snapshot, rate_limited_evidence = (
+            release_probe.sanitize_public_result(
+                request_profile="content-rate-limited",
+                request_as_of="2026-08-12",
+                result=rate_limited,
+                verified_at="2026-08-12T09:30:00+08:00",
+            )
+        )
+        self.assertIs(rate_limited_evidence[0]["attempted"], True)
+        self.assertEqual(
+            rate_limited_evidence[0]["source_result"],
+            "unavailable",
+        )
+        rate_limited_operation = rate_limited_snapshot["result"]["coverage"][
+            capability_id
+        ]["operations"][producer_operation_id]
+        self.assertEqual(rate_limited_operation["source_error_codes"], [])
+        serialized = json.dumps(
+            {
+                "snapshot": snapshot,
+                "evidence": evidence,
+                "rate_limited_snapshot": rate_limited_snapshot,
+                "rate_limited_evidence": rate_limited_evidence,
+            },
+            ensure_ascii=False,
+        )
         for forbidden in (
             "secret-value",
             "Authorization",
@@ -3694,9 +5180,10 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             "provider.example",
             "raw provider payload",
             "full provider body",
-            "source-error-secret",
+            str(source_error["id"]),
         ):
             self.assertNotIn(forbidden, serialized)
+
         installation_health = {
             "schema_version": "1.0",
             "status": "complete",
@@ -3748,17 +5235,231 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sanitized direct release result"):
             load_release_probe_evidence(forged)
         nested_forgery = deepcopy(report)
-        nested_forgery["plan_snapshots"][0]["result"]["coverage"][
-            "research_content_materials"
-        ]["operations"][producer_operation_id]["field_dispositions"][0][
-            "raw_payload"
-        ] = "secret"
+        nested_forgery["plan_snapshots"][0]["result"]["coverage"][capability_id][
+            "operations"
+        ][producer_operation_id]["field_dispositions"][0]["raw_payload"] = "secret"
         with self.assertRaisesRegex(ValueError, "field disposition"):
             load_release_probe_evidence(nested_forgery)
         forged_health = deepcopy(report)
         forged_health["installation_health"]["raw_payload"] = "secret"
         with self.assertRaisesRegex(ValueError, "installation health"):
             load_release_probe_evidence(forged_health)
+
+    def test_sanitizer_resolves_source_errors_by_each_operation_reference(self) -> None:
+        producer_operation_id = _reviewed_qualification_producers()[0]
+        credential_error = _credential_source_error(producer_operation_id)
+        credential_error_id = str(credential_error["id"])
+        states = (
+            ("failed", "failed", "failed", None, [credential_error_id]),
+            ("succeeded", "succeeded", "complete", True, []),
+            ("not-requested", "not_requested", "not_requested", None, []),
+        )
+        steps: list[dict[str, object]] = []
+        registry_steps: dict[str, object] = {}
+        coverage_steps: dict[str, object] = {}
+        for step_id, execution_state, state, query_complete, source_error_ids in states:
+            leaf_plan, leaf_coverage = _source_error_leaf(
+                producer_operation_id=producer_operation_id,
+                execution_state=execution_state,
+                state=state,
+                query_complete=query_complete,
+                source_error_ids=source_error_ids,
+            )
+            step = {
+                "step_id": step_id,
+                "version": "1.0",
+                "task_type": "research_content",
+                "criticality": "supporting",
+                "depends_on": [],
+            }
+            steps.append(step)
+            registry_steps[step_id] = {
+                "step_id": step_id,
+                "version": "1.0",
+                "task_type": "research_content",
+                "leaf_plan": leaf_plan,
+            }
+            coverage_steps[step_id] = {"leaf": leaf_coverage}
+        result = {
+            "schema_version": "1.0",
+            "research_anchor": {
+                "as_of": "2026-08-12",
+                "timezone": "Asia/Shanghai",
+            },
+            "plan": {
+                "id": "workflow-shared-source-error-owner",
+                "version": "1.0",
+                "task_type": "research_workflow",
+                "workflow_id": "shared-source-error-owner",
+                "steps": steps,
+            },
+            "capability_registry": {"steps": registry_steps},
+            "coverage": {"steps": coverage_steps},
+            "source_errors": [credential_error],
+        }
+
+        snapshot, evidence = release_probe.sanitize_public_result(
+            request_profile="workflow-shared-source-error-owner",
+            request_as_of="2026-08-12",
+            result=result,
+            verified_at="2026-08-12T09:30:00+08:00",
+        )
+
+        safe_steps = snapshot["result"]["coverage"]["steps"]
+        operations = [
+            safe_steps[step_id]["leaf"]["shared_source_error_contract"]["operations"][
+                producer_operation_id
+            ]
+            for step_id, *_ in states
+        ]
+        self.assertEqual(
+            [operation["source_error_codes"] for operation in operations],
+            [["missing_credential"], [], []],
+        )
+        self.assertEqual(
+            [item["source_result"] for item in evidence],
+            ["credential_blocked", "complete", "unavailable"],
+        )
+        self.assertEqual(
+            [item["attempted"] for item in evidence],
+            [True, True, False],
+        )
+        serialized = json.dumps(
+            {"snapshot": snapshot, "evidence": evidence}, ensure_ascii=False
+        )
+        for forbidden in (
+            credential_error_id,
+            "workflow-secret",
+            "Authorization",
+        ):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_sanitizer_rejects_orphaned_workflow_source_error(self) -> None:
+        producer_operation_id = _reviewed_qualification_producers()[0]
+        credential_error = _credential_source_error(producer_operation_id)
+        credential_error_id = str(credential_error["id"])
+        steps: list[dict[str, object]] = []
+        registry_steps: dict[str, object] = {}
+        coverage_steps: dict[str, object] = {}
+        for step_id in ("first-owner", "repeated-owner"):
+            leaf_plan, leaf_coverage = _source_error_leaf(
+                producer_operation_id=producer_operation_id,
+                execution_state="failed",
+                state="failed",
+                query_complete=None,
+                source_error_ids=[credential_error_id],
+            )
+            step = {
+                "step_id": step_id,
+                "version": "1.0",
+                "task_type": "research_content",
+                "criticality": "supporting",
+                "depends_on": [],
+            }
+            steps.append(step)
+            registry_steps[step_id] = {
+                "step_id": step_id,
+                "version": "1.0",
+                "task_type": "research_content",
+                "leaf_plan": leaf_plan,
+            }
+            coverage_steps[step_id] = {"leaf": leaf_coverage}
+        result = {
+            "schema_version": "1.0",
+            "research_anchor": {
+                "as_of": "2026-08-12",
+                "timezone": "Asia/Shanghai",
+            },
+            "plan": {
+                "id": "workflow-orphaned-source-error",
+                "version": "1.0",
+                "task_type": "research_workflow",
+                "workflow_id": "orphaned-source-error",
+                "steps": steps,
+            },
+            "capability_registry": {"steps": registry_steps},
+            "coverage": {"steps": coverage_steps},
+            "source_errors": [credential_error],
+        }
+        for covered in coverage_steps.values():
+            operation = covered["leaf"]["shared_source_error_contract"]["operations"][
+                producer_operation_id
+            ]
+            self.assertEqual(operation["source_error_ids"], [credential_error_id])
+            operation["source_error_ids"] = []
+
+        with self.assertRaisesRegex(ValueError, "source error IDs do not close"):
+            release_probe.sanitize_public_result(
+                request_profile="orphaned-workflow-source-error",
+                request_as_of="2026-08-12",
+                result=result,
+                verified_at="2026-08-12T09:30:00+08:00",
+            )
+
+    def test_sanitizer_rejects_invalid_source_error_id_authority(self) -> None:
+        producer_operation_id = _reviewed_qualification_producers()[0]
+
+        def direct_result() -> dict[str, object]:
+            credential_error = _credential_source_error(producer_operation_id)
+            plan, coverage = _source_error_leaf(
+                producer_operation_id=producer_operation_id,
+                execution_state="failed",
+                state="failed",
+                query_complete=None,
+                source_error_ids=[str(credential_error["id"])],
+            )
+            return {
+                "schema_version": "1.0",
+                "research_anchor": {
+                    "as_of": "2026-08-12",
+                    "timezone": "Asia/Shanghai",
+                },
+                "plan": plan,
+                "coverage": coverage,
+                "source_errors": [credential_error],
+            }
+
+        invalid_results: list[tuple[str, dict[str, object]]] = []
+        unknown = direct_result()
+        unknown["coverage"]["shared_source_error_contract"]["operations"][
+            producer_operation_id
+        ]["source_error_ids"] = ["unknown-error"]
+        invalid_results.append(("unknown-reference", unknown))
+
+        duplicate_reference = direct_result()
+        duplicate_reference["coverage"]["shared_source_error_contract"]["operations"][
+            producer_operation_id
+        ]["source_error_ids"] = 2 * [duplicate_reference["source_errors"][0]["id"]]
+        invalid_results.append(("duplicate-reference", duplicate_reference))
+
+        foreign_owner = direct_result()
+        foreign_error = _public_source_error(
+            capability_id="foreign-capability",
+            operation_id="foreign-source@1",
+            code="missing_credential",
+            message="Missing foreign credential.",
+        )
+        foreign_owner["source_errors"].append(foreign_error)
+        foreign_owner["coverage"]["shared_source_error_contract"]["operations"][
+            producer_operation_id
+        ]["source_error_ids"] = [foreign_error["id"]]
+        invalid_results.append(("foreign-owner", foreign_owner))
+
+        duplicate_id = direct_result()
+        duplicate_id["source_errors"].append(deepcopy(duplicate_id["source_errors"][0]))
+        invalid_results.append(("duplicate-top-level-id", duplicate_id))
+
+        for name, result in invalid_results:
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(ValueError, "source error"),
+            ):
+                release_probe.sanitize_public_result(
+                    request_profile=f"source-error-{name}",
+                    request_as_of="2026-08-12",
+                    result=result,
+                    verified_at="2026-08-12T09:30:00+08:00",
+                )
 
     def test_sanitizer_excludes_valuation_local_selection_from_producer_evidence(
         self,

@@ -1477,6 +1477,10 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             .research(comparison_workflow_request(["工业富联", "平安银行"]))
             .to_dict()
         )
+        for covered_step in public_result["coverage"]["steps"].values():
+            for capability in covered_step["leaf"].values():
+                for operation in capability["operations"].values():
+                    operation["source_error_codes"] = []
         step_registry = public_result["capability_registry"]["steps"]["comparison"]
         obligations = step_registry["leaf_plan"]["operation_obligations"]
         producer_ids = sorted({item["producer_operation_id"] for item in obligations})
@@ -1498,6 +1502,15 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                 offline_contract_selector="tests.test_research_workflows",
                 offline_contract_result="passed",
                 evidence_references=("tests.test_research_workflows",),
+                capability_ids=tuple(
+                    sorted(
+                        {
+                            obligation["capability_id"]
+                            for obligation in obligations
+                            if obligation["producer_operation_id"] == producer_id
+                        }
+                    )
+                ),
             )
             for producer_id in producer_ids
         )
@@ -1597,6 +1610,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                                         "execution_state": "succeeded",
                                         "state": "observed_empty",
                                         "query_complete": True,
+                                        "source_error_codes": [],
                                         "observation_ids": [],
                                         "source_error_ids": [],
                                         "field_dispositions": [
@@ -1631,6 +1645,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                 offline_contract_selector=f"tests.contracts.operation_{index}",
                 offline_contract_result="passed",
                 evidence_references=(f"tests.contracts.operation_{index}",),
+                capability_ids=(f"capability-{index}",),
             )
             for index, producer_id in enumerate(producer_ids)
         )
@@ -1680,6 +1695,174 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             },
             "live_probes": probes,
         }
+
+    def test_normal_builder_rejects_empty_qualification_application_authority(
+        self,
+    ) -> None:
+        for name in ("unchanged", "self-consistent-relabel"):
+            inputs = self._stable_matrix_inputs()
+            qualifications = tuple(
+                replace(item, capability_ids=())
+                for item in inputs["qualification_evidence"]
+            )
+            inputs["qualification_evidence"] = qualifications
+            self.assertTrue(all(not item.capability_ids for item in qualifications))
+            if name == "self-consistent-relabel":
+                snapshots = deepcopy(inputs["plan_snapshots"])
+                result = snapshots[0].result
+                plan = result["plan"]
+                obligation = plan["operation_obligations"][0]
+                old_capability_id = obligation["capability_id"]
+                relabeled_capability_id = "self-consistent-relabel"
+                plan["capabilities"] = [relabeled_capability_id]
+                obligation["capability_id"] = relabeled_capability_id
+                capability = result["coverage"].pop(old_capability_id)
+                operation = capability["operations"][obligation["operation_id"]]
+                operation["capability_id"] = relabeled_capability_id
+                result["coverage"][relabeled_capability_id] = capability
+                inputs["plan_snapshots"] = snapshots
+
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(
+                    ValueError, "qualification capability ids are invalid"
+                ),
+            ):
+                build_operation_release_matrix(**inputs)
+
+    def test_reviewed_capability_application_rejects_self_consistent_relabel(
+        self,
+    ) -> None:
+        inputs = self._stable_matrix_inputs()
+        snapshots = deepcopy(inputs["plan_snapshots"])
+        reviewed_capabilities_by_producer: dict[str, set[str]] = {}
+        for snapshot in snapshots:
+            for obligation in snapshot.result["plan"]["operation_obligations"]:
+                reviewed_capabilities_by_producer.setdefault(
+                    obligation["producer_operation_id"], set()
+                ).add(obligation["capability_id"])
+        qualifications = tuple(
+            replace(
+                item,
+                capability_ids=tuple(
+                    sorted(
+                        reviewed_capabilities_by_producer[item.producer_operation_id]
+                    )
+                ),
+            )
+            for item in inputs["qualification_evidence"]
+        )
+        self.assertEqual(
+            {
+                (
+                    capability_id,
+                    qualification.producer_operation_id,
+                )
+                for qualification in qualifications
+                for capability_id in qualification.capability_ids
+            },
+            {
+                (
+                    obligation["capability_id"],
+                    obligation["producer_operation_id"],
+                )
+                for snapshot in snapshots
+                for obligation in snapshot.result["plan"]["operation_obligations"]
+            },
+        )
+        build_operation_release_matrix(
+            **{
+                **inputs,
+                "qualification_evidence": qualifications,
+            }
+        )
+
+        result = snapshots[0].result
+        plan = result["plan"]
+        obligation = plan["operation_obligations"][0]
+        old_capability_id = obligation["capability_id"]
+        unknown_capability_id = "unknown-reviewed-capability"
+        plan["capabilities"] = [unknown_capability_id]
+        obligation["capability_id"] = unknown_capability_id
+        capability = result["coverage"].pop(old_capability_id)
+        operation = capability["operations"][obligation["operation_id"]]
+        operation["capability_id"] = unknown_capability_id
+        result["coverage"][unknown_capability_id] = capability
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "qualification application authority does not close the plan",
+        ):
+            build_operation_release_matrix(
+                **{
+                    **inputs,
+                    "plan_snapshots": snapshots,
+                    "qualification_evidence": qualifications,
+                }
+            )
+
+    def test_direct_qualification_rejects_duplicate_capability_authority(
+        self,
+    ) -> None:
+        inputs = self._stable_matrix_inputs()
+        snapshots = inputs["plan_snapshots"]
+        reviewed_capabilities_by_producer = {
+            obligation["producer_operation_id"]: obligation["capability_id"]
+            for snapshot in snapshots
+            for obligation in snapshot.result["plan"]["operation_obligations"]
+        }
+        qualifications = tuple(
+            replace(
+                item,
+                capability_ids=(
+                    reviewed_capabilities_by_producer[item.producer_operation_id],
+                ),
+            )
+            for item in inputs["qualification_evidence"]
+        )
+        duplicate = replace(
+            qualifications[0],
+            capability_ids=(
+                qualifications[0].capability_ids[0],
+                qualifications[0].capability_ids[0],
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "qualification capability ids are invalid",
+        ):
+            build_operation_release_matrix(
+                **{
+                    **inputs,
+                    "qualification_evidence": (duplicate, *qualifications[1:]),
+                }
+            )
+
+    def test_release_source_result_contract_rejects_non_v040_states(self) -> None:
+        inputs = self._stable_matrix_inputs()
+        snapshots = deepcopy(inputs["plan_snapshots"])
+        operation = snapshots[0].result["coverage"]["capability-0"]["operations"][
+            "alpha_source@1"
+        ]
+        operation["execution_state"] = "failed"
+        operation["state"] = "failed"
+        operation["query_complete"] = None
+        probes = tuple(inputs["live_probes"])
+
+        for source_result in ("failed", "rate_limited"):
+            with self.subTest(source_result=source_result):
+                with self.assertRaises(ValueError):
+                    build_operation_release_matrix(
+                        **{
+                            **inputs,
+                            "plan_snapshots": snapshots,
+                            "live_probes": (
+                                replace(probes[0], source_result=source_result),
+                                probes[1],
+                            ),
+                        }
+                    )
 
     def test_matrix_bytes_are_order_independent_and_applications_are_deduplicated(
         self,
@@ -1929,6 +2112,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                 "execution_state": "succeeded",
                 "state": "observed_empty",
                 "query_complete": True,
+                "source_error_codes": [],
                 "observation_ids": [],
                 "source_error_ids": [],
                 "field_dispositions": [
@@ -1945,6 +2129,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
         operations[producer_ids[1]]["execution_state"] = "failed"
         operations[producer_ids[1]]["state"] = "failed"
         operations[producer_ids[1]]["query_complete"] = None
+        operations[producer_ids[1]]["source_error_codes"] = ["missing_credential"]
         snapshot = ReleasePlanSnapshot(
             result={
                 "schema_version": "1.0",
@@ -1979,6 +2164,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                 offline_contract_selector="tests.contracts.public_material",
                 offline_contract_result="passed",
                 evidence_references=("tests.contracts.public_material",),
+                capability_ids=(capability_id,),
                 gap_issues=(62,),
             ),
             OperationQualificationEvidence(
@@ -1997,6 +2183,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                 offline_contract_selector="tests.contracts.credentialed_material",
                 offline_contract_result="passed",
                 evidence_references=("tests.contracts.credentialed_material",),
+                capability_ids=(capability_id,),
                 gap_issues=(),
             ),
         )
@@ -2131,6 +2318,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             "execution_state": "succeeded",
             "state": "observed_empty",
             "query_complete": True,
+            "source_error_codes": [],
             "field_dispositions": [
                 {
                     "field": "derived_value",
@@ -2183,6 +2371,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                 "execution_state": "succeeded",
                 "state": "observed_empty",
                 "query_complete": True,
+                "source_error_codes": [],
                 "observation_ids": [],
                 "source_error_ids": [],
                 "field_dispositions": [
@@ -2234,6 +2423,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                     ),
                     offline_contract_result="passed",
                     evidence_references=("tests.test_direct_market_valuation_runtime",),
+                    capability_ids=(capability_id,),
                     gap_issues=(61,),
                 ),
             ),
@@ -2425,6 +2615,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
                                 "execution_state": "succeeded",
                                 "state": "observed_empty",
                                 "query_complete": True,
+                                "source_error_codes": [],
                                 "observation_ids": [],
                                 "source_error_ids": [],
                                 "field_dispositions": [
@@ -2459,6 +2650,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             ),
             offline_contract_result="passed",
             evidence_references=("tests.test_operation_release_matrix",),
+            capability_ids=(owner[0],),
             gap_issues=(61,),
         )
         live = LiveProbeEvidence(

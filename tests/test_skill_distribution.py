@@ -1034,7 +1034,7 @@ class SkillDistributionTests(unittest.TestCase):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(audit_relative_path, readme)
 
-    def test_research_docs_separate_current_v030_files_from_versioned_history(
+    def test_research_docs_separate_current_release_files_from_versioned_history(
         self,
     ) -> None:
         research_root = Path(REPOSITORY_ROOT, "docs", "research")
@@ -1050,6 +1050,7 @@ class SkillDistributionTests(unittest.TestCase):
                 "v0.3.0-operation-release-matrix.md",
                 "v0.3.0-release-audit-2026-08-18.md",
                 "v0.3.0-release-probe-evidence.json",
+                "v0.4.0-operation-qualification.json",
             },
         )
 
@@ -1062,6 +1063,13 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertTrue(
             all(re.fullmatch(r"v\d+\.\d+\.\d+-.+", name) for name in history_files)
         )
+        research_index = Path(research_root, "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "[`v0.4.0-operation-qualification.json`](v0.4.0-operation-qualification.json)",
+            research_index,
+        )
+        self.assertIn("不构成 v0.4.0 发布或联网验证证明", research_index)
+
         self.assertFalse(any(name.startswith("core-v0.3.0-") for name in current_files))
 
     def test_examples_index_every_versioned_request_exactly_once(self) -> None:

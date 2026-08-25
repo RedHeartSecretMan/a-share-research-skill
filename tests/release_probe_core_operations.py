@@ -30,16 +30,23 @@ from a_share_research.operation_release_matrix import (  # noqa: E402
     ReleasePlanSnapshot,
     build_operation_release_matrix,
     canonical_release_as_of,
+    canonical_release_source_error_codes,
+    derive_release_source_result,
+    formal_operation_applications,
     formal_producer_operation_ids,
     load_operation_qualification_manifest,
     load_release_probe_evidence,
 )
 from a_share_research.research_result import (  # noqa: E402
+    _validate_public_source_error,
+    stable_result_id,
     validate_plan_operation_producer_authority,
 )
 
 from tests.release_probe_attempts import (  # noqa: E402
-    assemble_release_probe_evidence,
+    assemble_release_probe_evidence as _assemble_release_probe_evidence,
+)
+from tests.release_probe_attempts import (  # noqa: E402
     attempt_json_bytes,
     create_release_probe_attempt,
     load_release_probe_attempt,
@@ -49,29 +56,21 @@ from tests.release_probe_attempts import (  # noqa: E402
 PROBE_ID = "tests/release_probe_core_operations.py"
 _COPIED_INSTALL_TIMEOUT_SECONDS = 1200
 DEFAULT_QUALIFICATION = (
-    REPOSITORY_ROOT / "docs" / "research" / "v0.3.0-operation-qualification.json"
+    REPOSITORY_ROOT / "docs" / "research" / "v0.4.0-operation-qualification.json"
 )
 _SAFE_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-_CREDENTIAL_FAILURE_CODES = {
-    "credential_not_allowed",
-    "credentials_not_allowed",
-    "missing_credential",
-    "permission_denied",
-}
-_RATE_LIMIT_FAILURE_CODES = {
-    "rate_limit_exceeded",
-    "rate_limited",
-    "upstream_rate_limited",
-}
 _SOURCE_RESULT_PRECEDENCE = (
     "complete",
     "partial",
     "observed_empty",
     "credential_blocked",
-    "rate_limited",
     "unavailable",
-    "failed",
 )
+_SOURCE_ERROR_DETAIL_SCOPES = {
+    ("capital_events", "capital_event_observations", "data_type"),
+    ("market_signals", "market_signal_observations", "signal_types"),
+    ("etf_options", "etf_option_contracts", "contract_codes"),
+}
 
 ProcessExecutor = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -852,7 +851,8 @@ def sanitize_public_result(
         )
     plan = _mapping(result.get("plan"), "public result contract plan")
     coverage = _mapping(result.get("coverage"), "public result contract coverage")
-    error_codes = _source_error_codes(result.get("source_errors"))
+    source_errors = _source_errors_by_id(result.get("source_errors"))
+    referenced_source_error_ids: set[str] = set()
     if plan.get("task_type") == "research_workflow":
         safe_result, safe_evidence = _sanitize_workflow_result(
             plan=plan,
@@ -861,9 +861,12 @@ def sanitize_public_result(
                 "public result contract workflow registry",
             ),
             coverage=coverage,
-            error_codes=error_codes,
+            source_errors=source_errors,
             verified_at=verified_at,
+            referenced_source_error_ids=referenced_source_error_ids,
         )
+        if referenced_source_error_ids != set(source_errors):
+            raise ValueError("public result contract source error IDs do not close")
         return (
             {
                 "request_profile": request_profile,
@@ -875,9 +878,12 @@ def sanitize_public_result(
     safe_plan, safe_coverage, safe_evidence = _sanitize_plan_contract(
         plan=plan,
         coverage=coverage,
-        error_codes=error_codes,
+        source_errors=source_errors,
         verified_at=verified_at,
+        referenced_source_error_ids=referenced_source_error_ids,
     )
+    if referenced_source_error_ids != set(source_errors):
+        raise ValueError("public result contract source error IDs do not close")
     return (
         {
             "request_profile": request_profile,
@@ -896,8 +902,9 @@ def _sanitize_plan_contract(
     *,
     plan: Mapping[str, object],
     coverage: Mapping[str, object],
-    error_codes: Mapping[tuple[str, str], Sequence[str]],
+    source_errors: Mapping[str, tuple[str, str, object, str | None]],
     verified_at: str,
+    referenced_source_error_ids: set[str],
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
     """Reduce one direct or workflow-leaf plan to its formal contracts."""
 
@@ -944,7 +951,14 @@ def _sanitize_plan_contract(
             operations.get(operation_id),
             "public result contract owned operation coverage",
         )
-        safe_operation = _safe_operation(operation, capability_id, operation_id)
+        safe_operation = _safe_operation(
+            operation,
+            capability_id,
+            operation_id,
+            task_type=cast(str, safe_plan["task_type"]),
+            source_errors=source_errors,
+            referenced_source_error_ids=referenced_source_error_ids,
+        )
         aggregate_output = safe_coverage.setdefault(capability_id, {"operations": {}})
         aggregate_operations = cast(
             dict[str, object],
@@ -961,10 +975,7 @@ def _sanitize_plan_contract(
                     "probe_status": "passed",
                     "attempted": safe_operation["execution_state"]
                     in {"succeeded", "failed"},
-                    "source_result": _source_result(
-                        safe_operation,
-                        error_codes.get((capability_id, operation_id), ()),
-                    ),
+                    "source_result": derive_release_source_result((safe_operation,)),
                     "verified_at": verified_at,
                 }
             )
@@ -979,8 +990,9 @@ def _sanitize_workflow_result(
     plan: Mapping[str, object],
     registry: Mapping[str, object],
     coverage: Mapping[str, object],
-    error_codes: Mapping[tuple[str, str], Sequence[str]],
+    source_errors: Mapping[str, tuple[str, str, object, str | None]],
     verified_at: str,
+    referenced_source_error_ids: set[str],
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     plan_steps = _sequence(plan.get("steps"), "public workflow plan steps")
     registry_steps = _mapping(registry.get("steps"), "public workflow registry steps")
@@ -1031,8 +1043,9 @@ def _sanitize_workflow_result(
             safe_leaf_plan, safe_leaf_coverage, leaf_evidence = _sanitize_plan_contract(
                 plan=_mapping(leaf_plan_value, "public workflow leaf plan"),
                 coverage=_mapping(leaf_coverage_value, "public workflow leaf coverage"),
-                error_codes=error_codes,
+                source_errors=source_errors,
                 verified_at=verified_at,
+                referenced_source_error_ids=referenced_source_error_ids,
             )
             if (
                 safe_leaf_plan["task_type"] != safe_step["task_type"]
@@ -1160,7 +1173,13 @@ def _safe_research_dependencies(value: object) -> list[dict[str, object]]:
 
 
 def _safe_operation(
-    value: Mapping[str, object], capability_id: str, operation_id: str
+    value: Mapping[str, object],
+    capability_id: str,
+    operation_id: str,
+    *,
+    task_type: str,
+    source_errors: Mapping[str, tuple[str, str, object, str | None]],
+    referenced_source_error_ids: set[str],
 ) -> dict[str, object]:
     if (
         value.get("capability_id") != capability_id
@@ -1213,53 +1232,80 @@ def _safe_operation(
         ):
             raise ValueError("public result contract field dispositions are invalid")
         safe_dispositions.append(deepcopy(dict(disposition)))
+    source_error_ids = _string_list_or_empty(
+        value.get("source_error_ids", ()),
+        "operation source error ids",
+    )
+    source_error_codes: list[str] = []
+    for source_error_id in source_error_ids:
+        source_error = source_errors.get(source_error_id)
+        if source_error is None:
+            raise ValueError("operation references an unknown source error")
+        error_capability_id, error_operation_id, error_code, detail_scope = source_error
+        if (error_capability_id, error_operation_id) != (
+            capability_id,
+            operation_id,
+        ):
+            raise ValueError("operation references a foreign-owner source error")
+        if (
+            detail_scope is not None
+            and (
+                task_type,
+                capability_id,
+                detail_scope,
+            )
+            not in _SOURCE_ERROR_DETAIL_SCOPES
+        ):
+            raise ValueError("source error scope is invalid for this task")
+        referenced_source_error_ids.add(source_error_id)
+        source_error_codes.extend(canonical_release_source_error_codes((error_code,)))
     return {
         "capability_id": capability_id,
         "operation_id": operation_id,
         "execution_state": execution_state,
         "state": state,
         "query_complete": query_complete,
+        "source_error_codes": list(
+            canonical_release_source_error_codes(source_error_codes)
+        ),
         "field_dispositions": safe_dispositions,
     }
 
 
-def _source_error_codes(
+def _source_errors_by_id(
     value: object,
-) -> dict[tuple[str, str], tuple[str, ...]]:
+) -> dict[str, tuple[str, str, object, str | None]]:
     if value is None:
         return {}
     errors = _sequence(value, "public result contract source errors")
-    indexed: dict[tuple[str, str], list[str]] = {}
+    indexed: dict[str, tuple[str, str, object, str | None]] = {}
     for raw_error in errors:
         error = _mapping(raw_error, "public result contract source error")
-        owner = (
-            _text(error.get("capability_id"), "source error capability id"),
-            _text(error.get("operation_id"), "source error operation id"),
+        details = _validate_public_source_error(error)
+        error_id = _text(error.get("id"), "source error id")
+        if not _SAFE_PROFILE.fullmatch(error_id) or error_id in indexed:
+            raise ValueError("public result contract source error id is invalid")
+        capability_id = _text(error.get("capability_id"), "source error capability id")
+        operation_id = _text(error.get("operation_id"), "source error operation id")
+        code = error.get("code")
+        message = error.get("message")
+        canonical_payload: dict[str, object] = {
+            "capability_id": capability_id,
+            "operation_id": operation_id,
+            "code": code,
+            "message": message,
+        }
+        if details:
+            canonical_payload["details"] = details
+        if error_id != stable_result_id("source-error", canonical_payload):
+            raise ValueError("source-error ID contradicts its canonical payload")
+        indexed[error_id] = (
+            capability_id,
+            operation_id,
+            code,
+            next(iter(details), None),
         )
-        indexed.setdefault(owner, []).append(
-            _text(error.get("code"), "source error code")
-        )
-    return {owner: tuple(codes) for owner, codes in indexed.items()}
-
-
-def _source_result(
-    operation: Mapping[str, object], failure_codes: Sequence[str]
-) -> str:
-    state = operation["state"]
-    if state in {"complete", "observed_empty", "partial"}:
-        return cast(str, state)
-    if any(code in _CREDENTIAL_FAILURE_CODES for code in failure_codes):
-        return "credential_blocked"
-    if any(code in _RATE_LIMIT_FAILURE_CODES for code in failure_codes):
-        return "rate_limited"
-    if state in {
-        "failed",
-        "not_requested",
-        "skipped_policy",
-        "skipped_research_dependency",
-    }:
-        return "unavailable"
-    raise ValueError("public result contract coverage state is unsupported")
+    return indexed
 
 
 def _combined_source_result(values: Sequence[Mapping[str, object]]) -> str:
@@ -1541,6 +1587,7 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
         load_release_probe_evidence(report)
     )
     denominator = formal_producer_operation_ids(snapshots)
+    applications = formal_operation_applications(snapshots)
     try:
         qualification_payload = json.loads(
             DEFAULT_QUALIFICATION.read_text(encoding="utf-8")
@@ -1550,6 +1597,7 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
     qualification = load_operation_qualification_manifest(
         _mapping(qualification_payload, "operation qualification manifest"),
         expected_producer_operation_ids=denominator,
+        expected_operation_applications=applications,
     )
     build_operation_release_matrix(
         plan_snapshots=snapshots,
@@ -1561,7 +1609,7 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
 
 
 def _reviewed_producer_operation_ids() -> tuple[str, ...]:
-    """Load the reviewed v0.3.0 owner set without creating a second registry."""
+    """Load the reviewed static owner set without a numeric denominator gate."""
 
     try:
         payload = _mapping(
@@ -1581,10 +1629,7 @@ def _reviewed_producer_operation_ids() -> tuple[str, ...]:
         payload,
         expected_producer_operation_ids=candidate_ids,
     )
-    reviewed = tuple(item.producer_operation_id for item in qualification)
-    if len(reviewed) != 44:
-        raise ValueError("reviewed release denominator is incomplete")
-    return reviewed
+    return tuple(item.producer_operation_id for item in qualification)
 
 
 def _truth_gate_progress(
@@ -1702,6 +1747,23 @@ def _validate_attempt_contract(
         _reviewed_producer_operation_ids()
     ):
         raise ValueError("release probe attempt contains an unreviewed producer")
+
+
+def assemble_release_probe_evidence(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    candidate_sha: str,
+    assembled_at: str,
+) -> dict[str, object]:
+    """Validate exact application truth before assembling an attempt union."""
+
+    for attempt in attempts:
+        _validate_attempt_contract(attempt)
+    return _assemble_release_probe_evidence(
+        attempts,
+        candidate_sha=candidate_sha,
+        assembled_at=assembled_at,
+    )
 
 
 def _write_atomic(path: Path, payload: bytes) -> None:

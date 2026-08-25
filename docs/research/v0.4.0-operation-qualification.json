@@ -1,0 +1,1525 @@
+{
+  "schema_version": "2.0",
+  "operations": [
+    {
+      "producer_operation_id": "cls_market_flash@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "primary_market_flash",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/communication_sources.py#ClsMarketFlashOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_communication_sources.py#CommunicationSourceOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "cninfo_announcement@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "authoritative_disclosure",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/disclosure_sources.py#CninfoAnnouncementOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_disclosure_sources.py#CninfoAnnouncementOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "cninfo_investor_qa@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "primary_investor_communication",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_investor_qa_qualifies_formal_owner",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/communication_sources.py#CninfoInvestorQaOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_communication_sources.py#CommunicationSourceOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_investor_qa_qualifies_formal_owner",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "cninfo_security_dictionary@1",
+      "capability_ids": [
+        "security_identity_resolution",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "source_listing_or_dictionary_snapshot",
+        "retrieval_time": "retrieved_at_with_timezone"
+      },
+      "unit_semantics": {
+        "identity_fields": "canonical_text_codes_and_dates"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "corroborating_identity_dictionary",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_58",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_identity_sources.py#test_cninfo_dictionary_normalizes_identity_observation",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/identity_sources.py#CninfoSecurityDictionaryOperation",
+        "skill/a-share-research/scripts/a_share_research/identity_sources.py#IdentityFieldContract",
+        "tests/test_identity_sources.py#test_cninfo_dictionary_normalizes_identity_observation",
+        "tests/test_identity_sources.py#IdentitySourceOperationTests",
+        "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+        "tests/test_unified_identity_runtime.py#test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_board_fund_flow@1",
+      "capability_ids": [
+        "capital_event_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_and_directions"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_mode_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_board_fund_flow",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_63",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_board_flow_public_contract_rejects_market_scope_forgery",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/capital_flow_sources.py#EastmoneyBoardFundFlowOperation",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_board_flow_public_contract_rejects_market_scope_forgery",
+        "tests/test_capital_flow_sources.py#BoardFundFlowTests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_dividend@1",
+      "capability_ids": [
+        "capital_event_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_and_directions"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_mode_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_dividend_event",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_63",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_company_capital_public_contract_rejects_role_forgery",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/company_capital_sources.py#EastmoneyDividendOperation",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_company_capital_public_contract_rejects_role_forgery",
+        "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_focus_monitoring@1",
+      "capability_ids": [
+        "market_signal_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_directions_and_rules"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_coverage_without_sibling_inference",
+      "empty_result_semantics": "complete_coverage_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_focus_monitoring",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/market_monitoring_sources.py#EastmoneyFocusMonitoringOperation",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "tests/test_market_monitoring_sources.py#FocusMonitoringSourceTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_forward_adjusted_daily_line@1",
+      "capability_ids": [
+        "market_trend_series"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "completed_trading_date_not_after_as_of",
+        "adjustment": "forward_adjusted_series"
+      },
+      "unit_semantics": {
+        "price": "forward_adjusted_CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_forward_adjusted_series",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_forward_adjusted_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/adjusted_series_sources.py#EastmoneyForwardAdjustedDailyLineOperation",
+        "skill/a-share-research/scripts/a_share_research/market_series.py#build_market_trend_result",
+        "tests/test_market_series.py#MarketTrendProcessTests",
+        "tests/test_operation_release_matrix.py#test_issue_59_forward_adjusted_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_industry_rotation@1",
+      "capability_ids": [
+        "market_signal_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_directions_and_rules"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_coverage_without_sibling_inference",
+      "empty_result_semantics": "complete_coverage_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_industry_rotation",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/market_theme_sources.py#EastmoneyIndustryRotationOperation",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "tests/test_market_theme_sources.py#EastmoneyIndustryRotationTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_limit_state@1",
+      "capability_ids": [
+        "market_signal_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_directions_and_rules"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_coverage_without_sibling_inference",
+      "empty_result_semantics": "complete_coverage_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_limit_state",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_market_pool_public_contract_distinguishes_proven_empty_and_partial",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/market_limit_sources.py#EastmoneyLimitStateOperation",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalCoverageAuthority",
+        "tests/test_market_limit_sources.py#EastmoneyLimitStateTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_market_pool_public_contract_distinguishes_proven_empty_and_partial",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_margin_trading@1",
+      "capability_ids": [
+        "capital_event_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_and_directions"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_mode_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_margin_trading",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_63",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_margin_public_contract_rejects_unit_forgery",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/company_capital_sources.py#EastmoneyMarginTradingOperation",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_margin_public_contract_rejects_unit_forgery",
+        "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_market_flash@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "fallback_market_flash",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/communication_sources.py#EastmoneyMarketFlashOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_communication_sources.py#CommunicationSourceOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_market_flash_qualifies_controlled_fallback",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_northbound_flow@1",
+      "capability_ids": [
+        "capital_event_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_and_directions"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_mode_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_northbound_disclosure",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_northbound_owner_enforces_disclosure_cutoff_and_semantics",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/capital_flow_sources.py#EastmoneyNorthboundFlowOperation",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_capital_flow_sources.py#NorthboundFlowTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_northbound_owner_enforces_disclosure_cutoff_and_semantics",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_reports@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "primary_research_report",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/report_sources.py#EastmoneyReportOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_report_sources.py#EastmoneyReportOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_security_board_membership@1",
+      "capability_ids": [
+        "market_signal_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_directions_and_rules"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_coverage_without_sibling_inference",
+      "empty_result_semantics": "complete_coverage_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_security_board_membership",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/market_theme_sources.py#EastmoneySecurityBoardMembershipOperation",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "tests/test_market_theme_sources.py#EastmoneySecurityBoardMembershipTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_severe_abnormal_movement@1",
+      "capability_ids": [
+        "market_signal_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_directions_and_rules"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_coverage_without_sibling_inference",
+      "empty_result_semantics": "complete_coverage_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_severe_abnormal_movement",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/market_monitoring_sources.py#EastmoneySevereAbnormalMovementOperation",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "tests/test_market_monitoring_sources.py#SevereAbnormalMovementSourceTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_shareholder_count@1",
+      "capability_ids": [
+        "capital_event_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_and_directions"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_mode_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_shareholder_count",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_63",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_company_capital_public_contract_rejects_role_forgery",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/company_capital_sources.py#EastmoneyShareholderCountOperation",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_company_capital_public_contract_rejects_role_forgery",
+        "tests/test_company_capital_sources.py#CompanyCapitalSourceTests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_stock_fund_flow@1",
+      "capability_ids": [
+        "capital_event_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_and_directions"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_mode_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_stock_fund_flow",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_63",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_stock_flow_public_contract_rejects_direction_forgery",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/capital_flow_sources.py#EastmoneyStockFundFlowOperation",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_stock_flow_public_contract_rejects_direction_forgery",
+        "tests/test_capital_flow_sources.py#StockFundFlowTests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_stock_info@1",
+      "capability_ids": [
+        "security_valuation_metrics",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "retrieval_snapshot_at_research_boundary",
+        "effective_time": "source_snapshot_not_independently_verified"
+      },
+      "unit_semantics": {
+        "total_shares": "shares",
+        "price": "CNY_per_share",
+        "market_cap": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "supporting_valuation_operand",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_61",
+        "request_bound": "paced_and_bounded_retry"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/valuation_sources.py#EastmoneyStockInfoOperation",
+        "skill/a-share-research/scripts/a_share_research/valuation_sources.py#StockInfoObservation",
+        "tests/test_valuation_sources.py#EastmoneyStockInfoOperationTests",
+        "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_stock_news@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "primary_stock_news",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/disclosure_sources.py#EastmoneyStockNewsOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_disclosure_sources.py#EastmoneyStockNewsOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "eastmoney_trading_events@1",
+      "capability_ids": [
+        "capital_event_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_and_directions"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_mode_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_trading_and_lockup_events",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_63",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_trading_events_public_contract_preserves_partial_and_empty",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/trading_event_sources.py#EastmoneyTradingEventOperation",
+        "skill/a-share-research/scripts/a_share_research/capital_contract.py#CapitalObservationAuthority",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_63_trading_events_public_contract_preserves_partial_and_empty",
+        "tests/test_trading_event_sources.py#EastmoneyTradingEventOperationTests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "exchange_intraday_replay_daily@1",
+      "capability_ids": [
+        "intraday_replay_daily_boundary"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "completed_trading_date_daily_boundary",
+        "timezone": "Asia/Shanghai"
+      },
+      "unit_semantics": {
+        "price": "CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_safe_failure_limits_replay_cross_check",
+      "empty_result_semantics": "missing_daily_boundary_is_unavailable_not_empty",
+      "acquisition_role": "daily_boundary_cross_check",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "single_security_single_day"
+      },
+      "offline_contract_selector": "tests/test_direct_intraday_runtime.py#test_copied_installed_replay_exercises_formal_exchange_daily_owner_contract",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/intraday_replay_registry.py#ExchangeReplayDailyBoundaryOperation",
+        "skill/a-share-research/scripts/a_share_research/intraday_replay_contract.py#IntradayReplayDailySourceBatch",
+        "tests/test_intraday_replay_registry.py#test_szse_daily_amount_and_volume_are_independent_boundary_operands",
+        "tests/test_intraday_replay_registry.py#ExchangeReplayDailyBoundaryTests",
+        "tests/test_direct_intraday_runtime.py#test_copied_installed_replay_exercises_formal_exchange_daily_owner_contract",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "iwencai_content_search@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "credentialed_content_search",
+      "credential_policy": "local_environment_reference_required_not_persisted",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/report_sources.py#IwencaiContentSearchOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_report_sources.py#IwencaiContentSearchOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "mootdx_f10@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "supporting_F10_profile",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_61",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_61_formal_mootdx_f10_owner_has_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/communication_sources.py#MootdxF10Operation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_communication_sources.py#CommunicationSourceOperationTests",
+        "tests/test_communication_sources.py#test_mootdx_f10_missing_dependency_is_explicit_without_installing",
+        "tests/test_communication_sources.py#test_mootdx_f10_missing_category_is_explicit_and_incomplete",
+        "tests/test_operation_release_matrix.py#test_issue_61_formal_mootdx_f10_owner_has_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "mootdx_intraday_replay@1",
+      "capability_ids": [
+        "intraday_replay_sequence"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "completed_trading_date_with_session_contract",
+        "timezone": "Asia/Shanghai"
+      },
+      "unit_semantics": {
+        "price": "CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_safe_failure_blocks_unproved_full_day",
+      "empty_result_semantics": "completed_day_zero_rows_is_failure_not_empty",
+      "acquisition_role": "primary_intraday_replay_series",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_58",
+        "request_bound": "single_security_single_day"
+      },
+      "offline_contract_selector": "tests/test_intraday_replay_mootdx.py#test_qualified_pages_normalize_units_and_keep_recent_calendar",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/intraday_replay_mootdx.py#MootdxIntradayReplayOperation",
+        "skill/a-share-research/scripts/a_share_research/intraday_replay_contract.py#IntradayReplaySourceBatch",
+        "tests/test_intraday_replay_mootdx.py#test_qualified_pages_normalize_units_and_keep_recent_calendar",
+        "tests/test_intraday_replay_mootdx.py#MootdxReplayAdapterTests",
+        "tests/test_direct_intraday_runtime.py#test_copied_installed_replay_exercises_formal_mootdx_owner_contract",
+        "tests/test_operation_release_matrix.py#test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "sina_etf_option_snapshot@1",
+      "capability_ids": [
+        "etf_option_contracts"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "trading_date_observed_at_and_expiry_date",
+        "timezone": "Asia/Shanghai"
+      },
+      "unit_semantics": {
+        "numeric_fields": "provider_values_with_field_specific_contract_no_inference"
+      },
+      "failure_semantics": "operation_local_failure_with_per_contract_coverage",
+      "empty_result_semantics": "complete_listing_zero_qualified_contracts_is_observed_empty",
+      "acquisition_role": "primary_option_snapshot",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "bounded_batch"
+      },
+      "offline_contract_selector": "tests/test_direct_etf_options_runtime.py#test_copied_installed_success_retains_all_acquisition_facts_by_owner",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/etf_option_sources.py#SinaEtfOptionSnapshotOperation",
+        "skill/a-share-research/scripts/a_share_research/etf_option_contract.py#OptionSourceBatch",
+        "tests/test_etf_option_sources.py#test_collects_gbk_call_put_quotes_and_provider_analytics",
+        "tests/test_etf_option_sources.py#SinaEtfOptionSnapshotTests",
+        "tests/test_direct_etf_options_runtime.py#test_copied_installed_success_retains_all_acquisition_facts_by_owner",
+        "tests/test_direct_etf_options_runtime.py#test_copied_installed_partial_analytics_retains_quotes_atm_and_sibling",
+        "tests/test_operation_release_matrix.py#test_issue_59_closes_exact_reviewed_owner_projection_without_index_invention",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "sina_financial_statements@1",
+      "capability_ids": [
+        "security_valuation_metrics",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "report_period_and_publication_date_not_after_as_of",
+        "version_time": "source_update_time"
+      },
+      "unit_semantics": {
+        "financial_values": "CNY_reported_consolidated_statement"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "no_report_before_research_boundary_is_failure_not_empty",
+      "acquisition_role": "supporting_financial_statements",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_61",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/valuation_sources.py#SinaFinancialStatementsOperation",
+        "skill/a-share-research/scripts/a_share_research/valuation_sources.py#FinancialStatementObservation",
+        "tests/test_valuation_sources.py#SinaFinancialStatementsOperationTests",
+        "tests/test_direct_market_valuation_runtime.py#test_valuation_missing_financials_keeps_other_owned_inputs",
+        "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "sse_announcement@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "authoritative_exchange_disclosure",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_sse_material_survives_cninfo_failure",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/sse_disclosure_sources.py#SseAnnouncementOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_sse_disclosure_sources.py#SseAnnouncementOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_sse_material_survives_cninfo_failure",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "sse_daily_line@1",
+      "capability_ids": [
+        "market_trend_series",
+        "valuation_close",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "completed_trading_date_not_after_as_of",
+        "retrieval_time": "retrieved_at_with_timezone"
+      },
+      "unit_semantics": {
+        "price": "CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_exchange_daily_line",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/close_sources.py#SseDailyLineOperation",
+        "skill/a-share-research/scripts/a_share_research/close_sources.py#DailyBarObservation",
+        "tests/test_close_sources.py#test_matching_sse_and_tencent_close_is_an_honest_limited_result",
+        "tests/test_close_sources.py#CloseSourceOperationTests",
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "sse_etf_list@1",
+      "capability_ids": [
+        "etf_market_quote",
+        "etf_option_identity"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "listing_date_and_retrieved_at",
+        "market_boundary": "SSE_ETF_universe"
+      },
+      "unit_semantics": {
+        "identity_fields": "canonical_text_codes_and_dates"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_ETF_identity",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/etf_market.py#SseEtfListOperation",
+        "skill/a-share-research/scripts/a_share_research/etf_market.py#EtfIdentityObservation",
+        "tests/test_market_series.py#test_510050_completed_quote_cross_checks_identity_price_and_volume",
+        "tests/test_market_series.py#test_etf_price_conflict_blocks_the_quote",
+        "tests/test_direct_market_valuation_runtime.py#test_etf_partial_failure_retains_successful_sibling_observations",
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "sse_etf_snapshot@1",
+      "capability_ids": [
+        "etf_market_quote",
+        "etf_option_reference"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "trading_date_and_observed_at",
+        "timezone": "Asia/Shanghai"
+      },
+      "unit_semantics": {
+        "price": "CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_ETF_reference_quote",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/etf_market.py#SseEtfSnapshotOperation",
+        "skill/a-share-research/scripts/a_share_research/etf_market.py#EtfSnapshotObservation",
+        "tests/test_market_series.py#test_510050_completed_quote_cross_checks_identity_price_and_volume",
+        "tests/test_market_series.py#test_etf_price_conflict_blocks_the_quote",
+        "tests/test_direct_market_valuation_runtime.py#test_etf_partial_failure_retains_successful_sibling_observations",
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "sse_stock_list@1",
+      "capability_ids": [
+        "security_identity_resolution",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "source_listing_or_dictionary_snapshot",
+        "retrieval_time": "retrieved_at_with_timezone"
+      },
+      "unit_semantics": {
+        "identity_fields": "canonical_text_codes_and_dates"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_exchange_identity",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_58",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/identity_sources.py#SseStockListOperation",
+        "skill/a-share-research/scripts/a_share_research/identity_sources.py#IdentityFieldContract",
+        "tests/test_identity_sources.py#test_sse_stock_list_normalizes_identity_observation",
+        "tests/test_identity_sources.py#IdentitySourceOperationTests",
+        "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+        "tests/test_unified_identity_runtime.py#test_installed_identity_rejects_unreviewed_live_fields",
+        "tests/test_unified_identity_runtime.py#test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "szse_announcement@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "authoritative_exchange_disclosure",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/disclosure_sources.py#SzseAnnouncementOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_disclosure_sources.py#SzseAnnouncementOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_bluefocus_qualifies_four_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "szse_daily_line@1",
+      "capability_ids": [
+        "market_trend_series",
+        "valuation_close",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "completed_trading_date_not_after_as_of",
+        "retrieval_time": "retrieved_at_with_timezone"
+      },
+      "unit_semantics": {
+        "price": "CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_exchange_daily_line",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/close_sources.py#SzseDailyLineOperation",
+        "skill/a-share-research/scripts/a_share_research/close_sources.py#DailyBarObservation",
+        "tests/test_close_sources.py#test_szse_daily_line_normalizes_bars_units_and_owner_evidence",
+        "tests/test_close_sources.py#test_matching_szse_and_tencent_close_uses_the_same_contract",
+        "tests/test_close_sources.py#CloseSourceOperationTests",
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "szse_stock_list@1",
+      "capability_ids": [
+        "security_identity_resolution",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "source_listing_or_dictionary_snapshot",
+        "retrieval_time": "retrieved_at_with_timezone"
+      },
+      "unit_semantics": {
+        "identity_fields": "canonical_text_codes_and_dates"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_exchange_identity",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_58",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_unified_identity_runtime.py#test_installed_szse_identity_accepts_reviewed_live_field_inventory",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/identity_sources.py#SzseStockListOperation",
+        "skill/a-share-research/scripts/a_share_research/identity_sources.py#IdentityFieldContract",
+        "tests/test_identity_sources.py#test_szse_stock_list_normalizes_identity_observation",
+        "tests/test_identity_sources.py#IdentitySourceOperationTests",
+        "tests/test_unified_identity_runtime.py#test_installed_identity_success_retains_operation_owned_observations",
+        "tests/test_unified_identity_runtime.py#test_installed_szse_identity_accepts_reviewed_live_field_inventory",
+        "tests/test_unified_identity_runtime.py#test_installed_identity_rejects_unreviewed_live_fields",
+        "tests/test_unified_identity_runtime.py#test_copied_installed_identity_blocks_bse_without_routing_and_wrong_market",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "tencent_daily_line@1",
+      "capability_ids": [
+        "etf_market_quote",
+        "market_trend_series",
+        "valuation_close",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "completed_trading_date_not_after_as_of",
+        "retrieval_time": "retrieved_at_with_timezone"
+      },
+      "unit_semantics": {
+        "price": "CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "fallback_and_cross_check_daily_line",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/close_sources.py#TencentDailyLineOperation",
+        "skill/a-share-research/scripts/a_share_research/close_sources.py#DailyBarObservation",
+        "tests/test_close_sources.py#test_matching_sse_and_tencent_close_is_an_honest_limited_result",
+        "tests/test_close_sources.py#test_matching_szse_and_tencent_close_uses_the_same_contract",
+        "tests/test_close_sources.py#CloseSourceOperationTests",
+        "tests/test_direct_market_valuation_runtime.py#test_copied_installed_tencent_provider_values_are_explicitly_excluded",
+        "tests/test_operation_release_matrix.py#test_issue_59_daily_and_etf_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "tencent_forward_adjusted_daily_line@1",
+      "capability_ids": [
+        "market_trend_series"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "completed_trading_date_not_after_as_of",
+        "adjustment": "forward_adjusted_series"
+      },
+      "unit_semantics": {
+        "price": "forward_adjusted_CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_observations_is_observed_empty",
+      "acquisition_role": "secondary_forward_adjusted_series",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_59",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_59_forward_adjusted_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/adjusted_series_sources.py#TencentForwardAdjustedDailyLineOperation",
+        "skill/a-share-research/scripts/a_share_research/market_series.py#build_market_trend_result",
+        "tests/test_market_series.py#MarketTrendProcessTests",
+        "tests/test_operation_release_matrix.py#test_issue_59_forward_adjusted_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "tencent_intraday_snapshot@1",
+      "capability_ids": [
+        "intraday_market_snapshot"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "trading_date_observed_at_retrieved_at_and_session_state",
+        "timezone": "Asia/Shanghai"
+      },
+      "unit_semantics": {
+        "price": "CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "no_qualified_current_session_observation_is_indeterminate",
+      "acquisition_role": "independent_intraday_cross_check_peer",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_58",
+        "request_bound": "single_security_snapshot"
+      },
+      "offline_contract_selector": "tests/test_direct_intraday_runtime.py#test_copied_installed_snapshot_fixture_is_exact_formal_result",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/intraday_sources.py#TencentIntradayOperation",
+        "skill/a-share-research/scripts/a_share_research/intraday_contract.py#IntradayObservation",
+        "tests/test_direct_intraday_runtime.py#test_copied_installed_snapshot_fixture_is_exact_formal_result",
+        "tests/test_intraday_snapshot_cli_e2e.py#IntradaySnapshotCliE2ETests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "ths_consensus_eps@1",
+      "capability_ids": [
+        "security_valuation_metrics",
+        "valuation_compare_metrics"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "retrieved_consensus_snapshot",
+        "forecast_period": "annual_forecast_year"
+      },
+      "unit_semantics": {
+        "eps": "CNY_per_share",
+        "institutions": "count"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "complete_query_zero_forecasts_is_observed_empty",
+      "acquisition_role": "supporting_consensus_operand",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_61",
+        "request_bound": "profile_bounded"
+      },
+      "offline_contract_selector": "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/valuation_sources.py#ThsConsensusEpsOperation",
+        "skill/a-share-research/scripts/a_share_research/valuation_sources.py#ConsensusEpsSnapshot",
+        "tests/test_valuation_sources.py#ThsConsensusEpsOperationTests",
+        "tests/test_direct_market_valuation_runtime.py#test_valuation_partial_failure_retains_completed_inputs",
+        "tests/test_operation_release_matrix.py#test_issue_61_valuation_owners_have_installed_public_qualification",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "ths_consensus_material@1",
+      "capability_ids": [
+        "research_content_materials"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "published_at_available_at_and_retrieved_at",
+        "request_boundary": "published_window_not_after_as_of"
+      },
+      "unit_semantics": {
+        "material": "normalized_text_and_typed_metadata"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_state_without_sibling_inference",
+      "empty_result_semantics": "complete_true_zero_materials_is_observed_empty",
+      "acquisition_role": "supporting_consensus_material",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_62",
+        "request_bound": "limit_and_window_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/report_sources.py#ThsConsensusMaterialOperation",
+        "skill/a-share-research/scripts/a_share_research/content_contract.py#SourceBatch",
+        "tests/test_report_sources.py#ThsConsensusMaterialOperationTests",
+        "tests/test_direct_research_content_runtime.py#test_issue_62_copied_installed_reports_qualify_three_formal_owners",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "ths_limit_reason@1",
+      "capability_ids": [
+        "market_signal_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_directions_and_rules"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_coverage_without_sibling_inference",
+      "empty_result_semantics": "complete_coverage_zero_observations_is_observed_empty",
+      "acquisition_role": "supporting_limit_reason",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/market_limit_sources.py#ThsLimitReasonOperation",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "tests/test_market_limit_sources.py#ThsLimitReasonTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "ths_market_heat@1",
+      "capability_ids": [
+        "market_signal_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_directions_and_rules"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_coverage_without_sibling_inference",
+      "empty_result_semantics": "complete_coverage_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_market_heat",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/market_theme_sources.py#ThsMarketHeatOperation",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "tests/test_market_theme_sources.py#ThsMarketHeatTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_remaining_market_owners_use_copied_installed_public_seam",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "ths_strong_stock_theme@1",
+      "capability_ids": [
+        "market_signal_observations"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "observed_on_observed_at_available_at_and_retrieved_at",
+        "request_boundary": "bounded_observation_window"
+      },
+      "unit_semantics": {
+        "metrics": "per_observation_explicit_units_directions_and_rules"
+      },
+      "failure_semantics": "operation_local_failure_or_partial_coverage_without_sibling_inference",
+      "empty_result_semantics": "complete_coverage_zero_observations_is_observed_empty",
+      "acquisition_role": "primary_strong_stock_theme",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_64",
+        "request_bound": "limit_window_and_pages_bounded"
+      },
+      "offline_contract_selector": "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_strong_theme_owner_rejects_coherent_scope_and_period_forgery",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/market_theme_sources.py#ThsStrongStockThemeOperation",
+        "skill/a-share-research/scripts/a_share_research/market_signal_contract.py#MarketSignalObservationAuthority",
+        "tests/test_market_theme_sources.py#ThsStrongStockThemeTests",
+        "tests/test_direct_capital_market_signals_runtime.py#test_issue_64_strong_theme_owner_rejects_coherent_scope_and_period_forgery",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    },
+    {
+      "producer_operation_id": "tongdaxin_intraday_snapshot@1",
+      "capability_ids": [
+        "intraday_market_snapshot"
+      ],
+      "disposition": "integrated",
+      "temporal_semantics": {
+        "observation_boundary": "trading_date_observed_at_retrieved_at_and_session_state",
+        "timezone": "Asia/Shanghai"
+      },
+      "unit_semantics": {
+        "price": "CNY_per_share",
+        "volume": "shares",
+        "amount": "CNY"
+      },
+      "failure_semantics": "operation_local_failed_state_with_safe_source_error",
+      "empty_result_semantics": "no_qualified_current_session_observation_is_indeterminate",
+      "acquisition_role": "independent_intraday_cross_check_peer",
+      "credential_policy": "not_required_by_owner_contract",
+      "rate_limit_policy": {
+        "scope": "owner_operation",
+        "qualification": "qualified_by_issue_58",
+        "request_bound": "single_security_snapshot"
+      },
+      "offline_contract_selector": "tests/test_direct_intraday_runtime.py#test_copied_installed_snapshot_fixture_is_exact_formal_result",
+      "offline_contract_result": "passed",
+      "evidence_references": [
+        "skill/a-share-research/scripts/a_share_research/intraday_sources.py#TongdaxinIntradayOperation",
+        "skill/a-share-research/scripts/a_share_research/intraday_contract.py#IntradayObservation",
+        "tests/test_direct_intraday_runtime.py#test_copied_installed_snapshot_fixture_is_exact_formal_result",
+        "tests/test_intraday_snapshot_cli_e2e.py#IntradaySnapshotCliE2ETests",
+        "docs/specs/0007-implementation-amendment-a.md#A-08a"
+      ],
+      "gap_issues": []
+    }
+  ]
+}

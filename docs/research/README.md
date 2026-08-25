@@ -1,6 +1,6 @@
 # 研究与发布资料
 
-本目录以 v0.3.0 为当前版本。现行文件统一采用 `v0.3.0-<主题>.<扩展名>` 命名；只有需要时间锚点的审计文件追加 `-YYYY-MM-DD`。带日期的历史现场记录采用 `v<版本>-<主题>-YYYY-MM-DD.md`，并集中放在 [`history/`](history/) 中。仓库级阅读顺序见 [`../README.md`](../README.md)。
+本目录以 v0.3.0 为当前已发布版本；其发布证据采用 `v0.3.0-<主题>.<扩展名>` 命名，只有需要时间锚点的审计文件追加 `-YYYY-MM-DD`。v0.4.0 DAG 开发期的静态资格权威也保留在本目录，但不构成 v0.4.0 发布或联网验证证明。带日期的历史现场记录采用 `v<版本>-<主题>-YYYY-MM-DD.md`，并集中放在 [`history/`](history/) 中。仓库级阅读顺序见 [`../README.md`](../README.md)。
 
 ## v0.3.0 当前资料
 
@@ -12,7 +12,15 @@
 | [`v0.3.0-operation-release-matrix.json`](v0.3.0-operation-release-matrix.json) | 由资格清单和联网证据派生的发布矩阵 | 只由生成器写入 |
 | [`v0.3.0-operation-release-matrix.md`](v0.3.0-operation-release-matrix.md) | 证据口径、解释边界和维护者复验命令 | 人工维护 |
 
-JSON 证据是版本化发布产物，不是使用案例，也不得手工调整字段、计数或摘要。运行普通研究请求请从 [`examples/README.md`](../../examples/README.md) 选择请求文件。
+## v0.4.0 DAG 开发资料
+
+| 文件 | 用途 | 修改方式 |
+| --- | --- | --- |
+| [`v0.4.0-operation-qualification.json`](v0.4.0-operation-qualification.json) | 按 capability 与 producer application 绑定的静态资格权威 | 只随 v0.4.0 DAG 的资格审查更新 |
+
+该文件用于让维护者探测按实际公开计划义务闭合资格集合；它不是 v0.4.0 发布矩阵、Release、冻结候选或联网验证证明。
+
+`v0.3.0-*` JSON 证据是版本化发布产物；`v0.4.0-operation-qualification.json` 是开发期静态审阅权威，不是发布产物。两者都不是使用案例，也不得手工调整字段、计数或摘要。运行普通研究请求请从 [`examples/README.md`](../../examples/README.md) 选择请求文件。
 
 正式 GitHub Release 为 [`v0.3.0`](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.3.0)。发布提交、annotated tag 对象、冻结运行时候选和联网证据时点分别记录在发布审计中，不以同一个 SHA 代替四种事实。
 
