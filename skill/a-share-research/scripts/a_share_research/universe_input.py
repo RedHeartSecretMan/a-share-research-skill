@@ -226,6 +226,23 @@ def _error(code: str, message: str) -> UniverseInputError:
     return UniverseInputError(code, message)
 
 
+def _snapshot_error() -> UniverseInputError:
+    return _error(
+        "input_snapshot_failed",
+        "Universe input snapshot could not be read.",
+    )
+
+
+def _snapshot_properties(
+    value: object,
+    names: tuple[str, ...],
+) -> tuple[object, ...] | None:
+    try:
+        return tuple(getattr(value, name) for name in names)
+    except Exception:
+        return None
+
+
 def _exact_exchange(value: object) -> str:
     if type(value) is not str or value not in EXCHANGES:
         raise _error("invalid_exchange", "Universe exchange identity is invalid.")
@@ -272,19 +289,19 @@ def _canonical_code(exchange: str, value: object) -> tuple[str, str]:
     return value, f"{exchange}:{value}"
 
 
-def _safe_provenance(value: object, fallback: str) -> str:
-    if type(value) is not str or not value:
+def _safe_provenance(value: object) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > 512
+        or _SAFE_PROVENANCE.fullmatch(value) is None
+        or any(marker in value.casefold() for marker in _UNSAFE_REFERENCE_MARKERS)
+    ):
         raise _error(
             "invalid_provenance",
             "Universe provenance is invalid.",
         )
-    if (
-        len(value) <= 512
-        and _SAFE_PROVENANCE.fullmatch(value) is not None
-        and not any(marker in value.casefold() for marker in _UNSAFE_REFERENCE_MARKERS)
-    ):
-        return value
-    return fallback
+    return value
 
 
 def _normalized_datetime(value: object, code: str) -> tuple[datetime, str]:
@@ -324,7 +341,13 @@ def _snapshot_records(value: object) -> tuple[object, ...]:
             "invalid_records",
             "Universe outcome records must use a supported container.",
         )
-    return tuple(cast(Sequence[object], value))
+    try:
+        detached = tuple(cast(Sequence[object], value))
+    except Exception:
+        detached = None
+    if detached is None:
+        raise _snapshot_error()
+    return detached
 
 
 def _validate_list_state(
@@ -449,8 +472,13 @@ def prepare_universe_request(
 
     if not isinstance(request, UniverseRequest) or type(research_now) is not datetime:
         raise _invalid_time()
-    screen_value = request.screen_date
-    cutoff_value = request.information_cutoff
+    request_snapshot = _snapshot_properties(
+        request,
+        ("screen_date", "information_cutoff"),
+    )
+    if request_snapshot is None:
+        raise _snapshot_error()
+    screen_value, cutoff_value = request_snapshot
     screen_date = _parse_date(screen_value)
     cutoff = _parse_aware_datetime(cutoff_value)
     if (
@@ -490,14 +518,31 @@ def _prepare_list_record(
 ) -> _PreparedExchangeListRecord:
     if not isinstance(value, ExchangeListRecord):
         raise _error("invalid_record", "Universe exchange-list record is invalid.")
-    exchange_value = value.exchange
-    code_value = value.code
-    name_value = value.name
-    category_value = value.security_category
-    effective_value = value.effective_at
-    available_value = value.available_at
-    retrieved_value = value.retrieved_at
-    provenance_value = value.provenance_uri
+    record_snapshot = _snapshot_properties(
+        value,
+        (
+            "exchange",
+            "code",
+            "name",
+            "security_category",
+            "effective_at",
+            "available_at",
+            "retrieved_at",
+            "provenance_uri",
+        ),
+    )
+    if record_snapshot is None:
+        raise _snapshot_error()
+    (
+        exchange_value,
+        code_value,
+        name_value,
+        category_value,
+        effective_value,
+        available_value,
+        retrieved_value,
+        provenance_value,
+    ) = record_snapshot
 
     exchange = _exact_exchange(exchange_value)
     if exchange != outcome_exchange:
@@ -538,10 +583,7 @@ def _prepare_list_record(
         effective_at=effective_at,
         available_at=available_at,
         retrieved_at=retrieved_at,
-        provenance_uri=_safe_provenance(
-            provenance_value,
-            f"universe-list:{exchange}:{code}",
-        ),
+        provenance_uri=_safe_provenance(provenance_value),
         _authority=_PREPARE_AUTHORITY,
     )
 
@@ -553,15 +595,33 @@ def prepare_exchange_list_outcome(
 
     if not isinstance(outcome, ExchangeListOutcome):
         raise _error("invalid_outcome", "Universe exchange-list outcome is invalid.")
-    operation_value = outcome.operation_id
-    exchange_value = outcome.exchange
-    screen_value = outcome.screen_date
-    attempted_value = outcome.attempted
-    source_result_value = outcome.source_result
-    expected_value = outcome.expected_count
-    pages_expected_value = outcome.pages_expected
-    pages_received_value = outcome.pages_received
-    records_value = outcome.records
+    outcome_snapshot = _snapshot_properties(
+        outcome,
+        (
+            "operation_id",
+            "exchange",
+            "screen_date",
+            "attempted",
+            "source_result",
+            "expected_count",
+            "pages_expected",
+            "pages_received",
+            "records",
+        ),
+    )
+    if outcome_snapshot is None:
+        raise _snapshot_error()
+    (
+        operation_value,
+        exchange_value,
+        screen_value,
+        attempted_value,
+        source_result_value,
+        expected_value,
+        pages_expected_value,
+        pages_received_value,
+        records_value,
+    ) = outcome_snapshot
 
     operation_id = _safe_operation_id(operation_value)
     exchange = _exact_exchange(exchange_value)
@@ -623,17 +683,37 @@ def _prepare_identity_record(
 ) -> _PreparedUniverseIdentity:
     if not isinstance(value, UniverseIdentity):
         raise _error("invalid_record", "Universe identity record is invalid.")
-    exchange_value = value.exchange
-    code_value = value.code
-    name_value = value.name
-    category_value = value.security_category
-    listing_state_value = value.listing_state
-    effective_from_value = value.effective_from
-    effective_to_value = value.effective_to
-    observed_value = value.observed_at
-    available_value = value.available_at
-    retrieved_value = value.retrieved_at
-    provenance_value = value.provenance_uri
+    record_snapshot = _snapshot_properties(
+        value,
+        (
+            "exchange",
+            "code",
+            "name",
+            "security_category",
+            "listing_state",
+            "effective_from",
+            "effective_to",
+            "observed_at",
+            "available_at",
+            "retrieved_at",
+            "provenance_uri",
+        ),
+    )
+    if record_snapshot is None:
+        raise _snapshot_error()
+    (
+        exchange_value,
+        code_value,
+        name_value,
+        category_value,
+        listing_state_value,
+        effective_from_value,
+        effective_to_value,
+        observed_value,
+        available_value,
+        retrieved_value,
+        provenance_value,
+    ) = record_snapshot
 
     exchange = _exact_exchange(exchange_value)
     if exchange != outcome_exchange:
@@ -691,10 +771,7 @@ def _prepare_identity_record(
         observed_at=observed_at,
         available_at=available_at,
         retrieved_at=retrieved_at,
-        provenance_uri=_safe_provenance(
-            provenance_value,
-            f"universe-identity:{exchange}:{code}",
-        ),
+        provenance_uri=_safe_provenance(provenance_value),
         _authority=_PREPARE_AUTHORITY,
     )
 
@@ -706,12 +783,27 @@ def prepare_identity_outcome(
 
     if not isinstance(outcome, IdentityBatchOutcome):
         raise _error("invalid_outcome", "Universe identity outcome is invalid.")
-    operation_value = outcome.operation_id
-    exchange_value = outcome.exchange
-    attempted_value = outcome.attempted
-    source_result_value = outcome.source_result
-    expected_value = outcome.expected_count
-    records_value = outcome.records
+    outcome_snapshot = _snapshot_properties(
+        outcome,
+        (
+            "operation_id",
+            "exchange",
+            "attempted",
+            "source_result",
+            "expected_count",
+            "records",
+        ),
+    )
+    if outcome_snapshot is None:
+        raise _snapshot_error()
+    (
+        operation_value,
+        exchange_value,
+        attempted_value,
+        source_result_value,
+        expected_value,
+        records_value,
+    ) = outcome_snapshot
 
     operation_id = _safe_operation_id(operation_value)
     exchange = _exact_exchange(exchange_value)

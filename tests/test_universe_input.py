@@ -22,6 +22,7 @@ from a_share_research.universe_input import (  # noqa: E402
     ExchangeListRecord,
     IdentityBatchOutcome,
     UniverseIdentity,
+    UniverseInputError,
     UniverseRequest,
     prepare_exchange_list_outcome,
     prepare_identity_outcome,
@@ -152,6 +153,28 @@ class _StatefulIdentity(UniverseIdentity):
 
 
 class UniverseRequestInputTests(unittest.TestCase):
+    def test_request_getter_failure_is_sanitized_at_the_module_seam(self) -> None:
+        secret = "LEAK:/private/tmp/provider-secret-token"
+
+        class FailingRequest(UniverseRequest):
+            def __getattribute__(self, name: str) -> object:
+                if name == "screen_date":
+                    raise RuntimeError(secret)
+                return object.__getattribute__(self, name)
+
+        with self.assertRaisesRegex(
+            UniverseInputError, "^Universe input snapshot could not be read[.]$"
+        ) as caught:
+            prepare_universe_request(
+                FailingRequest("2026-08-20", "2026-08-21T10:00:00+08:00"),
+                research_now=datetime(2026, 8, 21, 10, 0, tzinfo=ASIA_SHANGHAI),
+            )
+
+        self.assertEqual(caught.exception.code, "input_snapshot_failed")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
     def test_stateful_request_is_read_once_and_prepared_immutably(self) -> None:
         request = _StatefulRequest()
 
@@ -220,6 +243,83 @@ class UniverseRequestInputTests(unittest.TestCase):
 
 
 class ExchangeListInputTests(unittest.TestCase):
+    def test_list_outcome_getter_failure_is_sanitized_at_the_module_seam(
+        self,
+    ) -> None:
+        secret = "LEAK:/private/tmp/provider-secret-token"
+
+        class FailingListOutcome(ExchangeListOutcome):
+            def __getattribute__(self, name: str) -> object:
+                if name == "operation_id":
+                    raise RuntimeError(secret)
+                return object.__getattribute__(self, name)
+
+        outcome = FailingListOutcome(
+            operation_id="sse_stock_list@1",
+            exchange="SSE",
+            screen_date="2026-08-20",
+            attempted=True,
+            source_result="complete",
+            expected_count=1,
+            pages_expected=1,
+            pages_received=1,
+            records=[_list_record()],
+        )
+
+        with self.assertRaisesRegex(
+            UniverseInputError, "^Universe input snapshot could not be read[.]$"
+        ) as caught:
+            prepare_exchange_list_outcome(outcome)
+
+        self.assertEqual(caught.exception.code, "input_snapshot_failed")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
+    def test_list_record_getter_failure_is_sanitized_at_the_module_seam(
+        self,
+    ) -> None:
+        secret = "LEAK:/private/tmp/provider-secret-token"
+
+        class FailingListRecord(ExchangeListRecord):
+            def __getattribute__(self, name: str) -> object:
+                if name == "name":
+                    raise RuntimeError(secret)
+                return object.__getattribute__(self, name)
+
+        record = FailingListRecord(
+            exchange="SSE",
+            code="600000",
+            name="浦发银行",
+            security_category="A_SHARE",
+            effective_at="1999-11-10",
+            available_at="2026-08-20T09:00:00+08:00",
+            retrieved_at="2026-08-21T10:00:00+08:00",
+            provenance_uri="sse-list:2026-08-20",
+        )
+
+        with self.assertRaisesRegex(
+            UniverseInputError, "^Universe input snapshot could not be read[.]$"
+        ) as caught:
+            prepare_exchange_list_outcome(
+                ExchangeListOutcome(
+                    operation_id="sse_stock_list@1",
+                    exchange="SSE",
+                    screen_date="2026-08-20",
+                    attempted=True,
+                    source_result="complete",
+                    expected_count=1,
+                    pages_expected=1,
+                    pages_received=1,
+                    records=[record],
+                )
+            )
+
+        self.assertEqual(caught.exception.code, "input_snapshot_failed")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
     def test_stateful_outcome_and_mutable_records_are_detached_once(self) -> None:
         records = [_list_record()]
         outcome = _StatefulListOutcome(records)
@@ -344,7 +444,7 @@ class ExchangeListInputTests(unittest.TestCase):
 
         self.assertEqual(prepared.records[0].effective_at, "2026-08-20T00:30:00+08:00")
 
-    def test_unsafe_operation_is_rejected_and_provenance_is_safely_sealed(self) -> None:
+    def test_unsafe_operation_is_rejected_without_disclosure(self) -> None:
         unsafe = "/private/tmp/provider-secret-token"
         with self.assertRaises(ValueError) as caught:
             prepare_exchange_list_outcome(
@@ -362,21 +462,6 @@ class ExchangeListInputTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, "invalid_operation_identity")
         self.assertNotIn(unsafe, str(caught.exception))
-
-        prepared = prepare_exchange_list_outcome(
-            ExchangeListOutcome(
-                operation_id="sse_stock_list@1",
-                exchange="SSE",
-                screen_date="2026-08-20",
-                attempted=True,
-                source_result="complete",
-                expected_count=1,
-                pages_expected=1,
-                pages_received=1,
-                records=[replace(_list_record(), provenance_uri=unsafe)],
-            )
-        )
-        self.assertEqual(prepared.records[0].provenance_uri, "universe-list:SSE:600000")
 
     def test_exact_runtime_types_duplicates_and_exchange_conflicts_fail_closed(
         self,
@@ -498,6 +583,80 @@ class ExchangeListInputTests(unittest.TestCase):
 
 
 class IdentityInputTests(unittest.TestCase):
+    def test_identity_outcome_getter_failure_is_sanitized_at_the_module_seam(
+        self,
+    ) -> None:
+        secret = "LEAK:/private/tmp/provider-secret-token"
+
+        class FailingIdentityOutcome(IdentityBatchOutcome):
+            def __getattribute__(self, name: str) -> object:
+                if name == "operation_id":
+                    raise RuntimeError(secret)
+                return object.__getattribute__(self, name)
+
+        outcome = FailingIdentityOutcome(
+            operation_id="sse_identity@1",
+            exchange="SSE",
+            attempted=True,
+            source_result="complete",
+            expected_count=1,
+            records=[_identity()],
+        )
+
+        with self.assertRaisesRegex(
+            UniverseInputError, "^Universe input snapshot could not be read[.]$"
+        ) as caught:
+            prepare_identity_outcome(outcome)
+
+        self.assertEqual(caught.exception.code, "input_snapshot_failed")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
+    def test_identity_record_getter_failure_is_sanitized_at_the_module_seam(
+        self,
+    ) -> None:
+        secret = "LEAK:/private/tmp/provider-secret-token"
+
+        class FailingIdentity(UniverseIdentity):
+            def __getattribute__(self, name: str) -> object:
+                if name == "name":
+                    raise RuntimeError(secret)
+                return object.__getattribute__(self, name)
+
+        identity = FailingIdentity(
+            exchange="SSE",
+            code="600000",
+            name="浦发银行",
+            security_category="A_SHARE",
+            listing_state="listed",
+            effective_from="1999-11-10",
+            effective_to=None,
+            observed_at="2026-08-20T15:00:00+08:00",
+            available_at="2026-08-20T15:30:00+08:00",
+            retrieved_at="2026-08-21T10:00:00+08:00",
+            provenance_uri="sse-identity:2026-08-20",
+        )
+
+        with self.assertRaisesRegex(
+            UniverseInputError, "^Universe input snapshot could not be read[.]$"
+        ) as caught:
+            prepare_identity_outcome(
+                IdentityBatchOutcome(
+                    operation_id="sse_identity@1",
+                    exchange="SSE",
+                    attempted=True,
+                    source_result="complete",
+                    expected_count=1,
+                    records=[identity],
+                )
+            )
+
+        self.assertEqual(caught.exception.code, "input_snapshot_failed")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
     def test_stateful_identity_outcome_is_not_reread_after_validation(self) -> None:
         records = [_identity()]
         outcome = _StatefulIdentityOutcome(records)
@@ -645,6 +804,45 @@ class IdentityInputTests(unittest.TestCase):
                             [record],
                         )
                     )
+
+
+class UniverseInputProvenanceTests(unittest.TestCase):
+    def test_unsafe_public_provenance_fails_closed_without_disclosure(self) -> None:
+        unsafe = "/private/tmp/provider-secret-token"
+        preparations = (
+            lambda: prepare_exchange_list_outcome(
+                ExchangeListOutcome(
+                    operation_id="sse_stock_list@1",
+                    exchange="SSE",
+                    screen_date="2026-08-20",
+                    attempted=True,
+                    source_result="complete",
+                    expected_count=1,
+                    pages_expected=1,
+                    pages_received=1,
+                    records=[replace(_list_record(), provenance_uri=unsafe)],
+                )
+            ),
+            lambda: prepare_identity_outcome(
+                IdentityBatchOutcome(
+                    operation_id="sse_identity@1",
+                    exchange="SSE",
+                    attempted=True,
+                    source_result="complete",
+                    expected_count=1,
+                    records=[replace(_identity(), provenance_uri=unsafe)],
+                )
+            ),
+        )
+
+        for prepare in preparations:
+            with self.subTest(prepare=prepare):
+                with self.assertRaisesRegex(
+                    UniverseInputError, "^Universe provenance is invalid[.]$"
+                ) as caught:
+                    prepare()
+                self.assertEqual(caught.exception.code, "invalid_provenance")
+                self.assertNotIn(unsafe, str(caught.exception))
 
 
 class UniverseInputInstalledCopyTests(unittest.TestCase):
