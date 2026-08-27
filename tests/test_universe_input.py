@@ -152,7 +152,28 @@ class _StatefulIdentity(UniverseIdentity):
         return object.__getattribute__(self, name)
 
 
+class _RaisingClassImpostor:
+    def __getattribute__(self, name: str) -> object:
+        if name == "__class__":
+            raise RuntimeError("RAW_SECRET:/private/tmp/provider-token")
+        return object.__getattribute__(self, name)
+
+
 class UniverseRequestInputTests(unittest.TestCase):
+    def test_request_runtime_type_gate_is_sanitized_before_snapshot(self) -> None:
+        secret = "RAW_SECRET:/private/tmp/provider-token"
+
+        with self.assertRaises(UniverseInputError) as caught:
+            prepare_universe_request(
+                _RaisingClassImpostor(),  # type: ignore[arg-type]
+                research_now=datetime(2026, 8, 21, 10, 0, tzinfo=ASIA_SHANGHAI),
+            )
+
+        self.assertEqual(caught.exception.code, "invalid_research_time")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
     def test_request_getter_failure_is_sanitized_at_the_module_seam(self) -> None:
         secret = "LEAK:/private/tmp/provider-secret-token"
 
@@ -243,6 +264,46 @@ class UniverseRequestInputTests(unittest.TestCase):
 
 
 class ExchangeListInputTests(unittest.TestCase):
+    def test_list_outcome_runtime_type_gate_is_sanitized_before_snapshot(
+        self,
+    ) -> None:
+        secret = "RAW_SECRET:/private/tmp/provider-token"
+
+        with self.assertRaises(UniverseInputError) as caught:
+            prepare_exchange_list_outcome(
+                _RaisingClassImpostor()  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(caught.exception.code, "invalid_outcome")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
+    def test_list_record_runtime_type_gate_is_sanitized_before_snapshot(
+        self,
+    ) -> None:
+        secret = "RAW_SECRET:/private/tmp/provider-token"
+
+        with self.assertRaises(UniverseInputError) as caught:
+            prepare_exchange_list_outcome(
+                ExchangeListOutcome(
+                    operation_id="sse_stock_list@1",
+                    exchange="SSE",
+                    screen_date="2026-08-20",
+                    attempted=True,
+                    source_result="complete",
+                    expected_count=1,
+                    pages_expected=1,
+                    pages_received=1,
+                    records=[_RaisingClassImpostor()],  # type: ignore[list-item]
+                )
+            )
+
+        self.assertEqual(caught.exception.code, "invalid_record")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
     def test_list_outcome_getter_failure_is_sanitized_at_the_module_seam(
         self,
     ) -> None:
@@ -583,6 +644,43 @@ class ExchangeListInputTests(unittest.TestCase):
 
 
 class IdentityInputTests(unittest.TestCase):
+    def test_identity_outcome_runtime_type_gate_is_sanitized_before_snapshot(
+        self,
+    ) -> None:
+        secret = "RAW_SECRET:/private/tmp/provider-token"
+
+        with self.assertRaises(UniverseInputError) as caught:
+            prepare_identity_outcome(
+                _RaisingClassImpostor()  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(caught.exception.code, "invalid_outcome")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
+    def test_identity_record_runtime_type_gate_is_sanitized_before_snapshot(
+        self,
+    ) -> None:
+        secret = "RAW_SECRET:/private/tmp/provider-token"
+
+        with self.assertRaises(UniverseInputError) as caught:
+            prepare_identity_outcome(
+                IdentityBatchOutcome(
+                    operation_id="sse_identity@1",
+                    exchange="SSE",
+                    attempted=True,
+                    source_result="complete",
+                    expected_count=1,
+                    records=[_RaisingClassImpostor()],  # type: ignore[list-item]
+                )
+            )
+
+        self.assertEqual(caught.exception.code, "invalid_record")
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
     def test_identity_outcome_getter_failure_is_sanitized_at_the_module_seam(
         self,
     ) -> None:

@@ -243,6 +243,10 @@ def _snapshot_properties(
         return None
 
 
+def _has_runtime_type(value: object, expected_type: type[object]) -> bool:
+    return issubclass(type(value), expected_type)
+
+
 def _exact_exchange(value: object) -> str:
     if type(value) is not str or value not in EXCHANGES:
         raise _error("invalid_exchange", "Universe exchange identity is invalid.")
@@ -470,7 +474,10 @@ def prepare_universe_request(
 ) -> _PreparedUniverseRequest:
     """Read, validate and detach one universe request exactly once."""
 
-    if not isinstance(request, UniverseRequest) or type(research_now) is not datetime:
+    if (
+        not _has_runtime_type(request, UniverseRequest)
+        or type(research_now) is not datetime
+    ):
         raise _invalid_time()
     request_snapshot = _snapshot_properties(
         request,
@@ -516,7 +523,7 @@ def _prepare_list_record(
     outcome_exchange: str,
     screen_date: date,
 ) -> _PreparedExchangeListRecord:
-    if not isinstance(value, ExchangeListRecord):
+    if not _has_runtime_type(value, ExchangeListRecord):
         raise _error("invalid_record", "Universe exchange-list record is invalid.")
     record_snapshot = _snapshot_properties(
         value,
@@ -593,7 +600,7 @@ def prepare_exchange_list_outcome(
 ) -> _PreparedExchangeListOutcome:
     """Read, validate and detach one exchange-list outcome exactly once."""
 
-    if not isinstance(outcome, ExchangeListOutcome):
+    if not _has_runtime_type(outcome, ExchangeListOutcome):
         raise _error("invalid_outcome", "Universe exchange-list outcome is invalid.")
     outcome_snapshot = _snapshot_properties(
         outcome,
@@ -681,7 +688,7 @@ def _prepare_identity_record(
     *,
     outcome_exchange: str,
 ) -> _PreparedUniverseIdentity:
-    if not isinstance(value, UniverseIdentity):
+    if not _has_runtime_type(value, UniverseIdentity):
         raise _error("invalid_record", "Universe identity record is invalid.")
     record_snapshot = _snapshot_properties(
         value,
@@ -781,7 +788,7 @@ def prepare_identity_outcome(
 ) -> _PreparedIdentityBatchOutcome:
     """Read, validate and detach one identity outcome exactly once."""
 
-    if not isinstance(outcome, IdentityBatchOutcome):
+    if not _has_runtime_type(outcome, IdentityBatchOutcome):
         raise _error("invalid_outcome", "Universe identity outcome is invalid.")
     outcome_snapshot = _snapshot_properties(
         outcome,
