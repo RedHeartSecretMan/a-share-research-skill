@@ -221,6 +221,25 @@ class _IdentityOwner:
     invoke: Callable[[object, tuple[object, ...], float], object]
 
 
+@dataclass(frozen=True, slots=True)
+class _AdapterRequestView:
+    screen_date: str
+    information_cutoff: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AdapterListRecordView:
+    exchange: str
+    code: str
+    canonical_security_id: str
+    name: str
+    security_category: str
+    effective_at: str
+    available_at: str
+    retrieved_at: str
+    provenance_uri: str
+
+
 def _error(code: str, message: str) -> UniverseContractError:
     return UniverseContractError(code, message)
 
@@ -345,6 +364,29 @@ def _prepare_request(
     return prepared
 
 
+def _adapter_request_view(request: _PreparedUniverseRequest) -> _AdapterRequestView:
+    return _AdapterRequestView(
+        screen_date=request.screen_date,
+        information_cutoff=request.information_cutoff,
+    )
+
+
+def _adapter_list_record_view(
+    record: _PreparedExchangeListRecord,
+) -> _AdapterListRecordView:
+    return _AdapterListRecordView(
+        exchange=record.exchange,
+        code=record.code,
+        canonical_security_id=record.canonical_security_id,
+        name=record.name,
+        security_category=record.security_category,
+        effective_at=record.effective_at,
+        available_at=record.available_at,
+        retrieved_at=record.retrieved_at,
+        provenance_uri=record.provenance_uri,
+    )
+
+
 def _invoke_list(
     owner: _ListOwner,
     request: _PreparedUniverseRequest,
@@ -353,7 +395,7 @@ def _invoke_list(
     raw_outcome: object | None = None
     invocation_failed = False
     try:
-        raw_outcome = owner.invoke(request, timeout_seconds)
+        raw_outcome = owner.invoke(_adapter_request_view(request), timeout_seconds)
     except Exception:
         invocation_failed = True
     if invocation_failed:
@@ -410,8 +452,11 @@ def _invoke_identity(
     invocation_failed = False
     try:
         raw_outcome = owner.invoke(
-            request,
-            cast(tuple[object, ...], listings),
+            _adapter_request_view(request),
+            cast(
+                tuple[object, ...],
+                tuple(_adapter_list_record_view(record) for record in listings),
+            ),
             timeout_seconds,
         )
     except Exception:
@@ -666,10 +711,6 @@ def _reconcile_partition(
             )
     expected = list_outcome.expected_count
     resolved = len(identity_outcome.records)
-    identity_is_complete = (
-        identity_outcome.source_result in {"complete", "observed_empty"}
-        and resolved == expected
-    )
     securities = tuple(
         (
             _build_security(
@@ -687,6 +728,19 @@ def _reconcile_partition(
             )
         )
         for list_record in sorted(list_outcome.records, key=lambda record: record.code)
+    )
+    has_unproven_expected_identity = any(
+        security.universe_state == "expected_universe"
+        and any(
+            reason in {"listing_state_unproven", "as_of_unproven"}
+            for reason in security.unranked_reasons
+        )
+        for security in securities
+    )
+    identity_is_complete = (
+        identity_outcome.source_result in {"complete", "observed_empty"}
+        and resolved == expected
+        and not has_unproven_expected_identity
     )
     return UniversePartition(
         exchange=list_outcome.exchange,
@@ -715,10 +769,11 @@ def build_as_of_a_share_universe(
     """Prepare, acquire and project the fixed three-exchange universe."""
 
     prepared_request = _prepare_request(request, research_now)
+    timeout_type = type(timeout_seconds)
     if (
-        type(timeout_seconds) not in {int, float}
-        or not isfinite(timeout_seconds)
+        timeout_type not in {int, float}
         or timeout_seconds <= 0
+        or (timeout_type is float and not isfinite(timeout_seconds))
     ):
         raise _error(
             "invalid_timeout",

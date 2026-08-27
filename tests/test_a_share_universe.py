@@ -86,6 +86,62 @@ class _IdentityAdapter:
         return self.outcome
 
 
+@dataclass(frozen=True)
+class _RequestMutatingListAdapter:
+    exchange: str
+    operation_id: str
+    outcome: ExchangeListOutcome
+
+    def acquire(self, request: object, timeout_seconds: float) -> ExchangeListOutcome:
+        object.__setattr__(request, "screen_date", "2026-08-19")
+        return self.outcome
+
+
+@dataclass(frozen=True)
+class _ListingMutatingIdentityAdapter:
+    exchange: str
+    operation_id: str
+    outcome: IdentityBatchOutcome
+
+    def resolve(
+        self,
+        request: object,
+        listings: tuple[object, ...],
+        timeout_seconds: float,
+    ) -> IdentityBatchOutcome:
+        object.__setattr__(listings[0], "name", "FORGED")
+        return self.outcome
+
+
+@dataclass(frozen=True)
+class _TimeoutRecordingListAdapter:
+    exchange: str
+    operation_id: str
+    outcome: ExchangeListOutcome
+    seen: list[object]
+
+    def acquire(self, request: object, timeout_seconds: float) -> ExchangeListOutcome:
+        self.seen.append(timeout_seconds)
+        return self.outcome
+
+
+@dataclass(frozen=True)
+class _TimeoutRecordingIdentityAdapter:
+    exchange: str
+    operation_id: str
+    outcome: IdentityBatchOutcome
+    seen: list[object]
+
+    def resolve(
+        self,
+        request: object,
+        listings: tuple[object, ...],
+        timeout_seconds: float,
+    ) -> IdentityBatchOutcome:
+        self.seen.append(timeout_seconds)
+        return self.outcome
+
+
 def _complete_list_outcome(record: ExchangeListRecord) -> ExchangeListOutcome:
     return ExchangeListOutcome(
         operation_id=f"fixture_{record.exchange.lower()}_list@1",
@@ -709,6 +765,90 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
                 self.assertEqual(security["listing_state"], state)
                 self.assertEqual(security["unranked_reasons"], [])
 
+    def test_unproven_expected_identity_preserves_facts_but_never_completes(
+        self,
+    ) -> None:
+        base = _identity("SSE", "600519", "贵州茅台")
+        cases = (
+            (replace(base, listing_state=None), ["listing_state_unproven"]),
+            (replace(base, effective_from=None), ["as_of_unproven"]),
+            (
+                replace(
+                    base,
+                    effective_from="2026-08-21",
+                    available_at="2026-08-21T09:00:00+08:00",
+                ),
+                ["as_of_unproven"],
+            ),
+        )
+
+        for identity, reasons in cases:
+            with self.subTest(identity=identity):
+                result = _build_fixture_universe(
+                    identity_outcome_overrides={
+                        "SSE": _complete_identity_outcome(identity)
+                    }
+                ).to_public_dict()
+                partition = result["partitions"]["SSE"]
+
+                self.assertFalse(partition["complete"])
+                self.assertFalse(result["full_a_share_universe"])
+                self.assertEqual(partition["source_result"], "complete")
+                self.assertEqual(
+                    partition["reconciliation"],
+                    {"expected": 1, "resolved": 1, "failed": 0},
+                )
+                self.assertEqual(partition["limitation_codes"], ["identity_incomplete"])
+                self.assertEqual(len(partition["securities"]), 1)
+                self.assertEqual(
+                    partition["securities"][0]["unranked_reasons"], reasons
+                )
+                self.assertEqual(
+                    partition["source_outcomes"]["identity"],
+                    {
+                        "operation_id": "fixture_sse_identity@1",
+                        "attempted": True,
+                        "source_result": "complete",
+                        "expected_count": 1,
+                        "observed_count": 1,
+                    },
+                )
+
+    def test_adapter_request_mutation_cannot_change_authoritative_screen_date(
+        self,
+    ) -> None:
+        row = _fixture_rows()["SSE"]
+        outcome = _complete_list_outcome(row)
+        result = _build_fixture_universe(
+            list_adapter_overrides={
+                "SSE": _RequestMutatingListAdapter("SSE", outcome.operation_id, outcome)
+            }
+        ).to_public_dict()
+
+        self.assertEqual(result["screen_date"], "2026-08-20")
+        self.assertTrue(result["partitions"]["SSE"]["complete"])
+
+    def test_adapter_listing_mutation_cannot_change_name_or_denominator(
+        self,
+    ) -> None:
+        row = _fixture_rows()["SSE"]
+        outcome = _complete_identity_outcome(_identity("SSE", row.code, row.name))
+        result = _build_fixture_universe(
+            identity_adapter_overrides={
+                "SSE": _ListingMutatingIdentityAdapter(
+                    "SSE", outcome.operation_id, outcome
+                )
+            }
+        ).to_public_dict()
+        partition = result["partitions"]["SSE"]
+
+        self.assertEqual(partition["securities"][0]["name"], "贵州茅台")
+        self.assertEqual(
+            partition["reconciliation"],
+            {"expected": 1, "resolved": 1, "failed": 0},
+        )
+        self.assertTrue(partition["complete"])
+
     def test_conflict_table_fails_closed_with_stable_sanitized_errors(self) -> None:
         row = _fixture_rows()["SSE"]
         base_identity = _identity("SSE", row.code, row.name)
@@ -1020,6 +1160,52 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
                         timeout_seconds=timeout,  # type: ignore[arg-type]
                     )
                 self.assertEqual(caught.exception.code, "invalid_timeout")
+
+    def test_huge_positive_integer_timeout_is_forwarded_exactly(self) -> None:
+        rows = _fixture_rows()
+        seen: list[object] = []
+        list_adapters = tuple(
+            _TimeoutRecordingListAdapter(
+                exchange,
+                outcome.operation_id,
+                outcome,
+                seen,
+            )
+            for exchange, outcome in (
+                (exchange, _complete_list_outcome(record))
+                for exchange, record in rows.items()
+            )
+        )
+        identity_adapters = tuple(
+            _TimeoutRecordingIdentityAdapter(
+                exchange,
+                outcome.operation_id,
+                outcome,
+                seen,
+            )
+            for exchange, outcome in (
+                (
+                    exchange,
+                    _complete_identity_outcome(
+                        _identity(exchange, record.code, record.name)
+                    ),
+                )
+                for exchange, record in rows.items()
+            )
+        )
+        timeout = 10**1000
+
+        result = build_as_of_a_share_universe(
+            UniverseRequest("2026-08-20", "2026-08-20T23:59:59+08:00"),
+            research_now=datetime(2026, 8, 21, 10, 0, tzinfo=ASIA_SHANGHAI),
+            exchange_list_adapters=list_adapters,
+            identity_adapters=identity_adapters,
+            timeout_seconds=timeout,
+        ).to_public_dict()
+
+        self.assertTrue(result["full_a_share_universe"])
+        self.assertEqual(len(seen), 6)
+        self.assertTrue(all(value is timeout for value in seen))
 
 
 class AShareUniverseInstalledCopyTests(unittest.TestCase):
