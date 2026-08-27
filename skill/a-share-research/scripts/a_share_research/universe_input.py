@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import InitVar, dataclass
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Literal, Sequence, cast
 from unicodedata import category as unicode_category
@@ -33,7 +33,6 @@ _UNSAFE_REFERENCE_MARKERS = (
     "secret",
     "token",
 )
-_PREPARE_AUTHORITY = object()
 
 
 class UniverseInputError(ValueError):
@@ -110,19 +109,21 @@ class IdentityBatchOutcome:
     records: Sequence[UniverseIdentity]
 
 
-@dataclass(frozen=True, slots=True)
-class _PreparedUniverseRequest:
+class _PreparedValue:
+    __slots__ = ()
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("Prepared universe values have no public constructor.")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class _PreparedUniverseRequest(_PreparedValue):
     screen_date: str
     information_cutoff: str
-    _authority: InitVar[object]
-
-    def __post_init__(self, _authority: object) -> None:
-        if _authority is not _PREPARE_AUTHORITY:
-            raise TypeError("Prepared universe values have no public constructor.")
 
 
-@dataclass(frozen=True, slots=True)
-class _PreparedExchangeListRecord:
+@dataclass(frozen=True, slots=True, init=False)
+class _PreparedExchangeListRecord(_PreparedValue):
     exchange: str
     code: str
     canonical_security_id: str
@@ -132,15 +133,10 @@ class _PreparedExchangeListRecord:
     available_at: str
     retrieved_at: str
     provenance_uri: str
-    _authority: InitVar[object]
-
-    def __post_init__(self, _authority: object) -> None:
-        if _authority is not _PREPARE_AUTHORITY:
-            raise TypeError("Prepared universe values have no public constructor.")
 
 
-@dataclass(frozen=True, slots=True)
-class _PreparedExchangeListOutcome:
+@dataclass(frozen=True, slots=True, init=False)
+class _PreparedExchangeListOutcome(_PreparedValue):
     operation_id: str
     exchange: str
     screen_date: str
@@ -150,15 +146,10 @@ class _PreparedExchangeListOutcome:
     pages_expected: int
     pages_received: int
     records: tuple[_PreparedExchangeListRecord, ...]
-    _authority: InitVar[object]
-
-    def __post_init__(self, _authority: object) -> None:
-        if _authority is not _PREPARE_AUTHORITY:
-            raise TypeError("Prepared universe values have no public constructor.")
 
 
-@dataclass(frozen=True, slots=True)
-class _PreparedUniverseIdentity:
+@dataclass(frozen=True, slots=True, init=False)
+class _PreparedUniverseIdentity(_PreparedValue):
     exchange: str
     code: str
     canonical_security_id: str
@@ -171,26 +162,16 @@ class _PreparedUniverseIdentity:
     available_at: str | None
     retrieved_at: str
     provenance_uri: str
-    _authority: InitVar[object]
-
-    def __post_init__(self, _authority: object) -> None:
-        if _authority is not _PREPARE_AUTHORITY:
-            raise TypeError("Prepared universe values have no public constructor.")
 
 
-@dataclass(frozen=True, slots=True)
-class _PreparedIdentityBatchOutcome:
+@dataclass(frozen=True, slots=True, init=False)
+class _PreparedIdentityBatchOutcome(_PreparedValue):
     operation_id: str
     exchange: str
     attempted: bool
     source_result: SourceResult
     expected_count: int
     records: tuple[_PreparedUniverseIdentity, ...]
-    _authority: InitVar[object]
-
-    def __post_init__(self, _authority: object) -> None:
-        if _authority is not _PREPARE_AUTHORITY:
-            raise TypeError("Prepared universe values have no public constructor.")
 
 
 def _parse_date(value: object) -> date | None:
@@ -213,6 +194,15 @@ def _parse_aware_datetime(value: object) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
     return parsed
+
+
+def _normalized_research_now(value: datetime) -> datetime | None:
+    try:
+        if value.tzinfo is None or value.utcoffset() is None:
+            return None
+        return value.astimezone(ASIA_SHANGHAI)
+    except Exception:
+        return None
 
 
 def _invalid_time() -> UniverseInputError:
@@ -488,14 +478,9 @@ def prepare_universe_request(
     screen_value, cutoff_value = request_snapshot
     screen_date = _parse_date(screen_value)
     cutoff = _parse_aware_datetime(cutoff_value)
-    if (
-        screen_date is None
-        or cutoff is None
-        or research_now.tzinfo is None
-        or research_now.utcoffset() is None
-    ):
+    normalized_now = _normalized_research_now(research_now)
+    if screen_date is None or cutoff is None or normalized_now is None:
         raise _invalid_time()
-    normalized_now = research_now.astimezone(ASIA_SHANGHAI)
     normalized_cutoff = cutoff.astimezone(ASIA_SHANGHAI)
     if (
         normalized_cutoff > normalized_now
@@ -510,11 +495,14 @@ def prepare_universe_request(
         )
     ):
         raise _invalid_time()
-    return _PreparedUniverseRequest(
-        screen_date=screen_date.isoformat(),
-        information_cutoff=normalized_cutoff.isoformat(),
-        _authority=_PREPARE_AUTHORITY,
+    prepared = object.__new__(_PreparedUniverseRequest)
+    object.__setattr__(prepared, "screen_date", screen_date.isoformat())
+    object.__setattr__(
+        prepared,
+        "information_cutoff",
+        normalized_cutoff.isoformat(),
     )
+    return prepared
 
 
 def _prepare_list_record(
@@ -581,18 +569,18 @@ def _prepare_list_record(
             "invalid_evidence_chronology",
             "Universe evidence chronology is invalid.",
         )
-    return _PreparedExchangeListRecord(
-        exchange=exchange,
-        code=code,
-        canonical_security_id=canonical_id,
-        name=name,
-        security_category="A_SHARE",
-        effective_at=effective_at,
-        available_at=available_at,
-        retrieved_at=retrieved_at,
-        provenance_uri=_safe_provenance(provenance_value),
-        _authority=_PREPARE_AUTHORITY,
-    )
+    provenance_uri = _safe_provenance(provenance_value)
+    prepared = object.__new__(_PreparedExchangeListRecord)
+    object.__setattr__(prepared, "exchange", exchange)
+    object.__setattr__(prepared, "code", code)
+    object.__setattr__(prepared, "canonical_security_id", canonical_id)
+    object.__setattr__(prepared, "name", name)
+    object.__setattr__(prepared, "security_category", "A_SHARE")
+    object.__setattr__(prepared, "effective_at", effective_at)
+    object.__setattr__(prepared, "available_at", available_at)
+    object.__setattr__(prepared, "retrieved_at", retrieved_at)
+    object.__setattr__(prepared, "provenance_uri", provenance_uri)
+    return prepared
 
 
 def prepare_exchange_list_outcome(
@@ -669,18 +657,17 @@ def prepare_exchange_list_outcome(
             "duplicate_canonical_identity",
             "Universe exchange-list identity is duplicated.",
         )
-    return _PreparedExchangeListOutcome(
-        operation_id=operation_id,
-        exchange=exchange,
-        screen_date=screen_date.isoformat(),
-        attempted=attempted,
-        source_result=source_result,
-        expected_count=expected_count,
-        pages_expected=pages_expected,
-        pages_received=pages_received,
-        records=records,
-        _authority=_PREPARE_AUTHORITY,
-    )
+    prepared = object.__new__(_PreparedExchangeListOutcome)
+    object.__setattr__(prepared, "operation_id", operation_id)
+    object.__setattr__(prepared, "exchange", exchange)
+    object.__setattr__(prepared, "screen_date", screen_date.isoformat())
+    object.__setattr__(prepared, "attempted", attempted)
+    object.__setattr__(prepared, "source_result", source_result)
+    object.__setattr__(prepared, "expected_count", expected_count)
+    object.__setattr__(prepared, "pages_expected", pages_expected)
+    object.__setattr__(prepared, "pages_received", pages_received)
+    object.__setattr__(prepared, "records", records)
+    return prepared
 
 
 def _prepare_identity_record(
@@ -766,21 +753,21 @@ def _prepare_identity_record(
             "invalid_evidence_chronology",
             "Universe evidence chronology is invalid.",
         )
-    return _PreparedUniverseIdentity(
-        exchange=exchange,
-        code=code,
-        canonical_security_id=canonical_id,
-        name=name,
-        security_category="A_SHARE",
-        listing_state=listing_state,
-        effective_from=effective_from,
-        effective_to=effective_to,
-        observed_at=observed_at,
-        available_at=available_at,
-        retrieved_at=retrieved_at,
-        provenance_uri=_safe_provenance(provenance_value),
-        _authority=_PREPARE_AUTHORITY,
-    )
+    provenance_uri = _safe_provenance(provenance_value)
+    prepared = object.__new__(_PreparedUniverseIdentity)
+    object.__setattr__(prepared, "exchange", exchange)
+    object.__setattr__(prepared, "code", code)
+    object.__setattr__(prepared, "canonical_security_id", canonical_id)
+    object.__setattr__(prepared, "name", name)
+    object.__setattr__(prepared, "security_category", "A_SHARE")
+    object.__setattr__(prepared, "listing_state", listing_state)
+    object.__setattr__(prepared, "effective_from", effective_from)
+    object.__setattr__(prepared, "effective_to", effective_to)
+    object.__setattr__(prepared, "observed_at", observed_at)
+    object.__setattr__(prepared, "available_at", available_at)
+    object.__setattr__(prepared, "retrieved_at", retrieved_at)
+    object.__setattr__(prepared, "provenance_uri", provenance_uri)
+    return prepared
 
 
 def prepare_identity_outcome(
@@ -837,15 +824,14 @@ def prepare_identity_outcome(
             "duplicate_canonical_identity",
             "Universe identity is duplicated.",
         )
-    return _PreparedIdentityBatchOutcome(
-        operation_id=operation_id,
-        exchange=exchange,
-        attempted=attempted,
-        source_result=source_result,
-        expected_count=expected_count,
-        records=records,
-        _authority=_PREPARE_AUTHORITY,
-    )
+    prepared = object.__new__(_PreparedIdentityBatchOutcome)
+    object.__setattr__(prepared, "operation_id", operation_id)
+    object.__setattr__(prepared, "exchange", exchange)
+    object.__setattr__(prepared, "attempted", attempted)
+    object.__setattr__(prepared, "source_result", source_result)
+    object.__setattr__(prepared, "expected_count", expected_count)
+    object.__setattr__(prepared, "records", records)
+    return prepared
 
 
 __all__ = [

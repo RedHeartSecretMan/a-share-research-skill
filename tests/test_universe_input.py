@@ -6,8 +6,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from dataclasses import FrozenInstanceError, replace
-from datetime import datetime
+from dataclasses import FrozenInstanceError, fields, replace
+from datetime import datetime, timedelta, tzinfo
 from itertools import product
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -159,7 +159,46 @@ class _RaisingClassImpostor:
         return object.__getattribute__(self, name)
 
 
+class _FailingResearchTimezone(tzinfo):
+    def __init__(self, *, raise_on_call: int) -> None:
+        self._raise_on_call = raise_on_call
+        self.calls = 0
+
+    def utcoffset(self, value: datetime | None) -> timedelta:
+        self.calls += 1
+        if self.calls == self._raise_on_call:
+            raise RuntimeError("RAW_SECRET:/private/tmp/research-now-token")
+        return timedelta(hours=8)
+
+    def dst(self, value: datetime | None) -> timedelta:
+        return timedelta(0)
+
+    def tzname(self, value: datetime | None) -> str:
+        return "hostile"
+
+
 class UniverseRequestInputTests(unittest.TestCase):
+    def test_research_now_timezone_failures_are_sanitized_at_the_module_seam(
+        self,
+    ) -> None:
+        secret = "RAW_SECRET:/private/tmp/research-now-token"
+
+        for raise_on_call in (1, 2):
+            with self.subTest(raise_on_call=raise_on_call):
+                hostile_timezone = _FailingResearchTimezone(raise_on_call=raise_on_call)
+                with self.assertRaises(UniverseInputError) as caught:
+                    prepare_universe_request(
+                        UniverseRequest("2026-08-20", "2026-08-21T10:00:00+08:00"),
+                        research_now=datetime(
+                            2026, 8, 21, 10, 0, tzinfo=hostile_timezone
+                        ),
+                    )
+
+                self.assertEqual(caught.exception.code, "invalid_research_time")
+                self.assertNotIn(secret, str(caught.exception))
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+
     def test_request_runtime_type_gate_is_sanitized_before_snapshot(self) -> None:
         secret = "RAW_SECRET:/private/tmp/provider-token"
 
@@ -245,22 +284,76 @@ class UniverseRequestInputTests(unittest.TestCase):
         self.assertEqual(historical.information_cutoff, "2026-08-20T23:59:59+08:00")
         self.assertEqual(current.information_cutoff, "2026-08-21T10:00:00+08:00")
 
-    def test_prepared_values_have_no_public_constructor_or_replace_bypass(self) -> None:
-        prepared = prepare_universe_request(
+    def test_prepared_value_family_has_no_constructor_or_replace_bypass(self) -> None:
+        prepared_request = prepare_universe_request(
             UniverseRequest("2026-08-20", "2026-08-21T10:00:00+08:00"),
             research_now=datetime(2026, 8, 21, 10, 0, tzinfo=ASIA_SHANGHAI),
         )
+        prepared_list = prepare_exchange_list_outcome(
+            ExchangeListOutcome(
+                operation_id="sse_stock_list@1",
+                exchange="SSE",
+                screen_date="2026-08-20",
+                attempted=True,
+                source_result="complete",
+                expected_count=1,
+                pages_expected=1,
+                pages_received=1,
+                records=[_list_record()],
+            )
+        )
+        prepared_identity = prepare_identity_outcome(
+            IdentityBatchOutcome(
+                operation_id="sse_identity@1",
+                exchange="SSE",
+                attempted=True,
+                source_result="complete",
+                expected_count=1,
+                records=[_identity()],
+            )
+        )
+        cases = (
+            ("request", prepared_request, {"screen_date": "2099-01-01"}),
+            (
+                "list_record",
+                prepared_list.records[0],
+                {"canonical_security_id": "BSE:430001"},
+            ),
+            ("list_outcome", prepared_list, {"expected_count": 99}),
+            (
+                "identity_record",
+                prepared_identity.records[0],
+                {"effective_from": "2099-01-01"},
+            ),
+            ("identity_outcome", prepared_identity, {"expected_count": 99}),
+        )
+        leaked_authority = getattr(universe_input_module, "_PREPARE_AUTHORITY", None)
 
         self.assertFalse(
             any(name.startswith("Prepared") for name in universe_input_module.__all__)
         )
-        with self.assertRaises((TypeError, ValueError)):
-            replace(prepared, screen_date="2026-08-22")
-        with self.assertRaises(TypeError):
-            type(prepared)(
-                screen_date="2026-08-22",
-                information_cutoff="2026-08-22T10:00:00+08:00",
-            )
+        for name, prepared, forged_fields in cases:
+            constructor_fields = {
+                field.name: getattr(prepared, field.name) for field in fields(prepared)
+            }
+            with self.subTest(name=name, attack="leaked_authority_constructor"):
+                with self.assertRaises((TypeError, ValueError)):
+                    type(prepared)(
+                        **constructor_fields,
+                        _authority=leaked_authority,
+                    )
+            with self.subTest(name=name, attack="constructor"):
+                with self.assertRaises((TypeError, ValueError)):
+                    type(prepared)(**constructor_fields)
+            with self.subTest(name=name, attack="replace"):
+                with self.assertRaises((TypeError, ValueError)):
+                    replace(
+                        prepared,
+                        **forged_fields,
+                        _authority=leaked_authority,
+                    )
+
+        self.assertFalse(hasattr(universe_input_module, "_PREPARE_AUTHORITY"))
 
 
 class ExchangeListInputTests(unittest.TestCase):
