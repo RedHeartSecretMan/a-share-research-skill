@@ -34,7 +34,8 @@ from a_share_research.operation_release_matrix import (  # noqa: E402
     derive_release_source_result,
     formal_operation_applications,
     formal_producer_operation_ids,
-    load_operation_qualification_manifest,
+    load_active_operation_qualification_manifest,
+    load_operation_qualification_manifest,  # noqa: F401
     load_release_probe_evidence,
 )
 from a_share_research.research_result import (  # noqa: E402
@@ -1594,11 +1595,18 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
         )
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("operation qualification manifest is unreadable") from error
-    qualification = load_operation_qualification_manifest(
+    qualification = load_active_operation_qualification_manifest(
         _mapping(qualification_payload, "operation qualification manifest"),
-        expected_producer_operation_ids=denominator,
-        expected_operation_applications=applications,
     )
+    if {item.producer_operation_id for item in qualification} != set(denominator):
+        raise ValueError("qualification evidence does not close the denominator")
+    reviewed_applications = {
+        (capability_id, item.producer_operation_id)
+        for item in qualification
+        for capability_id in item.capability_ids
+    }
+    if reviewed_applications != set(applications):
+        raise ValueError("qualification application authority does not close the plan")
     build_operation_release_matrix(
         plan_snapshots=snapshots,
         qualification_evidence=qualification,
@@ -1618,16 +1626,8 @@ def _reviewed_producer_operation_ids() -> tuple[str, ...]:
         )
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("operation qualification manifest is unreadable") from error
-    candidate_ids = tuple(
-        _text(
-            _mapping(item, "qualification operation").get("producer_operation_id"),
-            "qualification producer operation id",
-        )
-        for item in _sequence(payload.get("operations"), "qualification operations")
-    )
-    qualification = load_operation_qualification_manifest(
+    qualification = load_active_operation_qualification_manifest(
         payload,
-        expected_producer_operation_ids=candidate_ids,
     )
     return tuple(item.producer_operation_id for item in qualification)
 

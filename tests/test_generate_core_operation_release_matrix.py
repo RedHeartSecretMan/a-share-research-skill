@@ -79,6 +79,31 @@ def _matching_snapshot(
 
 
 class CoreOperationMatrixGeneratorTests(unittest.TestCase):
+    def test_issue_114_v040_source_contract_references_resolve_without_production_owner(
+        self,
+    ) -> None:
+        path = (
+            REPOSITORY_ROOT
+            / "docs"
+            / "research"
+            / "v0.4.0-operation-qualification.json"
+        )
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        producer_ids = tuple(
+            item["producer_operation_id"] for item in manifest["operations"]
+        )
+        qualification = load_operation_qualification_manifest(
+            manifest,
+            expected_producer_operation_ids=producer_ids,
+        )
+
+        generator.validate_evidence_references(qualification)
+
+        self.assertEqual(len(qualification), 50)
+        self.assertEqual(
+            sum(item.source_contract is not None for item in qualification), 6
+        )
+
     def test_v030_legacy_adapter_preserves_input_and_adds_exact_codes(self) -> None:
         payload = _v030_payload()
         original = deepcopy(payload)

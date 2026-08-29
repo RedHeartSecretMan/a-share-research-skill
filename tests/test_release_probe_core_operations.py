@@ -354,9 +354,11 @@ def _reviewed_application_attempt(
     payload = json.loads(
         release_probe.DEFAULT_QUALIFICATION.read_text(encoding="utf-8")
     )
+    active_producers = set(_reviewed_qualification_producers())
     capabilities_by_producer = {
         item["producer_operation_id"]: tuple(item["capability_ids"])
         for item in payload["operations"]
+        if item["producer_operation_id"] in active_producers
     }
     return _synthetic_attempt(
         candidate_sha=candidate_sha,
@@ -3533,17 +3535,24 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             for capability_id in operation["capability_ids"]
         }
 
-        self.assertEqual(
-            reviewed_authority,
-            plan_authority,
-            msg=(
-                f"actual={len(plan_authority)}, reviewed={len(reviewed_authority)}, "
-                f"extras={sorted(reviewed_authority - plan_authority)!r}, "
-                f"missing={sorted(plan_authority - reviewed_authority)!r}"
-            ),
-        )
+        target_applications = {
+            ("whole_market_turnover", "sse_a_share_turnover@1"),
+            ("whole_market_turnover", "szse_a_share_turnover@1"),
+            ("whole_market_turnover", "bse_a_share_turnover@1"),
+            ("whole_market_margin", "sse_market_margin@1"),
+            ("whole_market_margin", "szse_market_margin@1"),
+            ("whole_market_margin", "bse_market_margin@1"),
+        }
+        self.assertEqual(reviewed_authority - plan_authority, target_applications)
+        self.assertFalse(plan_authority - reviewed_authority)
+        historical_manifest = deepcopy(reviewed_manifest)
+        historical_manifest["operations"] = [
+            operation
+            for operation in historical_manifest["operations"]
+            if operation["disposition"] != "pending_dependency"
+        ]
         qualification = load_operation_qualification_manifest(
-            reviewed_manifest,
+            historical_manifest,
             expected_producer_operation_ids=formal_producer_operation_ids(snapshots),
             expected_operation_applications=tuple(sorted(plan_authority)),
         )
@@ -3808,15 +3817,28 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             release_probe.DEFAULT_QUALIFICATION.read_text(encoding="utf-8")
         )
         with self.assertRaisesRegex(
-            ValueError, "qualification application authority does not close the plan"
+            ValueError, "qualification evidence does not close the denominator"
         ):
             load_operation_qualification_manifest(
                 qualification_payload,
                 expected_producer_operation_ids=tuple(plan_derived_producers),
+            )
+        active_qualification_payload = deepcopy(qualification_payload)
+        active_qualification_payload["operations"] = [
+            operation
+            for operation in active_qualification_payload["operations"]
+            if operation["disposition"] != "pending_dependency"
+        ]
+        with self.assertRaisesRegex(
+            ValueError, "qualification application authority does not close the plan"
+        ):
+            load_operation_qualification_manifest(
+                active_qualification_payload,
+                expected_producer_operation_ids=tuple(plan_derived_producers),
                 expected_operation_applications=plan_derived_applications,
             )
         qualification = load_operation_qualification_manifest(
-            qualification_payload,
+            active_qualification_payload,
             expected_producer_operation_ids=tuple(plan_derived_producers),
         )
         self.assertEqual(

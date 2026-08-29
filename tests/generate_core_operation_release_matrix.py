@@ -342,6 +342,36 @@ def _selector_module_binds_owner(item: OperationQualificationEvidence) -> bool:
     ]
     if len(matching_anchors) != 1:
         return False
+    if item.source_contract is not None:
+        fixture_reference = (
+            "skill/a-share-research/scripts/a_share_research/"
+            "operation_release_matrix.py#"
+            "load_market_foundation_qualification_fixtures"
+        )
+        operation_bound = any(
+            isinstance(node, ast.Constant) and node.value == item.producer_operation_id
+            for node in ast.walk(matching_anchors[0])
+        )
+        installed_validator_used = any(
+            isinstance(node, ast.Call)
+            and (
+                (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "load_market_foundation_qualification_fixtures"
+                )
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr
+                    == "load_market_foundation_qualification_fixtures"
+                )
+            )
+            for node in ast.walk(tree)
+        )
+        return (
+            operation_bound
+            and installed_validator_used
+            and fixture_reference in item.evidence_references
+        )
     owner_symbol = _owner_operation_symbol(item)
     return any(
         (isinstance(node, ast.Constant) and node.value == item.producer_operation_id)

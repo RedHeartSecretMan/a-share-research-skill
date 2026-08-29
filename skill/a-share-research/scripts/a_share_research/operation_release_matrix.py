@@ -7,10 +7,16 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Literal, Mapping, Sequence, cast
+from urllib.parse import urlsplit
 
+from .exact_normalization import (
+    ExactDecimalTerm,
+    ExactNormalizationError,
+    exact_scaled_sum,
+)
 from .research_result import (
     validate_field_disposition_destination_contract,
     validate_plan_operation_producer_authority,
@@ -48,6 +54,115 @@ _SENSITIVE_KEY_TOKENS = {
     "server_url",
     "token",
 }
+_QUALIFIED_FIRST_PARTY_HOSTS = {
+    "www.bse.cn",
+    "www.sse.com.cn",
+    "www.szse.cn",
+}
+_SOURCE_CONTRACT_KEYS = {
+    "producer_operation_id",
+    "capability_id",
+    "fixture_id",
+    "provider",
+    "scope",
+    "request_selector",
+    "response_shape",
+    "field_destinations",
+    "normalization",
+    "field_applicability",
+    "state_mapping",
+    "dependency_policy",
+    "license_policy",
+}
+_MARKET_FOUNDATION_SOURCE_CAPABILITIES = {
+    "bse_a_share_turnover@1": "whole_market_turnover",
+    "bse_market_margin@1": "whole_market_margin",
+    "sse_a_share_turnover@1": "whole_market_turnover",
+    "sse_market_margin@1": "whole_market_margin",
+    "szse_a_share_turnover@1": "whole_market_turnover",
+    "szse_market_margin@1": "whole_market_margin",
+}
+
+
+@dataclass(frozen=True)
+class _MarketFoundationNormalizationRule:
+    """One owner-bound fixture transform delegated to exact arithmetic."""
+
+    contract: Mapping[str, str]
+    source_scale_exponents: Mapping[str, int]
+
+
+_MARKET_FOUNDATION_NORMALIZATION_RULES = {
+    "bse_a_share_turnover@1": _MarketFoundationNormalizationRule(
+        contract={
+            "asset_filter": "accept_only_the_official_BSE_stock_daily_report_total",
+            "scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
+            "date": "require_report_date_equal_requested_completed_trading_date",
+        },
+        source_scale_exponents={"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": 4},
+    ),
+    "bse_market_margin@1": _MarketFoundationNormalizationRule(
+        contract={
+            "money_scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
+            "quantity_scale": "multiply_ten_thousand_shares_by_10000_using_exact_decimal",
+            "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable",
+        },
+        source_scale_exponents={
+            "FINANCING_BALANCE": 4,
+            "FINANCING_BUY_AMOUNT": 4,
+            "SECURITIES_LENDING_SELL_QUANTITY": 4,
+            "SECURITIES_LENDING_QUANTITY": 4,
+            "SECURITIES_LENDING_BALANCE": 4,
+            "MARGIN_TOTAL_BALANCE": 4,
+        },
+    ),
+    "sse_a_share_turnover@1": _MarketFoundationNormalizationRule(
+        contract={
+            "asset_filter": "sum_only_PRODUCT_CODE_01_and_03_and_reject_missing_or_duplicate_rows",
+            "scale": "multiply_each_hundred_million_CNY_value_by_100000000_then_exact_sum",
+            "date": "require_both_rows_TRADE_DATE_equal_requested_completed_trading_date",
+        },
+        source_scale_exponents={"TRADE_AMT_01": 8, "TRADE_AMT_03": 8},
+    ),
+    "sse_market_margin@1": _MarketFoundationNormalizationRule(
+        contract={
+            "money_scale": "official_CNY_values_retained_as_exact_decimal_CNY",
+            "quantity_scale": "official_share_values_retained_as_exact_decimal_shares",
+            "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable",
+        },
+        source_scale_exponents={
+            "FINANCING_BALANCE": 0,
+            "FINANCING_BUY_AMOUNT": 0,
+            "SECURITIES_LENDING_SELL_QUANTITY": 0,
+            "SECURITIES_LENDING_QUANTITY": 0,
+            "SECURITIES_LENDING_BALANCE": 0,
+            "MARGIN_TOTAL_BALANCE": 0,
+        },
+    ),
+    "szse_a_share_turnover@1": _MarketFoundationNormalizationRule(
+        contract={
+            "asset_filter": "accept_only_row_explicitly_labeled_A_share_total_and_reject_stock_or_index_proxy",
+            "scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
+            "date": "require_report_date_equal_requested_completed_trading_date",
+        },
+        source_scale_exponents={"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": 4},
+    ),
+    "szse_market_margin@1": _MarketFoundationNormalizationRule(
+        contract={
+            "money_scale": "official_CNY_values_retained_as_exact_decimal_CNY",
+            "quantity_scale": "official_share_values_retained_as_exact_decimal_shares",
+            "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable",
+        },
+        source_scale_exponents={
+            "FINANCING_BALANCE": 0,
+            "FINANCING_BUY_AMOUNT": 0,
+            "SECURITIES_LENDING_SELL_QUANTITY": 0,
+            "SECURITIES_LENDING_QUANTITY": 0,
+            "SECURITIES_LENDING_BALANCE": 0,
+            "MARGIN_TOTAL_BALANCE": 0,
+        },
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -80,6 +195,7 @@ class OperationQualificationEvidence:
     evidence_references: tuple[str, ...]
     capability_ids: tuple[str, ...] = ()
     gap_issues: tuple[int, ...] = ()
+    source_contract: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -410,7 +526,21 @@ def load_operation_qualification_manifest(
         expected_keys.add("capability_ids")
     for raw_value in values:
         value = _mapping(raw_value, "qualification operation")
-        if set(value) != expected_keys:
+        producer_operation_id = _text(
+            value.get("producer_operation_id"),
+            "qualification producer operation id",
+        )
+        requires_source_contract = (
+            producer_operation_id in _MARKET_FOUNDATION_SOURCE_CAPABILITIES
+        )
+        if (
+            set(value)
+            not in {
+                frozenset(expected_keys),
+                frozenset((*expected_keys, "source_contract")),
+            }
+            or ("source_contract" in value) != requires_source_contract
+        ):
             raise ValueError("operation qualification entry is invalid")
         capability_ids: tuple[str, ...] = ()
         if schema_version == "2.0":
@@ -443,10 +573,7 @@ def load_operation_qualification_manifest(
         )
         evidence.append(
             OperationQualificationEvidence(
-                producer_operation_id=_text(
-                    value.get("producer_operation_id"),
-                    "qualification producer operation id",
-                ),
+                producer_operation_id=producer_operation_id,
                 disposition=cast(
                     Literal["integrated", "experimental", "pending_dependency"],
                     disposition,
@@ -493,6 +620,22 @@ def load_operation_qualification_manifest(
                 evidence_references=references,
                 capability_ids=capability_ids,
                 gap_issues=gap_issues,
+                source_contract=(
+                    deepcopy(
+                        dict(
+                            _validated_source_contract(
+                                _mapping(
+                                    value.get("source_contract"),
+                                    "qualification source contract",
+                                ),
+                                producer_operation_id=producer_operation_id,
+                                capability_ids=capability_ids,
+                            )
+                        )
+                    )
+                    if requires_source_contract
+                    else None
+                ),
             )
         )
     indexed = _unique_evidence(evidence, "qualification evidence")
@@ -524,6 +667,217 @@ def load_operation_qualification_manifest(
     for item in evidence:
         _validate_qualification(item)
     return tuple(sorted(evidence, key=lambda item: item.producer_operation_id))
+
+
+def load_active_operation_qualification_manifest(
+    payload: Mapping[str, object],
+) -> tuple[OperationQualificationEvidence, ...]:
+    """Load installed authority and project only executable production owners."""
+
+    manifest = _mapping(payload, "operation qualification manifest")
+    manifest_producer_ids = tuple(
+        _text(
+            _mapping(item, "qualification operation").get("producer_operation_id"),
+            "qualification producer operation id",
+        )
+        for item in _sequence(manifest.get("operations"), "qualification operations")
+    )
+    reviewed = load_operation_qualification_manifest(
+        manifest,
+        expected_producer_operation_ids=manifest_producer_ids,
+    )
+    return tuple(item for item in reviewed if item.disposition != "pending_dependency")
+
+
+def load_market_foundation_qualification_fixtures(
+    payload: Mapping[str, object],
+    qualification_evidence: Sequence[OperationQualificationEvidence],
+) -> tuple[Mapping[str, object], ...]:
+    """Load the six installed deterministic source-contract fixtures."""
+
+    if (
+        set(payload) != {"schema_version", "fixtures"}
+        or payload.get("schema_version") != "1.0"
+    ):
+        raise ValueError("market foundation qualification fixtures are invalid")
+    qualifications = {
+        item.producer_operation_id: item
+        for item in qualification_evidence
+        if item.source_contract is not None
+    }
+    if set(qualifications) != set(_MARKET_FOUNDATION_SOURCE_CAPABILITIES):
+        raise ValueError("market foundation qualification owners do not close")
+    fixtures: dict[str, Mapping[str, object]] = {}
+    for raw_fixture in _sequence(payload.get("fixtures"), "qualification fixtures"):
+        fixture = _mapping(raw_fixture, "qualification fixture")
+        if set(fixture) != {
+            "producer_operation_id",
+            "capability_id",
+            "complete",
+            "observed_empty",
+            "unavailable",
+        }:
+            raise ValueError("market foundation qualification fixture is invalid")
+        operation_id = _safe_release_reference(
+            fixture.get("producer_operation_id"), "qualification fixture owner"
+        )
+        capability_id = _safe_release_reference(
+            fixture.get("capability_id"), "qualification fixture capability"
+        )
+        qualification = qualifications.get(operation_id)
+        if (
+            qualification is None
+            or operation_id in fixtures
+            or _MARKET_FOUNDATION_SOURCE_CAPABILITIES.get(operation_id) != capability_id
+        ):
+            raise ValueError("market foundation qualification fixture owner is invalid")
+        contract = _mapping(
+            qualification.source_contract, "qualification fixture source contract"
+        )
+        if contract.get("fixture_id") != operation_id:
+            raise ValueError("market foundation qualification fixture is not bound")
+        complete = _mapping(fixture.get("complete"), "qualification complete fixture")
+        if (
+            set(complete)
+            != {
+                "query_complete",
+                "report_date",
+                "published_at",
+                "source_fields",
+                "normalized_destinations",
+            }
+            or complete.get("query_complete") is not True
+        ):
+            raise ValueError("qualification complete fixture is invalid")
+        try:
+            date.fromisoformat(
+                _text(complete.get("report_date"), "fixture report date")
+            )
+            datetime.fromisoformat(
+                _text(complete.get("published_at"), "fixture publication time")
+            )
+        except ValueError as error:
+            raise ValueError("qualification fixture time is invalid") from error
+        source_fields = _mapping(
+            complete.get("source_fields"), "qualification fixture source fields"
+        )
+        normalized = _mapping(
+            complete.get("normalized_destinations"),
+            "qualification fixture normalized destinations",
+        )
+        destinations = _mapping(
+            contract.get("field_destinations"), "qualification field destinations"
+        )
+        if (
+            not source_fields
+            or set(source_fields) != set(destinations)
+            or set(normalized) != set(destinations.values())
+        ):
+            raise ValueError("qualification fixture field authority drifted")
+        for values, label in (
+            (source_fields, "fixture source field"),
+            (normalized, "fixture normalized destination"),
+        ):
+            for key, value in values.items():
+                _text(key, label)
+                _text(value, label)
+        _validate_market_foundation_fixture_normalization(
+            operation_id=operation_id,
+            contract=contract,
+            source_fields=source_fields,
+            normalized_destinations=normalized,
+        )
+        observed_empty = _mapping(
+            fixture.get("observed_empty"), "qualification empty fixture"
+        )
+        if observed_empty != {
+            "query_complete": True,
+            "row_count": 0,
+            "state": "observed_empty",
+        }:
+            raise ValueError("qualification empty fixture is invalid")
+        unavailable = _mapping(
+            fixture.get("unavailable"), "qualification unavailable fixture"
+        )
+        if (
+            set(unavailable) != {"query_complete", "reason", "state"}
+            or unavailable.get("query_complete") is not False
+            or unavailable.get("state") != "unavailable"
+        ):
+            raise ValueError("qualification unavailable fixture is invalid")
+        _safe_release_reference(
+            unavailable.get("reason"), "qualification unavailable reason"
+        )
+        fixtures[operation_id] = deepcopy(dict(fixture))
+    if set(fixtures) != set(qualifications):
+        raise ValueError("market foundation qualification fixtures do not close")
+    return tuple(fixtures[operation_id] for operation_id in sorted(fixtures))
+
+
+def _validate_market_foundation_fixture_normalization(
+    *,
+    operation_id: str,
+    contract: Mapping[str, object],
+    source_fields: Mapping[str, object],
+    normalized_destinations: Mapping[str, object],
+) -> None:
+    rule = _MARKET_FOUNDATION_NORMALIZATION_RULES.get(operation_id)
+    if rule is None:
+        raise ValueError("qualification fixture normalization owner is invalid")
+    normalization = _mapping(
+        contract.get("normalization"), "qualification fixture normalization contract"
+    )
+    destinations = _mapping(
+        contract.get("field_destinations"), "qualification field destinations"
+    )
+    if normalization != rule.contract or set(destinations) != set(
+        rule.source_scale_exponents
+    ):
+        raise ValueError("qualification fixture normalization authority drifted")
+
+    terms_by_destination: dict[str, list[ExactDecimalTerm]] = {}
+    for source_field, scale_exponent in rule.source_scale_exponents.items():
+        destination = _text(
+            destinations.get(source_field), "qualification field destination"
+        )
+        terms_by_destination.setdefault(destination, []).append(
+            ExactDecimalTerm(
+                value=_exact_fixture_decimal(
+                    source_fields.get(source_field),
+                    "qualification fixture source decimal",
+                ),
+                scale_exponent=scale_exponent,
+            )
+        )
+
+    try:
+        for destination, terms in terms_by_destination.items():
+            expected = exact_scaled_sum(tuple(terms))
+            actual = exact_scaled_sum(
+                (
+                    ExactDecimalTerm(
+                        value=_exact_fixture_decimal(
+                            normalized_destinations.get(destination),
+                            "qualification fixture normalized decimal",
+                        ),
+                        scale_exponent=0,
+                    ),
+                )
+            )
+            if actual.as_tuple() != expected.as_tuple():
+                raise ValueError("qualification fixture normalization is invalid")
+    except ExactNormalizationError as error:
+        raise ValueError("qualification fixture normalization is invalid") from error
+
+
+def _exact_fixture_decimal(value: object, label: str) -> Decimal:
+    try:
+        decimal = Decimal(_text(value, label))
+    except InvalidOperation as error:
+        raise ValueError(f"{label} is invalid") from error
+    if not decimal.is_finite():
+        raise ValueError(f"{label} is invalid")
+    return decimal
 
 
 def build_operation_release_matrix(
@@ -775,7 +1129,14 @@ def build_operation_release_matrix(
             raise ValueError("offline contract evidence must pass")
         if live.probe_status != "passed":
             raise ValueError("live probe harness evidence must pass")
-        if not live.attempted:
+        pending_dependency = qualification.disposition == "pending_dependency"
+        if pending_dependency and (
+            live.attempted or live.source_result != "unavailable"
+        ):
+            raise ValueError(
+                "pending qualification cannot claim attempted source evidence"
+            )
+        if not pending_dependency and not live.attempted:
             raise ValueError("live probe source must be attempted")
         _safe_release_reference(live.probe, "live probe")
         if live.source_result not in _RELEASE_SOURCE_RESULTS:
@@ -934,6 +1295,11 @@ def build_operation_release_matrix(
                     "result": qualification.offline_contract_result,
                 },
                 "evidence_references": list(qualification.evidence_references),
+                **(
+                    {"source_contract": deepcopy(dict(qualification.source_contract))}
+                    if qualification.source_contract is not None
+                    else {}
+                ),
                 "live_probe": {
                     "probe": live.probe,
                     "probe_status": live.probe_status,
@@ -1556,10 +1922,157 @@ def _validate_qualification(value: OperationQualificationEvidence) -> None:
     if not value.rate_limit_policy:
         raise ValueError("operation rate-limit policy is invalid")
     _safe_release_mapping(value.rate_limit_policy, "operation rate-limit policy")
+    if value.source_contract is not None:
+        _validated_source_contract(
+            value.source_contract,
+            producer_operation_id=value.producer_operation_id,
+            capability_ids=value.capability_ids,
+        )
     if len(value.gap_issues) != len(set(value.gap_issues)) or any(
         issue not in {58, 59, 61, 62, 63, 64} for issue in value.gap_issues
     ):
         raise ValueError("operation gap routing is invalid")
+
+
+def _validated_source_contract(
+    value: Mapping[str, object],
+    *,
+    producer_operation_id: str,
+    capability_ids: tuple[str, ...],
+) -> Mapping[str, object]:
+    """Validate one installed, first-party operation source contract."""
+
+    if set(value) != _SOURCE_CONTRACT_KEYS:
+        raise ValueError("qualification source contract is invalid")
+    expected_capability = _MARKET_FOUNDATION_SOURCE_CAPABILITIES.get(
+        producer_operation_id
+    )
+    if (
+        expected_capability is None
+        or capability_ids != (expected_capability,)
+        or value.get("producer_operation_id") != producer_operation_id
+        or value.get("capability_id") != expected_capability
+        or value.get("fixture_id") != producer_operation_id
+    ):
+        raise ValueError("qualification source contract owner is invalid")
+    provider = _mapping(value.get("provider"), "qualification source provider")
+    if (
+        set(provider)
+        != {
+            "id",
+            "organization",
+            "role",
+            "documentation_url",
+            "terms_url",
+        }
+        or provider.get("role") != "first_party_exchange"
+    ):
+        raise ValueError("qualification source provider is invalid")
+    provider_id = _safe_release_reference(provider.get("id"), "source provider id")
+    if provider_id not in {"bse", "sse", "szse"}:
+        raise ValueError("qualification source provider is invalid")
+    _text(provider.get("organization"), "source provider organization")
+    for key in ("documentation_url", "terms_url"):
+        _qualified_first_party_url(provider.get(key), f"source provider {key}")
+
+    scope = _mapping(value.get("scope"), "qualification source scope")
+    if set(scope) != {
+        "exchange",
+        "kind",
+        "included_assets",
+        "excluded_proxies",
+    }:
+        raise ValueError("qualification source scope is invalid")
+    exchange = _safe_release_reference(scope.get("exchange"), "source exchange")
+    if exchange != provider_id.upper():
+        raise ValueError("qualification source scope is invalid")
+    for key in ("kind", "included_assets", "excluded_proxies"):
+        _text(scope.get(key), f"qualification source scope {key}")
+
+    selector = _mapping(value.get("request_selector"), "qualification request selector")
+    if set(selector) != {
+        "method",
+        "selector_kind",
+        "resource_url",
+        "date_selector",
+        "max_requests",
+        "max_pages",
+    } or selector.get("method") not in {"GET", "POST"}:
+        raise ValueError("qualification request selector is invalid")
+    _text(selector.get("selector_kind"), "qualification selector kind")
+    _qualified_first_party_url(selector.get("resource_url"), "source resource URL")
+    _text(selector.get("date_selector"), "qualification date selector")
+    for key in ("max_requests", "max_pages"):
+        bound = selector.get(key)
+        if (
+            not isinstance(bound, int)
+            or isinstance(bound, bool)
+            or not 1 <= bound <= 10
+        ):
+            raise ValueError("qualification request selector is invalid")
+
+    response = _mapping(value.get("response_shape"), "qualification response shape")
+    if set(response) != {"shape", "required_fields", "publication_time_rule"}:
+        raise ValueError("qualification response shape is invalid")
+    for key in response:
+        _text(response.get(key), f"qualification response {key}")
+
+    for key in ("field_destinations", "normalization"):
+        facts = _mapping(value.get(key), f"qualification {key}")
+        if not facts:
+            raise ValueError(f"qualification {key} is invalid")
+        for fact_key, fact in facts.items():
+            _safe_release_reference(fact_key, f"qualification {key} key")
+            _text(fact, f"qualification {key} value")
+
+    applicability = _mapping(
+        value.get("field_applicability"), "qualification field applicability"
+    )
+    if set(applicability) != {
+        "applicable_fields",
+        "not_applicable_fields",
+        "formal_rule",
+    }:
+        raise ValueError("qualification field applicability is invalid")
+    for rule in applicability.values():
+        _text(rule, "qualification field applicability rule")
+
+    state_mapping = _mapping(value.get("state_mapping"), "qualification state mapping")
+    if set(state_mapping) != {
+        "complete",
+        "observed_empty",
+        "partial",
+        "credential_blocked",
+        "unavailable",
+        "not_applicable",
+    }:
+        raise ValueError("qualification state mapping is invalid")
+    for state, rule in state_mapping.items():
+        _safe_release_reference(state, "qualification state")
+        _text(rule, "qualification state rule")
+
+    for key in ("dependency_policy", "license_policy"):
+        policy = _mapping(value.get(key), f"qualification {key}")
+        if not policy:
+            raise ValueError(f"qualification {key} is invalid")
+        for policy_key, policy_value in policy.items():
+            _safe_release_reference(policy_key, f"qualification {key} key")
+            _text(policy_value, f"qualification {key} value")
+    return value
+
+
+def _qualified_first_party_url(value: object, label: str) -> str:
+    url = _text(value, label)
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in _QUALIFIED_FIRST_PARTY_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise ValueError(f"{label} is invalid")
+    return url
 
 
 def _safe_release_mapping(value: Mapping[str, object], label: str) -> None:
