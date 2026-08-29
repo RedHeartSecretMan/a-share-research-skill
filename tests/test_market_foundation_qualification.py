@@ -7,8 +7,10 @@ import sys
 import tempfile
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from decimal import Decimal, localcontext
 from pathlib import Path
+from typing import Mapping
 
 from tests.skill_imports import add_skill_scripts_to_path
 
@@ -17,6 +19,7 @@ add_skill_scripts_to_path()
 from a_share_research.operation_release_matrix import (  # noqa: E402
     InstallationLoadEvidence,
     LiveProbeEvidence,
+    OperationQualificationEvidence,
     ReleasePlanSnapshot,
     build_operation_release_matrix,
     load_market_foundation_qualification_fixtures,
@@ -119,9 +122,77 @@ EXTREME_DECIMAL_CASES = {
         "exact": "1e1000000",
     },
 }
+DECIMAL_CONTEXTS = ((6, 9, -9), (28, 99, -99), (80, 999, -999))
 
 
 class MarketFoundationQualificationTests(unittest.TestCase):
+    def _load_qualifications(self) -> tuple[OperationQualificationEvidence, ...]:
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        return load_operation_qualification_manifest(
+            payload,
+            expected_producer_operation_ids=tuple(
+                item["producer_operation_id"] for item in payload["operations"]
+            ),
+        )
+
+    def _assert_decimal_cases_are_context_independent(
+        self,
+        cases: Mapping[str, Mapping[str, object]],
+        *,
+        reject_forged: bool,
+    ) -> None:
+        qualifications = self._load_qualifications()
+        installed_fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        for operation_id, case in cases.items():
+            exact = deepcopy(installed_fixtures)
+            fixture = next(
+                item
+                for item in exact["fixtures"]
+                if item["producer_operation_id"] == operation_id
+            )
+            source_fields = case["source_fields"]
+            destination = case["destination"]
+            expected = case["exact"]
+            assert isinstance(source_fields, dict)
+            assert isinstance(destination, str)
+            assert isinstance(expected, str)
+            fixture["complete"]["source_fields"].update(source_fields)
+            fixture["complete"]["normalized_destinations"][destination] = expected
+            for precision, emax, emin in DECIMAL_CONTEXTS:
+                with self.subTest(
+                    operation=operation_id,
+                    precision=precision,
+                    emax=emax,
+                    emin=emin,
+                ):
+                    with localcontext() as context:
+                        context.prec = precision
+                        context.Emax = emax
+                        context.Emin = emin
+                        loaded = load_market_foundation_qualification_fixtures(
+                            exact,
+                            qualifications,
+                        )
+                    self.assertEqual(len(loaded), 6)
+            if reject_forged:
+                forged_value = case["forged"]
+                assert isinstance(forged_value, str)
+                forged = deepcopy(exact)
+                forged_fixture = next(
+                    item
+                    for item in forged["fixtures"]
+                    if item["producer_operation_id"] == operation_id
+                )
+                forged_fixture["complete"]["normalized_destinations"][destination] = (
+                    forged_value
+                )
+                with self.subTest(operation=operation_id, forged=True):
+                    with self.assertRaisesRegex(ValueError, "normalization"):
+                        load_market_foundation_qualification_fixtures(
+                            forged,
+                            qualifications,
+                        )
+
     def _load_target_contract(self, operation_id: str) -> dict[str, object]:
         payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
         expected_ids = tuple(
@@ -419,6 +490,87 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                         expected_operation_applications=expected_applications,
                     )
 
+    def test_issue_114_source_urls_are_owner_bound_and_malformed_shapes_fail(
+        self,
+    ) -> None:
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        expected_ids = tuple(
+            item["producer_operation_id"] for item in payload["operations"]
+        )
+        expected_applications = tuple(
+            (capability_id, item["producer_operation_id"])
+            for item in payload["operations"]
+            for capability_id in item["capability_ids"]
+        )
+        target_index = next(
+            index
+            for index, item in enumerate(payload["operations"])
+            if item["producer_operation_id"] == "bse_a_share_turnover@1"
+        )
+        mutations: list[dict[str, object]] = []
+        for section, key in (
+            ("provider", "documentation_url"),
+            ("provider", "terms_url"),
+            ("request_selector", "resource_url"),
+        ):
+            cross_provider = deepcopy(payload)
+            cross_provider["operations"][target_index]["source_contract"][section][
+                key
+            ] = "https://www.sse.com.cn/reviewed-but-wrong-exchange"
+            mutations.append(cross_provider)
+        for unsafe_url in (
+            "https://www.bse.cn/path?access_token=redacted",
+            "https://www.bse.cn:abc/path",
+            "https://www.bse.cn:99999/path",
+        ):
+            malformed = deepcopy(payload)
+            malformed["operations"][target_index]["source_contract"][
+                "request_selector"
+            ]["resource_url"] = unsafe_url
+            mutations.append(malformed)
+
+        for mutation in mutations:
+            with self.subTest(
+                resource=mutation["operations"][target_index]["source_contract"]
+            ):
+                with self.assertRaises(ValueError):
+                    load_operation_qualification_manifest(
+                        mutation,
+                        expected_producer_operation_ids=expected_ids,
+                        expected_operation_applications=expected_applications,
+                    )
+
+    def test_issue_114_sse_destination_split_fails_closed(self) -> None:
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        sse_contract = next(
+            item["source_contract"]
+            for item in payload["operations"]
+            if item["producer_operation_id"] == "sse_a_share_turnover@1"
+        )
+        split_destination = (
+            "observations.payload.observation.metrics.turnover_partition_03_CNY"
+        )
+        sse_contract["field_destinations"]["TRADE_AMT_03"] = split_destination
+        qualifications = load_operation_qualification_manifest(
+            payload,
+            expected_producer_operation_ids=tuple(
+                item["producer_operation_id"] for item in payload["operations"]
+            ),
+        )
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        sse_fixture = next(
+            item
+            for item in fixtures["fixtures"]
+            if item["producer_operation_id"] == "sse_a_share_turnover@1"
+        )
+        sse_fixture["complete"]["normalized_destinations"] = {
+            "observations.payload.observation.metrics.turnover_amount_CNY": "3000000000",
+            split_destination: "500000000",
+        }
+
+        with self.assertRaisesRegex(ValueError, "authority drifted"):
+            load_market_foundation_qualification_fixtures(fixtures, qualifications)
+
     def test_issue_114_loader_works_from_a_copied_installed_skill(self) -> None:
         payload = QUALIFICATION_PATH.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary:
@@ -572,106 +724,18 @@ class MarketFoundationQualificationTests(unittest.TestCase):
     def test_issue_114_all_six_owners_normalize_long_coefficients_exactly(
         self,
     ) -> None:
-        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
-        qualifications = load_operation_qualification_manifest(
-            payload,
-            expected_producer_operation_ids=tuple(
-                item["producer_operation_id"] for item in payload["operations"]
-            ),
+        self._assert_decimal_cases_are_context_independent(
+            LONG_DECIMAL_CASES,
+            reject_forged=True,
         )
-        installed_fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-
-        for operation_id, case in LONG_DECIMAL_CASES.items():
-            exact = deepcopy(installed_fixtures)
-            fixture = next(
-                item
-                for item in exact["fixtures"]
-                if item["producer_operation_id"] == operation_id
-            )
-            fixture["complete"]["source_fields"].update(case["source_fields"])
-            fixture["complete"]["normalized_destinations"][case["destination"]] = case[
-                "exact"
-            ]
-            for precision, emax, emin in (
-                (6, 9, -9),
-                (28, 99, -99),
-                (80, 999, -999),
-            ):
-                with self.subTest(
-                    operation=operation_id,
-                    precision=precision,
-                    emax=emax,
-                    emin=emin,
-                ):
-                    with localcontext() as context:
-                        context.prec = precision
-                        context.Emax = emax
-                        context.Emin = emin
-                        loaded = load_market_foundation_qualification_fixtures(
-                            exact,
-                            qualifications,
-                        )
-                    self.assertEqual(len(loaded), 6)
-
-            forged = deepcopy(exact)
-            forged_fixture = next(
-                item
-                for item in forged["fixtures"]
-                if item["producer_operation_id"] == operation_id
-            )
-            forged_fixture["complete"]["normalized_destinations"][
-                case["destination"]
-            ] = case["forged"]
-            with self.subTest(operation=operation_id, forged=True):
-                with self.assertRaisesRegex(ValueError, "normalization"):
-                    load_market_foundation_qualification_fixtures(
-                        forged,
-                        qualifications,
-                    )
 
     def test_issue_114_all_six_owners_accept_compact_extreme_exponents(
         self,
     ) -> None:
-        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
-        qualifications = load_operation_qualification_manifest(
-            payload,
-            expected_producer_operation_ids=tuple(
-                item["producer_operation_id"] for item in payload["operations"]
-            ),
+        self._assert_decimal_cases_are_context_independent(
+            EXTREME_DECIMAL_CASES,
+            reject_forged=False,
         )
-        installed_fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-
-        for operation_id, case in EXTREME_DECIMAL_CASES.items():
-            exact = deepcopy(installed_fixtures)
-            fixture = next(
-                item
-                for item in exact["fixtures"]
-                if item["producer_operation_id"] == operation_id
-            )
-            fixture["complete"]["source_fields"].update(case["source_fields"])
-            fixture["complete"]["normalized_destinations"][case["destination"]] = case[
-                "exact"
-            ]
-            for precision, emax, emin in (
-                (6, 9, -9),
-                (28, 99, -99),
-                (80, 999, -999),
-            ):
-                with self.subTest(
-                    operation=operation_id,
-                    precision=precision,
-                    emax=emax,
-                    emin=emin,
-                ):
-                    with localcontext() as context:
-                        context.prec = precision
-                        context.Emax = emax
-                        context.Emin = emin
-                        loaded = load_market_foundation_qualification_fixtures(
-                            exact,
-                            qualifications,
-                        )
-                    self.assertEqual(len(loaded), 6)
 
     def test_issue_114_all_six_owners_reject_nonfinite_source_values(self) -> None:
         payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
@@ -857,11 +921,14 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                 verified_at="2026-08-27T16:00:00+08:00",
             ),
         )
-        matrix = build_operation_release_matrix(
-            plan_snapshots=(snapshot,),
-            qualification_evidence=(*target_qualifications, active_qualification),
-            installation_loads=installs,
-            installation_health={
+        matrix_inputs = {
+            "plan_snapshots": (snapshot,),
+            "qualification_evidence": (
+                *target_qualifications,
+                active_qualification,
+            ),
+            "installation_loads": installs,
+            "installation_health": {
                 "schema_version": "1.0",
                 "status": "complete",
                 "dependencies": [],
@@ -872,7 +939,13 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                     "evidence_adoption": "not_checked",
                 },
             },
-            live_probes=probes,
+            "live_probes": probes,
+        }
+        with self.assertRaisesRegex(ValueError, "normalization fixtures"):
+            build_operation_release_matrix(**matrix_inputs)
+        matrix = build_operation_release_matrix(
+            **matrix_inputs,
+            qualification_fixtures=json.loads(FIXTURE_PATH.read_text(encoding="utf-8")),
         ).to_dict()
 
         self.assertEqual(matrix["denominator"]["operation_count"], 7)
@@ -904,21 +977,25 @@ class MarketFoundationQualificationTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "attempted"):
             build_operation_release_matrix(
-                plan_snapshots=(snapshot,),
-                qualification_evidence=(*target_qualifications, active_qualification),
-                installation_loads=installs,
-                installation_health={
-                    "schema_version": "1.0",
-                    "status": "complete",
-                    "dependencies": [],
-                    "operations": [],
-                    "source_policy": {
-                        "source_accessibility": "not_checked",
-                        "credentials": "not_checked",
-                        "evidence_adoption": "not_checked",
-                    },
+                **{**matrix_inputs, "live_probes": forged_active},
+                qualification_fixtures=json.loads(
+                    FIXTURE_PATH.read_text(encoding="utf-8")
+                ),
+            )
+        missing_contract = (
+            replace(target_qualifications[0], source_contract=None),
+            *target_qualifications[1:],
+            active_qualification,
+        )
+        with self.assertRaisesRegex(ValueError, "source contract"):
+            build_operation_release_matrix(
+                **{
+                    **matrix_inputs,
+                    "qualification_evidence": missing_contract,
                 },
-                live_probes=forged_active,
+                qualification_fixtures=json.loads(
+                    FIXTURE_PATH.read_text(encoding="utf-8")
+                ),
             )
 
 

@@ -55,9 +55,9 @@ _SENSITIVE_KEY_TOKENS = {
     "token",
 }
 _QUALIFIED_FIRST_PARTY_HOSTS = {
-    "www.bse.cn",
-    "www.sse.com.cn",
-    "www.szse.cn",
+    "bse": "www.bse.cn",
+    "sse": "www.sse.com.cn",
+    "szse": "www.szse.cn",
 }
 _SOURCE_CONTRACT_KEYS = {
     "producer_operation_id",
@@ -89,15 +89,29 @@ class _MarketFoundationNormalizationRule:
     """One owner-bound fixture transform delegated to exact arithmetic."""
 
     contract: Mapping[str, str]
+    field_destinations: Mapping[str, str]
     source_scale_exponents: Mapping[str, int]
 
 
+_MARGIN_FIELD_DESTINATIONS = {
+    "FINANCING_BALANCE": "observations.payload.observation.metrics.financing_balance_CNY",
+    "FINANCING_BUY_AMOUNT": "observations.payload.observation.metrics.financing_buy_amount_CNY",
+    "SECURITIES_LENDING_SELL_QUANTITY": "observations.payload.observation.metrics.securities_lending_sell_quantity_shares",
+    "SECURITIES_LENDING_QUANTITY": "observations.payload.observation.metrics.securities_lending_quantity_shares",
+    "SECURITIES_LENDING_BALANCE": "observations.payload.observation.metrics.securities_lending_balance_CNY",
+    "MARGIN_TOTAL_BALANCE": "observations.payload.observation.metrics.margin_total_balance_CNY",
+}
 _MARKET_FOUNDATION_NORMALIZATION_RULES = {
     "bse_a_share_turnover@1": _MarketFoundationNormalizationRule(
         contract={
             "asset_filter": "accept_only_the_official_BSE_stock_daily_report_total",
             "scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
             "date": "require_report_date_equal_requested_completed_trading_date",
+        },
+        field_destinations={
+            "A_SHARE_TURNOVER_TEN_THOUSAND_CNY": (
+                "observations.payload.observation.metrics.turnover_amount_CNY"
+            )
         },
         source_scale_exponents={"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": 4},
     ),
@@ -107,20 +121,18 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
             "quantity_scale": "multiply_ten_thousand_shares_by_10000_using_exact_decimal",
             "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable",
         },
-        source_scale_exponents={
-            "FINANCING_BALANCE": 4,
-            "FINANCING_BUY_AMOUNT": 4,
-            "SECURITIES_LENDING_SELL_QUANTITY": 4,
-            "SECURITIES_LENDING_QUANTITY": 4,
-            "SECURITIES_LENDING_BALANCE": 4,
-            "MARGIN_TOTAL_BALANCE": 4,
-        },
+        field_destinations=_MARGIN_FIELD_DESTINATIONS,
+        source_scale_exponents={field: 4 for field in _MARGIN_FIELD_DESTINATIONS},
     ),
     "sse_a_share_turnover@1": _MarketFoundationNormalizationRule(
         contract={
             "asset_filter": "sum_only_PRODUCT_CODE_01_and_03_and_reject_missing_or_duplicate_rows",
             "scale": "multiply_each_hundred_million_CNY_value_by_100000000_then_exact_sum",
             "date": "require_both_rows_TRADE_DATE_equal_requested_completed_trading_date",
+        },
+        field_destinations={
+            "TRADE_AMT_01": "observations.payload.observation.metrics.turnover_amount_CNY",
+            "TRADE_AMT_03": "observations.payload.observation.metrics.turnover_amount_CNY",
         },
         source_scale_exponents={"TRADE_AMT_01": 8, "TRADE_AMT_03": 8},
     ),
@@ -130,20 +142,19 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
             "quantity_scale": "official_share_values_retained_as_exact_decimal_shares",
             "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable",
         },
-        source_scale_exponents={
-            "FINANCING_BALANCE": 0,
-            "FINANCING_BUY_AMOUNT": 0,
-            "SECURITIES_LENDING_SELL_QUANTITY": 0,
-            "SECURITIES_LENDING_QUANTITY": 0,
-            "SECURITIES_LENDING_BALANCE": 0,
-            "MARGIN_TOTAL_BALANCE": 0,
-        },
+        field_destinations=_MARGIN_FIELD_DESTINATIONS,
+        source_scale_exponents={field: 0 for field in _MARGIN_FIELD_DESTINATIONS},
     ),
     "szse_a_share_turnover@1": _MarketFoundationNormalizationRule(
         contract={
             "asset_filter": "accept_only_row_explicitly_labeled_A_share_total_and_reject_stock_or_index_proxy",
             "scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
             "date": "require_report_date_equal_requested_completed_trading_date",
+        },
+        field_destinations={
+            "A_SHARE_TURNOVER_TEN_THOUSAND_CNY": (
+                "observations.payload.observation.metrics.turnover_amount_CNY"
+            )
         },
         source_scale_exponents={"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": 4},
     ),
@@ -153,14 +164,8 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
             "quantity_scale": "official_share_values_retained_as_exact_decimal_shares",
             "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable",
         },
-        source_scale_exponents={
-            "FINANCING_BALANCE": 0,
-            "FINANCING_BUY_AMOUNT": 0,
-            "SECURITIES_LENDING_SELL_QUANTITY": 0,
-            "SECURITIES_LENDING_QUANTITY": 0,
-            "SECURITIES_LENDING_BALANCE": 0,
-            "MARGIN_TOTAL_BALANCE": 0,
-        },
+        field_destinations=_MARGIN_FIELD_DESTINATIONS,
+        source_scale_exponents={field: 0 for field in _MARGIN_FIELD_DESTINATIONS},
     ),
 }
 
@@ -830,16 +835,16 @@ def _validate_market_foundation_fixture_normalization(
     destinations = _mapping(
         contract.get("field_destinations"), "qualification field destinations"
     )
-    if normalization != rule.contract or set(destinations) != set(
-        rule.source_scale_exponents
+    if (
+        normalization != rule.contract
+        or destinations != rule.field_destinations
+        or set(rule.field_destinations) != set(rule.source_scale_exponents)
     ):
         raise ValueError("qualification fixture normalization authority drifted")
 
     terms_by_destination: dict[str, list[ExactDecimalTerm]] = {}
     for source_field, scale_exponent in rule.source_scale_exponents.items():
-        destination = _text(
-            destinations.get(source_field), "qualification field destination"
-        )
+        destination = rule.field_destinations[source_field]
         terms_by_destination.setdefault(destination, []).append(
             ExactDecimalTerm(
                 value=_exact_fixture_decimal(
@@ -887,6 +892,7 @@ def build_operation_release_matrix(
     installation_loads: Sequence[InstallationLoadEvidence],
     installation_health: Mapping[str, object],
     live_probes: Sequence[LiveProbeEvidence],
+    qualification_fixtures: Mapping[str, object] | None = None,
 ) -> OperationReleaseMatrix:
     """Build a closed matrix whose denominator comes only from public plans."""
 
@@ -1028,6 +1034,18 @@ def build_operation_release_matrix(
         _validate_qualification(item)
         if not item.capability_ids:
             raise ValueError("qualification capability ids are invalid")
+    market_foundation_producers = set(producers) & set(
+        _MARKET_FOUNDATION_SOURCE_CAPABILITIES
+    )
+    if market_foundation_producers:
+        if qualification_fixtures is None:
+            raise ValueError("market foundation normalization fixtures are required")
+        load_market_foundation_qualification_fixtures(
+            qualification_fixtures,
+            qualification_evidence,
+        )
+    elif qualification_fixtures is not None:
+        raise ValueError("market foundation normalization fixtures are unplanned")
     qualification_by_producer = _unique_evidence(
         qualification_evidence, "qualification evidence"
     )
@@ -1885,6 +1903,11 @@ def _validate_qualification(value: OperationQualificationEvidence) -> None:
         )
         if tuple(sorted(set(canonical_capability_ids))) != canonical_capability_ids:
             raise ValueError("qualification capability ids are invalid")
+    requires_source_contract = (
+        value.producer_operation_id in _MARKET_FOUNDATION_SOURCE_CAPABILITIES
+    )
+    if (value.source_contract is not None) != requires_source_contract:
+        raise ValueError("qualification source contract ownership is invalid")
     if value.disposition not in {
         "integrated",
         "experimental",
@@ -1969,11 +1992,16 @@ def _validated_source_contract(
     ):
         raise ValueError("qualification source provider is invalid")
     provider_id = _safe_release_reference(provider.get("id"), "source provider id")
-    if provider_id not in {"bse", "sse", "szse"}:
+    expected_hostname = _QUALIFIED_FIRST_PARTY_HOSTS.get(provider_id)
+    if expected_hostname is None:
         raise ValueError("qualification source provider is invalid")
     _text(provider.get("organization"), "source provider organization")
     for key in ("documentation_url", "terms_url"):
-        _qualified_first_party_url(provider.get(key), f"source provider {key}")
+        _qualified_first_party_url(
+            provider.get(key),
+            f"source provider {key}",
+            expected_hostname=expected_hostname,
+        )
 
     scope = _mapping(value.get("scope"), "qualification source scope")
     if set(scope) != {
@@ -2000,7 +2028,11 @@ def _validated_source_contract(
     } or selector.get("method") not in {"GET", "POST"}:
         raise ValueError("qualification request selector is invalid")
     _text(selector.get("selector_kind"), "qualification selector kind")
-    _qualified_first_party_url(selector.get("resource_url"), "source resource URL")
+    _qualified_first_party_url(
+        selector.get("resource_url"),
+        "source resource URL",
+        expected_hostname=expected_hostname,
+    )
     _text(selector.get("date_selector"), "qualification date selector")
     for key in ("max_requests", "max_pages"):
         bound = selector.get(key)
@@ -2061,14 +2093,25 @@ def _validated_source_contract(
     return value
 
 
-def _qualified_first_party_url(value: object, label: str) -> str:
+def _qualified_first_party_url(
+    value: object,
+    label: str,
+    *,
+    expected_hostname: str,
+) -> str:
     url = _text(value, label)
     parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{label} is invalid") from error
     if (
         parsed.scheme != "https"
-        or parsed.hostname not in _QUALIFIED_FIRST_PARTY_HOSTS
+        or parsed.hostname != expected_hostname
+        or port is not None
         or parsed.username is not None
         or parsed.password is not None
+        or parsed.query
         or parsed.fragment
     ):
         raise ValueError(f"{label} is invalid")
