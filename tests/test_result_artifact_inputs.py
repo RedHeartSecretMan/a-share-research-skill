@@ -14,6 +14,7 @@ from tests.skill_imports import add_skill_scripts_to_path
 add_skill_scripts_to_path()
 
 import a_share_research.result_artifact_inputs as result_artifact_inputs_module  # noqa: E402
+from a_share_research.bounded_public_data import MAX_PUBLIC_DATA_DEPTH  # noqa: E402
 from a_share_research.result_artifact_inputs import (  # noqa: E402
     PreparedResultArtifactFile,
     prepare_candidate,
@@ -593,6 +594,10 @@ class ResultArtifactInputTests(unittest.TestCase):
             {"note": "path=/"},
             {"note": "path|/"},
             {"note": "file:///private/tmp/secret.json"},
+            {"note": "／private／synthetic／secret.json"},
+            {"note": "ｆｉｌｅ：／／／private／synthetic／secret.json"},
+            {"note": "Ｃ：／private／synthetic／secret.json"},
+            {"note": "＼＼server＼share＼secret.json"},
             {"note": "prefixfile://safe then file:///private/tmp/secret.json"},
             {"note": "ß file:///private/tmp/secret.json"},
             {"note": "///private/tmp/secret.json"},
@@ -1367,6 +1372,41 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             }
         raise AssertionError(f"unknown test surface: {surface}")
 
+    def _assert_key_rejected_everywhere(
+        self,
+        raw_key: str,
+        *,
+        error_pattern: str | None = None,
+    ) -> None:
+        for surface in ("metadata", "query", "fragment"):
+            document = self._surface_document(surface, raw_key)
+            for factory_name, factory in self._factories():
+                with self.subTest(
+                    raw_key=raw_key,
+                    surface=surface,
+                    factory=factory_name,
+                    expected="sensitive",
+                ):
+                    if error_pattern is None:
+                        with self.assertRaises(ValueError):
+                            factory(document)
+                    else:
+                        with self.assertRaisesRegex(ValueError, error_pattern):
+                            factory(document)
+
+    def _assert_key_accepted_everywhere(self, raw_key: str) -> None:
+        for surface in ("metadata", "query", "fragment"):
+            document = self._surface_document(surface, raw_key)
+            for factory_name, factory in self._factories():
+                with self.subTest(
+                    raw_key=raw_key,
+                    surface=surface,
+                    factory=factory_name,
+                    expected="ordinary",
+                ):
+                    prepared = factory(document)
+                    self.assertIn(raw_key.encode(), prepared.content_bytes)
+
     def test_complete_semantic_key_rejects_cross_token_morphology_everywhere(
         self,
     ) -> None:
@@ -1382,19 +1422,10 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
         )
 
         for raw_key in sensitive_keys:
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                    ):
-                        with self.assertRaisesRegex(
-                            ValueError,
-                            "^result artifact .+ invalid$",
-                        ):
-                            factory(document)
+            self._assert_key_rejected_everywhere(
+                raw_key,
+                error_pattern="^result artifact .+ invalid$",
+            )
 
     def test_complete_key_morphology_cross_product_uses_one_shared_result(
         self,
@@ -1422,16 +1453,7 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             separators,
         ):
             raw_key = separator.join((qualifier, root, suffix))
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                    ):
-                        with self.assertRaises(ValueError):
-                            factory(document)
+            self._assert_key_rejected_everywhere(raw_key)
 
     def test_plural_sensitive_atoms_reject_on_every_surface_and_factory(
         self,
@@ -1452,16 +1474,7 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
         )
 
         for raw_key in plural_server_keys:
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                    ):
-                        with self.assertRaises(ValueError):
-                            factory(document)
+            self._assert_key_rejected_everywhere(raw_key)
 
     def test_interposed_qualifiers_do_not_split_sensitive_compounds(self) -> None:
         sensitive_keys = (
@@ -1504,16 +1517,7 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
         )
 
         for raw_key in sensitive_keys:
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                    ):
-                        with self.assertRaises(ValueError):
-                            factory(document)
+            self._assert_key_rejected_everywhere(raw_key)
 
     def test_ordinary_words_are_not_rejected_for_sensitive_substrings(self) -> None:
         ordinary_keys = (
@@ -1546,19 +1550,20 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "rapid_key",
             "tokenization_status",
             "transportation_status",
+            "shaping_key_status",
+            "secretion_rate",
+            "requester_headerline_count",
+            "strawberry_payload_count",
+            "drawer_payload_count",
+            "therapist_key_count",
+            "capitol_key_count",
+            "payload_drawer_count",
+            "swordtokenizer_status",
+            "wordtokenizer_version",
         )
 
         for raw_key in ordinary_keys:
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                    ):
-                        prepared = factory(document)
-                        self.assertIn(raw_key.encode(), prepared.content_bytes)
+            self._assert_key_accepted_everywhere(raw_key)
 
     def test_punctuation_camel_and_concatenation_share_one_canonical_result(
         self,
@@ -1577,29 +1582,10 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
         )
 
         for raw_key in ordinary_equivalents:
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                        expected="ordinary",
-                    ):
-                        factory(document)
+            self._assert_key_accepted_everywhere(raw_key)
 
         for raw_key in sensitive_equivalents:
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                        expected="sensitive",
-                    ):
-                        with self.assertRaises(ValueError):
-                            factory(document)
+            self._assert_key_rejected_everywhere(raw_key)
 
     def test_exact_safe_whole_lexemes_do_not_exempt_sensitive_compounds(
         self,
@@ -1615,16 +1601,7 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
         )
 
         for raw_key in safe_keys:
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                    ):
-                        prepared = factory(document)
-                        self.assertIn(raw_key.encode(), prepared.content_bytes)
+            self._assert_key_accepted_everywhere(raw_key)
 
         for raw_key in (
             "serverInformation",
@@ -1638,16 +1615,7 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "backup_tokenized_word_count",
             "tokenized_word_count_backup",
         ):
-            for surface in ("metadata", "query", "fragment"):
-                document = self._surface_document(surface, raw_key)
-                for factory_name, factory in self._factories():
-                    with self.subTest(
-                        raw_key=raw_key,
-                        surface=surface,
-                        factory=factory_name,
-                    ):
-                        with self.assertRaises(ValueError):
-                            factory(document)
+            self._assert_key_rejected_everywhere(raw_key)
 
 
 class ResultArtifactLocatorTests(unittest.TestCase):
@@ -1751,6 +1719,34 @@ class ResultArtifactLocatorTests(unittest.TestCase):
 
         self.assertLess(elapsed, 2.0)
 
+    def test_nested_locator_depth_is_explicitly_bounded_without_recursion(
+        self,
+    ) -> None:
+        def nested_locator(depth: int) -> str:
+            locator = "https://leaf.example/public"
+            for _ in range(depth):
+                locator = f"https://nested.example/public?next={locator}"
+            return locator
+
+        accepted = nested_locator(MAX_PUBLIC_DATA_DEPTH)
+        rejected = nested_locator(MAX_PUBLIC_DATA_DEPTH + 1)
+        far_over_bound = nested_locator(MAX_PUBLIC_DATA_DEPTH * 8)
+
+        started = perf_counter()
+        for factory_name, factory in self._factories():
+            with self.subTest(factory=factory_name, depth=MAX_PUBLIC_DATA_DEPTH):
+                prepared = factory({"public_reference": accepted})
+                self.assertIn(accepted.encode(), prepared.content_bytes)
+            with self.subTest(factory=factory_name, depth=MAX_PUBLIC_DATA_DEPTH + 1):
+                with self.assertRaises(ValueError):
+                    factory({"public_reference": rejected})
+            with self.subTest(factory=factory_name, depth=MAX_PUBLIC_DATA_DEPTH * 8):
+                with self.assertRaises(ValueError):
+                    factory({"public_reference": far_over_bound})
+        elapsed = perf_counter() - started
+
+        self.assertLess(elapsed, 2.0)
+
     def test_locator_scheme_and_bracketed_host_cover_the_complete_raw_token(
         self,
     ) -> None:
@@ -1762,6 +1758,11 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "xhttps://example.test/public",
             "nothttps://example.test/public",
             "ftp+https://example.test/public",
+            "https://public.example/https://localhost/private",
+            "https://public.example/https://example.test:65536/private",
+            "https://public.example/https://2130706433/private",
+            "https://public.example/https://user@example.test/private",
+            "https://public.example/https://example.internal/private",
         )
 
         for locator in invalid_locators:
@@ -1842,6 +1843,10 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "/etc/passwd",
             "／private／secret",
             "failed=/private/secret.json",
+            "failed:/private/secret.json",
+            "failed|/private/secret.json",
+            "failed)/private/secret.json",
+            "failed：／private／secret.json",
         )
 
         for name in unsafe_names:

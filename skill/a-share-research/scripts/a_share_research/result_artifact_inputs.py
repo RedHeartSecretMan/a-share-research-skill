@@ -64,6 +64,12 @@ class _SemanticKeyClass(Enum):
     SENSITIVE = auto()
 
 
+class _SemanticAtomRun(NamedTuple):
+    start: int
+    end: int
+    atoms: tuple[str, ...]
+
+
 _SAFE_WHOLE_LEXEMES = frozenset(
     {
         "application",
@@ -104,21 +110,6 @@ _SENSITIVE_WHOLE_LEXEMES = frozenset(
         "transport",
     }
 )
-_QUALIFIABLE_SENSITIVE_WHOLE_ATOMS = _SENSITIVE_WHOLE_LEXEMES - {"headers"}
-_UNAMBIGUOUS_QUALIFIABLE_WHOLE_ATOMS = _QUALIFIABLE_SENSITIVE_WHOLE_ATOMS - {"host"}
-_SENSITIVE_SINGLE_PATTERNS = tuple(
-    re.compile(pattern)
-    for pattern in (
-        r"authorizations?",
-        r"cookies?",
-        r"credentials?",
-        r"endpoints?",
-        r"hostnames?",
-        r"passwords?",
-        r"secrets?",
-        r"tokens?",
-    )
-)
 _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("authorizations", "authorization"),
     ("informations", "information"),
@@ -144,44 +135,145 @@ _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("ips", "ip"),
     ("maps", "map"),
 )
-_ORDINARY_EMBEDDED_LEXEMES = re.compile(
-    r"(?:apiar(?:y|ies)|capillar(?:y|ies)|capital|ghosts?|hockey|hostess(?:es)?|hostile|keyboard|keynote|monkeys?|rapid|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?|transportation(?:s)?)"
-)
-_SENSITIVE_COMPOUND_ATOMS: tuple[
-    tuple[tuple[str, ...], tuple[str, ...]],
-    ...,
-] = (
-    (("api", "apis"), ("key", "keys")),
-    (("raw",), ("payload", "payloads")),
-    (("request", "requests"), ("header", "headers")),
+_SENSITIVE_COMPOUND_ATOMS = (
+    (frozenset({"api"}), frozenset({"key"})),
+    (frozenset({"raw"}), frozenset({"payload"})),
+    (frozenset({"request"}), frozenset({"header"})),
     (
-        ("server", "servers"),
-        (
-            "address",
-            "addresses",
-            "detail",
-            "details",
-            "endpoint",
-            "endpoints",
-            "info",
-            "infos",
-            "information",
-            "informations",
-            "host",
-            "hosts",
-            "hostname",
-            "hostnames",
-            "ip",
-            "ips",
-            "metadata",
-            "name",
-            "names",
-            "port",
-            "ports",
-            "url",
-            "urls",
+        frozenset({"server"}),
+        frozenset(
+            {
+                "address",
+                "detail",
+                "endpoint",
+                "host",
+                "hostname",
+                "info",
+                "information",
+                "ip",
+                "metadata",
+                "name",
+                "port",
+                "url",
+            }
         ),
     ),
+    (frozenset({"base"}), frozenset({"url"})),
+    (frozenset({"result"}), frozenset({"artifact"})),
+)
+_SENSITIVE_SINGLE_ATOMS = frozenset(
+    {
+        "authorization",
+        "baseurl",
+        "callable",
+        "cookie",
+        "credential",
+        "endpoint",
+        "host",
+        "hostname",
+        "password",
+        "resultartifact",
+        "secret",
+        "token",
+        "transport",
+    }
+)
+_QUALIFIABLE_WHOLE_ATOMS = frozenset(
+    {
+        "baseurl",
+        "callable",
+        "endpoint",
+        "host",
+        "hostname",
+        "resultartifact",
+        "transport",
+    }
+)
+_SAFE_COMPOUND_WHOLE_LEXEMES = _SAFE_WHOLE_LEXEMES - {
+    "application",
+    "header",
+    "key",
+    "rotation",
+    "server",
+}
+_SEMANTIC_ATOMS = tuple(
+    sorted(
+        {
+            "access",
+            "account",
+            "address",
+            "annual",
+            "api",
+            "application",
+            "artifact",
+            "audit",
+            "authorization",
+            "backup",
+            "base",
+            "baseurl",
+            "callable",
+            "client",
+            "cookie",
+            "count",
+            "credential",
+            "detail",
+            "digest",
+            "endpoint",
+            "envelope",
+            "for",
+            "header",
+            "host",
+            "hostname",
+            "http",
+            "info",
+            "information",
+            "ip",
+            "job",
+            "key",
+            "metadata",
+            "name",
+            "normalized",
+            "party",
+            "password",
+            "payload",
+            "port",
+            "primary",
+            "provider",
+            "proxy",
+            "raw",
+            "request",
+            "response",
+            "result",
+            "resultartifact",
+            "rotation",
+            "runtime",
+            "secret",
+            "server",
+            "status",
+            "third",
+            "tls",
+            "token",
+            "transport",
+            "url",
+            "v2",
+            "word",
+            "working",
+            "x",
+        }
+        | _SAFE_COMPOUND_WHOLE_LEXEMES,
+        key=lambda atom: (-len(atom), atom),
+    )
+)
+_SEMANTIC_ATOM_ALIASES = tuple(
+    sorted(
+        {(atom, atom) for atom in _SEMANTIC_ATOMS}
+        | {
+            (plural, singular)
+            for plural, singular in _SEMANTIC_PLURAL_REPLACEMENTS
+            if singular in _SEMANTIC_ATOMS
+        },
+        key=lambda alias: (-len(alias[0]), alias[0]),
+    )
 )
 
 
@@ -456,62 +548,6 @@ def _semantic_key_tokens(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", camel_separated.casefold()))
 
 
-def _classifier_tokens(raw_tokens: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(
-        normalized
-        for token in raw_tokens
-        if (
-            normalized := _ORDINARY_EMBEDDED_LEXEMES.sub(
-                "",
-                _normalize_semantic_plurals(token),
-            )
-        )
-    )
-
-
-def _token_has_atom_at_edge(token: str, atoms: tuple[str, ...]) -> bool:
-    return token.startswith(atoms) or token.endswith(atoms)
-
-
-def _token_has_atom_pair(
-    token: str,
-    first_atoms: tuple[str, ...],
-    second_atoms: tuple[str, ...],
-) -> bool:
-    return (
-        any(atom in token for atom in first_atoms)
-        and any(atom in token for atom in second_atoms)
-        and _token_has_atom_at_edge(token, first_atoms + second_atoms)
-    )
-
-
-def _contains_sensitive_compound(
-    value: str,
-    raw_tokens: tuple[str, ...],
-) -> bool:
-    tokens = _classifier_tokens(raw_tokens)
-    for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS:
-        if any(atom in value for atom in start_atoms) and any(
-            atom in value for atom in end_atoms
-        ):
-            return True
-        for index, token in enumerate(tokens):
-            if _token_has_atom_pair(token, start_atoms, end_atoms):
-                return True
-            for other_index, other in enumerate(tokens):
-                if index == other_index:
-                    continue
-                if _token_has_atom_at_edge(
-                    token, start_atoms
-                ) and _token_has_atom_at_edge(other, end_atoms):
-                    return True
-                if _token_has_atom_at_edge(
-                    token, end_atoms
-                ) and _token_has_atom_at_edge(other, start_atoms):
-                    return True
-    return False
-
-
 def _normalize_semantic_plurals(value: str) -> str:
     normalized = value
     for plural, singular in _SEMANTIC_PLURAL_REPLACEMENTS:
@@ -519,16 +555,77 @@ def _normalize_semantic_plurals(value: str) -> str:
     return normalized
 
 
-def _contains_qualified_sensitive_whole(
-    value: str,
-    raw_tokens: tuple[str, ...],
+def _semantic_atom_runs(token: str) -> tuple[_SemanticAtomRun, ...]:
+    memo: dict[int, tuple[int, tuple[str, ...]]] = {}
+
+    def longest_run(start: int) -> tuple[int, tuple[str, ...]]:
+        cached = memo.get(start)
+        if cached is not None:
+            return cached
+        best: tuple[int, tuple[str, ...]] = (start, ())
+        for lexeme, atom in _SEMANTIC_ATOM_ALIASES:
+            if not token.startswith(lexeme, start):
+                continue
+            end, remainder = longest_run(start + len(lexeme))
+            if end > best[0]:
+                best = (end, (atom, *remainder))
+        memo[start] = best
+        return best
+
+    runs: list[_SemanticAtomRun] = []
+    for start in range(len(token)):
+        cursor, atoms = longest_run(start)
+        if atoms:
+            runs.append(_SemanticAtomRun(start, cursor, atoms))
+    return tuple(runs)
+
+
+def _semantic_atoms_are_sensitive(
+    atoms: tuple[str, ...],
+    *,
+    complete_token: bool,
 ) -> bool:
-    tokens = tuple(_normalize_semantic_plurals(token) for token in raw_tokens)
-    return (
-        any(token in _QUALIFIABLE_SENSITIVE_WHOLE_ATOMS for token in tokens)
-        or any(atom in value for atom in _UNAMBIGUOUS_QUALIFIABLE_WHOLE_ATOMS)
-        or "host" in value
+    atom_set = frozenset(atoms)
+    if any(
+        atom_set.intersection(first_atoms) and atom_set.intersection(second_atoms)
+        for first_atoms, second_atoms in _SENSITIVE_COMPOUND_ATOMS
+    ):
+        return True
+    if complete_token and atom_set.intersection(_SENSITIVE_SINGLE_ATOMS):
+        return True
+    return len(atoms) > 1 and bool(
+        atom_set.intersection(_SENSITIVE_SINGLE_ATOMS | _QUALIFIABLE_WHOLE_ATOMS)
     )
+
+
+def _contains_sensitive_semantic_atoms(raw_tokens: tuple[str, ...]) -> bool:
+    complete_atoms: list[str] = []
+    for token in raw_tokens:
+        for run in _semantic_atom_runs(token):
+            complete_token = run.start == 0 and run.end == len(token)
+            if _semantic_atoms_are_sensitive(
+                run.atoms,
+                complete_token=complete_token,
+            ):
+                return True
+            if complete_token:
+                complete_atoms.extend(run.atoms)
+    return _semantic_atoms_are_sensitive(
+        tuple(complete_atoms),
+        complete_token=True,
+    )
+
+
+def _contains_qualified_safe_compound(value: str) -> bool:
+    for run in _semantic_atom_runs(value):
+        if (
+            run.start == 0
+            and run.end == len(value)
+            and len(run.atoms) > 1
+            and _SAFE_COMPOUND_WHOLE_LEXEMES.intersection(run.atoms)
+        ):
+            return True
+    return False
 
 
 def _classify_semantic_key(value: str) -> _SemanticKeyClass:
@@ -557,15 +654,9 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
         return _SemanticKeyClass.SAFE_WHOLE_LEXEME
     if plural_normalized in _ORDINARY_WHOLE_LEXEMES:
         return _SemanticKeyClass.ORDINARY_PUBLIC
-    ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", plural_normalized)
-    if (
-        _contains_qualified_sensitive_whole(ordinary_elided, tokens)
-        or _contains_sensitive_compound(ordinary_elided, tokens)
-        or any(
-            pattern.search(ordinary_elided) is not None
-            for pattern in _SENSITIVE_SINGLE_PATTERNS
-        )
-    ):
+    if _contains_qualified_safe_compound(
+        normalized
+    ) or _contains_sensitive_semantic_atoms(tokens):
         return _SemanticKeyClass.SENSITIVE
     return _SemanticKeyClass.ORDINARY_PUBLIC
 
@@ -640,41 +731,44 @@ def _contains_c0_control(value: str) -> bool:
     return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
 
 
-def _decoded_parameter_value_is_safe(value: str) -> bool:
+def _decoded_parameter_value_is_safe(
+    value: str,
+    *,
+    nested_locators: list[tuple[str, int]],
+    depth: int,
+) -> bool:
     if _FILE_URI_PATTERN.search(value) is not None:
         return False
-    if _SCHEME_PATTERN.search(value) is None:
-        return True
-    return not _unsafe_persisted_string(value)
+    if _SCHEME_PATTERN.search(value) is not None:
+        if depth >= MAX_PUBLIC_DATA_DEPTH:
+            return False
+        nested_locators.append((value, depth + 1))
+    return True
 
 
 def _decoded_parameter_path_is_safe(value: str) -> bool:
+    if _SCHEME_PATTERN.search(value) is not None:
+        return True
     if (
         value.startswith(("//", "\\"))
         or _UNC_PATH_PATTERN.search(value) is not None
         or _WINDOWS_DRIVE_PATH_PATTERN.search(value) is not None
     ):
         return False
-    if value.startswith("/") and not any(
-        value == prefix or value.startswith(f"{prefix}/")
-        for prefix in _PUBLIC_ROOTED_ROUTE_PREFIXES
-    ):
-        return False
-    search_from = 0
-    while (delimiter := value.find("=", search_from)) >= 0:
-        suffix = value[delimiter + 1 :]
-        if suffix.startswith("/") and not any(
-            suffix == prefix or suffix.startswith(f"{prefix}/")
-            for prefix in _PUBLIC_ROOTED_ROUTE_PREFIXES
-        ):
-            return False
-        if suffix == ".." or suffix.startswith(("../", "..\\")):
-            return False
-        search_from = delimiter + 1
-    return ".." not in value.replace("\\", "/").split("/")
+    return not _persisted_string_has_local_path(
+        value,
+        (),
+        allow_public_rooted_routes=True,
+    )
 
 
-def _decoded_parameter_is_safe(name: str, value: str) -> bool:
+def _decoded_parameter_is_safe(
+    name: str,
+    value: str,
+    *,
+    nested_locators: list[tuple[str, int]],
+    depth: int,
+) -> bool:
     normalized_name = normalize("NFKC", name)
     normalized_value = normalize("NFKC", value)
     return (
@@ -682,13 +776,26 @@ def _decoded_parameter_is_safe(name: str, value: str) -> bool:
         and not _contains_c0_control(normalized_value)
         and _decoded_parameter_path_is_safe(normalized_name)
         and _decoded_parameter_path_is_safe(normalized_value)
-        and _decoded_parameter_value_is_safe(normalized_name)
-        and _decoded_parameter_value_is_safe(normalized_value)
         and _classify_semantic_key(normalized_name) is not _SemanticKeyClass.SENSITIVE
+        and _decoded_parameter_value_is_safe(
+            normalized_name,
+            nested_locators=nested_locators,
+            depth=depth,
+        )
+        and _decoded_parameter_value_is_safe(
+            normalized_value,
+            nested_locators=nested_locators,
+            depth=depth,
+        )
     )
 
 
-def _locator_parameters_are_safe(value: str) -> bool:
+def _locator_parameters_are_safe(
+    value: str,
+    *,
+    nested_locators: list[tuple[str, int]],
+    depth: int,
+) -> bool:
     if not value or not _percent_escapes_are_safe(value):
         return not value
     try:
@@ -701,7 +808,15 @@ def _locator_parameters_are_safe(value: str) -> bool:
         )
     except (UnicodeDecodeError, ValueError):
         return False
-    return all(_decoded_parameter_is_safe(name, item) for name, item in parameters)
+    return all(
+        _decoded_parameter_is_safe(
+            name,
+            item,
+            nested_locators=nested_locators,
+            depth=depth,
+        )
+        for name, item in parameters
+    )
 
 
 def _scheme_starts_at_token_boundary(value: str, index: int) -> bool:
@@ -786,7 +901,7 @@ def _locator_has_local_path_suffix(path: str, query: str, fragment: str) -> bool
     return False
 
 
-def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, str]:
+def _locator_authority(value: str, scheme_end: int) -> tuple[int, str]:
     authority_end = scheme_end
     while (
         authority_end < len(value)
@@ -795,7 +910,11 @@ def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, s
         and ord(value[authority_end]) != 0x7F
     ):
         authority_end += 1
-    authority = value[scheme_end:authority_end]
+    return authority_end, value[scheme_end:authority_end]
+
+
+def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, str]:
+    authority_end, authority = _locator_authority(value, scheme_end)
     token_end = authority_end
     if token_end < len(value) and value[token_end] in "/?#":
         token_end += 1
@@ -821,7 +940,13 @@ def _authority_brackets_are_exact(authority: str) -> bool:
     return not remainder or re.fullmatch(r":[0-9]+", remainder) is not None
 
 
-def _validate_public_locator(token: str, authority: str) -> None:
+def _validate_public_locator(
+    token: str,
+    authority: str,
+    *,
+    nested_locators: list[tuple[str, int]],
+    depth: int,
+) -> None:
     if (
         not authority
         or not _authority_brackets_are_exact(authority)
@@ -877,43 +1002,70 @@ def _validate_public_locator(token: str, authority: str) -> None:
     ):
         raise ValueError("result artifact persisted document is invalid")
     if not _locator_parameters_are_safe(
-        parsed.query
-    ) or not _locator_parameters_are_safe(parsed.fragment):
+        parsed.query,
+        nested_locators=nested_locators,
+        depth=depth,
+    ) or not _locator_parameters_are_safe(
+        parsed.fragment,
+        nested_locators=nested_locators,
+        depth=depth,
+    ):
         raise ValueError("result artifact persisted document is invalid")
 
 
-def _public_locator_spans(value: str) -> tuple[tuple[int, int], ...]:
+def _public_locator_spans(
+    value: str,
+    *,
+    nested_locators: list[tuple[str, int]],
+    depth: int,
+) -> tuple[tuple[int, int], ...]:
     spans: list[tuple[int, int]] = []
     covered_until = 0
     for match in _SCHEME_PATTERN.finditer(value):
         if match.start() < covered_until:
+            if _scheme_starts_at_token_boundary(value, match.start()):
+                authority_end, authority = _locator_authority(value, match.end())
+                _validate_public_locator(
+                    value[match.start() : authority_end],
+                    authority,
+                    nested_locators=nested_locators,
+                    depth=depth,
+                )
             continue
         if not _scheme_starts_at_token_boundary(value, match.start()):
             continue
         token_end, token, authority = _locator_token(value, match.start(), match.end())
-        _validate_public_locator(token, authority)
+        _validate_public_locator(
+            token,
+            authority,
+            nested_locators=nested_locators,
+            depth=depth,
+        )
         spans.append((match.start(), token_end))
         covered_until = token_end
     return tuple(spans)
 
 
-def _unsafe_persisted_string(value: str) -> bool:
-    if (
-        _contains_c0_control(value)
-        or _FILE_URI_PATTERN.search(value) is not None
-        or _UNC_PATH_PATTERN.search(value) is not None
-    ):
-        return True
-    try:
-        locator_spans = _public_locator_spans(value)
-    except ValueError:
-        return True
-
+def _persisted_string_has_local_path(
+    value: str,
+    locator_spans: tuple[tuple[int, int], ...],
+    *,
+    allow_public_rooted_routes: bool = False,
+) -> bool:
     def at_path_boundary(index: int) -> bool:
         if index == 0:
             return True
         previous = value[index - 1]
         return not (previous.isalnum() or previous in "/\\")
+
+    def public_rooted_route_starts(index: int) -> bool:
+        for prefix in _PUBLIC_ROOTED_ROUTE_PREFIXES:
+            if not value.startswith(prefix, index):
+                continue
+            route_end = index + len(prefix)
+            if route_end == len(value) or value[route_end] == "/":
+                return True
+        return False
 
     locator_index = 0
     for index, character in enumerate(value):
@@ -938,8 +1090,12 @@ def _unsafe_persisted_string(value: str) -> bool:
             return True
         if character == "/":
             following = value[index + 1] if index + 1 < len(value) else ""
-            if at_path_boundary(index) and (
-                index == 0 or not following or not following.isspace()
+            if (
+                at_path_boundary(index)
+                and (index == 0 or not following or not following.isspace())
+                and not (
+                    allow_public_rooted_routes and public_rooted_route_starts(index)
+                )
             ):
                 return True
         elif character == "\\":
@@ -962,6 +1118,37 @@ def _unsafe_persisted_string(value: str) -> bool:
         ):
             return True
         start = index + 2
+    return False
+
+
+def _unsafe_persisted_string(value: str) -> bool:
+    nested_locators = [(value, 0)]
+    while nested_locators:
+        current, depth = nested_locators.pop()
+        compatibility_normalized = normalize("NFKC", current)
+        if compatibility_normalized != current and (
+            _contains_c0_control(compatibility_normalized)
+            or _FILE_URI_PATTERN.search(compatibility_normalized) is not None
+            or _UNC_PATH_PATTERN.search(compatibility_normalized) is not None
+            or _persisted_string_has_local_path(compatibility_normalized, ())
+        ):
+            return True
+        if (
+            _contains_c0_control(current)
+            or _FILE_URI_PATTERN.search(current) is not None
+            or _UNC_PATH_PATTERN.search(current) is not None
+        ):
+            return True
+        try:
+            locator_spans = _public_locator_spans(
+                current,
+                nested_locators=nested_locators,
+                depth=depth,
+            )
+        except ValueError:
+            return True
+        if _persisted_string_has_local_path(current, locator_spans):
+            return True
     return False
 
 
