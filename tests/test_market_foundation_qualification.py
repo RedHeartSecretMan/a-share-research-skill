@@ -584,6 +584,34 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                         expected_producer_operation_ids=expected_ids,
                     )
 
+    def test_issue_114_fixture_loader_revalidates_authority_and_duplicates(
+        self,
+    ) -> None:
+        qualifications = self._load_qualifications()
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        drifted_public_fact = replace(
+            qualifications[0],
+            temporal_semantics={"request_boundary": "future_data"},
+        )
+        mutable_contract = deepcopy(qualifications[0])
+        assert isinstance(mutable_contract.source_contract, dict)
+        provider = mutable_contract.source_contract["provider"]
+        assert isinstance(provider, dict)
+        provider["documentation_url"] = "https://www.bse.cn/unreviewed-resource"
+
+        for evidence in (drifted_public_fact, mutable_contract):
+            with self.subTest(evidence=evidence):
+                with self.assertRaises(ValueError):
+                    load_market_foundation_qualification_fixtures(
+                        fixtures,
+                        (evidence, *qualifications[1:]),
+                    )
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            load_market_foundation_qualification_fixtures(
+                fixtures,
+                (*qualifications, qualifications[0]),
+            )
+
     def test_issue_114_public_qualification_facts_are_exact_authority(self) -> None:
         payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
         expected_ids = tuple(

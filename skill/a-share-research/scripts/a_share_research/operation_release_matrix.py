@@ -742,11 +742,19 @@ def load_market_foundation_qualification_fixtures(
         or payload.get("schema_version") != "1.0"
     ):
         raise ValueError("market foundation qualification fixtures are invalid")
-    qualifications = {
-        item.producer_operation_id: item
-        for item in qualification_evidence
-        if item.source_contract is not None
-    }
+    qualifications: dict[str, OperationQualificationEvidence] = {}
+    reviewed_producers: set[str] = set()
+    for item in qualification_evidence:
+        _validate_qualification(item)
+        producer_operation_id = _text(
+            item.producer_operation_id,
+            "qualification evidence producer operation id",
+        )
+        if producer_operation_id in reviewed_producers:
+            raise ValueError("qualification evidence owner is duplicated")
+        reviewed_producers.add(producer_operation_id)
+        if item.source_contract is not None:
+            qualifications[producer_operation_id] = item
     if set(qualifications) != set(_MARKET_FOUNDATION_SOURCE_CAPABILITIES):
         raise ValueError("market foundation qualification owners do not close")
     fixtures: dict[str, Mapping[str, object]] = {}
