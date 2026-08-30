@@ -715,6 +715,14 @@ class ResultArtifactInputTests(unittest.TestCase):
             },
             {
                 "note": (
+                    "https://example.test/public:本地路径="
+                    "/private/synthetic/secret.json"
+                )
+            },
+            {"note": "https://example.test/public:local=C:/private/secret.json"},
+            {"note": ("https://example.test/public:local=//server/share/secret.json")},
+            {
+                "note": (
                     "https://example.test/public),本地路径="
                     "/private/synthetic/secret.json"
                 )
@@ -1603,6 +1611,7 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "http://public.example:8080/status",
             "https://example.test/public?next=/docs&mode=full&ratio=1/2",
             "https://research.example/public#/docs/section-2?mode=full",
+            ("https://example.test/public?next=https://other.example/public"),
         )
         for locator in safe_locators:
             for factory_name, factory in self._factories():
@@ -1664,6 +1673,8 @@ class ResultArtifactLocatorTests(unittest.TestCase):
         invalid_locators = (
             "https://[v1.fe]/public",
             "https://[vF.example]/public",
+            "https://[2606:4700:4700::1111]evil/public",
+            "https://[2606:4700:4700::1111]]/public",
             "xhttps://example.test/public",
             "nothttps://example.test/public",
             "ftp+https://example.test/public",

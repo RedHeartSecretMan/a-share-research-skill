@@ -604,9 +604,22 @@ def _locator_parameters_are_safe(value: str) -> bool:
     )
 
 
+def _scheme_starts_at_token_boundary(value: str, index: int) -> bool:
+    return index == 0 or not (value[index - 1].isalnum() or value[index - 1] in "+-.")
+
+
 def _starts_local_path_suffix(value: str, index: int) -> bool:
-    if value[index] not in "),;":
+    if value[index] not in "),;:":
         return False
+    if value[index] == ":" and value[index + 1 :].startswith("//"):
+        for scheme in ("https", "http"):
+            scheme_start = index - len(scheme)
+            if (
+                scheme_start >= 0
+                and value[scheme_start:index].casefold() == scheme
+                and _scheme_starts_at_token_boundary(value, scheme_start)
+            ):
+                return False
     cursor = index + 1
     while cursor < len(value) and value[cursor] in ",;:":
         cursor += 1
@@ -660,9 +673,20 @@ def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, s
     return token_end, value[start:token_end], authority
 
 
+def _authority_brackets_are_exact(authority: str) -> bool:
+    if not authority.startswith("["):
+        return "[" not in authority and "]" not in authority
+    closing = authority.find("]")
+    if closing < 0 or "[" in authority[1:closing] or "]" in authority[closing + 1 :]:
+        return False
+    remainder = authority[closing + 1 :]
+    return not remainder or re.fullmatch(r":[0-9]+", remainder) is not None
+
+
 def _validate_public_locator(token: str, authority: str) -> None:
     if (
         not authority
+        or not _authority_brackets_are_exact(authority)
         or "\\" in authority
         or "%" in authority
         or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in token)
@@ -721,9 +745,7 @@ def _validate_public_locator(token: str, authority: str) -> None:
 def _public_locator_spans(value: str) -> tuple[tuple[int, int], ...]:
     spans: list[tuple[int, int]] = []
     for match in _SCHEME_PATTERN.finditer(value):
-        if match.start() > 0 and (
-            value[match.start() - 1].isalnum() or value[match.start() - 1] in "+-."
-        ):
+        if not _scheme_starts_at_token_boundary(value, match.start()):
             continue
         token_end, token, authority = _locator_token(value, match.start(), match.end())
         _validate_public_locator(token, authority)
