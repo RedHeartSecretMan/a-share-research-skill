@@ -24,6 +24,13 @@ from .research_result import (
 
 OperationOwner = tuple[str, str]
 _SAFE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@#-]{0,255}$")
+_CANONICAL_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_CANONICAL_TIMESTAMP = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\+08:00$"
+)
+_CANONICAL_DECIMAL = re.compile(
+    r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE]-?(?:0|[1-9][0-9]*))?$"
+)
 _CANDIDATE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _ATTEMPT_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _MAX_LIVE_EVIDENCE_AGE = timedelta(days=7)
@@ -54,6 +61,9 @@ _SENSITIVE_KEY_TOKENS = {
     "server_url",
     "token",
 }
+_SENSITIVE_COMPACT_KEY_TOKENS = frozenset(
+    token.replace("_", "") for token in _SENSITIVE_KEY_TOKENS
+)
 _QUALIFIED_FIRST_PARTY_HOSTS = {
     "bse": "www.bse.cn",
     "sse": "www.sse.com.cn",
@@ -82,16 +92,19 @@ _MARKET_FOUNDATION_SOURCE_CAPABILITIES = {
     "szse_a_share_turnover@1": "whole_market_turnover",
     "szse_market_margin@1": "whole_market_margin",
 }
-# Canonical-JSON digests pin every reviewed provider, scope, selector, field,
-# temporal, state, dependency, and license fact to its exact operation owner.
-_MARKET_FOUNDATION_SOURCE_CONTRACT_SHA256 = {
-    "bse_a_share_turnover@1": "28382e5138207b9ce9e4fe4b3bbd2b1ba80082c8fedbe271825041e497d69022",
-    "bse_market_margin@1": "1d67365f1c15c1b5a85267d81d9c62e1dcccc4ca8dd951cfdf2d59526bbabff5",
-    "sse_a_share_turnover@1": "d41048dc408ae826685269aeda2b521c9bd3860ad78579c844d1646f6d719e71",
-    "sse_market_margin@1": "a2ec5761b56d4851bfe0326bc4b534abc7e71bcba90b7cc5e1f5335490a91e85",
-    "szse_a_share_turnover@1": "bcf80e6f13fd550da587ac55e5c9c7fec892d61de93dbf2812125f750f33062f",
-    "szse_market_margin@1": "ac988b42808f772aabd376e069c022a3f043e874d459ec0aab676b28334bffe6",
+# Canonical-JSON digests pin every reviewed public qualification fact and
+# nested source contract to its exact operation owner.
+_MARKET_FOUNDATION_QUALIFICATION_SHA256 = {
+    "bse_a_share_turnover@1": "5761adb40b2d2023aef578d977f382586ffab1d3de3a8e5110241ea8b675a776",
+    "bse_market_margin@1": "a41d52ee4975e1879891608071e287401dc7c66be21bc9633410cfe40ebab944",
+    "sse_a_share_turnover@1": "c02f9ffea373119928d3e4b7850a141ef0ee16c955cf1205c23b397c7338bd3e",
+    "sse_market_margin@1": "9e9f63d48867e996d39ed38a106af9483750b55ced651718e4c7ce00627591d6",
+    "szse_a_share_turnover@1": "c5f3ff7e6e46e33d14461005fb006294ee053f91bcb93f6291e781bdc8522a56",
+    "szse_market_margin@1": "c6dd9fe0f7900c1612ed3e0c26508f0c71e512a2b83bc2fa3fb4b37a3dc7b265",
 }
+_MARKET_FOUNDATION_FIXTURE_SHA256 = (
+    "6ff5e67208789a855c2db9d4a23945442539f2e3e032df74af311bc7d64e1146"
+)
 
 
 @dataclass(frozen=True)
@@ -898,14 +911,19 @@ def load_market_foundation_qualification_fixtures(
 
 def _validate_market_foundation_fixture_time(value: Mapping[str, object]) -> None:
     try:
-        report_date = date.fromisoformat(
-            _text(value.get("report_date"), "fixture report date")
-        )
-        published_at = datetime.fromisoformat(
-            _text(value.get("published_at"), "fixture publication time")
-        )
+        report_text = _text(value.get("report_date"), "fixture report date")
+        published_text = _text(value.get("published_at"), "fixture publication time")
         if (
-            published_at.utcoffset() != timedelta(hours=8)
+            _CANONICAL_DATE.fullmatch(report_text) is None
+            or _CANONICAL_TIMESTAMP.fullmatch(published_text) is None
+        ):
+            raise ValueError("qualification fixture time is invalid")
+        report_date = date.fromisoformat(report_text)
+        published_at = datetime.fromisoformat(published_text)
+        if (
+            report_date.isoformat() != report_text
+            or published_at.isoformat(timespec="seconds") != published_text
+            or published_at.utcoffset() != timedelta(hours=8)
             or published_at.date() < report_date
         ):
             raise ValueError("qualification fixture time is invalid")
@@ -957,7 +975,7 @@ def _validate_market_foundation_fixture_normalization(
                     ExactDecimalTerm(
                         value=_exact_fixture_decimal(
                             normalized_destinations.get(destination),
-                            "qualification fixture normalized decimal",
+                            "qualification fixture normalization decimal",
                         ),
                         scale_exponent=0,
                     ),
@@ -970,8 +988,11 @@ def _validate_market_foundation_fixture_normalization(
 
 
 def _exact_fixture_decimal(value: object, label: str) -> Decimal:
+    text = _text(value, label)
+    if _CANONICAL_DECIMAL.fullmatch(text) is None:
+        raise ValueError(f"{label} is invalid")
     try:
-        decimal = Decimal(_text(value, label))
+        decimal = Decimal(text)
     except InvalidOperation as error:
         raise ValueError(f"{label} is invalid") from error
     if not decimal.is_finite():
@@ -1138,6 +1159,14 @@ def build_operation_release_matrix(
             qualification_fixtures,
             qualification_evidence,
         )
+        if (
+            _canonical_mapping_sha256(
+                qualification_fixtures,
+                "market foundation fixture authority",
+            )
+            != _MARKET_FOUNDATION_FIXTURE_SHA256
+        ):
+            raise ValueError("market foundation fixture authority drifted")
     elif qualification_fixtures is not None:
         raise ValueError("market foundation normalization fixtures are unplanned")
     qualification_by_producer = _unique_evidence(
@@ -2049,6 +2078,51 @@ def _validate_qualification(value: OperationQualificationEvidence) -> None:
         issue not in {58, 59, 61, 62, 63, 64} for issue in value.gap_issues
     ):
         raise ValueError("operation gap routing is invalid")
+    if requires_source_contract:
+        _validate_market_foundation_qualification_authority(value)
+
+
+def _validate_market_foundation_qualification_authority(
+    value: OperationQualificationEvidence,
+) -> None:
+    source_contract = value.source_contract
+    if source_contract is None:
+        raise ValueError("qualification source contract ownership is invalid")
+    payload = {
+        "producer_operation_id": value.producer_operation_id,
+        "capability_ids": list(value.capability_ids),
+        "disposition": value.disposition,
+        "temporal_semantics": deepcopy(dict(value.temporal_semantics)),
+        "unit_semantics": deepcopy(dict(value.unit_semantics)),
+        "failure_semantics": value.failure_semantics,
+        "empty_result_semantics": value.empty_result_semantics,
+        "acquisition_role": value.acquisition_role,
+        "credential_policy": value.credential_policy,
+        "rate_limit_policy": deepcopy(dict(value.rate_limit_policy)),
+        "offline_contract_selector": value.offline_contract_selector,
+        "offline_contract_result": value.offline_contract_result,
+        "evidence_references": list(value.evidence_references),
+        "gap_issues": list(value.gap_issues),
+        "source_contract": deepcopy(dict(source_contract)),
+    }
+    if (
+        _canonical_mapping_sha256(payload, "qualification authority")
+        != (_MARKET_FOUNDATION_QUALIFICATION_SHA256[value.producer_operation_id])
+    ):
+        raise ValueError("qualification authority drifted")
+
+
+def _canonical_mapping_sha256(value: Mapping[str, object], label: str) -> str:
+    try:
+        canonical_bytes = json.dumps(
+            deepcopy(dict(value)),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{label} is invalid") from error
+    return sha256(canonical_bytes).hexdigest()
 
 
 def _validated_source_contract(
@@ -2182,20 +2256,6 @@ def _validated_source_contract(
         if not policy:
             raise ValueError(f"qualification {key} is invalid")
         _safe_release_mapping(policy, f"qualification {key}")
-    try:
-        contract_bytes = json.dumps(
-            deepcopy(dict(value)),
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    except (TypeError, ValueError) as error:
-        raise ValueError("qualification source contract is invalid") from error
-    if (
-        sha256(contract_bytes).hexdigest()
-        != (_MARKET_FOUNDATION_SOURCE_CONTRACT_SHA256[producer_operation_id])
-    ):
-        raise ValueError("qualification source contract authority drifted")
     return value
 
 
@@ -2231,6 +2291,7 @@ def _safe_release_mapping(value: Mapping[str, object], label: str) -> None:
             not isinstance(key, str)
             or not key.strip()
             or normalized_key in _SENSITIVE_KEY_TOKENS
+            or normalized_key.replace("_", "") in _SENSITIVE_COMPACT_KEY_TOKENS
             or any(
                 token in normalized_key.split("_")
                 for token in {"credential", "secret", "password", "cookie"}

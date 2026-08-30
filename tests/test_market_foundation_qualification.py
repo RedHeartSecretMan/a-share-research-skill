@@ -51,13 +51,13 @@ LONG_DECIMAL_CASES = {
         "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": LONG_DECIMAL_SOURCE},
         "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
         "exact": "123456789012345678901234567891000.0",
-        "forged": "1.234567890123456789012345679E+32",
+        "forged": "1.234567890123456789012345679E32",
     },
     "bse_market_margin@1": {
         "source_fields": {"FINANCING_BALANCE": LONG_DECIMAL_SOURCE},
         "destination": "observations.payload.observation.metrics.financing_balance_CNY",
         "exact": "123456789012345678901234567891000.0",
-        "forged": "1.234567890123456789012345679E+32",
+        "forged": "1.234567890123456789012345679E32",
     },
     "sse_a_share_turnover@1": {
         "source_fields": {
@@ -66,25 +66,25 @@ LONG_DECIMAL_CASES = {
         },
         "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
         "exact": "1234567890123456789012345678990000000.0",
-        "forged": "1.234567890123456789012345679E+36",
+        "forged": "1.234567890123456789012345679E36",
     },
     "sse_market_margin@1": {
         "source_fields": {"FINANCING_BALANCE": LONG_DECIMAL_SOURCE},
         "destination": "observations.payload.observation.metrics.financing_balance_CNY",
         "exact": LONG_DECIMAL_SOURCE,
-        "forged": "1.234567890123456789012345679E+28",
+        "forged": "1.234567890123456789012345679E28",
     },
     "szse_a_share_turnover@1": {
         "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": LONG_DECIMAL_SOURCE},
         "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
         "exact": "123456789012345678901234567891000.0",
-        "forged": "1.234567890123456789012345679E+32",
+        "forged": "1.234567890123456789012345679E32",
     },
     "szse_market_margin@1": {
         "source_fields": {"FINANCING_BALANCE": LONG_DECIMAL_SOURCE},
         "destination": "observations.payload.observation.metrics.financing_balance_CNY",
         "exact": LONG_DECIMAL_SOURCE,
-        "forged": "1.234567890123456789012345679E+28",
+        "forged": "1.234567890123456789012345679E28",
     },
 }
 EXTREME_DECIMAL_CASES = {
@@ -584,6 +584,38 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                         expected_producer_operation_ids=expected_ids,
                     )
 
+    def test_issue_114_public_qualification_facts_are_exact_authority(self) -> None:
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        expected_ids = tuple(
+            item["producer_operation_id"] for item in payload["operations"]
+        )
+        target_index = next(
+            index
+            for index, item in enumerate(payload["operations"])
+            if item["producer_operation_id"] == "bse_a_share_turnover@1"
+        )
+        mutations = (
+            ("temporal_semantics", {"request_boundary": "future_data"}),
+            ("unit_semantics", {"turnover_amount": "USD"}),
+            ("failure_semantics", "blank_page_is_complete"),
+            ("empty_result_semantics", "blank_page_is_observed_empty"),
+            ("acquisition_role", "unreviewed_provider_probe"),
+            ("credential_policy", "embedded_credentials"),
+            (
+                "rate_limit_policy",
+                {"scope": "unbounded", "accessToken": "redacted"},
+            ),
+        )
+        for field, value in mutations:
+            mutation = deepcopy(payload)
+            mutation["operations"][target_index][field] = value
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError):
+                    load_operation_qualification_manifest(
+                        mutation,
+                        expected_producer_operation_ids=expected_ids,
+                    )
+
     def test_issue_114_sse_destination_split_fails_closed(self) -> None:
         payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
         sse_contract = next(
@@ -800,6 +832,46 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                             qualifications,
                         )
 
+    def test_issue_114_fixture_dates_and_decimals_require_canonical_lexemes(
+        self,
+    ) -> None:
+        qualifications = self._load_qualifications()
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        for field, value in (
+            ("report_date", "2026-W35-3"),
+            ("published_at", "20260826T180000+0800"),
+        ):
+            mutation = deepcopy(fixtures)
+            mutation["fixtures"][0]["complete"][field] = value
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(ValueError, "time is invalid"):
+                    load_market_foundation_qualification_fixtures(
+                        mutation,
+                        qualifications,
+                    )
+        for source_value, destination_value in (
+            (" 1 ", " 10000 "),
+            ("1_0", "1_00000"),
+            ("+1", "+10000"),
+        ):
+            mutation = deepcopy(fixtures)
+            complete = mutation["fixtures"][0]["complete"]
+            complete["source_fields"]["A_SHARE_TURNOVER_TEN_THOUSAND_CNY"] = (
+                source_value
+            )
+            complete["normalized_destinations"][
+                "observations.payload.observation.metrics.turnover_amount_CNY"
+            ] = destination_value
+            with self.subTest(
+                source_value=source_value,
+                destination_value=destination_value,
+            ):
+                with self.assertRaisesRegex(ValueError, "decimal is invalid"):
+                    load_market_foundation_qualification_fixtures(
+                        mutation,
+                        qualifications,
+                    )
+
     def test_issue_114_unavailable_reason_is_owner_bound(self) -> None:
         qualifications = self._load_qualifications()
         fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
@@ -818,16 +890,10 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                         qualifications,
                     )
 
-    def test_issue_114_sse_extreme_exponents_are_exact_and_context_independent(
+    def test_issue_114_sse_extreme_two_partition_forgery_fails_closed(
         self,
     ) -> None:
-        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
-        qualifications = load_operation_qualification_manifest(
-            payload,
-            expected_producer_operation_ids=tuple(
-                item["producer_operation_id"] for item in payload["operations"]
-            ),
-        )
+        qualifications = self._load_qualifications()
         fixture_payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
         sse_fixture = next(
             item
@@ -839,30 +905,10 @@ class MarketFoundationQualificationTests(unittest.TestCase):
             "TRADE_AMT_03": "2e1000000",
         }
         destination = "observations.payload.observation.metrics.turnover_amount_CNY"
-        sse_fixture["complete"]["normalized_destinations"][destination] = "3e1000008"
-
-        for precision, emax, emin in ((6, 9, -9), (28, 99, -99), (80, 999, -999)):
-            with self.subTest(precision=precision, emax=emax, emin=emin):
-                with localcontext() as context:
-                    context.prec = precision
-                    context.Emax = emax
-                    context.Emin = emin
-                    loaded = load_market_foundation_qualification_fixtures(
-                        fixture_payload,
-                        qualifications,
-                    )
-                self.assertEqual(len(loaded), 6)
-
-        forged = deepcopy(fixture_payload)
-        forged_sse = next(
-            item
-            for item in forged["fixtures"]
-            if item["producer_operation_id"] == "sse_a_share_turnover@1"
-        )
-        forged_sse["complete"]["normalized_destinations"][destination] = "1e1000008"
+        sse_fixture["complete"]["normalized_destinations"][destination] = "1e1000008"
         with self.assertRaisesRegex(ValueError, "normalization"):
             load_market_foundation_qualification_fixtures(
-                forged,
+                fixture_payload,
                 qualifications,
             )
 
@@ -1109,6 +1155,17 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                 if item["disposition"] == "pending_dependency"
             )
         )
+        forged_fixture_authority = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        forged_complete = forged_fixture_authority["fixtures"][0]["complete"]
+        forged_complete["source_fields"]["A_SHARE_TURNOVER_TEN_THOUSAND_CNY"] = "2"
+        forged_complete["normalized_destinations"][
+            "observations.payload.observation.metrics.turnover_amount_CNY"
+        ] = "20000"
+        with self.assertRaisesRegex(ValueError, "fixture authority drifted"):
+            build_operation_release_matrix(
+                **matrix_inputs,
+                qualification_fixtures=forged_fixture_authority,
+            )
         forged_active = (
             LiveProbeEvidence(
                 producer_operation_id=probes[0].producer_operation_id,
@@ -1142,6 +1199,44 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                     FIXTURE_PATH.read_text(encoding="utf-8")
                 ),
             )
+        public_fact_mutations = (
+            replace(
+                target_qualifications[0],
+                temporal_semantics={"request_boundary": "future_data"},
+            ),
+            replace(
+                target_qualifications[0],
+                unit_semantics={"turnover_amount": "USD"},
+            ),
+            replace(
+                target_qualifications[0],
+                empty_result_semantics="blank_page_is_observed_empty",
+            ),
+            replace(
+                target_qualifications[0],
+                credential_policy="embedded_credentials",
+            ),
+            replace(
+                target_qualifications[0],
+                rate_limit_policy={"scope": "unbounded", "accessToken": "redacted"},
+            ),
+        )
+        for mutation in public_fact_mutations:
+            with self.subTest(public_fact=mutation):
+                with self.assertRaises(ValueError):
+                    build_operation_release_matrix(
+                        **{
+                            **matrix_inputs,
+                            "qualification_evidence": (
+                                mutation,
+                                *target_qualifications[1:],
+                                active_qualification,
+                            ),
+                        },
+                        qualification_fixtures=json.loads(
+                            FIXTURE_PATH.read_text(encoding="utf-8")
+                        ),
+                    )
 
 
 if __name__ == "__main__":
