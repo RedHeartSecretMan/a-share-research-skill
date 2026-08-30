@@ -11,7 +11,7 @@ from decimal import Decimal
 from enum import Enum, auto
 from hashlib import sha256
 from ipaddress import ip_address
-from typing import cast
+from typing import NamedTuple, cast
 from urllib.parse import parse_qsl, urlsplit
 from weakref import ReferenceType, ref
 
@@ -50,6 +50,7 @@ _NON_PUBLIC_DNS_SUFFIXES = frozenset(
         "localhost",
     }
 )
+_NON_PUBLIC_DNS_NAMES = ("home.arpa",)
 
 
 class _SemanticKeyClass(Enum):
@@ -92,21 +93,29 @@ _SENSITIVE_WHOLE_LEXEMES = frozenset(
 _SENSITIVE_SEMANTIC_PATTERNS = tuple(
     re.compile(pattern)
     for pattern in (
-        r"apikeys?",
+        r"api(?:s)?key(?:s)?",
         r"authorizations?",
         r"cookies?",
         r"credentials?",
         r"passwords?",
         r"rawpayloads?",
-        r"requestheaders?(?:maps?)?",
+        r"request(?:s)?header(?:s)?(?:map(?:s)?)?",
         r"secrets?",
-        r"server(?:address(?:es)?|details?|informations?|infos?|ips?|metadata|names?|ports?|urls?)",
+        r"servers?(?:address(?:es)?|details?|informations?|infos?|ips?|metadata|names?|ports?|urls?)",
         r"tokens?",
     )
 )
 
 
-_PreparedValues = tuple[str, str, bytes, str, int, int]
+class _PreparedValues(NamedTuple):
+    relative_path: str
+    schema_version: str
+    content_bytes: bytes
+    sha256: str
+    byte_count: int
+    record_count: int
+
+
 _MODULE_AUTHORITY = object()
 
 
@@ -183,27 +192,27 @@ class _PreparedResultArtifactFile(
 
     @property
     def relative_path(self) -> str:
-        return _prepared_values(self)[0]
+        return _prepared_values(self).relative_path
 
     @property
     def schema_version(self) -> str:
-        return _prepared_values(self)[1]
+        return _prepared_values(self).schema_version
 
     @property
     def content_bytes(self) -> bytes:
-        return _prepared_values(self)[2]
+        return _prepared_values(self).content_bytes
 
     @property
     def sha256(self) -> str:
-        return _prepared_values(self)[3]
+        return _prepared_values(self).sha256
 
     @property
     def byte_count(self) -> int:
-        return _prepared_values(self)[4]
+        return _prepared_values(self).byte_count
 
     @property
     def record_count(self) -> int:
-        return _prepared_values(self)[5]
+        return _prepared_values(self).record_count
 
 
 _PREPARED_VALUES: dict[
@@ -226,13 +235,13 @@ def _prepared_file(
     content_bytes: bytes,
     record_count: int,
 ) -> PreparedResultArtifactFile:
-    values: _PreparedValues = (
-        relative_path,
-        schema_version,
-        content_bytes,
-        sha256(content_bytes).hexdigest(),
-        len(content_bytes),
-        record_count,
+    values = _PreparedValues(
+        relative_path=relative_path,
+        schema_version=schema_version,
+        content_bytes=content_bytes,
+        sha256=sha256(content_bytes).hexdigest(),
+        byte_count=len(content_bytes),
+        record_count=record_count,
     )
     prepared = object.__new__(_PreparedResultArtifactFile)
     identifier = id(prepared)
@@ -406,6 +415,10 @@ def _public_dns_hostname(value: str) -> bool:
         len(labels) < 2
         or labels[-1] in _NON_PUBLIC_DNS_SUFFIXES
         or labels[-1].isdigit()
+        or any(
+            value == name or value.endswith(f".{name}")
+            for name in _NON_PUBLIC_DNS_NAMES
+        )
     ):
         return False
     return all(
@@ -437,7 +450,7 @@ def _public_authority_hostname(value: str) -> bool:
     )
 
 
-def _valid_percent_escapes(value: str) -> bool:
+def _percent_escapes_are_safe(value: str) -> bool:
     index = 0
     while (index := value.find("%", index)) >= 0:
         if (
@@ -445,12 +458,19 @@ def _valid_percent_escapes(value: str) -> bool:
             or re.fullmatch(r"[0-9A-Fa-f]{2}", value[index + 1 : index + 3]) is None
         ):
             return False
+        decoded = int(value[index + 1 : index + 3], 16)
+        if decoded < 0x20 or decoded == 0x7F:
+            return False
         index += 3
     return True
 
 
+def _contains_c0_control(value: str) -> bool:
+    return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+
+
 def _parameter_names_are_safe(value: str) -> bool:
-    if not value or not _valid_percent_escapes(value):
+    if not value or not _percent_escapes_are_safe(value):
         return not value
     try:
         parameters = parse_qsl(
@@ -463,8 +483,10 @@ def _parameter_names_are_safe(value: str) -> bool:
     except (UnicodeDecodeError, ValueError):
         return False
     return all(
-        _classify_semantic_key(name) is not _SemanticKeyClass.SENSITIVE
-        for name, _ in parameters
+        not _contains_c0_control(name)
+        and not _contains_c0_control(parameter_value)
+        and _classify_semantic_key(name) is not _SemanticKeyClass.SENSITIVE
+        for name, parameter_value in parameters
     )
 
 
@@ -535,6 +557,11 @@ def _validate_public_locator(token: str, authority: str) -> None:
             raise ValueError("result artifact persisted document is invalid") from None
     if not _public_authority_hostname(normalized_hostname):
         raise ValueError("result artifact persisted document is invalid")
+    if any(
+        not _percent_escapes_are_safe(part)
+        for part in (parsed.path, parsed.query, parsed.fragment)
+    ):
+        raise ValueError("result artifact persisted document is invalid")
     if not _parameter_names_are_safe(parsed.query) or not _parameter_names_are_safe(
         parsed.fragment
     ):
@@ -552,7 +579,7 @@ def _public_locator_spans(value: str) -> tuple[tuple[int, int], ...]:
 
 def _unsafe_persisted_string(value: str) -> bool:
     if (
-        any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+        _contains_c0_control(value)
         or _FILE_URI_PATTERN.search(value) is not None
         or _UNC_PATH_PATTERN.search(value) is not None
     ):

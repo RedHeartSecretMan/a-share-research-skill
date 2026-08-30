@@ -21,6 +21,34 @@ from a_share_research.result_artifact_inputs import (  # noqa: E402
 PreparedFactory = Callable[[Mapping[str, object]], PreparedResultArtifactFile]
 
 
+def _prepared_factories(
+    *,
+    kind: str = "universe",
+    exchange: str = "SSE",
+    shard_index: int = 0,
+) -> tuple[tuple[str, PreparedFactory], ...]:
+    return (
+        (
+            "candidate",
+            lambda document: prepare_candidate(
+                canonical_security_id="SSE:600519",
+                schema_version="1.0",
+                document=document,
+            ),
+        ),
+        (
+            "partition",
+            lambda document: prepare_completed_partition(
+                kind=kind,
+                exchange=exchange,
+                shard_index=shard_index,
+                schema_version="1.0",
+                records=(document,),
+            ),
+        ),
+    )
+
+
 class _StatefulString(str):
     def __str__(self) -> str:
         return "../changed-after-validation"
@@ -1261,26 +1289,7 @@ class ResultArtifactInputTests(unittest.TestCase):
 
 class ResultArtifactSemanticKeyTests(unittest.TestCase):
     def _factories(self) -> tuple[tuple[str, PreparedFactory], ...]:
-        return (
-            (
-                "candidate",
-                lambda document: prepare_candidate(
-                    canonical_security_id="SSE:600519",
-                    schema_version="1.0",
-                    document=document,
-                ),
-            ),
-            (
-                "partition",
-                lambda document: prepare_completed_partition(
-                    kind="universe",
-                    exchange="SSE",
-                    shard_index=0,
-                    schema_version="1.0",
-                    records=(document,),
-                ),
-            ),
-        )
+        return _prepared_factories()
 
     def _surface_document(self, surface: str, raw_key: str) -> Mapping[str, object]:
         if surface == "metadata":
@@ -1365,6 +1374,34 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             factory(document)
 
+    def test_plural_server_compounds_reject_on_every_surface_and_factory(
+        self,
+    ) -> None:
+        plural_server_keys = (
+            "serversInformation",
+            "backupServersInformation",
+            "servers_info",
+            "backupServersInfo",
+            "serversAddresses",
+            "jobServersInformationStatus",
+            "requestsHeaders",
+            "backupRequestsHeaders",
+            "apisKeys",
+            "clientApisKeys",
+        )
+
+        for raw_key in plural_server_keys:
+            for surface in ("metadata", "query", "fragment"):
+                document = self._surface_document(surface, raw_key)
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        raw_key=raw_key,
+                        surface=surface,
+                        factory=factory_name,
+                    ):
+                        with self.assertRaises(ValueError):
+                            factory(document)
+
     def test_exact_safe_whole_lexemes_do_not_exempt_sensitive_compounds(
         self,
     ) -> None:
@@ -1411,26 +1448,7 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
 
 class ResultArtifactLocatorTests(unittest.TestCase):
     def _factories(self) -> tuple[tuple[str, PreparedFactory], ...]:
-        return (
-            (
-                "candidate",
-                lambda document: prepare_candidate(
-                    canonical_security_id="SSE:600519",
-                    schema_version="1.0",
-                    document=document,
-                ),
-            ),
-            (
-                "partition",
-                lambda document: prepare_completed_partition(
-                    kind="factors",
-                    exchange="BSE",
-                    shard_index=9,
-                    schema_version="1.0",
-                    records=(document,),
-                ),
-            ),
-        )
+        return _prepared_factories(kind="factors", exchange="BSE", shard_index=9)
 
     def test_complete_http_authority_matrix_is_positive_and_fail_closed(
         self,
@@ -1523,6 +1541,56 @@ class ResultArtifactLocatorTests(unittest.TestCase):
                 with self.subTest(locator=locator, factory=factory_name):
                     with self.assertRaises(ValueError):
                         factory({"public_reference": locator})
+
+    def test_home_arpa_authorities_are_local_even_with_subdomains_or_root_dot(
+        self,
+    ) -> None:
+        locators = (
+            "https://home.arpa/private",
+            "https://router.home.arpa/private",
+            "https://router.home.arpa./private",
+        )
+
+        for locator in locators:
+            for factory_name, factory in self._factories():
+                with self.subTest(locator=locator, factory=factory_name):
+                    with self.assertRaises(ValueError):
+                        factory({"public_reference": locator})
+
+    def test_percent_decoded_c0_parameter_names_fail_closed(self) -> None:
+        for code_point in (*range(0x20), 0x7F):
+            encoded = f"%{code_point:02X}"
+            for surface_marker in ("?", "#"):
+                locator = (
+                    "https://research.example/public"
+                    f"{surface_marker}safe{encoded}field=1"
+                )
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        code_point=code_point,
+                        surface_marker=surface_marker,
+                        factory=factory_name,
+                    ):
+                        with self.assertRaises(ValueError):
+                            factory({"public_reference": locator})
+
+    def test_percent_encoded_c0_fails_in_every_locator_component(self) -> None:
+        for code_point in (*range(0x20), 0x7F):
+            encoded = f"%{code_point:02X}"
+            locators = (
+                f"https://research.example/public{encoded}field",
+                f"https://research.example/public?safe=field{encoded}value",
+                f"https://research.example/public#safe{encoded}field",
+            )
+            for locator in locators:
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        code_point=code_point,
+                        locator=locator,
+                        factory=factory_name,
+                    ):
+                        with self.assertRaises(ValueError):
+                            factory({"public_reference": locator})
 
         for code_point in (*range(0x20), 0x7F):
             locator = f"https://example.test{chr(code_point)}@localhost/private"
