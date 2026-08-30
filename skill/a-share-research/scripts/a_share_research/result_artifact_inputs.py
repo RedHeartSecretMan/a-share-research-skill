@@ -43,6 +43,7 @@ _WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"(?:^|[^A-Za-z0-9/\\])[A-Za-z]:[/\\]")
 _AUTHORITY_TERMINATORS = frozenset("/?#")
 _INVALID_LOCATOR_CHARACTERS = frozenset('<>"[]|\\^`{}')
 _LOCAL_PATH_SUFFIX_DELIMITERS = frozenset("!$'()*+,-.:;@_~")
+_PUBLIC_ROOTED_ROUTE_PREFIXES = ("/docs",)
 _NON_PUBLIC_DNS_SUFFIXES = frozenset(
     {
         "home",
@@ -144,7 +145,7 @@ _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("maps", "map"),
 )
 _ORDINARY_EMBEDDED_LEXEMES = re.compile(
-    r"(?:apiar(?:y|ies)|ghosts?|hostess(?:es)?|hostile|monkeys?|rapid|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?|transportation(?:s)?)"
+    r"(?:apiar(?:y|ies)|capital|ghosts?|hostess(?:es)?|hostile|monkeys?|rapid|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?|transportation(?:s)?)"
 )
 _SENSITIVE_COMPOUND_ATOMS: tuple[
     tuple[tuple[str, ...], tuple[str, ...]],
@@ -642,6 +643,11 @@ def _decoded_parameter_path_is_safe(value: str) -> bool:
         or _WINDOWS_DRIVE_PATH_PATTERN.search(value) is not None
     ):
         return False
+    if value.startswith("/") and not any(
+        value == prefix or value.startswith(f"{prefix}/")
+        for prefix in _PUBLIC_ROOTED_ROUTE_PREFIXES
+    ):
+        return False
     return ".." not in value.replace("\\", "/").split("/")
 
 
@@ -653,6 +659,7 @@ def _decoded_parameter_is_safe(name: str, value: str) -> bool:
         and not _contains_c0_control(normalized_value)
         and _decoded_parameter_path_is_safe(normalized_name)
         and _decoded_parameter_path_is_safe(normalized_value)
+        and _decoded_parameter_value_is_safe(normalized_name)
         and _decoded_parameter_value_is_safe(normalized_value)
         and _classify_semantic_key(normalized_name) is not _SemanticKeyClass.SENSITIVE
     )

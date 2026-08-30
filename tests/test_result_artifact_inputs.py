@@ -1521,6 +1521,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "capitalkey",
             "capital_keys",
             "capitalKeys",
+            "capital_key_status",
+            "annualCapitalKeyStatus",
+            "working_capital_key_status",
             "apiary_monkey_population",
             "apiarymonkeypopulation",
             "ghost_count",
@@ -1653,6 +1656,7 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             ("https://example.test/public?next=https://other.example/public"),
             ("https://example.test/public?next=https%3A%2F%2Fother.example%2Fpublic"),
             ("https://example.test/public?next=%2Fdocs"),
+            ("https://example.test/public?next=%2Fdocs%2Fsection"),
         )
         for locator in safe_locators:
             for factory_name, factory in self._factories():
@@ -1777,6 +1781,48 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             encoded = quote(value, safe="")
             for surface_marker in ("?", "#"):
                 locator = f"https://example.test/public{surface_marker}next={encoded}"
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        value=value,
+                        surface_marker=surface_marker,
+                        factory=factory_name,
+                    ):
+                        with self.assertRaises(ValueError):
+                            factory({"public_reference": locator})
+
+    def test_decoded_parameter_names_and_posix_local_values_fail_closed(self) -> None:
+        unsafe_names = (
+            "/private/data.json",
+            "file:///private/data",
+            "http://10.0.0.1/public",
+            "／private／data.json",
+        )
+        unsafe_values = (
+            "/private/secret",
+            "/Users/name/secret",
+            "/etc/passwd",
+            "／private／secret",
+        )
+
+        for name in unsafe_names:
+            encoded_name = quote(name, safe="")
+            for surface_marker in ("?", "#"):
+                locator = f"https://example.test/public{surface_marker}{encoded_name}=1"
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        name=name,
+                        surface_marker=surface_marker,
+                        factory=factory_name,
+                    ):
+                        with self.assertRaises(ValueError):
+                            factory({"public_reference": locator})
+
+        for value in unsafe_values:
+            encoded_value = quote(value, safe="")
+            for surface_marker in ("?", "#"):
+                locator = (
+                    f"https://example.test/public{surface_marker}next={encoded_value}"
+                )
                 for factory_name, factory in self._factories():
                     with self.subTest(
                         value=value,
