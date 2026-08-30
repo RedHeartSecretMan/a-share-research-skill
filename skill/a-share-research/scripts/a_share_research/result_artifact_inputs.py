@@ -25,6 +25,7 @@ from .bounded_public_data import (
 
 _MAX_FILE_BYTES = 64 * 1024 * 1024
 _MAX_PARTITION_RECORDS = 100_000
+_MAX_SHARD_COUNT = 100_000
 _MAX_SCHEMA_TOKEN_BYTES = 128
 _SCHEMA_TOKEN_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._@+-"
@@ -36,7 +37,7 @@ _CANONICAL_JSON_ENCODER = json.JSONEncoder(
     sort_keys=True,
 )
 _SCHEME_PATTERN = re.compile(r"(?i:https?://)")
-_FILE_URI_PATTERN = re.compile(r"(?i:file://)")
+_FILE_URI_PATTERN = re.compile(r"(?i:(?<![a-z0-9+.-])file:)")
 _UNC_PATH_PATTERN = re.compile(r"\\{2,}[^\\/\s]+\\[^\\/\s]+")
 _AUTHORITY_TERMINATORS = frozenset("/?#")
 _INVALID_LOCATOR_CHARACTERS = frozenset('<>"[]|\\^`{}')
@@ -468,6 +469,8 @@ def _contains_ordered_atoms(
     value: str,
     start_atoms: tuple[str, ...],
     end_atoms: tuple[str, ...],
+    *,
+    allow_arbitrary_gap: bool,
 ) -> bool:
     for start_atom in start_atoms:
         search_from = 0
@@ -476,7 +479,9 @@ def _contains_ordered_atoms(
             for end_atom in end_atoms:
                 end_search = after_start
                 while (end := value.find(end_atom, end_search)) >= 0:
-                    if _is_qualifier_sequence(value[after_start:end]):
+                    if allow_arbitrary_gap or _is_qualifier_sequence(
+                        value[after_start:end]
+                    ):
                         return True
                     end_search = end + 1
             search_from = start + 1
@@ -506,7 +511,12 @@ def _contains_sensitive_compound(
 ) -> bool:
     tokens = tuple(_normalize_semantic_plurals(token) for token in raw_tokens)
     for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS:
-        if _contains_ordered_atoms(value, start_atoms, end_atoms):
+        if _contains_ordered_atoms(
+            value,
+            start_atoms,
+            end_atoms,
+            allow_arbitrary_gap="api" not in start_atoms,
+        ):
             return True
         for index, token in enumerate(tokens[:-1]):
             if _token_is_ordinary_lexeme(token) or not token.endswith(start_atoms):
@@ -535,8 +545,7 @@ def _contains_qualified_sensitive_whole(
     return (
         any(token in _QUALIFIABLE_SENSITIVE_WHOLE_ATOMS for token in tokens)
         or any(atom in value for atom in _UNAMBIGUOUS_QUALIFIABLE_WHOLE_ATOMS)
-        or value.startswith("host")
-        or value.endswith("host")
+        or "host" in value
     )
 
 
@@ -683,6 +692,13 @@ def _scheme_starts_at_token_boundary(value: str, index: int) -> bool:
     return index == 0 or not (value[index - 1].isalnum() or value[index - 1] in "+-.")
 
 
+def _is_invalid_locator_character(value: str) -> bool:
+    return any(
+        character in _INVALID_LOCATOR_CHARACTERS
+        for character in normalize("NFKC", value)
+    )
+
+
 def _starts_local_path_suffix(value: str, index: int) -> bool:
     suffix = normalize("NFKC", value[index:])
     if not suffix or suffix[0] not in _LOCAL_PATH_SUFFIX_DELIMITERS:
@@ -738,14 +754,14 @@ def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, s
         token_end += 1
         while (
             token_end < len(value)
-            and value[token_end] not in _INVALID_LOCATOR_CHARACTERS
+            and not _is_invalid_locator_character(value[token_end])
             and ord(value[token_end]) > 0x20
             and ord(value[token_end]) != 0x7F
         ):
             if _starts_local_path_suffix(value, token_end):
                 raise ValueError("result artifact persisted document is invalid")
             token_end += 1
-    if token_end < len(value) and value[token_end] in _INVALID_LOCATOR_CHARACTERS:
+    if token_end < len(value) and _is_invalid_locator_character(value[token_end]):
         raise ValueError("result artifact persisted document is invalid")
     return token_end, value[start:token_end], authority
 
@@ -948,7 +964,7 @@ def prepare_completed_partition(
         or type(exchange) is not str
         or exchange not in {"BSE", "SSE", "SZSE"}
         or type(shard_index) is not int
-        or not 0 <= shard_index < _MAX_PARTITION_RECORDS
+        or not 0 <= shard_index < _MAX_SHARD_COUNT
         or not _valid_schema_token(schema_version)
     ):
         raise ValueError("result artifact partition coordinates are invalid")

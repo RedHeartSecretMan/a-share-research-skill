@@ -1486,6 +1486,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "backuphosts",
             "provider_base_url",
             "transport_envelope",
+            "requestauditheaders",
+            "jobhoststatus",
+            "jobhostsstatus",
         )
 
         for raw_key in sensitive_keys:
@@ -1745,6 +1748,8 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             ("https://example.test/public?next=https%3A%2F%2Flocalhost%2Fprivate"),
             ("https://example.test/public#next=https%3A%2F%2F10.0.0.1%2Fprivate"),
             ("https://example.test/public?next=file%3A%2F%2F%2Fprivate%2Fsecret"),
+            ("https://example.test/public?next=file%3A%2Fprivate%2Fsecret"),
+            ("https://example.test/public#next=file%3A%2FC%3A%2Fprivate%2Fsecret"),
         )
 
         for locator in locators:
@@ -1776,6 +1781,18 @@ class ResultArtifactLocatorTests(unittest.TestCase):
         for locator in continuations:
             for factory_name, factory in self._factories():
                 with self.subTest(locator=locator, factory=factory_name):
+                    with self.assertRaises(ValueError):
+                        factory({"public_reference": locator})
+
+    def test_nfkc_invalid_locator_characters_cannot_absorb_adjacent_paths(
+        self,
+    ) -> None:
+        for character in ("］", "＂", "＜", "＞", "｜", "＼", "＾", "｀", "｛", "｝"):
+            locator = (
+                f"https://example.test/public{character}/private/synthetic/secret.json"
+            )
+            for factory_name, factory in self._factories():
+                with self.subTest(character=character, factory=factory_name):
                     with self.assertRaises(ValueError):
                         factory({"public_reference": locator})
 
