@@ -1497,6 +1497,10 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "headers_for_request",
             "payloadForRaw",
             "informationForServer",
+            "jobserverinformationstatus",
+            "backupapikeysstatus",
+            "backuprequestheadersstatus",
+            "backupproviderrawpayloadsdigest",
         )
 
         for raw_key in sensitive_keys:
@@ -1732,6 +1736,21 @@ class ResultArtifactLocatorTests(unittest.TestCase):
 
         self.assertLess(elapsed, 2.0)
 
+    def test_adversarial_locator_delimiters_and_schemes_are_bounded(self) -> None:
+        locators = (
+            "https://example.test/public/" + "!" * 4_000 + "x",
+            "https://example.test/" * 2_001,
+        )
+
+        started = perf_counter()
+        for locator in locators:
+            for _, factory in self._factories():
+                prepared = factory({"public_reference": locator})
+                self.assertIn(locator.encode(), prepared.content_bytes)
+        elapsed = perf_counter() - started
+
+        self.assertLess(elapsed, 2.0)
+
     def test_locator_scheme_and_bracketed_host_cover_the_complete_raw_token(
         self,
     ) -> None:
@@ -1822,6 +1841,7 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "/Users/name/secret",
             "/etc/passwd",
             "／private／secret",
+            "failed=/private/secret.json",
         )
 
         for name in unsafe_names:

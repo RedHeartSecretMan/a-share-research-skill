@@ -42,11 +42,8 @@ _UNC_PATH_PATTERN = re.compile(r"\\{2,}[^\\/\s]+\\[^\\/\s]+")
 _WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"(?:^|[^A-Za-z0-9/\\])[A-Za-z]:[/\\]")
 _AUTHORITY_TERMINATORS = frozenset("/?#")
 _INVALID_LOCATOR_CHARACTERS = frozenset('<>"[]|\\^`{}')
+_LOCAL_PATH_SUFFIX_DELIMITERS = frozenset("!$'()*+,-.:;@_~")
 _PUBLIC_ROOTED_ROUTE_PREFIXES = ("/docs",)
-_LOCAL_PATH_SUFFIX_PATTERN = re.compile(
-    r"[!$'()*+,\-.:;@_~]+(?:[^=/\\&?#\x00-\x20\x7f]*=)?"
-    r"(?:[/\\]|\.\.(?:[/\\]|$)|[A-Za-z]:[/\\])"
-)
 _NON_PUBLIC_DNS_SUFFIXES = frozenset(
     {
         "home",
@@ -488,9 +485,16 @@ def _token_has_atom_pair(
     )
 
 
-def _contains_sensitive_compound(raw_tokens: tuple[str, ...]) -> bool:
+def _contains_sensitive_compound(
+    value: str,
+    raw_tokens: tuple[str, ...],
+) -> bool:
     tokens = _classifier_tokens(raw_tokens)
     for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS:
+        if any(atom in value for atom in start_atoms) and any(
+            atom in value for atom in end_atoms
+        ):
+            return True
         for index, token in enumerate(tokens):
             if _token_has_atom_pair(token, start_atoms, end_atoms):
                 return True
@@ -556,7 +560,7 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", plural_normalized)
     if (
         _contains_qualified_sensitive_whole(ordinary_elided, tokens)
-        or _contains_sensitive_compound(tokens)
+        or _contains_sensitive_compound(ordinary_elided, tokens)
         or any(
             pattern.search(ordinary_elided) is not None
             for pattern in _SENSITIVE_SINGLE_PATTERNS
@@ -656,6 +660,17 @@ def _decoded_parameter_path_is_safe(value: str) -> bool:
         for prefix in _PUBLIC_ROOTED_ROUTE_PREFIXES
     ):
         return False
+    search_from = 0
+    while (delimiter := value.find("=", search_from)) >= 0:
+        suffix = value[delimiter + 1 :]
+        if suffix.startswith("/") and not any(
+            suffix == prefix or suffix.startswith(f"{prefix}/")
+            for prefix in _PUBLIC_ROOTED_ROUTE_PREFIXES
+        ):
+            return False
+        if suffix == ".." or suffix.startswith(("../", "..\\")):
+            return False
+        search_from = delimiter + 1
     return ".." not in value.replace("\\", "/").split("/")
 
 
@@ -700,25 +715,74 @@ def _is_invalid_locator_character(value: str) -> bool:
     )
 
 
+def _starts_absolute_path(value: str, index: int) -> bool:
+    if index >= len(value):
+        return False
+    if value.startswith(("/", "\\"), index):
+        return True
+    if value.startswith("..", index):
+        after_parent = index + 2
+        if after_parent == len(value) or value[after_parent] in "/\\":
+            return True
+    return (
+        index + 2 < len(value)
+        and value[index].isascii()
+        and value[index].isalpha()
+        and value[index + 1] == ":"
+        and value[index + 2] in "/\\"
+    )
+
+
+def _is_nested_http_scheme(value: str, colon: int) -> bool:
+    for scheme in ("https", "http"):
+        scheme_start = colon - len(scheme)
+        if (
+            scheme_start >= 0
+            and value[scheme_start:colon].casefold() == scheme
+            and _scheme_starts_at_token_boundary(value, scheme_start)
+        ):
+            return True
+    return False
+
+
 def _locator_has_local_path_suffix(path: str, query: str, fragment: str) -> bool:
     visible = normalize(
         "NFKC",
         path + (f"?{query}" if query else "") + (f"#{fragment}" if fragment else ""),
     )
-    for match in _LOCAL_PATH_SUFFIX_PATTERN.finditer(visible):
-        if visible[match.start()] == ":":
-            for scheme in ("https", "http"):
-                scheme_start = match.start() - len(scheme)
-                if (
-                    scheme_start >= 0
-                    and visible[scheme_start : match.start()].casefold() == scheme
-                    and _scheme_starts_at_token_boundary(visible, scheme_start)
-                ):
-                    break
-            else:
-                return True
+    index = 0
+    while index < len(visible):
+        if visible[index] not in _LOCAL_PATH_SUFFIX_DELIMITERS:
+            index += 1
             continue
-        return True
+        if _starts_absolute_path(visible, index):
+            return True
+        if visible[index] == ":" and _is_nested_http_scheme(visible, index):
+            index += 1
+            continue
+        cursor = index + 1
+        if _starts_absolute_path(visible, cursor):
+            return True
+        while (
+            cursor < len(visible)
+            and visible[cursor] not in "=/\\&?#"
+            and ord(visible[cursor]) > 0x20
+            and ord(visible[cursor]) != 0x7F
+        ):
+            if visible[
+                cursor
+            ] in _LOCAL_PATH_SUFFIX_DELIMITERS and _starts_absolute_path(
+                visible, cursor + 1
+            ):
+                return True
+            cursor += 1
+        if (
+            cursor < len(visible)
+            and visible[cursor] == "="
+            and _starts_absolute_path(visible, cursor + 1)
+        ):
+            return True
+        index = max(index + 1, cursor + 1)
     return False
 
 
@@ -820,12 +884,16 @@ def _validate_public_locator(token: str, authority: str) -> None:
 
 def _public_locator_spans(value: str) -> tuple[tuple[int, int], ...]:
     spans: list[tuple[int, int]] = []
+    covered_until = 0
     for match in _SCHEME_PATTERN.finditer(value):
+        if match.start() < covered_until:
+            continue
         if not _scheme_starts_at_token_boundary(value, match.start()):
             continue
         token_end, token, authority = _locator_token(value, match.start(), match.end())
         _validate_public_locator(token, authority)
         spans.append((match.start(), token_end))
+        covered_until = token_end
     return tuple(spans)
 
 
