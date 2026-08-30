@@ -39,6 +39,7 @@ _CANONICAL_JSON_ENCODER = json.JSONEncoder(
 _SCHEME_PATTERN = re.compile(r"(?i:https?://)")
 _FILE_URI_PATTERN = re.compile(r"(?i:(?<![a-z0-9+.-])file:)")
 _UNC_PATH_PATTERN = re.compile(r"\\{2,}[^\\/\s]+\\[^\\/\s]+")
+_WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"(?:^|[^A-Za-z0-9/\\])[A-Za-z]:[/\\]")
 _AUTHORITY_TERMINATORS = frozenset("/?#")
 _INVALID_LOCATOR_CHARACTERS = frozenset('<>"[]|\\^`{}')
 _LOCAL_PATH_SUFFIX_DELIMITERS = frozenset("!$'()*+,-.:;@_~")
@@ -666,6 +667,16 @@ def _decoded_parameter_value_is_safe(value: str) -> bool:
     return not _unsafe_persisted_string(value)
 
 
+def _decoded_parameter_path_is_safe(value: str) -> bool:
+    if (
+        value.startswith(("//", "\\"))
+        or _UNC_PATH_PATTERN.search(value) is not None
+        or _WINDOWS_DRIVE_PATH_PATTERN.search(value) is not None
+    ):
+        return False
+    return ".." not in value.replace("\\", "/").split("/")
+
+
 def _locator_parameters_are_safe(value: str) -> bool:
     if not value or not _percent_escapes_are_safe(value):
         return not value
@@ -682,6 +693,8 @@ def _locator_parameters_are_safe(value: str) -> bool:
     return all(
         not _contains_c0_control(name)
         and not _contains_c0_control(parameter_value)
+        and _decoded_parameter_path_is_safe(name)
+        and _decoded_parameter_path_is_safe(parameter_value)
         and _decoded_parameter_value_is_safe(parameter_value)
         and _classify_semantic_key(name) is not _SemanticKeyClass.SENSITIVE
         for name, parameter_value in parameters

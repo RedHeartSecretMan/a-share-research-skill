@@ -1649,6 +1649,7 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://research.example/public#/docs/section-2?mode=full",
             ("https://example.test/public?next=https://other.example/public"),
             ("https://example.test/public?next=https%3A%2F%2Fother.example%2Fpublic"),
+            ("https://example.test/public?next=%2Fdocs"),
         )
         for locator in safe_locators:
             for factory_name, factory in self._factories():
@@ -1750,6 +1751,9 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             ("https://example.test/public?next=file%3A%2F%2F%2Fprivate%2Fsecret"),
             ("https://example.test/public?next=file%3A%2Fprivate%2Fsecret"),
             ("https://example.test/public#next=file%3A%2FC%3A%2Fprivate%2Fsecret"),
+            ("https://example.test/public?next=C%3A%2Fprivate%2Fsecret.json"),
+            ("https://example.test/public?next=%5C%5Cserver%5Cshare%5Csecret.json"),
+            ("https://example.test/public#next=..%2Fsecret.json"),
         )
 
         for locator in locators:
