@@ -201,10 +201,59 @@ _SAFE_COMPOUND_WHOLE_LEXEMES = _SAFE_WHOLE_LEXEMES - {
 _ORDINARY_PARTIAL_ATOM_TOKENS = frozenset(
     {"ghost", "ghosts", "hockey", "monkey", "monkeys"}
 )
+_ORDINARY_SEMANTIC_HOMOGRAPHS = tuple(
+    sorted(
+        {
+            "apiaries",
+            "apiary",
+            "capillaries",
+            "capillary",
+            "capital",
+            "capitol",
+            "drawer",
+            "ghost",
+            "ghosts",
+            "headerline",
+            "hockey",
+            "hostess",
+            "hostesses",
+            "hostile",
+            "hostility",
+            "keyboard",
+            "keynote",
+            "monkey",
+            "monkeys",
+            "observer",
+            "rapid",
+            "requester",
+            "secretarial",
+            "secretariat",
+            "secretariats",
+            "secretaries",
+            "secretary",
+            "secretion",
+            "secretory",
+            "shaping",
+            "strawberry",
+            "swordtokenizer",
+            "therapist",
+            "tokenisation",
+            "tokeniser",
+            "tokenization",
+            "tokenizer",
+            "tokenomics",
+            "transportation",
+            "transportations",
+            "wordtokenizer",
+        },
+        key=lambda value: (-len(value), value),
+    )
+)
+_ORDINARY_SAFE_COMPOUND_SUFFIXES = {"wordtoken": ("iser", "izer")}
 _ORDINARY_SENSITIVE_PREFIX_SUFFIXES = {
-    "host": ("age", "ess", "esses", "ile"),
-    "secret": ("arial", "ariat", "ary", "ion", "ive"),
-    "token": ("isation", "iser", "ization", "izer"),
+    "host": ("age", "ess", "esses", "ile", "ility"),
+    "secret": ("arial", "ariat", "ary", "ion", "ive", "ory"),
+    "token": ("isation", "iser", "ization", "izer", "omics"),
     "transport": ("ation",),
 }
 _SEMANTIC_ATOMS = tuple(
@@ -306,6 +355,9 @@ class _PreparedValues(NamedTuple):
     record_count: int
 
 
+_PREPARED_VALUE_INDEX = {
+    field_name: index for index, field_name in enumerate(_PreparedValues._fields)
+}
 _MODULE_AUTHORITY = object()
 _SEALED_PREPARED_TYPES: set[type[object]] = set()
 
@@ -391,6 +443,12 @@ class _PreparedResultArtifactFile(
     def __new__(cls) -> _PreparedResultArtifactFile:
         raise TypeError("prepared result artifact files are Module-owned")
 
+    def __getattribute__(self, name: str) -> object:
+        field_index = _PREPARED_VALUE_INDEX.get(name)
+        if field_index is not None:
+            return _prepared_values(self)[field_index]
+        return object.__getattribute__(self, name)
+
     @property
     def relative_path(self) -> str:
         return _prepared_values(self).relative_path
@@ -434,11 +492,32 @@ def _prepared_values(value: PreparedResultArtifactFile) -> _PreparedValues:
 
 def _prepared_file(
     *,
+    _module_authority: object,
     relative_path: str,
     schema_version: str,
     content_bytes: bytes,
     record_count: int,
 ) -> PreparedResultArtifactFile:
+    candidate_path = re.fullmatch(
+        r"candidates/(?:BSE|SSE|SZSE)-[0-9]{6}\.json",
+        relative_path,
+    )
+    partition_path = re.fullmatch(
+        r"partitions/(?:factors|ranking|universe)/(?:BSE|SSE|SZSE)/"
+        r"part-[0-9]{5}\.jsonl",
+        relative_path,
+    )
+    if (
+        _module_authority is not _MODULE_AUTHORITY
+        or not _valid_schema_token(schema_version)
+        or type(content_bytes) is not bytes
+        or len(content_bytes) > _MAX_FILE_BYTES
+        or type(record_count) is not int
+        or not 0 <= record_count <= _MAX_PARTITION_RECORDS
+        or (candidate_path is None and partition_path is None)
+        or (candidate_path is not None and record_count != 1)
+    ):
+        raise ValueError("result artifact prepared file is invalid")
     values = _PreparedValues(
         relative_path=relative_path,
         schema_version=schema_version,
@@ -497,9 +576,15 @@ def _detached_json_value(value: object) -> object:
             return float_item, 1, 0
         if item_type is Decimal:
             decimal_item = cast(Decimal, item)
-            if not decimal_item.is_finite():
+            if (
+                not decimal_item.is_finite()
+                or len(decimal_item.as_tuple().digits) > MAX_PUBLIC_DATA_STRING_LENGTH
+            ):
                 raise ValueError("result artifact persisted document is invalid")
-            return str(decimal_item), 1, 0
+            decimal_string = str(decimal_item)
+            if len(decimal_string) > MAX_PUBLIC_DATA_STRING_LENGTH:
+                raise ValueError("result artifact persisted document is invalid")
+            return decimal_string, 1, 0
 
         identity = id(item)
         if identity in active:
@@ -705,13 +790,39 @@ def _contains_qualified_safe_compound(
     runs: tuple[_SemanticAtomRun, ...],
 ) -> bool:
     for run in runs:
+        safe_atoms = _SAFE_COMPOUND_WHOLE_LEXEMES.intersection(run.atoms)
+        has_ordinary_suffix = any(
+            any(
+                value[run.end :].startswith(suffix)
+                for suffix in _ORDINARY_SAFE_COMPOUND_SUFFIXES.get(atom, ())
+            )
+            for atom in safe_atoms
+        )
         if (
-            _SAFE_COMPOUND_WHOLE_LEXEMES.intersection(run.atoms)
-            and run.end == len(value)
+            safe_atoms
             and ((run.start == 0 and run.atom_count > 1) or run.start > 0)
+            and run.end == len(value)
+        ) or (
+            safe_atoms
+            and run.start == 0
+            and run.end < len(value)
+            and not has_ordinary_suffix
         ):
             return True
     return False
+
+
+def _contains_sensitive_character_stream(raw_tokens: tuple[str, ...]) -> bool:
+    stream = "".join(raw_tokens)
+    for ordinary_lexeme in _ORDINARY_SEMANTIC_HOMOGRAPHS:
+        stream = stream.replace(ordinary_lexeme, "#" * len(ordinary_lexeme))
+    if any(atom in stream for atom in _SENSITIVE_SINGLE_ATOMS):
+        return True
+    return any(
+        any(atom in stream for atom in first_atoms)
+        and any(atom in stream for atom in second_atoms)
+        for first_atoms, second_atoms in _SENSITIVE_COMPOUND_ATOMS
+    )
 
 
 def _classify_semantic_key(value: str) -> _SemanticKeyClass:
@@ -743,10 +854,14 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     atom_runs_by_token = {
         token: _semantic_atom_runs(token) for token in {*tokens, normalized}
     }
-    if _contains_qualified_safe_compound(
-        normalized,
-        atom_runs_by_token[normalized],
-    ) or _contains_sensitive_semantic_atoms(tokens, atom_runs_by_token):
+    if (
+        _contains_qualified_safe_compound(
+            normalized,
+            atom_runs_by_token[normalized],
+        )
+        or _contains_sensitive_semantic_atoms(tokens, atom_runs_by_token)
+        or _contains_sensitive_character_stream(tokens)
+    ):
         return _SemanticKeyClass.SENSITIVE
     return _SemanticKeyClass.ORDINARY_PUBLIC
 
@@ -790,11 +905,7 @@ def _public_authority_hostname(value: str) -> bool:
         return not _looks_like_legacy_numeric_hostname(value) and _public_dns_hostname(
             value
         )
-    if (
-        isinstance(address, IPv6Address)
-        and address.ipv4_mapped is not None
-        and str(address.ipv4_mapped) in _IANA_NON_GLOBAL_IP_LITERALS
-    ):
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
         return False
     return (
         address.is_global
@@ -1302,6 +1413,11 @@ def _unsafe_persisted_string(value: str) -> bool:
     nested_locators = [(value, 0)]
     while nested_locators:
         current, depth = nested_locators.pop()
+        percent_decoded = _closed_percent_decode(current)
+        if percent_decoded is None:
+            return True
+        if percent_decoded != current:
+            nested_locators.append((percent_decoded, depth))
         compatibility_normalized = normalize("NFKC", current)
         if compatibility_normalized != current and (
             _contains_c0_control(compatibility_normalized)
@@ -1401,6 +1517,7 @@ def prepare_completed_partition(
     except Exception:
         raise ValueError("result artifact partition records are invalid") from None
     return _prepared_file(
+        _module_authority=_MODULE_AUTHORITY,
         relative_path=(f"partitions/{kind}/{exchange}/part-{shard_index:05d}.jsonl"),
         schema_version=schema_version,
         content_bytes=encoded,
@@ -1443,6 +1560,7 @@ def prepare_candidate(
     except Exception:
         raise ValueError("result artifact candidate document is invalid") from None
     return _prepared_file(
+        _module_authority=_MODULE_AUTHORITY,
         relative_path=f"candidates/{exchange}-{code}.json",
         schema_version=schema_version,
         content_bytes=encoded,

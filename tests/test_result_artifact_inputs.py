@@ -380,6 +380,20 @@ class ResultArtifactInputTests(unittest.TestCase):
         self.assertIsInstance(prepared, PreparedResultArtifactFile)
         self.assertEqual(prepared.content_bytes, b'{"status":"limited"}\n')
 
+        type.__setattr__(
+            concrete_type,
+            "content_bytes",
+            property(lambda _: b"forged\n"),
+        )
+        try:
+            self.assertEqual(prepared.content_bytes, b'{"status":"limited"}\n')
+            self.assertEqual(
+                prepared.sha256,
+                "d910ea1abd9150063db074de152f24d9956c2d1ec3735226faaba46cdf123722",
+            )
+        finally:
+            type.__setattr__(concrete_type, "content_bytes", original_property)
+
     def test_coordinates_require_exact_canonical_builtin_tokens(self) -> None:
         valid_partition = prepare_completed_partition(
             kind="ranking",
@@ -616,6 +630,8 @@ class ResultArtifactInputTests(unittest.TestCase):
             {"note": "path=/"},
             {"note": "path|/"},
             {"note": "file:///private/tmp/secret.json"},
+            {"note": "file%3A%2F%2F%2Fprivate%2Fsecret"},
+            {"note": "%2Fprivate%2Fsecret.json"},
             {"note": "／private／synthetic／secret.json"},
             {"note": "ｆｉｌｅ：／／／private／synthetic／secret.json"},
             {"note": "Ｃ：／private／synthetic／secret.json"},
@@ -1241,6 +1257,7 @@ class ResultArtifactInputTests(unittest.TestCase):
             {"value": float("-inf")},
             {"value": Decimal("NaN")},
             {"value": Decimal("Infinity")},
+            {"value": Decimal("1" * (64 * 1024 + 1))},
             {"value": b"not-json"},
             {"value": cyclic},
         )
@@ -1550,6 +1567,12 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "productionapikeyhistory",
             "productionApiKeyHistory",
             "production_api_key_history",
+            "customerpasswordpolicy",
+            "customerpasswordspolicy",
+            "customerapipolicykeystatus",
+            "customerpasswordhistory",
+            "customercredentialhistory",
+            "webhosthistory",
         )
 
         for raw_key in sensitive_keys:
@@ -1598,6 +1621,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "wordtokenizer_version",
             "monkey_api_status",
             "hockey_api_score",
+            "hostility_score",
+            "secretory_activity",
+            "tokenomics_metric",
         )
 
         for raw_key in ordinary_keys:
@@ -1653,6 +1679,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "backup_tokenized_word_count",
             "tokenized_word_count_backup",
             "production_application_key_rotation_status",
+            "application_key_rotation_status_policy",
+            "applicationKeyRotationStatusPolicy",
+            "applicationkeyrotationstatuspolicy",
         ):
             self._assert_key_rejected_everywhere(raw_key)
 
@@ -1769,6 +1798,7 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://192.0.2.1/public",
             "https://192.88.99.2/private",
             "https://[::1]/public",
+            "https://[::ffff:8.8.8.8]/public",
             "https://[fc00::1]/public",
             "https://[fe80::1]/public",
             "https://[ff02::1]/public",
