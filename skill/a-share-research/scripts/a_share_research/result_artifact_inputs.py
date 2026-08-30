@@ -144,18 +144,7 @@ _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("maps", "map"),
 )
 _ORDINARY_EMBEDDED_LEXEMES = re.compile(
-    r"(?:apiar(?:y|ies)|ghosts?|hostess(?:es)?|hostile|monkeys?|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?|transportation(?:s)?)"
-)
-_INTERPOSED_QUALIFIER_ATOMS = (
-    "access",
-    "backup",
-    "http",
-    "https",
-    "normalized",
-    "response",
-    "rotation",
-    "runtime",
-    "tls",
+    r"(?:apiar(?:y|ies)|ghosts?|hostess(?:es)?|hostile|monkeys?|rapid|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?|transportation(?:s)?)"
 )
 _SENSITIVE_COMPOUND_ATOMS: tuple[
     tuple[tuple[str, ...], tuple[str, ...]],
@@ -470,36 +459,16 @@ def _contains_ordered_atoms(
     value: str,
     start_atoms: tuple[str, ...],
     end_atoms: tuple[str, ...],
-    *,
-    allow_arbitrary_gap: bool,
 ) -> bool:
     for start_atom in start_atoms:
         search_from = 0
         while (start := value.find(start_atom, search_from)) >= 0:
             after_start = start + len(start_atom)
             for end_atom in end_atoms:
-                end_search = after_start
-                while (end := value.find(end_atom, end_search)) >= 0:
-                    if allow_arbitrary_gap or _is_qualifier_sequence(
-                        value[after_start:end]
-                    ):
-                        return True
-                    end_search = end + 1
+                if value.find(end_atom, after_start) >= 0:
+                    return True
             search_from = start + 1
     return False
-
-
-def _is_qualifier_sequence(value: str) -> bool:
-    if not value:
-        return True
-    reachable = {0}
-    for index in range(len(value)):
-        if index not in reachable:
-            continue
-        for qualifier in _INTERPOSED_QUALIFIER_ATOMS:
-            if value.startswith(qualifier, index):
-                reachable.add(index + len(qualifier))
-    return len(value) in reachable
 
 
 def _token_is_ordinary_lexeme(value: str) -> bool:
@@ -516,7 +485,6 @@ def _contains_sensitive_compound(
             value,
             start_atoms,
             end_atoms,
-            allow_arbitrary_gap="api" not in start_atoms,
         ):
             return True
         for index, token in enumerate(tokens[:-1]):
@@ -677,6 +645,19 @@ def _decoded_parameter_path_is_safe(value: str) -> bool:
     return ".." not in value.replace("\\", "/").split("/")
 
 
+def _decoded_parameter_is_safe(name: str, value: str) -> bool:
+    normalized_name = normalize("NFKC", name)
+    normalized_value = normalize("NFKC", value)
+    return (
+        not _contains_c0_control(normalized_name)
+        and not _contains_c0_control(normalized_value)
+        and _decoded_parameter_path_is_safe(normalized_name)
+        and _decoded_parameter_path_is_safe(normalized_value)
+        and _decoded_parameter_value_is_safe(normalized_value)
+        and _classify_semantic_key(normalized_name) is not _SemanticKeyClass.SENSITIVE
+    )
+
+
 def _locator_parameters_are_safe(value: str) -> bool:
     if not value or not _percent_escapes_are_safe(value):
         return not value
@@ -690,15 +671,7 @@ def _locator_parameters_are_safe(value: str) -> bool:
         )
     except (UnicodeDecodeError, ValueError):
         return False
-    return all(
-        not _contains_c0_control(name)
-        and not _contains_c0_control(parameter_value)
-        and _decoded_parameter_path_is_safe(name)
-        and _decoded_parameter_path_is_safe(parameter_value)
-        and _decoded_parameter_value_is_safe(parameter_value)
-        and _classify_semantic_key(name) is not _SemanticKeyClass.SENSITIVE
-        for name, parameter_value in parameters
-    )
+    return all(_decoded_parameter_is_safe(name, item) for name, item in parameters)
 
 
 def _scheme_starts_at_token_boundary(value: str, index: int) -> bool:

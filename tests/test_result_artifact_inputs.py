@@ -6,6 +6,7 @@ import unittest
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from decimal import Decimal
 from itertools import product
+from urllib.parse import quote
 
 from tests.skill_imports import add_skill_scripts_to_path
 
@@ -1489,6 +1490,8 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "requestauditheaders",
             "jobhoststatus",
             "jobhostsstatus",
+            "clientapiprimarykey",
+            "clientapiv2keys",
         )
 
         for raw_key in sensitive_keys:
@@ -1761,6 +1764,27 @@ class ResultArtifactLocatorTests(unittest.TestCase):
                 with self.subTest(locator=locator, factory=factory_name):
                     with self.assertRaises(ValueError):
                         factory({"public_reference": locator})
+
+    def test_nfkc_decoded_parameter_paths_and_file_uris_fail_closed(self) -> None:
+        unsafe_values = (
+            "Ｃ：／private／secret.json",
+            "＼＼server＼share＼secret.json",
+            "．．／secret.json",
+            "ｆｉｌｅ：／／／private／secret",
+        )
+
+        for value in unsafe_values:
+            encoded = quote(value, safe="")
+            for surface_marker in ("?", "#"):
+                locator = f"https://example.test/public{surface_marker}next={encoded}"
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        value=value,
+                        surface_marker=surface_marker,
+                        factory=factory_name,
+                    ):
+                        with self.assertRaises(ValueError):
+                            factory({"public_reference": locator})
 
     def test_parser_significant_authority_continuations_and_c0_fail_closed(
         self,
