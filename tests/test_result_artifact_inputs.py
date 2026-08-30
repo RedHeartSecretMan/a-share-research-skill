@@ -690,6 +690,12 @@ class ResultArtifactInputTests(unittest.TestCase):
                     "local=/private/synthetic/secret.json"
                 )
             },
+            {
+                "note": (
+                    "reference [https://example.test/public]"
+                    "/private/synthetic/do-not-leak.json"
+                )
+            },
         )
         for document in unsafe_documents:
             with self.subTest(document=document):
@@ -1388,6 +1394,8 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "backupRequestsHeaders",
             "apisKeys",
             "clientApisKeys",
+            "serverHosts",
+            "backupHostNames",
         )
 
         for raw_key in plural_server_keys:
@@ -1447,6 +1455,8 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "application_key_rotation_status",
             "capital_key",
             "capitalkey",
+            "capital_keys",
+            "capitalKeys",
         )
 
         for raw_key in ordinary_keys:

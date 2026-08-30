@@ -38,7 +38,7 @@ _SCHEME_PATTERN = re.compile(r"(?i:https?://)")
 _FILE_URI_PATTERN = re.compile(r"(?i:file://)")
 _UNC_PATH_PATTERN = re.compile(r"\\{2,}[^\\/\s]+\\[^\\/\s]+")
 _AUTHORITY_TERMINATORS = frozenset("/?#")
-_INVALID_LOCATOR_CHARACTERS = frozenset('<>"|\\^`{}')
+_INVALID_LOCATOR_CHARACTERS = frozenset('<>"[]|\\^`{}')
 _NON_PUBLIC_DNS_SUFFIXES = frozenset(
     {
         "home",
@@ -105,10 +105,36 @@ _SENSITIVE_SINGLE_PATTERNS = tuple(
         r"authorizations?",
         r"cookies?",
         r"credentials?",
+        r"hosts?",
+        r"hostnames?",
         r"passwords?",
         r"secrets?",
         r"tokens?",
     )
+)
+_SEMANTIC_PLURAL_REPLACEMENTS = (
+    ("authorizations", "authorization"),
+    ("informations", "information"),
+    ("credentials", "credential"),
+    ("addresses", "address"),
+    ("hostnames", "hostname"),
+    ("passwords", "password"),
+    ("payloads", "payload"),
+    ("requests", "request"),
+    ("servers", "server"),
+    ("headers", "header"),
+    ("cookies", "cookie"),
+    ("details", "detail"),
+    ("secrets", "secret"),
+    ("tokens", "token"),
+    ("hosts", "host"),
+    ("keys", "key"),
+    ("names", "name"),
+    ("ports", "port"),
+    ("urls", "url"),
+    ("apis", "api"),
+    ("ips", "ip"),
+    ("maps", "map"),
 )
 _ORDINARY_EMBEDDED_LEXEMES = re.compile(r"secretar(?:iat(?:s)?|y|ies|ial)")
 _SENSITIVE_COMPOUND_ATOMS: tuple[
@@ -129,6 +155,10 @@ _SENSITIVE_COMPOUND_ATOMS: tuple[
             "infos",
             "information",
             "informations",
+            "host",
+            "hosts",
+            "hostname",
+            "hostnames",
             "ip",
             "ips",
             "metadata",
@@ -436,6 +466,13 @@ def _contains_sensitive_compound(value: str) -> bool:
     )
 
 
+def _normalize_semantic_plurals(value: str) -> str:
+    normalized = value
+    for plural, singular in _SEMANTIC_PLURAL_REPLACEMENTS:
+        normalized = normalized.replace(plural, singular)
+    return normalized
+
+
 def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     if (
         type(value) is not str
@@ -453,14 +490,19 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
         return _SemanticKeyClass.SAFE_WHOLE_LEXEME
     if normalized in _ORDINARY_WHOLE_LEXEMES:
         return _SemanticKeyClass.ORDINARY_PUBLIC
-    ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", normalized)
-    if (
-        normalized in _SENSITIVE_WHOLE_LEXEMES
-        or _contains_sensitive_compound(normalized)
-        or any(
-            pattern.search(ordinary_elided) is not None
-            for pattern in _SENSITIVE_SINGLE_PATTERNS
-        )
+    if normalized in _SENSITIVE_WHOLE_LEXEMES:
+        return _SemanticKeyClass.SENSITIVE
+    plural_normalized = _normalize_semantic_plurals(normalized)
+    if plural_normalized in _SENSITIVE_WHOLE_LEXEMES:
+        return _SemanticKeyClass.SENSITIVE
+    if plural_normalized in _SAFE_WHOLE_LEXEMES:
+        return _SemanticKeyClass.SAFE_WHOLE_LEXEME
+    if plural_normalized in _ORDINARY_WHOLE_LEXEMES:
+        return _SemanticKeyClass.ORDINARY_PUBLIC
+    ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", plural_normalized)
+    if _contains_sensitive_compound(plural_normalized) or any(
+        pattern.search(ordinary_elided) is not None
+        for pattern in _SENSITIVE_SINGLE_PATTERNS
     ):
         return _SemanticKeyClass.SENSITIVE
     return _SemanticKeyClass.ORDINARY_PUBLIC
