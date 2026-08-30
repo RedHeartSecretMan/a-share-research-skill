@@ -696,6 +696,29 @@ class ResultArtifactInputTests(unittest.TestCase):
                     "/private/synthetic/do-not-leak.json"
                 )
             },
+            {
+                "note": (
+                    "https://example.test/public),local-path="
+                    "/private/synthetic/secret.json"
+                )
+            },
+            {
+                "note": (
+                    "https://example.test/public),local.path="
+                    "/private/synthetic/secret.json"
+                )
+            },
+            {
+                "note": (
+                    "https://example.test/public):local=/private/synthetic/secret.json"
+                )
+            },
+            {
+                "note": (
+                    "https://example.test/public),本地路径="
+                    "/private/synthetic/secret.json"
+                )
+            },
         )
         for document in unsafe_documents:
             with self.subTest(document=document):
@@ -1428,6 +1451,8 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "request-httpbackupheaders",
             "client-api-rotationbackupkeys",
             "provider-raw-httpbackuppayload",
+            "backupServerEndpointStatus",
+            "serverEndpoint",
         )
 
         for raw_key in sensitive_keys:
@@ -1457,6 +1482,8 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "capitalkey",
             "capital_keys",
             "capitalKeys",
+            "apiary_monkey_population",
+            "apiarymonkeypopulation",
         )
 
         for raw_key in ordinary_keys:

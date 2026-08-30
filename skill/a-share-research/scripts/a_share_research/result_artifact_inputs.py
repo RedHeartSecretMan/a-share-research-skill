@@ -105,6 +105,7 @@ _SENSITIVE_SINGLE_PATTERNS = tuple(
         r"authorizations?",
         r"cookies?",
         r"credentials?",
+        r"endpoints?",
         r"hosts?",
         r"hostnames?",
         r"passwords?",
@@ -116,6 +117,7 @@ _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("authorizations", "authorization"),
     ("informations", "information"),
     ("credentials", "credential"),
+    ("endpoints", "endpoint"),
     ("addresses", "address"),
     ("hostnames", "hostname"),
     ("passwords", "password"),
@@ -136,7 +138,9 @@ _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("ips", "ip"),
     ("maps", "map"),
 )
-_ORDINARY_EMBEDDED_LEXEMES = re.compile(r"secretar(?:iat(?:s)?|y|ies|ial)")
+_ORDINARY_EMBEDDED_LEXEMES = re.compile(
+    r"(?:apiar(?:y|ies)|monkeys?|secretar(?:iat(?:s)?|y|ies|ial))"
+)
 _SENSITIVE_COMPOUND_ATOMS: tuple[
     tuple[tuple[str, ...], tuple[str, ...]],
     ...,
@@ -151,6 +155,8 @@ _SENSITIVE_COMPOUND_ATOMS: tuple[
             "addresses",
             "detail",
             "details",
+            "endpoint",
+            "endpoints",
             "info",
             "infos",
             "information",
@@ -500,7 +506,7 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     if plural_normalized in _ORDINARY_WHOLE_LEXEMES:
         return _SemanticKeyClass.ORDINARY_PUBLIC
     ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", plural_normalized)
-    if _contains_sensitive_compound(plural_normalized) or any(
+    if _contains_sensitive_compound(ordinary_elided) or any(
         pattern.search(ordinary_elided) is not None
         for pattern in _SENSITIVE_SINGLE_PATTERNS
     ):
@@ -602,22 +608,20 @@ def _starts_local_path_suffix(value: str, index: int) -> bool:
     if value[index] not in "),;":
         return False
     cursor = index + 1
-    if cursor < len(value) and value[cursor] in ",;":
+    while cursor < len(value) and value[cursor] in ",;:":
         cursor += 1
     name_start = cursor
-    if cursor < len(value) and (
-        value[cursor].isascii() and (value[cursor].isalpha() or value[cursor] == "_")
+    while (
+        cursor < len(value)
+        and value[cursor] not in "=/\\&?#"
+        and ord(value[cursor]) > 0x20
+        and ord(value[cursor]) != 0x7F
     ):
         cursor += 1
-        while cursor < len(value) and (
-            value[cursor].isascii()
-            and (value[cursor].isalnum() or value[cursor] == "_")
-        ):
-            cursor += 1
-        if cursor < len(value) and value[cursor] == "=":
-            cursor += 1
-        else:
-            cursor = name_start
+    if cursor < len(value) and value[cursor] == "=":
+        cursor += 1
+    else:
+        cursor = name_start
     remaining = value[cursor:]
     return (
         remaining.startswith(("/", "\\", ".."))
