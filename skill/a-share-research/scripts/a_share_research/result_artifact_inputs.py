@@ -56,6 +56,7 @@ _NON_PUBLIC_DNS_SUFFIXES = frozenset(
     }
 )
 _NON_PUBLIC_DNS_NAMES = ("home.arpa",)
+_IANA_NON_GLOBAL_IP_LITERALS = frozenset({"192.88.99.2"})
 
 
 class _SemanticKeyClass(Enum):
@@ -197,7 +198,9 @@ _SAFE_COMPOUND_WHOLE_LEXEMES = _SAFE_WHOLE_LEXEMES - {
     "rotation",
     "server",
 }
-_ORDINARY_PARTIAL_ATOM_TOKENS = frozenset({"ghost", "ghosts"})
+_ORDINARY_PARTIAL_ATOM_TOKENS = frozenset(
+    {"ghost", "ghosts", "hockey", "monkey", "monkeys"}
+)
 _ORDINARY_SENSITIVE_PREFIX_SUFFIXES = {
     "host": ("age", "ess", "esses", "ile"),
     "secret": ("arial", "ariat", "ary", "ion", "ive"),
@@ -304,9 +307,20 @@ class _PreparedValues(NamedTuple):
 
 
 _MODULE_AUTHORITY = object()
+_SEALED_PREPARED_TYPES: set[type[object]] = set()
 
 
 class _PreparedResultArtifactFileMeta(ABCMeta):
+    def __setattr__(cls, name: str, value: object) -> None:
+        if cls in _SEALED_PREPARED_TYPES:
+            raise TypeError("prepared result artifact types are immutable")
+        super().__setattr__(name, value)
+
+    def __delattr__(cls, name: str) -> None:
+        if cls in _SEALED_PREPARED_TYPES:
+            raise TypeError("prepared result artifact types are immutable")
+        super().__delattr__(name)
+
     def __instancecheck__(cls, instance: object) -> bool:
         if type(instance) is not _PreparedResultArtifactFile:
             return False
@@ -400,6 +414,9 @@ class _PreparedResultArtifactFile(
     @property
     def record_count(self) -> int:
         return _prepared_values(self).record_count
+
+
+_SEALED_PREPARED_TYPES.update({PreparedResultArtifactFile, _PreparedResultArtifactFile})
 
 
 _PREPARED_VALUES: dict[
@@ -671,7 +688,9 @@ def _contains_sensitive_semantic_atoms(
                 complete_token=complete_token,
             ):
                 return True
-            if complete_token:
+            if complete_token or (
+                run.end == len(token) and token not in _ORDINARY_PARTIAL_ATOM_TOKENS
+            ):
                 complete_atoms.update(run.atoms)
                 complete_atom_count += run.atom_count
     return _semantic_atoms_are_sensitive(
@@ -687,10 +706,9 @@ def _contains_qualified_safe_compound(
 ) -> bool:
     for run in runs:
         if (
-            run.start == 0
+            _SAFE_COMPOUND_WHOLE_LEXEMES.intersection(run.atoms)
             and run.end == len(value)
-            and run.atom_count > 1
-            and _SAFE_COMPOUND_WHOLE_LEXEMES.intersection(run.atoms)
+            and ((run.start == 0 and run.atom_count > 1) or run.start > 0)
         ):
             return True
     return False
@@ -764,7 +782,7 @@ def _public_dns_hostname(value: str) -> bool:
 
 
 def _public_authority_hostname(value: str) -> bool:
-    if "%" in value:
+    if "%" in value or value in _IANA_NON_GLOBAL_IP_LITERALS:
         return False
     try:
         address = ip_address(value)
@@ -772,6 +790,12 @@ def _public_authority_hostname(value: str) -> bool:
         return not _looks_like_legacy_numeric_hostname(value) and _public_dns_hostname(
             value
         )
+    if (
+        isinstance(address, IPv6Address)
+        and address.ipv4_mapped is not None
+        and str(address.ipv4_mapped) in _IANA_NON_GLOBAL_IP_LITERALS
+    ):
+        return False
     return (
         address.is_global
         and not address.is_link_local

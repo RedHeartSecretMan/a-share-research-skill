@@ -358,6 +358,28 @@ class ResultArtifactInputTests(unittest.TestCase):
                 def record_count(self) -> int:
                     return -1
 
+    def test_prepared_concrete_type_rejects_caller_monkeypatching(self) -> None:
+        prepared = prepare_candidate(
+            canonical_security_id="SSE:600519",
+            schema_version="1.0",
+            document={"status": "limited"},
+        )
+        concrete_type = type(prepared)
+        original_property = concrete_type.__dict__["content_bytes"]
+
+        try:
+            concrete_type.content_bytes = property(  # type: ignore[assignment]
+                lambda _: b"forged\n"
+            )
+        except TypeError:
+            pass
+        else:
+            type.__setattr__(concrete_type, "content_bytes", original_property)
+            self.fail("prepared concrete type accepted caller monkeypatching")
+
+        self.assertIsInstance(prepared, PreparedResultArtifactFile)
+        self.assertEqual(prepared.content_bytes, b'{"status":"limited"}\n')
+
     def test_coordinates_require_exact_canonical_builtin_tokens(self) -> None:
         valid_partition = prepare_completed_partition(
             kind="ranking",
@@ -1524,6 +1546,10 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "passwordhash",
             "credentialshash",
             "archiverequesttraceheadersdigest",
+            "productionapiKeyHistory",
+            "productionapikeyhistory",
+            "productionApiKeyHistory",
+            "production_api_key_history",
         )
 
         for raw_key in sensitive_keys:
@@ -1570,6 +1596,8 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "payload_drawer_count",
             "swordtokenizer_status",
             "wordtokenizer_version",
+            "monkey_api_status",
+            "hockey_api_score",
         )
 
         for raw_key in ordinary_keys:
@@ -1624,6 +1652,7 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "application_key_rotation_status_apiKeys",
             "backup_tokenized_word_count",
             "tokenized_word_count_backup",
+            "production_application_key_rotation_status",
         ):
             self._assert_key_rejected_everywhere(raw_key)
 
@@ -1738,6 +1767,7 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://224.0.0.1/public",
             "https://240.0.0.1/public",
             "https://192.0.2.1/public",
+            "https://192.88.99.2/private",
             "https://[::1]/public",
             "https://[fc00::1]/public",
             "https://[fe80::1]/public",
