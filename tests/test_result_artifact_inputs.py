@@ -1514,6 +1514,13 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "backupapikeysstatus",
             "backuprequestheadersstatus",
             "backupproviderrawpayloadsdigest",
+            "userpassword",
+            "customercredentials",
+            "sessionsecret",
+            "bearertoken",
+            "serviceendpoint",
+            "webhost",
+            "serverhealthinformation",
         )
 
         for raw_key in sensitive_keys:
@@ -1616,6 +1623,35 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "tokenized_word_count_backup",
         ):
             self._assert_key_rejected_everywhere(raw_key)
+
+    def test_non_ascii_raw_key_result_is_identical_on_every_surface(self) -> None:
+        raw_key = "ｓｔａｔｕｓ"
+        encoded_key = quote(raw_key, safe="")
+        documents = (
+            ("metadata", {raw_key: "redacted"}),
+            (
+                "query",
+                {
+                    "public_reference": (
+                        f"https://research.example/public?{encoded_key}=redacted"
+                    )
+                },
+            ),
+            (
+                "fragment",
+                {
+                    "public_reference": (
+                        f"https://research.example/public#{encoded_key}=redacted"
+                    )
+                },
+            ),
+        )
+
+        for surface, document in documents:
+            for factory_name, factory in self._factories():
+                with self.subTest(surface=surface, factory=factory_name):
+                    with self.assertRaises(ValueError):
+                        factory(document)
 
 
 class ResultArtifactLocatorTests(unittest.TestCase):
@@ -1801,6 +1837,23 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             ("https://example.test/public?next=C%3A%2Fprivate%2Fsecret.json"),
             ("https://example.test/public?next=%5C%5Cserver%5Cshare%5Csecret.json"),
             ("https://example.test/public#next=..%2Fsecret.json"),
+        )
+
+        for locator in locators:
+            for factory_name, factory in self._factories():
+                with self.subTest(locator=locator, factory=factory_name):
+                    with self.assertRaises(ValueError):
+                        factory({"public_reference": locator})
+
+    def test_percent_decoded_locator_paths_fail_closed(self) -> None:
+        locators = (
+            "https://public.example/https%3A%2F%2Flocalhost%2Fprivate",
+            "https://public.example/file%3A%2F%2F%2Fprivate%2Fsecret",
+            "https://public.example/%2E%2E%2Fprivate%2Fsecret",
+            "https://public.example/C%3A%2Fprivate%2Fsecret",
+            "https://public.example/%5C%5Cserver%5Cshare%5Csecret",
+            "https://public.example/path=/private/secret",
+            "https://public.example/path%3D%2Fprivate%2Fsecret",
         )
 
         for locator in locators:

@@ -13,7 +13,7 @@ from hashlib import sha256
 from ipaddress import IPv6Address, ip_address
 from typing import NamedTuple, cast
 from unicodedata import normalize
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 from weakref import ReferenceType, ref
 
 from .bounded_public_data import (
@@ -196,6 +196,7 @@ _SAFE_COMPOUND_WHOLE_LEXEMES = _SAFE_WHOLE_LEXEMES - {
     "rotation",
     "server",
 }
+_ORDINARY_PARTIAL_ATOM_TOKENS = frozenset({"ghost", "ghosts"})
 _SEMANTIC_ATOMS = tuple(
     sorted(
         {
@@ -598,10 +599,37 @@ def _semantic_atoms_are_sensitive(
     )
 
 
+def _edge_spanning_atoms_are_sensitive(
+    token: str,
+    runs: tuple[_SemanticAtomRun, ...],
+) -> bool:
+    start_atoms = frozenset(
+        atom for run in runs if run.start == 0 for atom in run.atoms
+    )
+    end_atoms = frozenset(
+        atom for run in runs if run.end == len(token) for atom in run.atoms
+    )
+    if token not in _ORDINARY_PARTIAL_ATOM_TOKENS and end_atoms.intersection(
+        _SENSITIVE_SINGLE_ATOMS
+    ):
+        return True
+    return any(
+        (start_atoms.intersection(first_atoms) and end_atoms.intersection(second_atoms))
+        or (
+            start_atoms.intersection(second_atoms)
+            and end_atoms.intersection(first_atoms)
+        )
+        for first_atoms, second_atoms in _SENSITIVE_COMPOUND_ATOMS
+    )
+
+
 def _contains_sensitive_semantic_atoms(raw_tokens: tuple[str, ...]) -> bool:
     complete_atoms: list[str] = []
     for token in raw_tokens:
-        for run in _semantic_atom_runs(token):
+        runs = _semantic_atom_runs(token)
+        if _edge_spanning_atoms_are_sensitive(token, runs):
+            return True
+        for run in runs:
             complete_token = run.start == 0 and run.end == len(token)
             if _semantic_atoms_are_sensitive(
                 run.atoms,
@@ -776,7 +804,7 @@ def _decoded_parameter_is_safe(
         and not _contains_c0_control(normalized_value)
         and _decoded_parameter_path_is_safe(normalized_name)
         and _decoded_parameter_path_is_safe(normalized_value)
-        and _classify_semantic_key(normalized_name) is not _SemanticKeyClass.SENSITIVE
+        and _classify_semantic_key(name) is not _SemanticKeyClass.SENSITIVE
         and _decoded_parameter_value_is_safe(
             normalized_name,
             nested_locators=nested_locators,
@@ -861,6 +889,12 @@ def _is_nested_http_scheme(value: str, colon: int) -> bool:
 
 
 def _locator_has_local_path_suffix(path: str, query: str, fragment: str) -> bool:
+    normalized_path = normalize("NFKC", path)
+    path_index = 0
+    while (path_index := normalized_path.find("=", path_index)) >= 0:
+        if _starts_absolute_path(normalized_path, path_index + 1):
+            return True
+        path_index += 1
     visible = normalize(
         "NFKC",
         path + (f"?{query}" if query else "") + (f"#{fragment}" if fragment else ""),
@@ -940,6 +974,50 @@ def _authority_brackets_are_exact(authority: str) -> bool:
     return not remainder or re.fullmatch(r":[0-9]+", remainder) is not None
 
 
+def _decoded_locator_path_is_safe(
+    path: str,
+    *,
+    nested_locators: list[tuple[str, int]],
+    depth: int,
+) -> bool:
+    try:
+        visible = normalize(
+            "NFKC",
+            unquote(path, encoding="utf-8", errors="strict"),
+        )
+    except UnicodeDecodeError:
+        return False
+    if not visible:
+        return True
+    if visible.startswith("//") or _locator_has_local_path_suffix(visible, "", ""):
+        return False
+    body = visible[1:] if visible.startswith("/") else visible
+    if (
+        _FILE_URI_PATTERN.search(body) is not None
+        or _UNC_PATH_PATTERN.search(body) is not None
+        or _WINDOWS_DRIVE_PATH_PATTERN.search(body) is not None
+        or ".." in body.replace("\\", "/").split("/")
+    ):
+        return False
+    scheme_matches = tuple(_SCHEME_PATTERN.finditer(body))
+    if not scheme_matches:
+        return not _persisted_string_has_local_path(body, ())
+    for match in scheme_matches:
+        if not _scheme_starts_at_token_boundary(body, match.start()):
+            return False
+        authority_end, authority = _locator_authority(body, match.end())
+        try:
+            _validate_public_locator(
+                body[match.start() : authority_end],
+                authority,
+                nested_locators=nested_locators,
+                depth=depth,
+            )
+        except ValueError:
+            return False
+    return True
+
+
 def _validate_public_locator(
     token: str,
     authority: str,
@@ -994,11 +1072,19 @@ def _validate_public_locator(
             raise ValueError("result artifact persisted document is invalid") from None
     if not _public_authority_hostname(normalized_hostname):
         raise ValueError("result artifact persisted document is invalid")
-    if _locator_has_local_path_suffix(parsed.path, parsed.query, parsed.fragment):
-        raise ValueError("result artifact persisted document is invalid")
     if any(
         not _percent_escapes_are_safe(part)
         for part in (parsed.path, parsed.query, parsed.fragment)
+    ):
+        raise ValueError("result artifact persisted document is invalid")
+    if _locator_has_local_path_suffix(
+        parsed.path,
+        parsed.query,
+        parsed.fragment,
+    ) or not _decoded_locator_path_is_safe(
+        parsed.path,
+        nested_locators=nested_locators,
+        depth=depth,
     ):
         raise ValueError("result artifact persisted document is invalid")
     if not _locator_parameters_are_safe(
