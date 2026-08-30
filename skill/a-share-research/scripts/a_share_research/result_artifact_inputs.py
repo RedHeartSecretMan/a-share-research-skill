@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from enum import Enum, auto
 from hashlib import sha256
-from ipaddress import ip_address
+from ipaddress import IPv6Address, ip_address
 from typing import NamedTuple, cast
 from urllib.parse import parse_qsl, urlsplit
 from weakref import ReferenceType, ref
@@ -39,6 +39,7 @@ _FILE_URI_PATTERN = re.compile(r"(?i:file://)")
 _UNC_PATH_PATTERN = re.compile(r"\\{2,}[^\\/\s]+\\[^\\/\s]+")
 _AUTHORITY_TERMINATORS = frozenset("/?#")
 _INVALID_LOCATOR_CHARACTERS = frozenset('<>"[]|\\^`{}')
+_LOCAL_PATH_SUFFIX_DELIMITERS = frozenset("!$'()*+,-.:;@_~")
 _NON_PUBLIC_DNS_SUFFIXES = frozenset(
     {
         "home",
@@ -106,7 +107,6 @@ _SENSITIVE_SINGLE_PATTERNS = tuple(
         r"cookies?",
         r"credentials?",
         r"endpoints?",
-        r"hosts?",
         r"hostnames?",
         r"passwords?",
         r"secrets?",
@@ -139,7 +139,18 @@ _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("maps", "map"),
 )
 _ORDINARY_EMBEDDED_LEXEMES = re.compile(
-    r"(?:apiar(?:y|ies)|monkeys?|secretar(?:iat(?:s)?|y|ies|ial))"
+    r"(?:apiar(?:y|ies)|monkeys?|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?)"
+)
+_INTERPOSED_QUALIFIER_ATOMS = (
+    "access",
+    "backup",
+    "http",
+    "https",
+    "normalized",
+    "response",
+    "rotation",
+    "runtime",
+    "tls",
 )
 _SENSITIVE_COMPOUND_ATOMS: tuple[
     tuple[tuple[str, ...], tuple[str, ...]],
@@ -459,17 +470,51 @@ def _contains_ordered_atoms(
         search_from = 0
         while (start := value.find(start_atom, search_from)) >= 0:
             after_start = start + len(start_atom)
-            if any(value.find(end_atom, after_start) >= 0 for end_atom in end_atoms):
-                return True
+            for end_atom in end_atoms:
+                end_search = after_start
+                while (end := value.find(end_atom, end_search)) >= 0:
+                    if _is_qualifier_sequence(value[after_start:end]):
+                        return True
+                    end_search = end + 1
             search_from = start + 1
     return False
 
 
-def _contains_sensitive_compound(value: str) -> bool:
-    return any(
-        _contains_ordered_atoms(value, start_atoms, end_atoms)
-        for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS
-    )
+def _is_qualifier_sequence(value: str) -> bool:
+    if not value:
+        return True
+    reachable = {0}
+    for index in range(len(value)):
+        if index not in reachable:
+            continue
+        for qualifier in _INTERPOSED_QUALIFIER_ATOMS:
+            if value.startswith(qualifier, index):
+                reachable.add(index + len(qualifier))
+    return len(value) in reachable
+
+
+def _token_is_ordinary_lexeme(value: str) -> bool:
+    return _ORDINARY_EMBEDDED_LEXEMES.fullmatch(value) is not None
+
+
+def _contains_sensitive_compound(
+    value: str,
+    raw_tokens: tuple[str, ...],
+) -> bool:
+    tokens = tuple(_normalize_semantic_plurals(token) for token in raw_tokens)
+    for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS:
+        if _contains_ordered_atoms(value, start_atoms, end_atoms):
+            return True
+        for index, token in enumerate(tokens[:-1]):
+            if _token_is_ordinary_lexeme(token) or not token.endswith(start_atoms):
+                continue
+            if any(
+                not _token_is_ordinary_lexeme(later)
+                and (later.startswith(end_atoms) or later.endswith(end_atoms))
+                for later in tokens[index + 1 :]
+            ):
+                return True
+    return False
 
 
 def _normalize_semantic_plurals(value: str) -> str:
@@ -506,7 +551,7 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     if plural_normalized in _ORDINARY_WHOLE_LEXEMES:
         return _SemanticKeyClass.ORDINARY_PUBLIC
     ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", plural_normalized)
-    if _contains_sensitive_compound(ordinary_elided) or any(
+    if _contains_sensitive_compound(ordinary_elided, tokens) or any(
         pattern.search(ordinary_elided) is not None
         for pattern in _SENSITIVE_SINGLE_PATTERNS
     ):
@@ -560,6 +605,7 @@ def _public_authority_hostname(value: str) -> bool:
         and not address.is_multicast
         and not address.is_private
         and not address.is_reserved
+        and not (isinstance(address, IPv6Address) and address.is_site_local)
         and not address.is_unspecified
     )
 
@@ -609,7 +655,7 @@ def _scheme_starts_at_token_boundary(value: str, index: int) -> bool:
 
 
 def _starts_local_path_suffix(value: str, index: int) -> bool:
-    if value[index] not in "),;:":
+    if value[index] not in _LOCAL_PATH_SUFFIX_DELIMITERS:
         return False
     if value[index] == ":" and value[index + 1 :].startswith("//"):
         for scheme in ("https", "http"):

@@ -723,6 +723,12 @@ class ResultArtifactInputTests(unittest.TestCase):
             {"note": ("https://example.test/public:local=//server/share/secret.json")},
             {
                 "note": (
+                    "https://example.test/public!local=/private/synthetic/secret.json"
+                )
+            },
+            {"note": ("https://example.test/public!local=//server/share/secret.json")},
+            {
+                "note": (
                     "https://example.test/public),本地路径="
                     "/private/synthetic/secret.json"
                 )
@@ -821,6 +827,8 @@ class ResultArtifactInputTests(unittest.TestCase):
             "https://[::1]/public",
             "https://[fc00::1]/public",
             "https://[fe80::1]/public",
+            "https://[fec0::1]/public",
+            "https://[feff::1]:443/public",
             "https://[ff02::1]/public",
             "https://[2001:db8::1]/public",
             "https://127.0.0x1/public",
@@ -1492,6 +1500,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "capitalKeys",
             "apiary_monkey_population",
             "apiarymonkeypopulation",
+            "ghost_count",
+            "rapid_key",
+            "tokenization_status",
         )
 
         for raw_key in ordinary_keys:
