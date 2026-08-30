@@ -729,6 +729,18 @@ class ResultArtifactInputTests(unittest.TestCase):
             {"note": ("https://example.test/public!local=//server/share/secret.json")},
             {
                 "note": (
+                    "https://example.test/public!本地路径＝"
+                    "/private/synthetic/secret.json"
+                )
+            },
+            {
+                "note": (
+                    "https://example.test/public！本地路径："
+                    "/private/synthetic/secret.json"
+                )
+            },
+            {
+                "note": (
                     "https://example.test/public),本地路径="
                     "/private/synthetic/secret.json"
                 )
@@ -1469,6 +1481,11 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "provider-raw-httpbackuppayload",
             "backupServerEndpointStatus",
             "serverEndpoint",
+            "backup_hosts",
+            "backupHosts",
+            "backuphosts",
+            "provider_base_url",
+            "transport_envelope",
         )
 
         for raw_key in sensitive_keys:
@@ -1501,8 +1518,13 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "apiary_monkey_population",
             "apiarymonkeypopulation",
             "ghost_count",
+            "ghost",
+            "ghosts",
+            "hostess_count",
+            "hostile_status",
             "rapid_key",
             "tokenization_status",
+            "transportation_status",
         )
 
         for raw_key in ordinary_keys:
@@ -1623,6 +1645,7 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://example.test/public?next=/docs&mode=full&ratio=1/2",
             "https://research.example/public#/docs/section-2?mode=full",
             ("https://example.test/public?next=https://other.example/public"),
+            ("https://example.test/public?next=https%3A%2F%2Fother.example%2Fpublic"),
         )
         for locator in safe_locators:
             for factory_name, factory in self._factories():
@@ -1709,6 +1732,19 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://example.test/public#safe=1;proxyrequestHeaders=redacted",
             "https://example.test/public#safe=1,note&proxyrequestHeaders=redacted",
             "https://example.test/public#safe=1)note&proxyrequestHeaders=redacted",
+        )
+
+        for locator in locators:
+            for factory_name, factory in self._factories():
+                with self.subTest(locator=locator, factory=factory_name):
+                    with self.assertRaises(ValueError):
+                        factory({"public_reference": locator})
+
+    def test_encoded_nested_local_locators_and_file_uris_fail_closed(self) -> None:
+        locators = (
+            ("https://example.test/public?next=https%3A%2F%2Flocalhost%2Fprivate"),
+            ("https://example.test/public#next=https%3A%2F%2F10.0.0.1%2Fprivate"),
+            ("https://example.test/public?next=file%3A%2F%2F%2Fprivate%2Fsecret"),
         )
 
         for locator in locators:

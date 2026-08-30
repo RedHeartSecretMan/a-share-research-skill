@@ -12,6 +12,7 @@ from enum import Enum, auto
 from hashlib import sha256
 from ipaddress import IPv6Address, ip_address
 from typing import NamedTuple, cast
+from unicodedata import normalize
 from urllib.parse import parse_qsl, urlsplit
 from weakref import ReferenceType, ref
 
@@ -100,6 +101,8 @@ _SENSITIVE_WHOLE_LEXEMES = frozenset(
         "transport",
     }
 )
+_QUALIFIABLE_SENSITIVE_WHOLE_ATOMS = _SENSITIVE_WHOLE_LEXEMES - {"headers"}
+_UNAMBIGUOUS_QUALIFIABLE_WHOLE_ATOMS = _QUALIFIABLE_SENSITIVE_WHOLE_ATOMS - {"host"}
 _SENSITIVE_SINGLE_PATTERNS = tuple(
     re.compile(pattern)
     for pattern in (
@@ -139,7 +142,7 @@ _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("maps", "map"),
 )
 _ORDINARY_EMBEDDED_LEXEMES = re.compile(
-    r"(?:apiar(?:y|ies)|monkeys?|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?)"
+    r"(?:apiar(?:y|ies)|ghosts?|hostess(?:es)?|hostile|monkeys?|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?|transportation(?:s)?)"
 )
 _INTERPOSED_QUALIFIER_ATOMS = (
     "access",
@@ -524,6 +527,19 @@ def _normalize_semantic_plurals(value: str) -> str:
     return normalized
 
 
+def _contains_qualified_sensitive_whole(
+    value: str,
+    raw_tokens: tuple[str, ...],
+) -> bool:
+    tokens = tuple(_normalize_semantic_plurals(token) for token in raw_tokens)
+    return (
+        any(token in _QUALIFIABLE_SENSITIVE_WHOLE_ATOMS for token in tokens)
+        or any(atom in value for atom in _UNAMBIGUOUS_QUALIFIABLE_WHOLE_ATOMS)
+        or value.startswith("host")
+        or value.endswith("host")
+    )
+
+
 def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     if (
         type(value) is not str
@@ -551,9 +567,13 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     if plural_normalized in _ORDINARY_WHOLE_LEXEMES:
         return _SemanticKeyClass.ORDINARY_PUBLIC
     ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", plural_normalized)
-    if _contains_sensitive_compound(ordinary_elided, tokens) or any(
-        pattern.search(ordinary_elided) is not None
-        for pattern in _SENSITIVE_SINGLE_PATTERNS
+    if (
+        _contains_qualified_sensitive_whole(ordinary_elided, tokens)
+        or _contains_sensitive_compound(ordinary_elided, tokens)
+        or any(
+            pattern.search(ordinary_elided) is not None
+            for pattern in _SENSITIVE_SINGLE_PATTERNS
+        )
     ):
         return _SemanticKeyClass.SENSITIVE
     return _SemanticKeyClass.ORDINARY_PUBLIC
@@ -629,6 +649,14 @@ def _contains_c0_control(value: str) -> bool:
     return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
 
 
+def _decoded_parameter_value_is_safe(value: str) -> bool:
+    if _FILE_URI_PATTERN.search(value) is not None:
+        return False
+    if _SCHEME_PATTERN.search(value) is None:
+        return True
+    return not _unsafe_persisted_string(value)
+
+
 def _locator_parameters_are_safe(value: str) -> bool:
     if not value or not _percent_escapes_are_safe(value):
         return not value
@@ -645,6 +673,7 @@ def _locator_parameters_are_safe(value: str) -> bool:
     return all(
         not _contains_c0_control(name)
         and not _contains_c0_control(parameter_value)
+        and _decoded_parameter_value_is_safe(parameter_value)
         and _classify_semantic_key(name) is not _SemanticKeyClass.SENSITIVE
         for name, parameter_value in parameters
     )
@@ -655,33 +684,35 @@ def _scheme_starts_at_token_boundary(value: str, index: int) -> bool:
 
 
 def _starts_local_path_suffix(value: str, index: int) -> bool:
-    if value[index] not in _LOCAL_PATH_SUFFIX_DELIMITERS:
+    suffix = normalize("NFKC", value[index:])
+    if not suffix or suffix[0] not in _LOCAL_PATH_SUFFIX_DELIMITERS:
         return False
-    if value[index] == ":" and value[index + 1 :].startswith("//"):
+    if suffix[0] == ":" and suffix[1:].startswith("//"):
+        prefix = normalize("NFKC", value[:index])
         for scheme in ("https", "http"):
-            scheme_start = index - len(scheme)
+            scheme_start = len(prefix) - len(scheme)
             if (
                 scheme_start >= 0
-                and value[scheme_start:index].casefold() == scheme
-                and _scheme_starts_at_token_boundary(value, scheme_start)
+                and prefix[scheme_start:].casefold() == scheme
+                and _scheme_starts_at_token_boundary(prefix, scheme_start)
             ):
                 return False
-    cursor = index + 1
-    while cursor < len(value) and value[cursor] in ",;:":
+    cursor = 1
+    while cursor < len(suffix) and suffix[cursor] in ",;:":
         cursor += 1
     name_start = cursor
     while (
-        cursor < len(value)
-        and value[cursor] not in "=/\\&?#"
-        and ord(value[cursor]) > 0x20
-        and ord(value[cursor]) != 0x7F
+        cursor < len(suffix)
+        and suffix[cursor] not in "=/\\&?#"
+        and ord(suffix[cursor]) > 0x20
+        and ord(suffix[cursor]) != 0x7F
     ):
         cursor += 1
-    if cursor < len(value) and value[cursor] == "=":
+    if cursor < len(suffix) and suffix[cursor] == "=":
         cursor += 1
     else:
         cursor = name_start
-    remaining = value[cursor:]
+    remaining = suffix[cursor:]
     return (
         remaining.startswith(("/", "\\", ".."))
         or len(remaining) >= 3
