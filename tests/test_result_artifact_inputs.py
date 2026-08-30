@@ -1521,6 +1521,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "serviceendpoint",
             "webhost",
             "serverhealthinformation",
+            "passwordhash",
+            "credentialshash",
+            "archiverequesttraceheadersdigest",
         )
 
         for raw_key in sensitive_keys:
@@ -1653,6 +1656,35 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         factory(document)
 
+    def test_percent_decoded_key_uses_the_same_classifier(self) -> None:
+        for surface_marker in ("?", "#"):
+            locator = (
+                f"https://research.example/public{surface_marker}"
+                "password%68ash=redacted"
+            )
+            for factory_name, factory in self._factories():
+                with self.subTest(
+                    surface_marker=surface_marker,
+                    factory=factory_name,
+                ):
+                    with self.assertRaises(ValueError):
+                        factory({"public_reference": locator})
+
+    def test_max_item_max_key_semantic_classification_is_bounded(self) -> None:
+        cases = (
+            ("candidate", self._factories()[0][1], 9_999),
+            ("partition", self._factories()[1][1], 9_998),
+        )
+
+        for factory_name, factory, key_count in cases:
+            document = {f"{'x' * 119}{index:09d}": index for index in range(key_count)}
+            started = perf_counter()
+            prepared = factory(document)
+            elapsed = perf_counter() - started
+            with self.subTest(factory=factory_name):
+                self.assertEqual(prepared.record_count, 1)
+                self.assertLess(elapsed, 8.0)
+
 
 class ResultArtifactLocatorTests(unittest.TestCase):
     def _factories(self) -> tuple[tuple[str, PreparedFactory], ...]:
@@ -1671,6 +1703,10 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://research.example/public#/docs/section-2?mode=full",
             ("https://example.test/public?next=https://other.example/public"),
             ("https://example.test/public?next=https%3A%2F%2Fother.example%2Fpublic"),
+            (
+                "https://public.example/https%3A%2F%2Fother.example%2Fpublic"
+                "%3Fmode%3Dfull"
+            ),
             ("https://example.test/public?next=%2Fdocs"),
             ("https://example.test/public?next=%2Fdocs%2Fsection"),
         )
@@ -1854,6 +1890,18 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://public.example/%5C%5Cserver%5Cshare%5Csecret",
             "https://public.example/path=/private/secret",
             "https://public.example/path%3D%2Fprivate%2Fsecret",
+            (
+                "https://public.example/https%3A%2F%2Fother.example%2Fpublic"
+                "%3Fauthorization%3Dredacted"
+            ),
+            (
+                "https://public.example/https%3A%2F%2Fother.example%2Fpublic"
+                "%3FclientapiKeys%3Dredacted"
+            ),
+            (
+                "https://public.example/https%3A%2F%2Fother.example%2Fpublic"
+                "%23proxyrequestHeaders%3Dredacted"
+            ),
         )
 
         for locator in locators:
@@ -1861,6 +1909,27 @@ class ResultArtifactLocatorTests(unittest.TestCase):
                 with self.subTest(locator=locator, factory=factory_name):
                     with self.assertRaises(ValueError):
                         factory({"public_reference": locator})
+
+    def test_residual_percent_escapes_fail_closed_on_every_locator_surface(
+        self,
+    ) -> None:
+        residual_values = (
+            "%252Fprivate%252Fsecret",
+            "file%253A%252F%252F%252Fprivate%252Fsecret",
+            "safe%2500field",
+        )
+
+        for residual_value in residual_values:
+            locators = (
+                f"https://public.example/{residual_value}",
+                f"https://public.example/public?next={residual_value}",
+                f"https://public.example/public#next={residual_value}",
+            )
+            for locator in locators:
+                for factory_name, factory in self._factories():
+                    with self.subTest(locator=locator, factory=factory_name):
+                        with self.assertRaises(ValueError):
+                            factory({"public_reference": locator})
 
     def test_nfkc_decoded_parameter_paths_and_file_uris_fail_closed(self) -> None:
         unsafe_values = (

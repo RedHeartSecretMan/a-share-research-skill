@@ -67,7 +67,8 @@ class _SemanticKeyClass(Enum):
 class _SemanticAtomRun(NamedTuple):
     start: int
     end: int
-    atoms: tuple[str, ...]
+    atoms: frozenset[str]
+    atom_count: int
 
 
 _SAFE_WHOLE_LEXEMES = frozenset(
@@ -197,6 +198,12 @@ _SAFE_COMPOUND_WHOLE_LEXEMES = _SAFE_WHOLE_LEXEMES - {
     "server",
 }
 _ORDINARY_PARTIAL_ATOM_TOKENS = frozenset({"ghost", "ghosts"})
+_ORDINARY_SENSITIVE_PREFIX_SUFFIXES = {
+    "host": ("age", "ess", "esses", "ile"),
+    "secret": ("arial", "ariat", "ary", "ion", "ive"),
+    "token": ("isation", "iser", "ization", "izer"),
+    "transport": ("ation",),
+}
 _SEMANTIC_ATOMS = tuple(
     sorted(
         {
@@ -206,6 +213,7 @@ _SEMANTIC_ATOMS = tuple(
             "annual",
             "api",
             "application",
+            "archive",
             "artifact",
             "audit",
             "authorization",
@@ -223,6 +231,7 @@ _SEMANTIC_ATOMS = tuple(
             "envelope",
             "for",
             "header",
+            "hash",
             "host",
             "hostname",
             "http",
@@ -254,6 +263,7 @@ _SEMANTIC_ATOMS = tuple(
             "third",
             "tls",
             "token",
+            "trace",
             "transport",
             "url",
             "v2",
@@ -276,6 +286,12 @@ _SEMANTIC_ATOM_ALIASES = tuple(
         key=lambda alias: (-len(alias[0]), alias[0]),
     )
 )
+_SEMANTIC_ATOM_ALIASES_BY_INITIAL = {
+    initial: tuple(
+        alias for alias in _SEMANTIC_ATOM_ALIASES if alias[0].startswith(initial)
+    )
+    for initial in {alias[0][0] for alias in _SEMANTIC_ATOM_ALIASES}
+}
 
 
 class _PreparedValues(NamedTuple):
@@ -557,45 +573,50 @@ def _normalize_semantic_plurals(value: str) -> str:
 
 
 def _semantic_atom_runs(token: str) -> tuple[_SemanticAtomRun, ...]:
-    memo: dict[int, tuple[int, tuple[str, ...]]] = {}
+    memo: dict[int, tuple[int, frozenset[str], int]] = {}
 
-    def longest_run(start: int) -> tuple[int, tuple[str, ...]]:
+    def longest_run(start: int) -> tuple[int, frozenset[str], int]:
         cached = memo.get(start)
         if cached is not None:
             return cached
-        best: tuple[int, tuple[str, ...]] = (start, ())
-        for lexeme, atom in _SEMANTIC_ATOM_ALIASES:
+        best: tuple[int, frozenset[str], int] = (start, frozenset(), 0)
+        aliases = (
+            _SEMANTIC_ATOM_ALIASES_BY_INITIAL.get(token[start], ())
+            if start < len(token)
+            else ()
+        )
+        for lexeme, atom in aliases:
             if not token.startswith(lexeme, start):
                 continue
-            end, remainder = longest_run(start + len(lexeme))
+            end, remainder, remainder_count = longest_run(start + len(lexeme))
             if end > best[0]:
-                best = (end, (atom, *remainder))
+                best = (end, remainder | {atom}, remainder_count + 1)
         memo[start] = best
         return best
 
     runs: list[_SemanticAtomRun] = []
     for start in range(len(token)):
-        cursor, atoms = longest_run(start)
+        cursor, atoms, atom_count = longest_run(start)
         if atoms:
-            runs.append(_SemanticAtomRun(start, cursor, atoms))
+            runs.append(_SemanticAtomRun(start, cursor, atoms, atom_count))
     return tuple(runs)
 
 
 def _semantic_atoms_are_sensitive(
-    atoms: tuple[str, ...],
+    atoms: frozenset[str],
     *,
+    atom_count: int,
     complete_token: bool,
 ) -> bool:
-    atom_set = frozenset(atoms)
     if any(
-        atom_set.intersection(first_atoms) and atom_set.intersection(second_atoms)
+        atoms.intersection(first_atoms) and atoms.intersection(second_atoms)
         for first_atoms, second_atoms in _SENSITIVE_COMPOUND_ATOMS
     ):
         return True
-    if complete_token and atom_set.intersection(_SENSITIVE_SINGLE_ATOMS):
+    if complete_token and atoms.intersection(_SENSITIVE_SINGLE_ATOMS):
         return True
-    return len(atoms) > 1 and bool(
-        atom_set.intersection(_SENSITIVE_SINGLE_ATOMS | _QUALIFIABLE_WHOLE_ATOMS)
+    return atom_count > 1 and bool(
+        atoms.intersection(_SENSITIVE_SINGLE_ATOMS | _QUALIFIABLE_WHOLE_ATOMS)
     )
 
 
@@ -613,6 +634,15 @@ def _edge_spanning_atoms_are_sensitive(
         _SENSITIVE_SINGLE_ATOMS
     ):
         return True
+    for run in runs:
+        if run.start != 0:
+            continue
+        for atom in run.atoms.intersection(_SENSITIVE_SINGLE_ATOMS):
+            ordinary_suffixes = _ORDINARY_SENSITIVE_PREFIX_SUFFIXES.get(atom, ())
+            if not any(
+                token[run.end :].startswith(suffix) for suffix in ordinary_suffixes
+            ):
+                return True
     return any(
         (start_atoms.intersection(first_atoms) and end_atoms.intersection(second_atoms))
         or (
@@ -623,33 +653,43 @@ def _edge_spanning_atoms_are_sensitive(
     )
 
 
-def _contains_sensitive_semantic_atoms(raw_tokens: tuple[str, ...]) -> bool:
-    complete_atoms: list[str] = []
+def _contains_sensitive_semantic_atoms(
+    raw_tokens: tuple[str, ...],
+    atom_runs_by_token: Mapping[str, tuple[_SemanticAtomRun, ...]],
+) -> bool:
+    complete_atoms: set[str] = set()
+    complete_atom_count = 0
     for token in raw_tokens:
-        runs = _semantic_atom_runs(token)
+        runs = atom_runs_by_token[token]
         if _edge_spanning_atoms_are_sensitive(token, runs):
             return True
         for run in runs:
             complete_token = run.start == 0 and run.end == len(token)
             if _semantic_atoms_are_sensitive(
                 run.atoms,
+                atom_count=run.atom_count,
                 complete_token=complete_token,
             ):
                 return True
             if complete_token:
-                complete_atoms.extend(run.atoms)
+                complete_atoms.update(run.atoms)
+                complete_atom_count += run.atom_count
     return _semantic_atoms_are_sensitive(
-        tuple(complete_atoms),
+        frozenset(complete_atoms),
+        atom_count=complete_atom_count,
         complete_token=True,
     )
 
 
-def _contains_qualified_safe_compound(value: str) -> bool:
-    for run in _semantic_atom_runs(value):
+def _contains_qualified_safe_compound(
+    value: str,
+    runs: tuple[_SemanticAtomRun, ...],
+) -> bool:
+    for run in runs:
         if (
             run.start == 0
             and run.end == len(value)
-            and len(run.atoms) > 1
+            and run.atom_count > 1
             and _SAFE_COMPOUND_WHOLE_LEXEMES.intersection(run.atoms)
         ):
             return True
@@ -682,9 +722,13 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
         return _SemanticKeyClass.SAFE_WHOLE_LEXEME
     if plural_normalized in _ORDINARY_WHOLE_LEXEMES:
         return _SemanticKeyClass.ORDINARY_PUBLIC
+    atom_runs_by_token = {
+        token: _semantic_atom_runs(token) for token in {*tokens, normalized}
+    }
     if _contains_qualified_safe_compound(
-        normalized
-    ) or _contains_sensitive_semantic_atoms(tokens):
+        normalized,
+        atom_runs_by_token[normalized],
+    ) or _contains_sensitive_semantic_atoms(tokens, atom_runs_by_token):
         return _SemanticKeyClass.SENSITIVE
     return _SemanticKeyClass.ORDINARY_PUBLIC
 
@@ -759,6 +803,23 @@ def _contains_c0_control(value: str) -> bool:
     return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
 
 
+def _closed_percent_decode(value: str) -> str | None:
+    decoded = value
+    for _ in range(MAX_PUBLIC_DATA_DEPTH + 1):
+        if "%" not in decoded:
+            return decoded
+        if not _percent_escapes_are_safe(decoded):
+            return None
+        try:
+            next_decoded = unquote(decoded, encoding="utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return None
+        if next_decoded == decoded or _contains_c0_control(next_decoded):
+            return None
+        decoded = next_decoded
+    return None
+
+
 def _decoded_parameter_value_is_safe(
     value: str,
     *,
@@ -797,14 +858,19 @@ def _decoded_parameter_is_safe(
     nested_locators: list[tuple[str, int]],
     depth: int,
 ) -> bool:
-    normalized_name = normalize("NFKC", name)
-    normalized_value = normalize("NFKC", value)
+    closed_name = _closed_percent_decode(name)
+    closed_value = _closed_percent_decode(value)
+    if closed_name is None or closed_value is None:
+        return False
+    normalized_name = normalize("NFKC", closed_name)
+    normalized_value = normalize("NFKC", closed_value)
     return (
         not _contains_c0_control(normalized_name)
         and not _contains_c0_control(normalized_value)
         and _decoded_parameter_path_is_safe(normalized_name)
         and _decoded_parameter_path_is_safe(normalized_value)
         and _classify_semantic_key(name) is not _SemanticKeyClass.SENSITIVE
+        and _classify_semantic_key(closed_name) is not _SemanticKeyClass.SENSITIVE
         and _decoded_parameter_value_is_safe(
             normalized_name,
             nested_locators=nested_locators,
@@ -980,13 +1046,10 @@ def _decoded_locator_path_is_safe(
     nested_locators: list[tuple[str, int]],
     depth: int,
 ) -> bool:
-    try:
-        visible = normalize(
-            "NFKC",
-            unquote(path, encoding="utf-8", errors="strict"),
-        )
-    except UnicodeDecodeError:
+    decoded_path = _closed_percent_decode(path)
+    if decoded_path is None:
         return False
+    visible = normalize("NFKC", decoded_path)
     if not visible:
         return True
     if visible.startswith("//") or _locator_has_local_path_suffix(visible, "", ""):
@@ -1015,6 +1078,10 @@ def _decoded_locator_path_is_safe(
             )
         except ValueError:
             return False
+    if visible != path:
+        if depth >= MAX_PUBLIC_DATA_DEPTH:
+            return False
+        nested_locators.append((body, depth + 1))
     return True
 
 
