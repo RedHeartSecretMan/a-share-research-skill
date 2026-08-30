@@ -825,6 +825,10 @@ def load_market_foundation_qualification_fixtures(
             fixture.get("observed_empty"), "qualification empty fixture"
         )
         rule = _MARKET_FOUNDATION_NORMALIZATION_RULES[operation_id]
+        observed_empty_row_count = _strict_integer(
+            observed_empty.get("row_count"),
+            "qualification empty fixture row count",
+        )
         if capability_id == "whole_market_turnover":
             if (
                 set(observed_empty)
@@ -838,7 +842,7 @@ def load_market_foundation_qualification_fixtures(
                     "normalized_destinations",
                 }
                 or observed_empty.get("query_complete") is not True
-                or observed_empty.get("row_count") != rule.observed_empty_row_count
+                or observed_empty_row_count != rule.observed_empty_row_count
                 or observed_empty.get("state") != "observed_empty"
             ):
                 raise ValueError("qualification empty fixture is invalid")
@@ -885,7 +889,7 @@ def load_market_foundation_qualification_fixtures(
                     "published_at",
                 }
                 or observed_empty.get("query_complete") is not True
-                or observed_empty.get("row_count") != rule.observed_empty_row_count
+                or observed_empty_row_count != rule.observed_empty_row_count
                 or observed_empty.get("state") != "observed_empty"
             ):
                 raise ValueError("qualification empty fixture is invalid")
@@ -2564,6 +2568,10 @@ def _operation_application(value: object, label: str) -> OperationOwner:
 
 
 def _strict_issue(value: object) -> int:
+    return _strict_integer(value, "operation gap routing")
+
+
+def _strict_integer(value: object, label: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError("operation gap routing is invalid")
+        raise ValueError(f"{label} is invalid")
     return value

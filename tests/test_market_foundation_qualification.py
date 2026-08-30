@@ -671,13 +671,7 @@ class MarketFoundationQualificationTests(unittest.TestCase):
     def test_issue_114_installed_fixtures_prove_exact_normalization_and_states(
         self,
     ) -> None:
-        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
-        qualifications = load_operation_qualification_manifest(
-            payload,
-            expected_producer_operation_ids=tuple(
-                item["producer_operation_id"] for item in payload["operations"]
-            ),
-        )
+        qualifications = self._load_qualifications()
         fixtures = load_market_foundation_qualification_fixtures(
             json.loads(FIXTURE_PATH.read_text(encoding="utf-8")),
             qualifications,
@@ -808,6 +802,30 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                         qualifications,
                     )
 
+    def test_issue_114_empty_row_count_requires_strict_integer(self) -> None:
+        qualifications = self._load_qualifications()
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        for fixture in fixtures["fixtures"]:
+            operation_id = fixture["producer_operation_id"]
+            expected = fixture["observed_empty"]["row_count"]
+            malformed_values = [float(expected)]
+            if expected in {0, 1}:
+                malformed_values.append(bool(expected))
+            for malformed in malformed_values:
+                mutation = deepcopy(fixtures)
+                mutated_fixture = next(
+                    item
+                    for item in mutation["fixtures"]
+                    if item["producer_operation_id"] == operation_id
+                )
+                mutated_fixture["observed_empty"]["row_count"] = malformed
+                with self.subTest(operation=operation_id, row_count=malformed):
+                    with self.assertRaisesRegex(ValueError, "empty fixture"):
+                        load_market_foundation_qualification_fixtures(
+                            mutation,
+                            qualifications,
+                        )
+
     def test_issue_114_publication_time_is_aware_and_not_before_report_date(
         self,
     ) -> None:
@@ -929,13 +947,7 @@ class MarketFoundationQualificationTests(unittest.TestCase):
         )
 
     def test_issue_114_all_six_owners_reject_nonfinite_source_values(self) -> None:
-        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
-        qualifications = load_operation_qualification_manifest(
-            payload,
-            expected_producer_operation_ids=tuple(
-                item["producer_operation_id"] for item in payload["operations"]
-            ),
-        )
+        qualifications = self._load_qualifications()
         installed_fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
         for operation_id in {producer for _, producer in TARGET_APPLICATIONS}:
@@ -958,12 +970,7 @@ class MarketFoundationQualificationTests(unittest.TestCase):
     def test_issue_114_matrix_projects_six_plan_obligations_from_authority(
         self,
     ) -> None:
-        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
-        all_ids = tuple(item["producer_operation_id"] for item in payload["operations"])
-        qualifications = load_operation_qualification_manifest(
-            payload,
-            expected_producer_operation_ids=all_ids,
-        )
+        qualifications = self._load_qualifications()
         target_qualifications = tuple(
             item
             for item in qualifications
