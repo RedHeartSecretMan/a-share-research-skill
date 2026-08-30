@@ -90,20 +90,49 @@ _SENSITIVE_WHOLE_LEXEMES = frozenset(
         "transport",
     }
 )
-_SENSITIVE_SEMANTIC_PATTERNS = tuple(
+_SENSITIVE_SINGLE_PATTERNS = tuple(
     re.compile(pattern)
     for pattern in (
-        r"api(?:s)?key(?:s)?",
         r"authorizations?",
         r"cookies?",
         r"credentials?",
         r"passwords?",
-        r"rawpayloads?",
-        r"request(?:s)?header(?:s)?(?:map(?:s)?)?",
         r"secrets?",
-        r"servers?(?:address(?:es)?|details?|informations?|infos?|ips?|metadata|names?|ports?|urls?)",
         r"tokens?",
     )
+)
+_ORDINARY_EMBEDDED_LEXEMES = re.compile(
+    r"(?:secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz](?:ation(?:s)?|e(?:d|r(?:s)?|s)?|ing))"
+)
+_SENSITIVE_COMPOUND_ATOMS: tuple[
+    tuple[tuple[str, ...], tuple[str, ...]],
+    ...,
+] = (
+    (("api", "apis"), ("key", "keys")),
+    (("raw",), ("payload", "payloads")),
+    (("request", "requests"), ("header", "headers")),
+    (
+        ("server", "servers"),
+        (
+            "address",
+            "addresses",
+            "detail",
+            "details",
+            "info",
+            "infos",
+            "information",
+            "informations",
+            "ip",
+            "ips",
+            "metadata",
+            "name",
+            "names",
+            "port",
+            "ports",
+            "url",
+            "urls",
+        ),
+    ),
 )
 
 
@@ -368,14 +397,44 @@ def _detached_json_value(value: object) -> object:
     return snapshot(value, 0)[0]
 
 
-def _canonical_semantic_key(value: str) -> str:
+def _semantic_key_tokens(value: str) -> tuple[str, ...]:
     acronym_separated = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", value)
     camel_separated = re.sub(
         r"(?<=[a-z0-9])(?=[A-Z])",
         " ",
         acronym_separated,
     )
-    return "".join(re.findall(r"[a-z0-9]+", camel_separated.casefold()))
+    return tuple(re.findall(r"[a-z0-9]+", camel_separated.casefold()))
+
+
+def _same_token_contains_ordered_atoms(
+    token: str,
+    start_atoms: tuple[str, ...],
+    end_atoms: tuple[str, ...],
+) -> bool:
+    for start_atom in start_atoms:
+        search_from = 0
+        while (start := token.find(start_atom, search_from)) >= 0:
+            after_start = start + len(start_atom)
+            if any(token.find(end_atom, after_start) >= 0 for end_atom in end_atoms):
+                return True
+            search_from = start + 1
+    return False
+
+
+def _contains_sensitive_compound(tokens: tuple[str, ...]) -> bool:
+    for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS:
+        if any(
+            _same_token_contains_ordered_atoms(token, start_atoms, end_atoms)
+            for token in tokens
+        ):
+            return True
+        for index, token in enumerate(tokens[:-1]):
+            if not token.endswith(start_atoms):
+                continue
+            if any(later.startswith(end_atoms) for later in tokens[index + 1 :]):
+                return True
+    return False
 
 
 def _classify_semantic_key(value: str) -> _SemanticKeyClass:
@@ -387,14 +446,20 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
         or value.startswith("_")
     ):
         return _SemanticKeyClass.SENSITIVE
-    normalized = _canonical_semantic_key(value)
+    tokens = _semantic_key_tokens(value)
+    normalized = "".join(tokens)
     if not normalized:
         return _SemanticKeyClass.SENSITIVE
     if normalized in _SAFE_WHOLE_LEXEMES:
         return _SemanticKeyClass.SAFE_WHOLE_LEXEME
-    if normalized in _SENSITIVE_WHOLE_LEXEMES or any(
-        pattern.search(normalized) is not None
-        for pattern in _SENSITIVE_SEMANTIC_PATTERNS
+    ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", normalized)
+    if (
+        normalized in _SENSITIVE_WHOLE_LEXEMES
+        or _contains_sensitive_compound(tokens)
+        or any(
+            pattern.search(ordinary_elided) is not None
+            for pattern in _SENSITIVE_SINGLE_PATTERNS
+        )
     ):
         return _SemanticKeyClass.SENSITIVE
     return _SemanticKeyClass.ORDINARY_PUBLIC
@@ -469,7 +534,7 @@ def _contains_c0_control(value: str) -> bool:
     return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
 
 
-def _parameter_names_are_safe(value: str) -> bool:
+def _locator_parameters_are_safe(value: str) -> bool:
     if not value or not _percent_escapes_are_safe(value):
         return not value
     try:
@@ -555,6 +620,11 @@ def _validate_public_locator(token: str, authority: str) -> None:
             pass
         else:
             raise ValueError("result artifact persisted document is invalid") from None
+    if authority.startswith("["):
+        try:
+            ip_address(normalized_hostname)
+        except ValueError:
+            raise ValueError("result artifact persisted document is invalid") from None
     if not _public_authority_hostname(normalized_hostname):
         raise ValueError("result artifact persisted document is invalid")
     if any(
@@ -562,15 +632,19 @@ def _validate_public_locator(token: str, authority: str) -> None:
         for part in (parsed.path, parsed.query, parsed.fragment)
     ):
         raise ValueError("result artifact persisted document is invalid")
-    if not _parameter_names_are_safe(parsed.query) or not _parameter_names_are_safe(
-        parsed.fragment
-    ):
+    if not _locator_parameters_are_safe(
+        parsed.query
+    ) or not _locator_parameters_are_safe(parsed.fragment):
         raise ValueError("result artifact persisted document is invalid")
 
 
 def _public_locator_spans(value: str) -> tuple[tuple[int, int], ...]:
     spans: list[tuple[int, int]] = []
     for match in _SCHEME_PATTERN.finditer(value):
+        if match.start() > 0 and (
+            value[match.start() - 1].isalnum() or value[match.start() - 1] in "+-."
+        ):
+            continue
         token_end, token, authority = _locator_token(value, match.start(), match.end())
         _validate_public_locator(token, authority)
         spans.append((match.start(), token_end))

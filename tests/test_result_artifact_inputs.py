@@ -1374,7 +1374,7 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             factory(document)
 
-    def test_plural_server_compounds_reject_on_every_surface_and_factory(
+    def test_plural_sensitive_atoms_reject_on_every_surface_and_factory(
         self,
     ) -> None:
         plural_server_keys = (
@@ -1401,6 +1401,59 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
                     ):
                         with self.assertRaises(ValueError):
                             factory(document)
+
+    def test_interposed_qualifiers_do_not_split_sensitive_compounds(self) -> None:
+        sensitive_keys = (
+            "requestHTTPHeaders",
+            "requestTLSResponseHeaders",
+            "clientAPIAccessKeys",
+            "clientAPIRotationBackupKeys",
+            "providerRawHTTPPayload",
+            "providerRawNormalizedBackupPayload",
+            "serverRuntimeInformation",
+            "serverHTTPBackupAddress",
+            "requesthttpheaders",
+            "clientapiaccesskeys",
+            "providerrawhttppayload",
+            "serverruntimeinformation",
+        )
+
+        for raw_key in sensitive_keys:
+            for surface in ("metadata", "query", "fragment"):
+                document = self._surface_document(surface, raw_key)
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        raw_key=raw_key,
+                        surface=surface,
+                        factory=factory_name,
+                    ):
+                        with self.assertRaises(ValueError):
+                            factory(document)
+
+    def test_ordinary_words_are_not_rejected_for_sensitive_substrings(self) -> None:
+        ordinary_keys = (
+            "secretariat_status",
+            "secretary_name",
+            "tokenization_method",
+            "tokenizer_version",
+            "tokenized_word_count",
+            "monkey_population",
+            "headerline_count",
+            "observer_information_status",
+            "application_key_rotation_status",
+        )
+
+        for raw_key in ordinary_keys:
+            for surface in ("metadata", "query", "fragment"):
+                document = self._surface_document(surface, raw_key)
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        raw_key=raw_key,
+                        surface=surface,
+                        factory=factory_name,
+                    ):
+                        prepared = factory(document)
+                        self.assertIn(raw_key.encode(), prepared.content_bytes)
 
     def test_exact_safe_whole_lexemes_do_not_exempt_sensitive_compounds(
         self,
@@ -1433,6 +1486,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "apiKeys",
             "credentialRotation",
             "passwordStatus",
+            "backup_wordtoken_count",
+            "observer_information_status_backup",
+            "application_key_rotation_status_apiKeys",
         ):
             for surface in ("metadata", "query", "fragment"):
                 document = self._surface_document(surface, raw_key)
@@ -1513,6 +1569,23 @@ class ResultArtifactLocatorTests(unittest.TestCase):
                     factory=factory_name,
                     expected="rejected",
                 ):
+                    with self.assertRaises(ValueError):
+                        factory({"public_reference": locator})
+
+    def test_locator_scheme_and_bracketed_host_cover_the_complete_raw_token(
+        self,
+    ) -> None:
+        invalid_locators = (
+            "https://[v1.fe]/public",
+            "https://[vF.example]/public",
+            "xhttps://example.test/public",
+            "nothttps://example.test/public",
+            "ftp+https://example.test/public",
+        )
+
+        for locator in invalid_locators:
+            for factory_name, factory in self._factories():
+                with self.subTest(locator=locator, factory=factory_name):
                     with self.assertRaises(ValueError):
                         factory({"public_reference": locator})
 
