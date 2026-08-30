@@ -38,7 +38,7 @@ _SCHEME_PATTERN = re.compile(r"(?i:https?://)")
 _FILE_URI_PATTERN = re.compile(r"(?i:file://)")
 _UNC_PATH_PATTERN = re.compile(r"\\{2,}[^\\/\s]+\\[^\\/\s]+")
 _AUTHORITY_TERMINATORS = frozenset("/?#")
-_LOCATOR_TERMINATORS = frozenset(" <>\"'|\\^`{},;()")
+_INVALID_LOCATOR_CHARACTERS = frozenset('<>"|\\^`{}')
 _NON_PUBLIC_DNS_SUFFIXES = frozenset(
     {
         "home",
@@ -78,6 +78,15 @@ _SAFE_WHOLE_LEXEMES = frozenset(
         "wordtokens",
     }
 )
+_ORDINARY_WHOLE_LEXEMES = frozenset(
+    {
+        "capitalkey",
+        "tokenisationmethod",
+        "tokeniserversion",
+        "tokenizationmethod",
+        "tokenizerversion",
+    }
+)
 _SENSITIVE_WHOLE_LEXEMES = frozenset(
     {
         "baseurl",
@@ -101,9 +110,7 @@ _SENSITIVE_SINGLE_PATTERNS = tuple(
         r"tokens?",
     )
 )
-_ORDINARY_EMBEDDED_LEXEMES = re.compile(
-    r"(?:secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz](?:ation(?:s)?|e(?:d|r(?:s)?|s)?|ing))"
-)
+_ORDINARY_EMBEDDED_LEXEMES = re.compile(r"secretar(?:iat(?:s)?|y|ies|ial)")
 _SENSITIVE_COMPOUND_ATOMS: tuple[
     tuple[tuple[str, ...], tuple[str, ...]],
     ...,
@@ -407,34 +414,26 @@ def _semantic_key_tokens(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", camel_separated.casefold()))
 
 
-def _same_token_contains_ordered_atoms(
-    token: str,
+def _contains_ordered_atoms(
+    value: str,
     start_atoms: tuple[str, ...],
     end_atoms: tuple[str, ...],
 ) -> bool:
     for start_atom in start_atoms:
         search_from = 0
-        while (start := token.find(start_atom, search_from)) >= 0:
+        while (start := value.find(start_atom, search_from)) >= 0:
             after_start = start + len(start_atom)
-            if any(token.find(end_atom, after_start) >= 0 for end_atom in end_atoms):
+            if any(value.find(end_atom, after_start) >= 0 for end_atom in end_atoms):
                 return True
             search_from = start + 1
     return False
 
 
-def _contains_sensitive_compound(tokens: tuple[str, ...]) -> bool:
-    for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS:
-        if any(
-            _same_token_contains_ordered_atoms(token, start_atoms, end_atoms)
-            for token in tokens
-        ):
-            return True
-        for index, token in enumerate(tokens[:-1]):
-            if not token.endswith(start_atoms):
-                continue
-            if any(later.startswith(end_atoms) for later in tokens[index + 1 :]):
-                return True
-    return False
+def _contains_sensitive_compound(value: str) -> bool:
+    return any(
+        _contains_ordered_atoms(value, start_atoms, end_atoms)
+        for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS
+    )
 
 
 def _classify_semantic_key(value: str) -> _SemanticKeyClass:
@@ -452,10 +451,12 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
         return _SemanticKeyClass.SENSITIVE
     if normalized in _SAFE_WHOLE_LEXEMES:
         return _SemanticKeyClass.SAFE_WHOLE_LEXEME
+    if normalized in _ORDINARY_WHOLE_LEXEMES:
+        return _SemanticKeyClass.ORDINARY_PUBLIC
     ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", normalized)
     if (
         normalized in _SENSITIVE_WHOLE_LEXEMES
-        or _contains_sensitive_compound(tokens)
+        or _contains_sensitive_compound(normalized)
         or any(
             pattern.search(ordinary_elided) is not None
             for pattern in _SENSITIVE_SINGLE_PATTERNS
@@ -539,7 +540,7 @@ def _locator_parameters_are_safe(value: str) -> bool:
         return not value
     try:
         parameters = parse_qsl(
-            value,
+            value.replace(";", "&"),
             keep_blank_values=True,
             max_num_fields=MAX_PUBLIC_DATA_ITEMS,
             encoding="utf-8",
@@ -552,6 +553,37 @@ def _locator_parameters_are_safe(value: str) -> bool:
         and not _contains_c0_control(parameter_value)
         and _classify_semantic_key(name) is not _SemanticKeyClass.SENSITIVE
         for name, parameter_value in parameters
+    )
+
+
+def _starts_local_path_suffix(value: str, index: int) -> bool:
+    if value[index] not in "),;":
+        return False
+    cursor = index + 1
+    if cursor < len(value) and value[cursor] in ",;":
+        cursor += 1
+    name_start = cursor
+    if cursor < len(value) and (
+        value[cursor].isascii() and (value[cursor].isalpha() or value[cursor] == "_")
+    ):
+        cursor += 1
+        while cursor < len(value) and (
+            value[cursor].isascii()
+            and (value[cursor].isalnum() or value[cursor] == "_")
+        ):
+            cursor += 1
+        if cursor < len(value) and value[cursor] == "=":
+            cursor += 1
+        else:
+            cursor = name_start
+    remaining = value[cursor:]
+    return (
+        remaining.startswith(("/", "\\", ".."))
+        or len(remaining) >= 3
+        and remaining[0].isascii()
+        and remaining[0].isalpha()
+        and remaining[1] == ":"
+        and remaining[2] in "/\\"
     )
 
 
@@ -570,12 +602,14 @@ def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, s
         token_end += 1
         while (
             token_end < len(value)
-            and value[token_end] not in _LOCATOR_TERMINATORS
+            and value[token_end] not in _INVALID_LOCATOR_CHARACTERS
             and ord(value[token_end]) > 0x20
             and ord(value[token_end]) != 0x7F
         ):
+            if _starts_local_path_suffix(value, token_end):
+                raise ValueError("result artifact persisted document is invalid")
             token_end += 1
-    if token_end < len(value) and value[token_end] == "\\":
+    if token_end < len(value) and value[token_end] in _INVALID_LOCATOR_CHARACTERS:
         raise ValueError("result artifact persisted document is invalid")
     return token_end, value[start:token_end], authority
 

@@ -1416,6 +1416,10 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "clientapiaccesskeys",
             "providerrawhttppayload",
             "serverruntimeinformation",
+            "server-httpbackupaddress",
+            "request-httpbackupheaders",
+            "client-api-rotationbackupkeys",
+            "provider-raw-httpbackuppayload",
         )
 
         for raw_key in sensitive_keys:
@@ -1441,6 +1445,8 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "headerline_count",
             "observer_information_status",
             "application_key_rotation_status",
+            "capital_key",
+            "capitalkey",
         )
 
         for raw_key in ordinary_keys:
@@ -1454,6 +1460,47 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
                     ):
                         prepared = factory(document)
                         self.assertIn(raw_key.encode(), prepared.content_bytes)
+
+    def test_punctuation_camel_and_concatenation_share_one_canonical_result(
+        self,
+    ) -> None:
+        ordinary_equivalents = (
+            "capitalkey",
+            "capital_key",
+            "capital-key",
+            "capitalKey",
+        )
+        sensitive_equivalents = (
+            "serverhttpbackupaddress",
+            "server_http_backup_address",
+            "server-httpBackupAddress",
+            "serverHTTPBackupAddress",
+        )
+
+        for raw_key in ordinary_equivalents:
+            for surface in ("metadata", "query", "fragment"):
+                document = self._surface_document(surface, raw_key)
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        raw_key=raw_key,
+                        surface=surface,
+                        factory=factory_name,
+                        expected="ordinary",
+                    ):
+                        factory(document)
+
+        for raw_key in sensitive_equivalents:
+            for surface in ("metadata", "query", "fragment"):
+                document = self._surface_document(surface, raw_key)
+                for factory_name, factory in self._factories():
+                    with self.subTest(
+                        raw_key=raw_key,
+                        surface=surface,
+                        factory=factory_name,
+                        expected="sensitive",
+                    ):
+                        with self.assertRaises(ValueError):
+                            factory(document)
 
     def test_exact_safe_whole_lexemes_do_not_exempt_sensitive_compounds(
         self,
@@ -1489,6 +1536,8 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "backup_wordtoken_count",
             "observer_information_status_backup",
             "application_key_rotation_status_apiKeys",
+            "backup_tokenized_word_count",
+            "tokenized_word_count_backup",
         ):
             for surface in ("metadata", "query", "fragment"):
                 document = self._surface_document(surface, raw_key)
@@ -1584,6 +1633,26 @@ class ResultArtifactLocatorTests(unittest.TestCase):
         )
 
         for locator in invalid_locators:
+            for factory_name, factory in self._factories():
+                with self.subTest(locator=locator, factory=factory_name):
+                    with self.assertRaises(ValueError):
+                        factory({"public_reference": locator})
+
+    def test_query_fragment_punctuation_cannot_truncate_sensitive_parameters(
+        self,
+    ) -> None:
+        locators = (
+            "https://example.test/public?safe=1;note&clientapiKeys=redacted",
+            "https://example.test/public?safe=1;clientapiKeys=redacted",
+            "https://example.test/public?safe=1,note&clientapiKeys=redacted",
+            "https://example.test/public?safe=1)note&clientapiKeys=redacted",
+            "https://example.test/public#safe=1;note&proxyrequestHeaders=redacted",
+            "https://example.test/public#safe=1;proxyrequestHeaders=redacted",
+            "https://example.test/public#safe=1,note&proxyrequestHeaders=redacted",
+            "https://example.test/public#safe=1)note&proxyrequestHeaders=redacted",
+        )
+
+        for locator in locators:
             for factory_name, factory in self._factories():
                 with self.subTest(locator=locator, factory=factory_name):
                     with self.assertRaises(ValueError):
