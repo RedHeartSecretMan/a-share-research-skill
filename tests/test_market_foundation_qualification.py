@@ -528,6 +528,28 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                 "request_selector"
             ]["resource_url"] = unsafe_url
             mutations.append(malformed)
+        coherent_provider_forgery = deepcopy(payload)
+        forged_contract = coherent_provider_forgery["operations"][target_index][
+            "source_contract"
+        ]
+        forged_contract["provider"].update(
+            {
+                "id": "sse",
+                "organization": "Shanghai Stock Exchange",
+                "documentation_url": "https://www.sse.com.cn/market/stockdata/overview/day/",
+                "terms_url": "https://www.sse.com.cn/home/legal/",
+            }
+        )
+        forged_contract["scope"]["exchange"] = "SSE"
+        forged_contract["request_selector"]["resource_url"] = (
+            "https://www.sse.com.cn/market/stockdata/overview/day/"
+        )
+        mutations.append(coherent_provider_forgery)
+        same_host_unreviewed_path = deepcopy(payload)
+        same_host_unreviewed_path["operations"][target_index]["source_contract"][
+            "request_selector"
+        ]["resource_url"] = "https://www.bse.cn/unreviewed-resource"
+        mutations.append(same_host_unreviewed_path)
 
         for mutation in mutations:
             with self.subTest(
@@ -538,6 +560,28 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                         mutation,
                         expected_producer_operation_ids=expected_ids,
                         expected_operation_applications=expected_applications,
+                    )
+
+    def test_issue_114_nested_sensitive_source_policies_fail_closed(self) -> None:
+        payload = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        expected_ids = tuple(
+            item["producer_operation_id"] for item in payload["operations"]
+        )
+        target_index = next(
+            index
+            for index, item in enumerate(payload["operations"])
+            if item["producer_operation_id"] == "sse_market_margin@1"
+        )
+        for policy_name in ("dependency_policy", "license_policy"):
+            mutation = deepcopy(payload)
+            mutation["operations"][target_index]["source_contract"][policy_name][
+                "access_token"
+            ] = "redacted"
+            with self.subTest(policy=policy_name):
+                with self.assertRaises(ValueError):
+                    load_operation_qualification_manifest(
+                        mutation,
+                        expected_producer_operation_ids=expected_ids,
                     )
 
     def test_issue_114_sse_destination_split_fails_closed(self) -> None:
@@ -551,25 +595,13 @@ class MarketFoundationQualificationTests(unittest.TestCase):
             "observations.payload.observation.metrics.turnover_partition_03_CNY"
         )
         sse_contract["field_destinations"]["TRADE_AMT_03"] = split_destination
-        qualifications = load_operation_qualification_manifest(
-            payload,
-            expected_producer_operation_ids=tuple(
-                item["producer_operation_id"] for item in payload["operations"]
-            ),
-        )
-        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
-        sse_fixture = next(
-            item
-            for item in fixtures["fixtures"]
-            if item["producer_operation_id"] == "sse_a_share_turnover@1"
-        )
-        sse_fixture["complete"]["normalized_destinations"] = {
-            "observations.payload.observation.metrics.turnover_amount_CNY": "3000000000",
-            split_destination: "500000000",
-        }
-
         with self.assertRaisesRegex(ValueError, "authority drifted"):
-            load_market_foundation_qualification_fixtures(fixtures, qualifications)
+            load_operation_qualification_manifest(
+                payload,
+                expected_producer_operation_ids=tuple(
+                    item["producer_operation_id"] for item in payload["operations"]
+                ),
+            )
 
     def test_issue_114_loader_works_from_a_copied_installed_skill(self) -> None:
         payload = QUALIFICATION_PATH.read_text(encoding="utf-8")
@@ -629,9 +661,31 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                 observed_empty = fixture["observed_empty"]
                 unavailable = fixture["unavailable"]
                 self.assertTrue(complete["query_complete"])
+                if fixture["capability_id"] == "whole_market_turnover":
+                    self.assertTrue(observed_empty["query_complete"])
+                    self.assertEqual(observed_empty["state"], "observed_empty")
+                    self.assertTrue(
+                        all(
+                            Decimal(value).is_zero()
+                            for value in observed_empty["source_fields"].values()
+                        )
+                    )
+                    self.assertTrue(
+                        all(
+                            Decimal(value).is_zero()
+                            for value in observed_empty[
+                                "normalized_destinations"
+                            ].values()
+                        )
+                    )
+                else:
+                    self.assertTrue(observed_empty["query_complete"])
+                    self.assertEqual(observed_empty["row_count"], 0)
+                    self.assertEqual(observed_empty["state"], "observed_empty")
+                self.assertEqual(observed_empty["report_date"], "2026-08-26")
                 self.assertEqual(
-                    observed_empty,
-                    {"query_complete": True, "row_count": 0, "state": "observed_empty"},
+                    observed_empty["published_at"],
+                    "2026-08-26T18:00:00+08:00",
                 )
                 self.assertFalse(unavailable["query_complete"])
                 self.assertEqual(unavailable["state"], "unavailable")
@@ -672,6 +726,97 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                 "quantity_scale": "official_share_values_retained_as_exact_decimal_shares",
             },
         )
+
+    def test_issue_114_turnover_empty_requires_explicit_zero_partitions(self) -> None:
+        qualifications = self._load_qualifications()
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        for operation_id in (
+            "bse_a_share_turnover@1",
+            "sse_a_share_turnover@1",
+            "szse_a_share_turnover@1",
+        ):
+            mutation = deepcopy(fixtures)
+            fixture = next(
+                item
+                for item in mutation["fixtures"]
+                if item["producer_operation_id"] == operation_id
+            )
+            fixture["observed_empty"] = {
+                "query_complete": True,
+                "row_count": 0,
+                "state": "observed_empty",
+            }
+            with self.subTest(operation=operation_id):
+                with self.assertRaisesRegex(ValueError, "empty fixture"):
+                    load_market_foundation_qualification_fixtures(
+                        mutation,
+                        qualifications,
+                    )
+            nonzero = deepcopy(fixtures)
+            nonzero_fixture = next(
+                item
+                for item in nonzero["fixtures"]
+                if item["producer_operation_id"] == operation_id
+            )
+            source_field = next(
+                iter(nonzero_fixture["observed_empty"]["source_fields"])
+            )
+            destination = next(
+                iter(nonzero_fixture["observed_empty"]["normalized_destinations"])
+            )
+            nonzero_fixture["observed_empty"]["source_fields"][source_field] = "1"
+            scale = 8 if operation_id.startswith("sse_") else 4
+            nonzero_fixture["observed_empty"]["normalized_destinations"][
+                destination
+            ] = f"1e{scale}"
+            with self.subTest(operation=operation_id, nonzero=True):
+                with self.assertRaisesRegex(ValueError, "empty fixture"):
+                    load_market_foundation_qualification_fixtures(
+                        nonzero,
+                        qualifications,
+                    )
+
+    def test_issue_114_publication_time_is_aware_and_not_before_report_date(
+        self,
+    ) -> None:
+        qualifications = self._load_qualifications()
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        for fixture_part in ("complete", "observed_empty"):
+            for published_at in (
+                "2026-08-26",
+                "2026-08-26T18:00:00",
+                "2026-08-25T18:00:00+08:00",
+                "2026-08-26T10:00:00+00:00",
+            ):
+                mutation = deepcopy(fixtures)
+                mutation["fixtures"][0][fixture_part]["published_at"] = published_at
+                with self.subTest(
+                    fixture_part=fixture_part,
+                    published_at=published_at,
+                ):
+                    with self.assertRaisesRegex(ValueError, "time is invalid"):
+                        load_market_foundation_qualification_fixtures(
+                            mutation,
+                            qualifications,
+                        )
+
+    def test_issue_114_unavailable_reason_is_owner_bound(self) -> None:
+        qualifications = self._load_qualifications()
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        for operation_id in {producer for _, producer in TARGET_APPLICATIONS}:
+            mutation = deepcopy(fixtures)
+            fixture = next(
+                item
+                for item in mutation["fixtures"]
+                if item["producer_operation_id"] == operation_id
+            )
+            fixture["unavailable"]["reason"] = "unrelated_safe_reason"
+            with self.subTest(operation=operation_id):
+                with self.assertRaisesRegex(ValueError, "unavailable fixture"):
+                    load_market_foundation_qualification_fixtures(
+                        mutation,
+                        qualifications,
+                    )
 
     def test_issue_114_sse_extreme_exponents_are_exact_and_context_independent(
         self,

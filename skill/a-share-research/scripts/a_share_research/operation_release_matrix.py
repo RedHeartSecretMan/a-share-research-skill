@@ -82,6 +82,16 @@ _MARKET_FOUNDATION_SOURCE_CAPABILITIES = {
     "szse_a_share_turnover@1": "whole_market_turnover",
     "szse_market_margin@1": "whole_market_margin",
 }
+# Canonical-JSON digests pin every reviewed provider, scope, selector, field,
+# temporal, state, dependency, and license fact to its exact operation owner.
+_MARKET_FOUNDATION_SOURCE_CONTRACT_SHA256 = {
+    "bse_a_share_turnover@1": "28382e5138207b9ce9e4fe4b3bbd2b1ba80082c8fedbe271825041e497d69022",
+    "bse_market_margin@1": "1d67365f1c15c1b5a85267d81d9c62e1dcccc4ca8dd951cfdf2d59526bbabff5",
+    "sse_a_share_turnover@1": "d41048dc408ae826685269aeda2b521c9bd3860ad78579c844d1646f6d719e71",
+    "sse_market_margin@1": "a2ec5761b56d4851bfe0326bc4b534abc7e71bcba90b7cc5e1f5335490a91e85",
+    "szse_a_share_turnover@1": "bcf80e6f13fd550da587ac55e5c9c7fec892d61de93dbf2812125f750f33062f",
+    "szse_market_margin@1": "ac988b42808f772aabd376e069c022a3f043e874d459ec0aab676b28334bffe6",
+}
 
 
 @dataclass(frozen=True)
@@ -91,6 +101,8 @@ class _MarketFoundationNormalizationRule:
     contract: Mapping[str, str]
     field_destinations: Mapping[str, str]
     source_scale_exponents: Mapping[str, int]
+    observed_empty_row_count: int
+    unavailable_reason: str
 
 
 _MARGIN_FIELD_DESTINATIONS = {
@@ -114,6 +126,8 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
             )
         },
         source_scale_exponents={"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": 4},
+        observed_empty_row_count=1,
+        unavailable_reason="required_report_unit_missing",
     ),
     "bse_market_margin@1": _MarketFoundationNormalizationRule(
         contract={
@@ -123,6 +137,8 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
         },
         field_destinations=_MARGIN_FIELD_DESTINATIONS,
         source_scale_exponents={field: 4 for field in _MARGIN_FIELD_DESTINATIONS},
+        observed_empty_row_count=0,
+        unavailable_reason="required_summary_field_missing",
     ),
     "sse_a_share_turnover@1": _MarketFoundationNormalizationRule(
         contract={
@@ -135,6 +151,8 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
             "TRADE_AMT_03": "observations.payload.observation.metrics.turnover_amount_CNY",
         },
         source_scale_exponents={"TRADE_AMT_01": 8, "TRADE_AMT_03": 8},
+        observed_empty_row_count=2,
+        unavailable_reason="required_A_share_partition_missing",
     ),
     "sse_market_margin@1": _MarketFoundationNormalizationRule(
         contract={
@@ -144,6 +162,8 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
         },
         field_destinations=_MARGIN_FIELD_DESTINATIONS,
         source_scale_exponents={field: 0 for field in _MARGIN_FIELD_DESTINATIONS},
+        observed_empty_row_count=0,
+        unavailable_reason="required_summary_field_missing",
     ),
     "szse_a_share_turnover@1": _MarketFoundationNormalizationRule(
         contract={
@@ -157,6 +177,8 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
             )
         },
         source_scale_exponents={"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": 4},
+        observed_empty_row_count=1,
+        unavailable_reason="required_A_share_total_missing",
     ),
     "szse_market_margin@1": _MarketFoundationNormalizationRule(
         contract={
@@ -166,6 +188,8 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
         },
         field_destinations=_MARGIN_FIELD_DESTINATIONS,
         source_scale_exponents={field: 0 for field in _MARGIN_FIELD_DESTINATIONS},
+        observed_empty_row_count=0,
+        unavailable_reason="required_summary_field_missing",
     ),
 }
 
@@ -754,15 +778,7 @@ def load_market_foundation_qualification_fixtures(
             or complete.get("query_complete") is not True
         ):
             raise ValueError("qualification complete fixture is invalid")
-        try:
-            date.fromisoformat(
-                _text(complete.get("report_date"), "fixture report date")
-            )
-            datetime.fromisoformat(
-                _text(complete.get("published_at"), "fixture publication time")
-            )
-        except ValueError as error:
-            raise ValueError("qualification fixture time is invalid") from error
+        _validate_market_foundation_fixture_time(complete)
         source_fields = _mapping(
             complete.get("source_fields"), "qualification fixture source fields"
         )
@@ -795,12 +811,72 @@ def load_market_foundation_qualification_fixtures(
         observed_empty = _mapping(
             fixture.get("observed_empty"), "qualification empty fixture"
         )
-        if observed_empty != {
-            "query_complete": True,
-            "row_count": 0,
-            "state": "observed_empty",
-        }:
-            raise ValueError("qualification empty fixture is invalid")
+        rule = _MARKET_FOUNDATION_NORMALIZATION_RULES[operation_id]
+        if capability_id == "whole_market_turnover":
+            if (
+                set(observed_empty)
+                != {
+                    "query_complete",
+                    "row_count",
+                    "state",
+                    "report_date",
+                    "published_at",
+                    "source_fields",
+                    "normalized_destinations",
+                }
+                or observed_empty.get("query_complete") is not True
+                or observed_empty.get("row_count") != rule.observed_empty_row_count
+                or observed_empty.get("state") != "observed_empty"
+            ):
+                raise ValueError("qualification empty fixture is invalid")
+            _validate_market_foundation_fixture_time(observed_empty)
+            empty_source_fields = _mapping(
+                observed_empty.get("source_fields"),
+                "qualification empty source fields",
+            )
+            empty_destinations = _mapping(
+                observed_empty.get("normalized_destinations"),
+                "qualification empty normalized destinations",
+            )
+            if (
+                set(empty_source_fields) != set(rule.source_scale_exponents)
+                or set(empty_destinations) != set(rule.field_destinations.values())
+                or any(
+                    not _exact_fixture_decimal(
+                        item, "qualification empty source decimal"
+                    ).is_zero()
+                    for item in empty_source_fields.values()
+                )
+                or any(
+                    not _exact_fixture_decimal(
+                        item, "qualification empty normalized decimal"
+                    ).is_zero()
+                    for item in empty_destinations.values()
+                )
+            ):
+                raise ValueError("qualification empty fixture is invalid")
+            _validate_market_foundation_fixture_normalization(
+                operation_id=operation_id,
+                contract=contract,
+                source_fields=empty_source_fields,
+                normalized_destinations=empty_destinations,
+            )
+        else:
+            if (
+                set(observed_empty)
+                != {
+                    "query_complete",
+                    "row_count",
+                    "state",
+                    "report_date",
+                    "published_at",
+                }
+                or observed_empty.get("query_complete") is not True
+                or observed_empty.get("row_count") != rule.observed_empty_row_count
+                or observed_empty.get("state") != "observed_empty"
+            ):
+                raise ValueError("qualification empty fixture is invalid")
+            _validate_market_foundation_fixture_time(observed_empty)
         unavailable = _mapping(
             fixture.get("unavailable"), "qualification unavailable fixture"
         )
@@ -808,6 +884,7 @@ def load_market_foundation_qualification_fixtures(
             set(unavailable) != {"query_complete", "reason", "state"}
             or unavailable.get("query_complete") is not False
             or unavailable.get("state") != "unavailable"
+            or unavailable.get("reason") != rule.unavailable_reason
         ):
             raise ValueError("qualification unavailable fixture is invalid")
         _safe_release_reference(
@@ -817,6 +894,23 @@ def load_market_foundation_qualification_fixtures(
     if set(fixtures) != set(qualifications):
         raise ValueError("market foundation qualification fixtures do not close")
     return tuple(fixtures[operation_id] for operation_id in sorted(fixtures))
+
+
+def _validate_market_foundation_fixture_time(value: Mapping[str, object]) -> None:
+    try:
+        report_date = date.fromisoformat(
+            _text(value.get("report_date"), "fixture report date")
+        )
+        published_at = datetime.fromisoformat(
+            _text(value.get("published_at"), "fixture publication time")
+        )
+        if (
+            published_at.utcoffset() != timedelta(hours=8)
+            or published_at.date() < report_date
+        ):
+            raise ValueError("qualification fixture time is invalid")
+    except ValueError as error:
+        raise ValueError("qualification fixture time is invalid") from error
 
 
 def _validate_market_foundation_fixture_normalization(
@@ -2087,9 +2181,21 @@ def _validated_source_contract(
         policy = _mapping(value.get(key), f"qualification {key}")
         if not policy:
             raise ValueError(f"qualification {key} is invalid")
-        for policy_key, policy_value in policy.items():
-            _safe_release_reference(policy_key, f"qualification {key} key")
-            _text(policy_value, f"qualification {key} value")
+        _safe_release_mapping(policy, f"qualification {key}")
+    try:
+        contract_bytes = json.dumps(
+            deepcopy(dict(value)),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise ValueError("qualification source contract is invalid") from error
+    if (
+        sha256(contract_bytes).hexdigest()
+        != (_MARKET_FOUNDATION_SOURCE_CONTRACT_SHA256[producer_operation_id])
+    ):
+        raise ValueError("qualification source contract authority drifted")
     return value
 
 
