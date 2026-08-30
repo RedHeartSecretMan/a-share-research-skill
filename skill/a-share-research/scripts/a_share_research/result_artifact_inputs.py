@@ -42,8 +42,11 @@ _UNC_PATH_PATTERN = re.compile(r"\\{2,}[^\\/\s]+\\[^\\/\s]+")
 _WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"(?:^|[^A-Za-z0-9/\\])[A-Za-z]:[/\\]")
 _AUTHORITY_TERMINATORS = frozenset("/?#")
 _INVALID_LOCATOR_CHARACTERS = frozenset('<>"[]|\\^`{}')
-_LOCAL_PATH_SUFFIX_DELIMITERS = frozenset("!$'()*+,-.:;@_~")
 _PUBLIC_ROOTED_ROUTE_PREFIXES = ("/docs",)
+_LOCAL_PATH_SUFFIX_PATTERN = re.compile(
+    r"[!$'()*+,\-.:;@_~]+(?:[^=/\\&?#\x00-\x20\x7f]*=)?"
+    r"(?:[/\\]|\.\.(?:[/\\]|$)|[A-Za-z]:[/\\])"
+)
 _NON_PUBLIC_DNS_SUFFIXES = frozenset(
     {
         "home",
@@ -145,7 +148,7 @@ _SEMANTIC_PLURAL_REPLACEMENTS = (
     ("maps", "map"),
 )
 _ORDINARY_EMBEDDED_LEXEMES = re.compile(
-    r"(?:apiar(?:y|ies)|capital|ghosts?|hostess(?:es)?|hostile|monkeys?|rapid|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?|transportation(?:s)?)"
+    r"(?:apiar(?:y|ies)|capillar(?:y|ies)|capital|ghosts?|hockey|hostess(?:es)?|hostile|keyboard|keynote|monkeys?|rapid|secretar(?:iat(?:s)?|y|ies|ial)|tokeni[sz]ation(?:s)?|transportation(?:s)?)"
 )
 _SENSITIVE_COMPOUND_ATOMS: tuple[
     tuple[tuple[str, ...], tuple[str, ...]],
@@ -456,47 +459,52 @@ def _semantic_key_tokens(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", camel_separated.casefold()))
 
 
-def _contains_ordered_atoms(
-    value: str,
-    start_atoms: tuple[str, ...],
-    end_atoms: tuple[str, ...],
+def _classifier_tokens(raw_tokens: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        normalized
+        for token in raw_tokens
+        if (
+            normalized := _ORDINARY_EMBEDDED_LEXEMES.sub(
+                "",
+                _normalize_semantic_plurals(token),
+            )
+        )
+    )
+
+
+def _token_has_atom_at_edge(token: str, atoms: tuple[str, ...]) -> bool:
+    return token.startswith(atoms) or token.endswith(atoms)
+
+
+def _token_has_atom_pair(
+    token: str,
+    first_atoms: tuple[str, ...],
+    second_atoms: tuple[str, ...],
 ) -> bool:
-    for start_atom in start_atoms:
-        search_from = 0
-        while (start := value.find(start_atom, search_from)) >= 0:
-            after_start = start + len(start_atom)
-            for end_atom in end_atoms:
-                if value.find(end_atom, after_start) >= 0:
-                    return True
-            search_from = start + 1
-    return False
+    return (
+        any(atom in token for atom in first_atoms)
+        and any(atom in token for atom in second_atoms)
+        and _token_has_atom_at_edge(token, first_atoms + second_atoms)
+    )
 
 
-def _token_is_ordinary_lexeme(value: str) -> bool:
-    return _ORDINARY_EMBEDDED_LEXEMES.fullmatch(value) is not None
-
-
-def _contains_sensitive_compound(
-    value: str,
-    raw_tokens: tuple[str, ...],
-) -> bool:
-    tokens = tuple(_normalize_semantic_plurals(token) for token in raw_tokens)
+def _contains_sensitive_compound(raw_tokens: tuple[str, ...]) -> bool:
+    tokens = _classifier_tokens(raw_tokens)
     for start_atoms, end_atoms in _SENSITIVE_COMPOUND_ATOMS:
-        if _contains_ordered_atoms(
-            value,
-            start_atoms,
-            end_atoms,
-        ):
-            return True
-        for index, token in enumerate(tokens[:-1]):
-            if _token_is_ordinary_lexeme(token) or not token.endswith(start_atoms):
-                continue
-            if any(
-                not _token_is_ordinary_lexeme(later)
-                and (later.startswith(end_atoms) or later.endswith(end_atoms))
-                for later in tokens[index + 1 :]
-            ):
+        for index, token in enumerate(tokens):
+            if _token_has_atom_pair(token, start_atoms, end_atoms):
                 return True
+            for other_index, other in enumerate(tokens):
+                if index == other_index:
+                    continue
+                if _token_has_atom_at_edge(
+                    token, start_atoms
+                ) and _token_has_atom_at_edge(other, end_atoms):
+                    return True
+                if _token_has_atom_at_edge(
+                    token, end_atoms
+                ) and _token_has_atom_at_edge(other, start_atoms):
+                    return True
     return False
 
 
@@ -548,7 +556,7 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     ordinary_elided = _ORDINARY_EMBEDDED_LEXEMES.sub("", plural_normalized)
     if (
         _contains_qualified_sensitive_whole(ordinary_elided, tokens)
-        or _contains_sensitive_compound(ordinary_elided, tokens)
+        or _contains_sensitive_compound(tokens)
         or any(
             pattern.search(ordinary_elided) is not None
             for pattern in _SENSITIVE_SINGLE_PATTERNS
@@ -692,44 +700,26 @@ def _is_invalid_locator_character(value: str) -> bool:
     )
 
 
-def _starts_local_path_suffix(value: str, index: int) -> bool:
-    suffix = normalize("NFKC", value[index:])
-    if not suffix or suffix[0] not in _LOCAL_PATH_SUFFIX_DELIMITERS:
-        return False
-    if suffix[0] == ":" and suffix[1:].startswith("//"):
-        prefix = normalize("NFKC", value[:index])
-        for scheme in ("https", "http"):
-            scheme_start = len(prefix) - len(scheme)
-            if (
-                scheme_start >= 0
-                and prefix[scheme_start:].casefold() == scheme
-                and _scheme_starts_at_token_boundary(prefix, scheme_start)
-            ):
-                return False
-    cursor = 1
-    while cursor < len(suffix) and suffix[cursor] in ",;:":
-        cursor += 1
-    name_start = cursor
-    while (
-        cursor < len(suffix)
-        and suffix[cursor] not in "=/\\&?#"
-        and ord(suffix[cursor]) > 0x20
-        and ord(suffix[cursor]) != 0x7F
-    ):
-        cursor += 1
-    if cursor < len(suffix) and suffix[cursor] == "=":
-        cursor += 1
-    else:
-        cursor = name_start
-    remaining = suffix[cursor:]
-    return (
-        remaining.startswith(("/", "\\", ".."))
-        or len(remaining) >= 3
-        and remaining[0].isascii()
-        and remaining[0].isalpha()
-        and remaining[1] == ":"
-        and remaining[2] in "/\\"
+def _locator_has_local_path_suffix(path: str, query: str, fragment: str) -> bool:
+    visible = normalize(
+        "NFKC",
+        path + (f"?{query}" if query else "") + (f"#{fragment}" if fragment else ""),
     )
+    for match in _LOCAL_PATH_SUFFIX_PATTERN.finditer(visible):
+        if visible[match.start()] == ":":
+            for scheme in ("https", "http"):
+                scheme_start = match.start() - len(scheme)
+                if (
+                    scheme_start >= 0
+                    and visible[scheme_start : match.start()].casefold() == scheme
+                    and _scheme_starts_at_token_boundary(visible, scheme_start)
+                ):
+                    break
+            else:
+                return True
+            continue
+        return True
+    return False
 
 
 def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, str]:
@@ -751,8 +741,6 @@ def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, s
             and ord(value[token_end]) > 0x20
             and ord(value[token_end]) != 0x7F
         ):
-            if _starts_local_path_suffix(value, token_end):
-                raise ValueError("result artifact persisted document is invalid")
             token_end += 1
     if token_end < len(value) and _is_invalid_locator_character(value[token_end]):
         raise ValueError("result artifact persisted document is invalid")
@@ -816,6 +804,8 @@ def _validate_public_locator(token: str, authority: str) -> None:
         except ValueError:
             raise ValueError("result artifact persisted document is invalid") from None
     if not _public_authority_hostname(normalized_hostname):
+        raise ValueError("result artifact persisted document is invalid")
+    if _locator_has_local_path_suffix(parsed.path, parsed.query, parsed.fragment):
         raise ValueError("result artifact persisted document is invalid")
     if any(
         not _percent_escapes_are_safe(part)

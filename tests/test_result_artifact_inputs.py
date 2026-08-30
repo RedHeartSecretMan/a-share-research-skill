@@ -6,6 +6,7 @@ import unittest
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from decimal import Decimal
 from itertools import product
+from time import perf_counter
 from urllib.parse import quote
 
 from tests.skill_imports import add_skill_scripts_to_path
@@ -1492,6 +1493,10 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "jobhostsstatus",
             "clientapiprimarykey",
             "clientapiv2keys",
+            "keyForClientAPI",
+            "headers_for_request",
+            "payloadForRaw",
+            "informationForServer",
         )
 
         for raw_key in sensitive_keys:
@@ -1524,6 +1529,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "capital_key_status",
             "annualCapitalKeyStatus",
             "working_capital_key_status",
+            "apiKeyboardLayout",
+            "api_keynote_status",
+            "capillary_hockey_score",
             "apiary_monkey_population",
             "apiarymonkeypopulation",
             "ghost_count",
@@ -1711,6 +1719,18 @@ class ResultArtifactLocatorTests(unittest.TestCase):
                 ):
                     with self.assertRaises(ValueError):
                         factory({"public_reference": locator})
+
+    def test_max_bounded_non_ascii_locator_validation_is_linear(self) -> None:
+        prefix = "https://example.test/public/"
+        locator = prefix + "测" * (64 * 1024 - len(prefix))
+
+        started = perf_counter()
+        for _, factory in self._factories():
+            prepared = factory({"public_reference": locator})
+            self.assertIn(locator.encode(), prepared.content_bytes)
+        elapsed = perf_counter() - started
+
+        self.assertLess(elapsed, 2.0)
 
     def test_locator_scheme_and_bracketed_host_cover_the_complete_raw_token(
         self,
