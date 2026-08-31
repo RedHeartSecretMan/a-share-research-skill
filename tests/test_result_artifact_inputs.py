@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from decimal import Decimal
 from itertools import product
 from time import perf_counter
+from unittest.mock import patch
 from urllib.parse import quote
 
 from tests.skill_imports import add_skill_scripts_to_path
@@ -396,6 +397,69 @@ class ResultArtifactInputTests(unittest.TestCase):
             )
         finally:
             type.__setattr__(concrete_type, "content_bytes", original_property)
+
+    def test_module_private_names_cannot_change_prepared_authority(self) -> None:
+        prepared_files = (
+            prepare_candidate(
+                canonical_security_id="SSE:600519",
+                schema_version="1.0",
+                document={"status": "limited"},
+            ),
+            prepare_completed_partition(
+                kind="universe",
+                exchange="SSE",
+                shard_index=0,
+                schema_version="1.0",
+                records=({"status": "limited"},),
+            ),
+        )
+        forged_values = (
+            "../../outside.json",
+            "forged",
+            b'{"password":"leaked"}\n',
+            "0" * 64,
+            22,
+            -1,
+        )
+
+        for prepared in prepared_files:
+            expected = (
+                prepared.relative_path,
+                prepared.schema_version,
+                prepared.content_bytes,
+                prepared.sha256,
+                prepared.byte_count,
+                prepared.record_count,
+            )
+            for private_name, replacement in (
+                ("_PREPARED_VALUE_INDEX", {"content_bytes": 0}),
+                ("_prepared_values", lambda _: forged_values),
+            ):
+                with self.subTest(
+                    factory_path=prepared.relative_path,
+                    private_name=private_name,
+                ):
+                    with patch.object(
+                        result_artifact_inputs_module,
+                        private_name,
+                        replacement,
+                        create=True,
+                    ):
+                        self.assertEqual(
+                            (
+                                prepared.relative_path,
+                                prepared.schema_version,
+                                prepared.content_bytes,
+                                prepared.sha256,
+                                prepared.byte_count,
+                                prepared.record_count,
+                            ),
+                            expected,
+                        )
+                        self.assertIsInstance(
+                            prepared,
+                            PreparedResultArtifactFile,
+                        )
 
     def test_exposed_callable_internals_cannot_forge_or_replace_authority(
         self,

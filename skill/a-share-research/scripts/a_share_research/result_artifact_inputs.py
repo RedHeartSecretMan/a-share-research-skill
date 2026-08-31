@@ -349,9 +349,6 @@ class _PreparedValues(NamedTuple):
     record_count: int
 
 
-_PREPARED_VALUE_INDEX = {
-    field_name: index for index, field_name in enumerate(_PreparedValues._fields)
-}
 _SEALED_PREPARED_TYPES: set[type[object]] = set()
 
 
@@ -394,6 +391,15 @@ def _build_prepared_registry() -> tuple[
 _prepared_values_lookup, _prepared_instance_check, _register_prepared = (
     _build_prepared_registry()
 )
+
+
+def _prepared_values(
+    value: PreparedResultArtifactFile,
+    _lookup: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+        _prepared_values_lookup
+    ),
+) -> _PreparedValues:
+    return _lookup(value)
 
 
 class _PreparedResultArtifactFileMeta(ABCMeta):
@@ -474,13 +480,24 @@ class PreparedResultArtifactFile(ABC, metaclass=_PreparedResultArtifactFileMeta)
     def record_count(self) -> int:
         """Return the bounded number of encoded records."""
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(
+        self,
+        other: object,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> bool:
         if not isinstance(other, PreparedResultArtifactFile):
             return NotImplemented
-        return _prepared_values(self) == _prepared_values(other)
+        return _values(self) == _values(other)
 
-    def __hash__(self) -> int:
-        return hash(_prepared_values(self))
+    def __hash__(
+        self,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> int:
+        return hash(_values(self))
 
 
 class _PreparedResultArtifactFile(PreparedResultArtifactFile):
@@ -489,47 +506,83 @@ class _PreparedResultArtifactFile(PreparedResultArtifactFile):
     def __new__(cls) -> _PreparedResultArtifactFile:
         raise TypeError("prepared result artifact files are Module-owned")
 
-    def __getattribute__(self, name: str) -> object:
-        field_index = _PREPARED_VALUE_INDEX.get(name)
-        if field_index is not None:
-            return _prepared_values(self)[field_index]
+    def __getattribute__(
+        self,
+        name: str,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> object:
+        if name == "relative_path":
+            return _values(self)[0]
+        if name == "schema_version":
+            return _values(self)[1]
+        if name == "content_bytes":
+            return _values(self)[2]
+        if name == "sha256":
+            return _values(self)[3]
+        if name == "byte_count":
+            return _values(self)[4]
+        if name == "record_count":
+            return _values(self)[5]
         return object.__getattribute__(self, name)
 
     @property
-    def relative_path(self) -> str:
-        return _prepared_values(self).relative_path
+    def relative_path(
+        self,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> str:
+        return _values(self)[0]
 
     @property
-    def schema_version(self) -> str:
-        return _prepared_values(self).schema_version
+    def schema_version(
+        self,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> str:
+        return _values(self)[1]
 
     @property
-    def content_bytes(self) -> bytes:
-        return _prepared_values(self).content_bytes
+    def content_bytes(
+        self,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> bytes:
+        return _values(self)[2]
 
     @property
-    def sha256(self) -> str:
-        return _prepared_values(self).sha256
+    def sha256(
+        self,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> str:
+        return _values(self)[3]
 
     @property
-    def byte_count(self) -> int:
-        return _prepared_values(self).byte_count
+    def byte_count(
+        self,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> int:
+        return _values(self)[4]
 
     @property
-    def record_count(self) -> int:
-        return _prepared_values(self).record_count
+    def record_count(
+        self,
+        _values: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+            _prepared_values
+        ),
+    ) -> int:
+        return _values(self)[5]
 
 
 _SEALED_PREPARED_TYPES.update({PreparedResultArtifactFile, _PreparedResultArtifactFile})
-
-
-def _prepared_values(
-    value: PreparedResultArtifactFile,
-    _lookup: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
-        _prepared_values_lookup
-    ),
-) -> _PreparedValues:
-    return _lookup(value)
 
 
 def _prepared_file(
@@ -1718,6 +1771,7 @@ del _prepared_values_lookup
 del _prepared_instance_check
 del _register_prepared
 del _build_prepared_registry
+del _prepared_values
 del _SEALED_PREPARED_TYPES
 del _bind_prepared_factories
 
