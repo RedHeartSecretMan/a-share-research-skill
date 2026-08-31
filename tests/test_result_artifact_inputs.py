@@ -1906,6 +1906,9 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://example.test/public#proxyrequestHeaders=redacted",
             "https://example.test @localhost/private",
             "https://example.test @2130706433/private",
+            "https://example.test user@localhost/private",
+            "https://example.test safe:pw@10.0.0.1/private",
+            "https://example.test user@2130706433/private",
         )
         for locator in rejected_locators:
             for factory_name, factory in self._factories():

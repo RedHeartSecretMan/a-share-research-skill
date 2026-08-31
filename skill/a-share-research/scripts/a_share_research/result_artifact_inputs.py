@@ -1246,7 +1246,8 @@ def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, s
     token_end = authority_end
     if token_end < len(value) and value[token_end].isspace():
         continuation = value[token_end:].lstrip()
-        if continuation.startswith("@"):
+        continuation_authority = re.split(r"[/\s?#]", continuation, maxsplit=1)[0]
+        if "@" in continuation_authority:
             raise ValueError("result artifact persisted document is invalid")
     if token_end < len(value) and value[token_end] in "/?#":
         token_end += 1
