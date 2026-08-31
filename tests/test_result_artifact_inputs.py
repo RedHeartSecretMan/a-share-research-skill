@@ -397,6 +397,45 @@ class ResultArtifactInputTests(unittest.TestCase):
         finally:
             type.__setattr__(concrete_type, "content_bytes", original_property)
 
+    def test_exposed_callable_internals_cannot_forge_or_replace_authority(
+        self,
+    ) -> None:
+        prepared = prepare_candidate(
+            canonical_security_id="SSE:600519",
+            schema_version="1.0",
+            document={"status": "limited"},
+        )
+        factory_closure = prepare_candidate.__closure__
+        self.assertIsNotNone(factory_closure)
+        assert factory_closure is not None
+        builder = factory_closure[0].cell_contents
+        self.assertTrue(callable(builder))
+        with self.assertRaises(ValueError):
+            builder(
+                relative_path="candidates/SSE-600519.json",
+                schema_version="1.0",
+                content_bytes=b'{"password":"leaked"}\n',
+                record_count=1,
+            )
+
+        builder_defaults = builder.__kwdefaults__
+        self.assertIsNotNone(builder_defaults)
+        assert builder_defaults is not None
+        register = builder_defaults["_register"]
+        forged_values = result_artifact_inputs_module._PreparedValues(
+            "../../outside.json",
+            "forged",
+            b'{"password":"leaked"}\n',
+            "0" * 64,
+            22,
+            -1,
+        )
+        with self.assertRaises(ValueError):
+            register(prepared, forged_values)
+
+        self.assertIsInstance(prepared, PreparedResultArtifactFile)
+        self.assertEqual(prepared.content_bytes, b'{"status":"limited"}\n')
+
     def test_coordinates_require_exact_canonical_builtin_tokens(self) -> None:
         valid_partition = prepare_completed_partition(
             kind="ranking",
@@ -1647,6 +1686,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "capillary_hockey_score",
             "apiary_monkey_population",
             "apiarymonkeypopulation",
+            "apiarykey",
+            "apikeynotestatus",
+            "apikeyboardlayout",
             "ghost_count",
             "ghost",
             "ghosts",
@@ -1862,6 +1904,8 @@ class ResultArtifactLocatorTests(unittest.TestCase):
             "https://[2606:4700:4700::1111%25eth0]/public",
             "https://example.test/public?clientapiKeys=redacted",
             "https://example.test/public#proxyrequestHeaders=redacted",
+            "https://example.test @localhost/private",
+            "https://example.test @2130706433/private",
         )
         for locator in rejected_locators:
             for factory_name, factory in self._factories():

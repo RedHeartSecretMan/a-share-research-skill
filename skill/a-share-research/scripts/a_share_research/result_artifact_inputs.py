@@ -353,10 +353,47 @@ _PREPARED_VALUE_INDEX = {
     field_name: index for index, field_name in enumerate(_PreparedValues._fields)
 }
 _SEALED_PREPARED_TYPES: set[type[object]] = set()
-_PREPARED_VALUES: dict[
-    int,
-    tuple[ReferenceType[object], _PreparedValues],
-] = {}
+
+
+def _build_prepared_registry() -> tuple[
+    Callable[[PreparedResultArtifactFile], _PreparedValues],
+    Callable[[object], bool],
+    Callable[[object, _PreparedValues], None],
+]:
+    registered_values: dict[
+        int,
+        tuple[ReferenceType[object], _PreparedValues],
+    ] = {}
+
+    def lookup(value: PreparedResultArtifactFile) -> _PreparedValues:
+        registered = registered_values.get(id(value))
+        if registered is None or registered[0]() is not value:
+            raise TypeError("prepared result artifact file is not Module-owned")
+        return registered[1]
+
+    def is_registered(instance: object) -> bool:
+        registered = registered_values.get(id(instance))
+        return registered is not None and registered[0]() is instance
+
+    def register(prepared: object, values: _PreparedValues) -> None:
+        identifier = id(prepared)
+        if identifier in registered_values or not _prepared_values_are_valid(values):
+            raise ValueError("result artifact prepared file is invalid")
+
+        def discard(dead_reference: ReferenceType[object]) -> None:
+            registered = registered_values.get(identifier)
+            if registered is not None and registered[0] is dead_reference:
+                del registered_values[identifier]
+
+        reference = ref(prepared, discard)
+        registered_values[identifier] = (reference, values)
+
+    return lookup, is_registered, register
+
+
+_prepared_values_lookup, _prepared_instance_check, _register_prepared = (
+    _build_prepared_registry()
+)
 
 
 class _PreparedResultArtifactFileMeta(ABCMeta):
@@ -382,15 +419,11 @@ class _PreparedResultArtifactFileMeta(ABCMeta):
     def __instancecheck__(
         cls,
         instance: object,
-        _prepared_values: dict[
-            int,
-            tuple[ReferenceType[object], _PreparedValues],
-        ] = _PREPARED_VALUES,
+        _is_registered: Callable[[object], bool] = _prepared_instance_check,
     ) -> bool:
         if type(instance) is not _PreparedResultArtifactFile:
             return False
-        registered = _prepared_values.get(id(instance))
-        return registered is not None and registered[0]() is instance
+        return _is_registered(instance)
 
 
 class PreparedResultArtifactFile(ABC, metaclass=_PreparedResultArtifactFileMeta):
@@ -492,15 +525,11 @@ _SEALED_PREPARED_TYPES.update({PreparedResultArtifactFile, _PreparedResultArtifa
 
 def _prepared_values(
     value: PreparedResultArtifactFile,
-    _registered_values: dict[
-        int,
-        tuple[ReferenceType[object], _PreparedValues],
-    ] = _PREPARED_VALUES,
+    _lookup: Callable[[PreparedResultArtifactFile], _PreparedValues] = (
+        _prepared_values_lookup
+    ),
 ) -> _PreparedValues:
-    registered = _registered_values.get(id(value))
-    if registered is None or registered[0]() is not value:
-        raise TypeError("prepared result artifact file is not Module-owned")
-    return registered[1]
+    return _lookup(value)
 
 
 def _prepared_file(
@@ -509,10 +538,7 @@ def _prepared_file(
     schema_version: str,
     content_bytes: bytes,
     record_count: int,
-    _registered_values: dict[
-        int,
-        tuple[ReferenceType[object], _PreparedValues],
-    ] = _PREPARED_VALUES,
+    _register: Callable[[object, _PreparedValues], None] = _register_prepared,
 ) -> PreparedResultArtifactFile:
     candidate_path = re.fullmatch(
         r"candidates/(?:BSE|SSE|SZSE)-[0-9]{6}\.json",
@@ -542,15 +568,7 @@ def _prepared_file(
         record_count=record_count,
     )
     prepared = object.__new__(_PreparedResultArtifactFile)
-    identifier = id(prepared)
-
-    def discard(dead_reference: ReferenceType[_PreparedResultArtifactFile]) -> None:
-        registered = _registered_values.get(identifier)
-        if registered is not None and registered[0] is dead_reference:
-            del _registered_values[identifier]
-
-    reference = ref(prepared, discard)
-    _registered_values[identifier] = (cast(ReferenceType[object], reference), values)
+    _register(prepared, values)
     return prepared
 
 
@@ -563,6 +581,60 @@ def _valid_schema_token(value: object) -> bool:
         and all(character in _SCHEMA_TOKEN_CHARACTERS for character in value)
         and ".." not in value
     )
+
+
+def _prepared_values_are_valid(values: _PreparedValues) -> bool:
+    if (
+        type(values.relative_path) is not str
+        or type(values.schema_version) is not str
+        or type(values.content_bytes) is not bytes
+        or type(values.sha256) is not str
+        or type(values.byte_count) is not int
+        or type(values.record_count) is not int
+        or not _valid_schema_token(values.schema_version)
+        or len(values.content_bytes) > _MAX_FILE_BYTES
+        or values.byte_count != len(values.content_bytes)
+        or values.sha256 != sha256(values.content_bytes).hexdigest()
+    ):
+        return False
+    candidate_path = re.fullmatch(
+        r"candidates/(?:BSE|SSE|SZSE)-[0-9]{6}\.json",
+        values.relative_path,
+    )
+    partition_path = re.fullmatch(
+        r"partitions/(?:factors|ranking|universe)/(?:BSE|SSE|SZSE)/"
+        r"part-[0-9]{5}\.jsonl",
+        values.relative_path,
+    )
+    if (
+        (candidate_path is None and partition_path is None)
+        or not 0 <= values.record_count <= _MAX_PARTITION_RECORDS
+        or (candidate_path is not None and values.record_count != 1)
+    ):
+        return False
+    lines = values.content_bytes.splitlines(keepends=True)
+    if len(lines) != values.record_count or any(
+        not line.endswith(b"\n") for line in lines
+    ):
+        return False
+    try:
+        parsed_records = [json.loads(line) for line in lines]
+        if candidate_path is not None:
+            detached_record = _detached_json_value(parsed_records[0])
+            detached: object = [detached_record]
+        else:
+            detached = _detached_json_value(parsed_records)
+            if type(detached) is not list:
+                return False
+        canonical = bytearray()
+        for record in cast(list[object], detached):
+            if type(record) is not dict:
+                return False
+            _validate_detached_json(record)
+            _append_canonical_json_line(canonical, record)
+    except Exception:
+        return False
+    return bytes(canonical) == values.content_bytes
 
 
 def _detached_json_value(value: object) -> object:
@@ -827,10 +899,15 @@ def _contains_qualified_safe_compound(
     return False
 
 
-def _contains_sensitive_character_stream(raw_tokens: tuple[str, ...]) -> bool:
-    stream = "".join(raw_tokens)
+def _mask_ordinary_semantic_lexemes(token: str) -> str:
+    masked = token
     for ordinary_lexeme in _ORDINARY_SEMANTIC_HOMOGRAPHS:
-        stream = stream.replace(ordinary_lexeme, "#" * len(ordinary_lexeme))
+        masked = masked.replace(ordinary_lexeme, "#" * len(ordinary_lexeme))
+    return masked
+
+
+def _contains_sensitive_character_stream(raw_tokens: tuple[str, ...]) -> bool:
+    stream = "".join(_mask_ordinary_semantic_lexemes(token) for token in raw_tokens)
     if any(atom in stream for atom in _SENSITIVE_SINGLE_ATOMS):
         return True
     return any(
@@ -866,16 +943,17 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
         return _SemanticKeyClass.SAFE_WHOLE_LEXEME
     if plural_normalized in _ORDINARY_WHOLE_LEXEMES:
         return _SemanticKeyClass.ORDINARY_PUBLIC
+    semantic_tokens = tuple(_mask_ordinary_semantic_lexemes(token) for token in tokens)
     atom_runs_by_token = {
-        token: _semantic_atom_runs(token) for token in {*tokens, normalized}
+        token: _semantic_atom_runs(token) for token in {*semantic_tokens, normalized}
     }
     if (
         _contains_qualified_safe_compound(
             normalized,
             atom_runs_by_token[normalized],
         )
-        or _contains_sensitive_semantic_atoms(tokens, atom_runs_by_token)
-        or _contains_sensitive_character_stream(tokens)
+        or _contains_sensitive_semantic_atoms(semantic_tokens, atom_runs_by_token)
+        or _contains_sensitive_character_stream(semantic_tokens)
     ):
         return _SemanticKeyClass.SENSITIVE
     return _SemanticKeyClass.ORDINARY_PUBLIC
@@ -1166,6 +1244,10 @@ def _locator_authority(value: str, scheme_end: int) -> tuple[int, str]:
 def _locator_token(value: str, start: int, scheme_end: int) -> tuple[int, str, str]:
     authority_end, authority = _locator_authority(value, scheme_end)
     token_end = authority_end
+    if token_end < len(value) and value[token_end].isspace():
+        continuation = value[token_end:].lstrip()
+        if continuation.startswith("@"):
+            raise ValueError("result artifact persisted document is invalid")
     if token_end < len(value) and value[token_end] in "/?#":
         token_end += 1
         while (
@@ -1631,7 +1713,10 @@ prepare_candidate, prepare_completed_partition = _bind_prepared_factories(
     _prepared_file
 )
 del _prepared_file
-del _PREPARED_VALUES
+del _prepared_values_lookup
+del _prepared_instance_check
+del _register_prepared
+del _build_prepared_registry
 del _SEALED_PREPARED_TYPES
 del _bind_prepared_factories
 
