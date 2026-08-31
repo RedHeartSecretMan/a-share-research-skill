@@ -14,7 +14,10 @@ from tests.skill_imports import add_skill_scripts_to_path
 add_skill_scripts_to_path()
 
 import a_share_research.result_artifact_inputs as result_artifact_inputs_module  # noqa: E402
-from a_share_research.bounded_public_data import MAX_PUBLIC_DATA_DEPTH  # noqa: E402
+from a_share_research.bounded_public_data import (  # noqa: E402
+    MAX_PUBLIC_DATA_DEPTH,
+    MAX_PUBLIC_DATA_STRING_LENGTH,
+)
 from a_share_research.result_artifact_inputs import (  # noqa: E402
     PreparedResultArtifactFile,
     prepare_candidate,
@@ -727,6 +730,26 @@ class ResultArtifactInputTests(unittest.TestCase):
                     prepared = factory(document)
                     self.assertIn(value.encode(), prepared.content_bytes)
 
+    def test_plain_text_percent_decode_depth_is_explicitly_bounded(self) -> None:
+        accepted = "%" + "25" * MAX_PUBLIC_DATA_DEPTH
+        rejected = "%" + "25" * (MAX_PUBLIC_DATA_DEPTH + 1)
+        max_bounded = "%" + "25" * ((MAX_PUBLIC_DATA_STRING_LENGTH - 1) // 2)
+
+        started = perf_counter()
+        for factory_name, factory in _prepared_factories():
+            with self.subTest(factory=factory_name, depth=MAX_PUBLIC_DATA_DEPTH):
+                prepared = factory({"note": accepted})
+                self.assertIn(accepted.encode(), prepared.content_bytes)
+            with self.subTest(factory=factory_name, depth=MAX_PUBLIC_DATA_DEPTH + 1):
+                with self.assertRaises(ValueError):
+                    factory({"note": rejected})
+            with self.subTest(factory=factory_name, depth="max-string"):
+                with self.assertRaises(ValueError):
+                    factory({"note": max_bounded})
+        elapsed = perf_counter() - started
+
+        self.assertLess(elapsed, 2.0)
+
     def test_public_locator_span_never_absorbs_adjacent_local_path(self) -> None:
         unsafe_documents: tuple[Mapping[str, object], ...] = (
             {
@@ -1354,6 +1377,15 @@ class ResultArtifactInputTests(unittest.TestCase):
                 "prepare_completed_partition",
             },
         )
+        for implementation_name in (
+            "_MODULE_AUTHORITY",
+            "_PREPARED_VALUES",
+            "_prepared_file",
+        ):
+            with self.subTest(implementation_name=implementation_name):
+                self.assertFalse(
+                    hasattr(result_artifact_inputs_module, implementation_name)
+                )
         prepared_files = [
             prepare_candidate(
                 canonical_security_id=f"{exchange}:000001",

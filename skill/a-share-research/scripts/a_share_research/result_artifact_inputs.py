@@ -6,7 +6,7 @@ import json
 import math
 import re
 from abc import ABC, ABCMeta, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal
 from enum import Enum, auto
 from hashlib import sha256
@@ -352,25 +352,44 @@ class _PreparedValues(NamedTuple):
 _PREPARED_VALUE_INDEX = {
     field_name: index for index, field_name in enumerate(_PreparedValues._fields)
 }
-_MODULE_AUTHORITY = object()
 _SEALED_PREPARED_TYPES: set[type[object]] = set()
+_PREPARED_VALUES: dict[
+    int,
+    tuple[ReferenceType[object], _PreparedValues],
+] = {}
 
 
 class _PreparedResultArtifactFileMeta(ABCMeta):
-    def __setattr__(cls, name: str, value: object) -> None:
-        if cls in _SEALED_PREPARED_TYPES:
+    def __setattr__(
+        cls,
+        name: str,
+        value: object,
+        _sealed_types: set[type[object]] = _SEALED_PREPARED_TYPES,
+    ) -> None:
+        if cls in _sealed_types:
             raise TypeError("prepared result artifact types are immutable")
         super().__setattr__(name, value)
 
-    def __delattr__(cls, name: str) -> None:
-        if cls in _SEALED_PREPARED_TYPES:
+    def __delattr__(
+        cls,
+        name: str,
+        _sealed_types: set[type[object]] = _SEALED_PREPARED_TYPES,
+    ) -> None:
+        if cls in _sealed_types:
             raise TypeError("prepared result artifact types are immutable")
         super().__delattr__(name)
 
-    def __instancecheck__(cls, instance: object) -> bool:
+    def __instancecheck__(
+        cls,
+        instance: object,
+        _prepared_values: dict[
+            int,
+            tuple[ReferenceType[object], _PreparedValues],
+        ] = _PREPARED_VALUES,
+    ) -> bool:
         if type(instance) is not _PreparedResultArtifactFile:
             return False
-        registered = _PREPARED_VALUES.get(id(instance))
+        registered = _prepared_values.get(id(instance))
         return registered is not None and registered[0]() is instance
 
 
@@ -381,11 +400,14 @@ class PreparedResultArtifactFile(ABC, metaclass=_PreparedResultArtifactFileMeta)
 
     def __init_subclass__(
         cls,
-        *,
-        _module_authority: object | None = None,
         **kwargs: object,
     ) -> None:
-        if _module_authority is not _MODULE_AUTHORITY or kwargs:
+        existing_subclasses = (
+            subclass
+            for subclass in PreparedResultArtifactFile.__subclasses__()
+            if subclass is not cls
+        )
+        if next(existing_subclasses, None) is not None or kwargs:
             raise TypeError("prepared result artifact files cannot be subclassed")
         super().__init_subclass__()
 
@@ -428,10 +450,7 @@ class PreparedResultArtifactFile(ABC, metaclass=_PreparedResultArtifactFileMeta)
         return hash(_prepared_values(self))
 
 
-class _PreparedResultArtifactFile(
-    PreparedResultArtifactFile,
-    _module_authority=_MODULE_AUTHORITY,
-):
+class _PreparedResultArtifactFile(PreparedResultArtifactFile):
     __slots__ = ("__weakref__",)
 
     def __new__(cls) -> _PreparedResultArtifactFile:
@@ -471,14 +490,14 @@ class _PreparedResultArtifactFile(
 _SEALED_PREPARED_TYPES.update({PreparedResultArtifactFile, _PreparedResultArtifactFile})
 
 
-_PREPARED_VALUES: dict[
-    int,
-    tuple[ReferenceType[_PreparedResultArtifactFile], _PreparedValues],
-] = {}
-
-
-def _prepared_values(value: PreparedResultArtifactFile) -> _PreparedValues:
-    registered = _PREPARED_VALUES.get(id(value))
+def _prepared_values(
+    value: PreparedResultArtifactFile,
+    _registered_values: dict[
+        int,
+        tuple[ReferenceType[object], _PreparedValues],
+    ] = _PREPARED_VALUES,
+) -> _PreparedValues:
+    registered = _registered_values.get(id(value))
     if registered is None or registered[0]() is not value:
         raise TypeError("prepared result artifact file is not Module-owned")
     return registered[1]
@@ -486,11 +505,14 @@ def _prepared_values(value: PreparedResultArtifactFile) -> _PreparedValues:
 
 def _prepared_file(
     *,
-    _module_authority: object,
     relative_path: str,
     schema_version: str,
     content_bytes: bytes,
     record_count: int,
+    _registered_values: dict[
+        int,
+        tuple[ReferenceType[object], _PreparedValues],
+    ] = _PREPARED_VALUES,
 ) -> PreparedResultArtifactFile:
     candidate_path = re.fullmatch(
         r"candidates/(?:BSE|SSE|SZSE)-[0-9]{6}\.json",
@@ -502,8 +524,7 @@ def _prepared_file(
         relative_path,
     )
     if (
-        _module_authority is not _MODULE_AUTHORITY
-        or not _valid_schema_token(schema_version)
+        not _valid_schema_token(schema_version)
         or type(content_bytes) is not bytes
         or len(content_bytes) > _MAX_FILE_BYTES
         or type(record_count) is not int
@@ -524,12 +545,12 @@ def _prepared_file(
     identifier = id(prepared)
 
     def discard(dead_reference: ReferenceType[_PreparedResultArtifactFile]) -> None:
-        registered = _PREPARED_VALUES.get(identifier)
+        registered = _registered_values.get(identifier)
         if registered is not None and registered[0] is dead_reference:
-            del _PREPARED_VALUES[identifier]
+            del _registered_values[identifier]
 
     reference = ref(prepared, discard)
-    _PREPARED_VALUES[identifier] = (reference, values)
+    _registered_values[identifier] = (cast(ReferenceType[object], reference), values)
     return prepared
 
 
@@ -1414,7 +1435,9 @@ def _unsafe_persisted_string(value: str) -> bool:
         if _contains_c0_control(percent_decoded):
             return True
         if percent_decoded != current:
-            nested_locators.append((percent_decoded, depth))
+            if depth >= MAX_PUBLIC_DATA_DEPTH:
+                return True
+            nested_locators.append((percent_decoded, depth + 1))
         compatibility_normalized = normalize("NFKC", current)
         if compatibility_normalized != current and (
             _contains_c0_control(compatibility_normalized)
@@ -1476,8 +1499,9 @@ def _append_canonical_json_line(destination: bytearray, value: object) -> None:
     destination.append(0x0A)
 
 
-def prepare_completed_partition(
+def _prepare_completed_partition(
     *,
+    _prepared_builder: Callable[..., PreparedResultArtifactFile],
     kind: str,
     exchange: str,
     shard_index: int,
@@ -1513,8 +1537,7 @@ def prepare_completed_partition(
         ) from None
     except Exception:
         raise ValueError("result artifact partition records are invalid") from None
-    return _prepared_file(
-        _module_authority=_MODULE_AUTHORITY,
+    return _prepared_builder(
         relative_path=(f"partitions/{kind}/{exchange}/part-{shard_index:05d}.jsonl"),
         schema_version=schema_version,
         content_bytes=encoded,
@@ -1522,8 +1545,9 @@ def prepare_completed_partition(
     )
 
 
-def prepare_candidate(
+def _prepare_candidate(
     *,
+    _prepared_builder: Callable[..., PreparedResultArtifactFile],
     canonical_security_id: str,
     schema_version: str,
     document: Mapping[str, object],
@@ -1556,13 +1580,60 @@ def prepare_candidate(
         ) from None
     except Exception:
         raise ValueError("result artifact candidate document is invalid") from None
-    return _prepared_file(
-        _module_authority=_MODULE_AUTHORITY,
+    return _prepared_builder(
         relative_path=f"candidates/{exchange}-{code}.json",
         schema_version=schema_version,
         content_bytes=encoded,
         record_count=1,
     )
+
+
+def _bind_prepared_factories(
+    prepared_builder: Callable[..., PreparedResultArtifactFile],
+) -> tuple[
+    Callable[..., PreparedResultArtifactFile],
+    Callable[..., PreparedResultArtifactFile],
+]:
+    def prepare_candidate(
+        *,
+        canonical_security_id: str,
+        schema_version: str,
+        document: Mapping[str, object],
+    ) -> PreparedResultArtifactFile:
+        return _prepare_candidate(
+            _prepared_builder=prepared_builder,
+            canonical_security_id=canonical_security_id,
+            schema_version=schema_version,
+            document=document,
+        )
+
+    def prepare_completed_partition(
+        *,
+        kind: str,
+        exchange: str,
+        shard_index: int,
+        schema_version: str,
+        records: Sequence[Mapping[str, object]],
+    ) -> PreparedResultArtifactFile:
+        return _prepare_completed_partition(
+            _prepared_builder=prepared_builder,
+            kind=kind,
+            exchange=exchange,
+            shard_index=shard_index,
+            schema_version=schema_version,
+            records=records,
+        )
+
+    return prepare_candidate, prepare_completed_partition
+
+
+prepare_candidate, prepare_completed_partition = _bind_prepared_factories(
+    _prepared_file
+)
+del _prepared_file
+del _PREPARED_VALUES
+del _SEALED_PREPARED_TYPES
+del _bind_prepared_factories
 
 
 __all__ = [
