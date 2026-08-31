@@ -461,41 +461,133 @@ class ResultArtifactInputTests(unittest.TestCase):
                             PreparedResultArtifactFile,
                         )
 
-    def test_exposed_callable_internals_cannot_forge_or_replace_authority(
+    def test_module_private_policy_rebinding_cannot_change_factory_authority(
         self,
     ) -> None:
+        calls = (
+            (
+                "candidate",
+                lambda document, schema_version: prepare_candidate(
+                    canonical_security_id="SSE:600519",
+                    schema_version=schema_version,
+                    document=document,
+                ),
+            ),
+            (
+                "partition",
+                lambda document, schema_version: prepare_completed_partition(
+                    kind="universe",
+                    exchange="SSE",
+                    shard_index=0,
+                    schema_version=schema_version,
+                    records=(document,),
+                ),
+            ),
+        )
+        safe_whole_lexemes = getattr(
+            result_artifact_inputs_module,
+            "_SAFE_WHOLE_LEXEMES",
+            frozenset(),
+        )
+        attacks = (
+            (
+                "classifier_table",
+                "_SAFE_WHOLE_LEXEMES",
+                safe_whole_lexemes | {"password"},
+                {"password": "synthetic"},
+                "1.0",
+            ),
+            (
+                "validator_helper",
+                "_validate_detached_json",
+                lambda _: None,
+                {"password": "synthetic"},
+                "1.0",
+            ),
+            (
+                "schema_bound",
+                "_MAX_SCHEMA_TOKEN_BYTES",
+                1_024,
+                {},
+                "a" * 129,
+            ),
+        )
+
+        for attack, private_name, replacement, document, schema_version in attacks:
+            with patch.object(
+                result_artifact_inputs_module,
+                private_name,
+                replacement,
+                create=True,
+            ):
+                for factory_name, call in calls:
+                    with self.subTest(attack=attack, factory=factory_name):
+                        with self.assertRaises(ValueError):
+                            call(document, schema_version)
+
+    def test_module_private_prepared_type_cannot_supply_mutable_state(self) -> None:
+        class _RetainedPreparedValues:
+            retained: list[_RetainedPreparedValues] = []
+
+            def __init__(
+                self,
+                *,
+                relative_path: str,
+                schema_version: str,
+                content_bytes: bytes,
+                sha256: str,
+                byte_count: int,
+                record_count: int,
+            ) -> None:
+                self.relative_path = relative_path
+                self.schema_version = schema_version
+                self.content_bytes = content_bytes
+                self.sha256 = sha256
+                self.byte_count = byte_count
+                self.record_count = record_count
+                self.retained.append(self)
+
+            def __getitem__(self, index: int) -> object:
+                return (
+                    self.relative_path,
+                    self.schema_version,
+                    self.content_bytes,
+                    self.sha256,
+                    self.byte_count,
+                    self.record_count,
+                )[index]
+
+        for factory_name, factory in _prepared_factories():
+            _RetainedPreparedValues.retained.clear()
+            with self.subTest(factory=factory_name):
+                with patch.object(
+                    result_artifact_inputs_module,
+                    "_PreparedValues",
+                    _RetainedPreparedValues,
+                    create=True,
+                ):
+                    prepared = factory({"status": "limited"})
+                expected = prepared.content_bytes
+                for retained in _RetainedPreparedValues.retained:
+                    retained.content_bytes = b'{"password":"forged"}\n'
+                self.assertEqual(prepared.content_bytes, expected)
+                self.assertFalse(_RetainedPreparedValues.retained)
+
+    def test_exported_factories_do_not_expose_prepared_builder_arguments(self) -> None:
         prepared = prepare_candidate(
             canonical_security_id="SSE:600519",
             schema_version="1.0",
             document={"status": "limited"},
         )
-        factory_closure = prepare_candidate.__closure__
-        self.assertIsNotNone(factory_closure)
-        assert factory_closure is not None
-        builder = factory_closure[0].cell_contents
-        self.assertTrue(callable(builder))
-        with self.assertRaises(ValueError):
-            builder(
-                relative_path="candidates/SSE-600519.json",
-                schema_version="1.0",
-                content_bytes=b'{"password":"leaked"}\n',
-                record_count=1,
-            )
-
-        builder_defaults = builder.__kwdefaults__
-        self.assertIsNotNone(builder_defaults)
-        assert builder_defaults is not None
-        register = builder_defaults["_register"]
-        forged_values = result_artifact_inputs_module._PreparedValues(
-            "../../outside.json",
-            "forged",
-            b'{"password":"leaked"}\n',
-            "0" * 64,
-            22,
-            -1,
-        )
-        with self.assertRaises(ValueError):
-            register(prepared, forged_values)
+        for factory in (prepare_candidate, prepare_completed_partition):
+            with self.subTest(factory=factory.__name__):
+                with self.assertRaises(TypeError):
+                    factory(
+                        relative_path="../../outside.json",
+                        schema_version="forged",
+                        content_bytes=b'{"password":"leaked"}\n',
+                        record_count=-1,
+                    )
 
         self.assertIsInstance(prepared, PreparedResultArtifactFile)
         self.assertEqual(prepared.content_bytes, b'{"status":"limited"}\n')
@@ -1483,6 +1575,10 @@ class ResultArtifactInputTests(unittest.TestCase):
         for implementation_name in (
             "_MODULE_AUTHORITY",
             "_PREPARED_VALUES",
+            "_PreparedValues",
+            "_SAFE_WHOLE_LEXEMES",
+            "_validate_detached_json",
+            "_MAX_FILE_BYTES",
             "_prepared_file",
         ):
             with self.subTest(implementation_name=implementation_name):

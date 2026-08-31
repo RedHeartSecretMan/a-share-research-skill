@@ -11,6 +11,7 @@ from decimal import Decimal
 from enum import Enum, auto
 from hashlib import sha256
 from ipaddress import IPv6Address, ip_address
+from types import FunctionType as _FunctionType
 from typing import NamedTuple, cast
 from unicodedata import normalize
 from urllib.parse import parse_qsl, unquote, urlsplit
@@ -357,6 +358,7 @@ def _build_prepared_registry() -> tuple[
     Callable[[object], bool],
     Callable[[object, _PreparedValues], None],
 ]:
+    prepared_values_type = _PreparedValues
     registered_values: dict[
         int,
         tuple[ReferenceType[object], _PreparedValues],
@@ -374,7 +376,7 @@ def _build_prepared_registry() -> tuple[
 
     def register(prepared: object, values: _PreparedValues) -> None:
         identifier = id(prepared)
-        if identifier in registered_values or not _prepared_values_are_valid(values):
+        if identifier in registered_values or type(values) is not prepared_values_type:
             raise ValueError("result artifact prepared file is invalid")
 
         def discard(dead_reference: ReferenceType[object]) -> None:
@@ -427,8 +429,6 @@ class _PreparedResultArtifactFileMeta(ABCMeta):
         instance: object,
         _is_registered: Callable[[object], bool] = _prepared_instance_check,
     ) -> bool:
-        if type(instance) is not _PreparedResultArtifactFile:
-            return False
         return _is_registered(instance)
 
 
@@ -620,6 +620,8 @@ def _prepared_file(
         byte_count=len(content_bytes),
         record_count=record_count,
     )
+    if not _prepared_values_are_valid(values):
+        raise ValueError("result artifact prepared file is invalid")
     prepared = object.__new__(_PreparedResultArtifactFile)
     _register(prepared, values)
     return prepared
@@ -1725,7 +1727,10 @@ def _prepare_candidate(
 
 
 def _bind_prepared_factories(
+    *,
     prepared_builder: Callable[..., PreparedResultArtifactFile],
+    candidate_preparer: Callable[..., PreparedResultArtifactFile],
+    partition_preparer: Callable[..., PreparedResultArtifactFile],
 ) -> tuple[
     Callable[..., PreparedResultArtifactFile],
     Callable[..., PreparedResultArtifactFile],
@@ -1736,7 +1741,7 @@ def _bind_prepared_factories(
         schema_version: str,
         document: Mapping[str, object],
     ) -> PreparedResultArtifactFile:
-        return _prepare_candidate(
+        return candidate_preparer(
             _prepared_builder=prepared_builder,
             canonical_security_id=canonical_security_id,
             schema_version=schema_version,
@@ -1751,7 +1756,7 @@ def _bind_prepared_factories(
         schema_version: str,
         records: Sequence[Mapping[str, object]],
     ) -> PreparedResultArtifactFile:
-        return _prepare_completed_partition(
+        return partition_preparer(
             _prepared_builder=prepared_builder,
             kind=kind,
             exchange=exchange,
@@ -1763,17 +1768,84 @@ def _bind_prepared_factories(
     return prepare_candidate, prepare_completed_partition
 
 
+def _freeze_validation_graph() -> tuple[
+    Callable[..., PreparedResultArtifactFile],
+    Callable[..., PreparedResultArtifactFile],
+    Callable[..., PreparedResultArtifactFile],
+]:
+    """Capture one private, immutable-by-interface validation capability graph."""
+
+    module_globals = globals()
+    frozen_globals = dict(module_globals)
+    frozen_globals["_SEMANTIC_ATOM_ALIASES_BY_INITIAL"] = {
+        initial: tuple(aliases)
+        for initial, aliases in _SEMANTIC_ATOM_ALIASES_BY_INITIAL.items()
+    }
+    frozen_globals["_ORDINARY_SAFE_COMPOUND_SUFFIXES"] = {
+        key: tuple(suffixes)
+        for key, suffixes in _ORDINARY_SAFE_COMPOUND_SUFFIXES.items()
+    }
+    frozen_globals["_CANONICAL_JSON_ENCODER"] = json.JSONEncoder(
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    excluded = {
+        "_bind_prepared_factories",
+        "_build_prepared_registry",
+        "_freeze_validation_graph",
+    }
+    source_functions = {
+        name: value
+        for name, value in module_globals.items()
+        if name.startswith("_")
+        and name not in excluded
+        and isinstance(value, _FunctionType)
+    }
+    frozen_functions: dict[str, _FunctionType] = {}
+    for name, source in source_functions.items():
+        frozen = _FunctionType(
+            source.__code__,
+            frozen_globals,
+            source.__name__,
+            source.__defaults__,
+            source.__closure__,
+        )
+        frozen.__kwdefaults__ = (
+            None if source.__kwdefaults__ is None else dict(source.__kwdefaults__)
+        )
+        frozen.__annotations__ = dict(source.__annotations__)
+        frozen.__qualname__ = source.__qualname__
+        frozen.__module__ = source.__module__
+        frozen_functions[name] = frozen
+    frozen_globals.update(frozen_functions)
+    return (
+        cast(
+            Callable[..., PreparedResultArtifactFile],
+            frozen_functions["_prepared_file"],
+        ),
+        cast(
+            Callable[..., PreparedResultArtifactFile],
+            frozen_functions["_prepare_candidate"],
+        ),
+        cast(
+            Callable[..., PreparedResultArtifactFile],
+            frozen_functions["_prepare_completed_partition"],
+        ),
+    )
+
+
+(
+    _frozen_prepared_builder,
+    _frozen_candidate_preparer,
+    _frozen_partition_preparer,
+) = _freeze_validation_graph()
 prepare_candidate, prepare_completed_partition = _bind_prepared_factories(
-    _prepared_file
+    prepared_builder=_frozen_prepared_builder,
+    candidate_preparer=_frozen_candidate_preparer,
+    partition_preparer=_frozen_partition_preparer,
 )
-del _prepared_file
-del _prepared_values_lookup
-del _prepared_instance_check
-del _register_prepared
-del _build_prepared_registry
-del _prepared_values
-del _SEALED_PREPARED_TYPES
-del _bind_prepared_factories
 
 
 __all__ = [
@@ -1781,3 +1853,10 @@ __all__ = [
     "prepare_candidate",
     "prepare_completed_partition",
 ]
+
+
+for _private_name in tuple(
+    name for name in globals() if name.startswith("_") and not name.startswith("__")
+):
+    del globals()[_private_name]
+del _private_name
