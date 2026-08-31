@@ -198,9 +198,6 @@ _SAFE_COMPOUND_WHOLE_LEXEMES = _SAFE_WHOLE_LEXEMES - {
     "rotation",
     "server",
 }
-_ORDINARY_PARTIAL_ATOM_TOKENS = frozenset(
-    {"ghost", "ghosts", "hockey", "monkey", "monkeys"}
-)
 _ORDINARY_SEMANTIC_HOMOGRAPHS = tuple(
     sorted(
         {
@@ -217,6 +214,7 @@ _ORDINARY_SEMANTIC_HOMOGRAPHS = tuple(
             "hockey",
             "hostess",
             "hostesses",
+            "hostage",
             "hostile",
             "hostility",
             "keyboard",
@@ -232,6 +230,7 @@ _ORDINARY_SEMANTIC_HOMOGRAPHS = tuple(
             "secretaries",
             "secretary",
             "secretion",
+            "secretive",
             "secretory",
             "shaping",
             "strawberry",
@@ -249,13 +248,8 @@ _ORDINARY_SEMANTIC_HOMOGRAPHS = tuple(
         key=lambda value: (-len(value), value),
     )
 )
+_ORDINARY_PARTIAL_ATOM_TOKENS = frozenset(_ORDINARY_SEMANTIC_HOMOGRAPHS)
 _ORDINARY_SAFE_COMPOUND_SUFFIXES = {"wordtoken": ("iser", "izer")}
-_ORDINARY_SENSITIVE_PREFIX_SUFFIXES = {
-    "host": ("age", "ess", "esses", "ile", "ility"),
-    "secret": ("arial", "ariat", "ary", "ion", "ive", "ory"),
-    "token": ("isation", "iser", "ization", "izer", "omics"),
-    "transport": ("ation",),
-}
 _SEMANTIC_ATOMS = tuple(
     sorted(
         {
@@ -740,9 +734,9 @@ def _edge_spanning_atoms_are_sensitive(
         if run.start != 0:
             continue
         for atom in run.atoms.intersection(_SENSITIVE_SINGLE_ATOMS):
-            ordinary_suffixes = _ORDINARY_SENSITIVE_PREFIX_SUFFIXES.get(atom, ())
             if not any(
-                token[run.end :].startswith(suffix) for suffix in ordinary_suffixes
+                token.startswith(ordinary_lexeme) and atom in ordinary_lexeme
+                for ordinary_lexeme in _ORDINARY_SEMANTIC_HOMOGRAPHS
             ):
                 return True
     return any(
@@ -1413,8 +1407,11 @@ def _unsafe_persisted_string(value: str) -> bool:
     nested_locators = [(value, 0)]
     while nested_locators:
         current, depth = nested_locators.pop()
-        percent_decoded = _closed_percent_decode(current)
-        if percent_decoded is None:
+        try:
+            percent_decoded = unquote(current, encoding="utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return True
+        if _contains_c0_control(percent_decoded):
             return True
         if percent_decoded != current:
             nested_locators.append((percent_decoded, depth))

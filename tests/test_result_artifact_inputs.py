@@ -713,6 +713,20 @@ class ResultArtifactInputTests(unittest.TestCase):
             self.assertNotIn("/private/tmp", str(raised.exception))
             self.assertNotIn("do-not-leak", str(raised.exception))
 
+    def test_plain_text_percent_signs_are_not_locator_decoding(self) -> None:
+        ordinary_values = (
+            "margin 10%",
+            "literal % sign",
+            "percent%25value",
+            "growth%20rate",
+        )
+        for value in ordinary_values:
+            document = {"note": value}
+            for factory_name, factory in _prepared_factories():
+                with self.subTest(value=value, factory=factory_name):
+                    prepared = factory(document)
+                    self.assertIn(value.encode(), prepared.content_bytes)
+
     def test_public_locator_span_never_absorbs_adjacent_local_path(self) -> None:
         unsafe_documents: tuple[Mapping[str, object], ...] = (
             {
@@ -1624,6 +1638,9 @@ class ResultArtifactSemanticKeyTests(unittest.TestCase):
             "hostility_score",
             "secretory_activity",
             "tokenomics_metric",
+            "hostage_status",
+            "hostage_count",
+            "secretive_status",
         )
 
         for raw_key in ordinary_keys:
