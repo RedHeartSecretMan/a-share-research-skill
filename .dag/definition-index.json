@@ -1,0 +1,13 @@
+{
+  "inputs": [
+    {
+      "blob_oid": "046421da9af651cef61a936326d0649a553f5c0b",
+      "path": ".dag/definition-github-spec-0008.json"
+    },
+    {
+      "blob_oid": "c40c8a83b9399d9384c314ff0153641e92607139",
+      "path": "docs/specs/0008-v0.4.0-market-foundation-and-screening.md"
+    }
+  ],
+  "schema_version": 1
+}
