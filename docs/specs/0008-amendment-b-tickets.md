@@ -1,11 +1,11 @@
 # Spec 0008 Amendment B：任务修订与依赖
 
 基线：`codex/v0.4.0-dag` / `b564f9e3c64477d3c95277cfb9ebb2f58f278a23`，Spec 0008 与 `.dag/definition-github-spec-0008.json`。
-本文件是[主提案](0008-amendment-b-delivery-plan.md)的责任映射；[来源与时间契约](0008-amendment-b-source-time.md)、[结果包恢复协议](0008-amendment-b-artifact-protocol.md)与本文须一同审查。它不表示 Tracker 已更新、Ticket 已接受或 DAG 已启动。V4-U、V4-I、V4-F 是逻辑 ID，不是 GitHub Issue 编号。
+本文件是[主修订](0008-amendment-b-delivery-plan.md)的责任映射；[来源与时间契约](0008-amendment-b-source-time.md)、[结果包恢复协议](0008-amendment-b-artifact-protocol.md)与本文须一同审查。维护者已采用 B1–B3 推荐方案；本地修订尚未应用到 Tracker 或绑定为 Definition Checkpoint，不表示 Ticket 已接受或 DAG 已启动。V4-U、V4-I、V4-F 是逻辑 ID，不是 GitHub Issue 编号。
 
 ## 1. 最小结构决定
 
-- 仅新增 `V4-U`（可执行时点化三交易所证券池来源）与 `V4-I`（盘中三交易所成交额和证券去重广度来源）。
+- 新增 `V4-U`（可执行时点化三交易所证券池来源）、`V4-I`（盘中三交易所成交额和证券去重广度来源）与 `V4-F`（有界来源可行性探索）。
 - 冻结筛选上下文 `C` 由已有 #117 拥有；#120、#69 消费，不新增上下文 Ticket。
 - #108 保持原票，按结果包协议修订；不按修复轮次新增 Ticket，不将受限平台测试当作跨平台生产证明。
 - #110 保留纯 Universe 归一化、冻结输入与分母对账；`V4-U` 填补其明确排除的 provider-specific acquisition/parser。
@@ -13,8 +13,9 @@
 - #93 直接消费 #117/#118/`V4-I`，不再把 #112 当作盘中输入前置；#96 显式依赖 #112 与 #93。
 - `V4-U` 不直接依赖 #116：现有 seam 是 `ExchangeListOutcome` / `IdentityBatchOutcome` → #110 prepared snapshots，未使用 `OperationOutcome`。
 - `V4-I` 依赖 `V4-U` 的当前适用会话 membership；筛选使用的前一个共同完成交易日 universe 不得代理当前盘中分母。
+- `V4-F` 为 #112/#117/#118/`V4-U`/`V4-I`/#120 提供实现前来源证据，不阻塞 #116/#119/#108；探索记录不替代 #98 的冻结候选最终 attestation。
 
-## 2. 硬依赖建议与无环证明
+## 2. 已批准的硬依赖与无环证明
 
 下表保留所有未列为变更的基线 hard edges；既有直接消费依赖予以保留；新增直接消费关系显式列出，纯排序关系不加 hard edge。
 
@@ -24,16 +25,17 @@
 | #105 | #101 | 保持基线 |
 | #110 | 无 | 已接受输入基础在 captured integration tip 中，保持基线 |
 | #119 | 无 | 保持基线；不是 universe、文件系统或排名 Ticket |
+| V4-F | 无 | 独立有界来源探索，不依赖生产实现 |
 | #114 | #105 | 保持基线 |
 | #115 | #101 | 保持已接受 prepared-input 契约，不自动重开 |
 | #116 | #105 | 保持基线 |
 | #108 | #115 | 保持基线；不直接消费来源或日历实现 |
-| #117 | #105、#116 | 扩大已拥有的 session/context 输出，不依赖筛选 workflow |
-| #118 | #105、#116、#117 | 保持基线 |
-| #112 | #114、#116 | 保留日报/两融独立输出 |
-| V4-U | #110、#119 | 消费现有 universe seam 与实际请求计数 lane |
-| V4-I | #116、#117、#119、V4-U | immutable outcome、当前会话、请求预算及当前 membership |
-| #120 | #110、#119、#117、V4-U | 保留原输入/调用边界，增加 C 与生产来源的直接消费 |
+| #117 | #105、#116、V4-F | 扩大已拥有的 session/context 输出，先消费日历可行性证据，不依赖筛选 workflow |
+| #118 | #105、#116、#117、V4-F | 保留基线，增加固定四指数可行性证据 |
+| #112 | #114、#116、V4-F | 保留日报/两融独立输出，先消费来源可行性证据 |
+| V4-U | #110、#119、V4-F | 消费现有 universe seam、实际请求计数 lane 与清单/身份可行性证据 |
+| V4-I | #116、#117、#119、V4-U、V4-F | immutable outcome、当前会话、请求预算、当前 membership 与盘中可行性证据 |
+| #120 | #110、#119、#117、V4-U、V4-F | 保留原输入/调用边界，增加 C、生产来源及批量因子可行性证据的直接消费 |
 | #68 | #108、#120 | 保持排名和持久化组合边界 |
 | #69 | #68、#117 | 保留排名前置，显式消费上下文准备与恢复接口 |
 | #93 | #117、#118、V4-I | 删除 #112；盘中输入确有独立生产者 |
@@ -41,7 +43,7 @@
 | #97 | #69、#96 | 保持两条完整产品链汇合 |
 | #98 | #97 | 保持冻结后最终 live attestation |
 
-一个合法拓扑分层为：`{101,110,119}` → `{105,115,V4-U}` → `{114,116,108}` → `{112,117}` → `{118,V4-I,120}` → `{93,68}` → `{96,69}` → `{97}` → `{98}`。
+修订图共 21 个节点、40 条 hard edges。一个合法拓扑分层为：`{101,110,119,V4-F}` → `{105,115,V4-U}` → `{114,116,108}` → `{112,117}` → `{118,V4-I,120}` → `{93,68}` → `{96,69}` → `{97}` → `{98}`。
 分层仅证明无环，不代表所有同层票应并发；实际 ready 仍需回读 accepted/claim 状态。
 不存在 `#69 → #120` 边；C 不在 #69 内生成上游依赖，因此不会形成筛选闭环。
 #69 显式依赖 #117 的上下文接口；既有 #68 依赖仍保留。
@@ -59,7 +61,7 @@
 历史来源缺失时如实形成 partial/unavailable 或 unproven，不能把未知名单数量当 0；当前 membership 使用同一来源资格和采集代码，不重新实现另一套清单产品。
 不负责决定共同完成交易日、排名、artifact、候选深研或公共 workflow 注册。
 
-**依赖与消费者**：hard predecessors 为 #110/#119；直接消费者为 #120/V4-I；正式 manifest 由最终实际 workflow obligations 派生。
+**依赖与消费者**：hard predecessors 为 #110/#119/V4-F；直接消费者为 #120/V4-I；正式 manifest 由最终实际 workflow obligations 派生。
 不为复用名词而增加 #116 依赖；如果实现需要向 UnifiedResearchResult 投影，使用既有 operation qualification/projection 契约，不重写 #110 的 immutable snapshot 权威。
 
 **AC**：
@@ -87,7 +89,7 @@
 **范围**：只交付当前会话累计/横截面观测，不交付逐笔、分钟流、盘口或订阅；已有行业板块广度仍保留原能力语义，不得累加板块涨跌家数产生证券去重广度。
 不能把 #112 的完成日成交额、单指数/ETF 成交额或 stale 值当盘中字段。
 
-**依赖与消费者**：hard predecessors 为 #116/#117/#119/V4-U；直接消费者 #93，之后 #96/#97/#98。
+**依赖与消费者**：hard predecessors 为 #116/#117/#119/V4-U/V4-F；直接消费者 #93，之后 #96/#97/#98。
 V4-U 是实质数据依赖：用于当前 session expected membership；不得用“名称同为 universe”复用上一筛选日分母。
 
 **AC**：
@@ -120,11 +122,11 @@ V4-U 是实质数据依赖：用于当前 session expected membership；不得�
 | #119 | 一条 provider lane 管 initial/retry/timeout/quiescence；U/I/120 复用 | actual attempts 与 observable invocation 一致；不扩为通用调度框架；容量测试从 setup 外计时，清除 ignored runtime 污染 |
 | #120 | C+V4-U→时点合格 factor partitions；不再假设只有合成 Universe 可用 | 每证券身份/日期/cutoff 与 C 一致；20 个适用成交日、财务 available_at、factor-local unranked、实际预算 AC 保留；增加最大批准规模容量证据 |
 | #68 | 合格 factor+C 引用→固定四因子排名与 artifact 分区 | 固定数学/权重/并列/unranked 不变；三所小型纵向案例验证 C、分母与 artifact 引用，缺失不得改分母或重加权 |
-| #69 | C+冻结排名→有界候选、receipt；C 由 #117 提供，不由候选链反向供应上游 | B1 批准后同步严格输入、模板与候选映射：standard 显式 target_pe，fast 禁止；缺类别证据不补值，BSE/历史限制显式 blocked；create 捕获一次时钟，resume 复用原 C；B2 批准后接入 finalized receipt recovery；失败不改排名 |
+| #69 | C+冻结排名→有界候选、receipt；C 由 #117 提供，不由候选链反向供应上游 | 按已批准 B1 同步严格输入、模板与候选映射：standard 显式 target_pe，fast 禁止；缺类别证据不补值，BSE/历史限制显式 blocked；create 捕获一次时钟，resume 复用原 C；按已批准 B2 接入 finalized receipt recovery；失败不改排名 |
 | #93 | #117 session+#118 indices+V4-I turnover/breadth→market_wide_intraday fold | 去除日报/行业广度代理；保留 60 秒双边界、失败隔离、会话外 skip；I 的分母不完整不得生成完整市场结论 |
 | #96 | #93+#112→十五项 overview @2.0 | completed-session 与 current-session obligations 分别声明；保留已有十能力/tier；新增广度 owner 服务既定盘中 capability，不擅增第十六能力 |
 | #97 | 两条完成链→干净 installed-copy E2E、文档和分发 | 三所合成端到端场景、跨日 resume、C 漂移、真实平台持久化和干净复制测试；不复制 .runtime/pycache；全部版本与公开能力一致 |
-| #98 | clean candidate→typed attempts→final evidence→durable matrix | 精确 owner 分母与下表 release-critical capability 均闭合；early feasibility 若批准仍不可代替同候选新鲜 attestation |
+| #98 | clean candidate→typed attempts→final evidence→durable matrix | 精确 owner 分母与下表 release-critical capability 均闭合；已批准 B3 的 early feasibility 不可代替同候选新鲜 attestation |
 
 ### C 的 create / resume 约束
 
@@ -151,24 +153,24 @@ V4-U 是实质数据依赖：用于当前 session expected membership；不得�
 | 分发/质量 | 各票 + #97 | #98 | 原 full Python 3.12、Ruff、strict mypy、Skill validation、双审等门禁不删 |
 | 最终发布 attestation | #98 | Whole-DAG acceptance | 同 clean candidate、新鲜精确分母、全部来源状态、无自动发布 |
 
-## 7. 来源可行性与尚未生效的 early-live 备选
+## 7. V4-F 有界来源可行性探索
 
-生效后采用的离线顺序：生产来源票实现前先读第一方契约与已授权留存的来源形状，逐 owner 给出日期/字段/单位/许可/历史范围/分页/预算表；找不到证据的项标为未证明，禁止据此伪造 production shape 或 live 成功。
-所有普通测试继续离线；本草案未授权提前网络采集，也不把阅读官网等同于 provider live attempt。
+维护者已采用 B3，将 `V4-F` 纳入本地修订图；该决定批准独立、有限预算的 early-live 可行性阶段，不表示探索已执行或生产来源已获资格。该阶段随正式定义应用后执行。
+生产来源票实现前先读第一方契约与已授权留存的来源形状，逐 owner 给出日期/字段/单位/许可/历史范围/分页/预算表；找不到证据的项标为未证明，禁止据此伪造 production shape 或 live 成功。
+所有普通测试继续离线；阅读官网与 provider live attempt 分开记录。
 
-**只有维护者另行批准 early-live 决策时**，才新增独立逻辑票 `V4-F`：有界来源可行性探索；不依赖生产实现，不写发布资格、不更新 fixtures、不计入 #98 attestation，不提供通用探针公共 CLI。
-V4-F 在批准时固定候选 owners、请求上限、证据保存/脱敏边界及停止条件；产出“可行/有条件/未证实”的来源语义与覆盖证据。
-仅来源实现票 #112/#117/#118/U/I/#120 消费 V4-F 的证据，按实际 owner 归属建立最小前置；不阻断 #116/#119/#108 等纯基础票。
-V4-F 不依赖这些消费者，故加入后仍无环；若不批准，则不建 F、不改 hard edges，离线可行性阅读留在各来源票内，live 留到 #98。
-该备选当前未生效，不能写成已获 early-live 授权或真实 GitHub Issue。
+`V4-F` 不依赖生产实现，不写发布资格、不更新 fixtures、不计入 #98 attestation，不提供通用探针公共 CLI。
+开始探索前，执行者先编制可审查的有限预算来源清单，固定候选 owners、访问范围、请求上限、证据保存/脱敏边界及停止条件，并取得维护者对该具体清单的确认；这些具体执行参数尚待形成，不需重复批准 B3 的政策选择。
+V4-F 产出“可行/有条件/未证实”的来源语义与覆盖证据。#112/#117/#118/U/I/#120 六张来源实现票均直接依赖 V4-F，消费各自相关证据；不阻断 #116/#119/#108 等纯基础票。
+V4-F 不依赖这些消费者，故加入后仍无环。其逻辑 ID 尚未映射真实 GitHub Issue，Tracker 与 Definition Checkpoint 仍待应用。
 
-V4-F 条件性 Ticket 定义（仅在明确批准后应用）：
+V4-F Ticket 定义：
 
 - Objective：在实现前确认 release-critical 数据获取是否有可证语义、时点与容量路径，尽早给出不可行/未知结论。
 - Hard predecessors：无；它不能依赖 U/I 或其他生产 owner 已实现，也不得临时接管生产实现。
-- 输入：已批准 Spec、capability→候选 owner 表、明确的访问/许可与单次探索预算；不得读取或输出无关本地凭据。
+- 输入：已批准的 Spec 修订、capability→候选 owner 表、按现有权限明确的访问/许可与单次探索预算；不得读取或输出无关本地凭据。
 - 输出：带时点、来源定位和限定范围的脱敏可行性记录，保留失败、覆盖缺口与尚需批准的语义/预算变更。
-- AC：只执行批准清单内有界查询；核验历史清单能力、财务公开时间、20 日批量覆盖、BSE 和盘中时间/广度语义；未知仍为未知。
+- AC：开始前形成上述可审查来源清单并取得维护者确认，只执行已确认清单内有界查询；核验历史清单能力、财务公开时间、20 日批量覆盖、BSE 和盘中时间/广度语义；未知仍为未知。
 - AC：达到预算、访问限制或语义矛盾时停止该来源；不得用未批准 fallback、重复重试或修改 product scope 获得表面成功。
 - AC：记录不计入正式 operation 资格完成或最终 release evidence，不回写普通测试 fixtures，不改变生产 registry。
 - Verification：独立检查范围、次数、脱敏、时点和结论证据匹配；无 full production suite 要求，因为该票不修改生产实现。
@@ -202,4 +204,4 @@ operation attempted 100% 与 capability 可用是两项独立门禁；跨候选�
 - 前置可并行不等于必须并行；按共享文件、实际 integration tip 和双审吞吐限流，不把 provider 最大三组混同 Agent 数量。
 - 保留每票原质量门禁；修复测试输入环境和工具复现性，不通过删测试、放宽 timeout 或降低审查范围加速。
 - #69/#96 已有 installed-copy E2E；新增的是更早共享的小型三所场景和跨 seam 断言，不声称原计划完全没有 E2E。
-- 此草案不改变 push/tag/Release/Tracker 写入的授权边界；生效后必须另行应用定义、回读依赖和接受状态，再启动实施。
+- 本地修订不改变 push/tag/Release/Tracker 写入的授权边界；必须另行应用定义、回读依赖和接受状态，再启动实施。

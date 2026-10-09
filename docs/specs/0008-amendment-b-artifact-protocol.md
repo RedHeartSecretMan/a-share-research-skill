@@ -1,18 +1,18 @@
 # Spec 0008 Amendment B：结果包恢复协议
 
-本稿是[主提案](0008-amendment-b-delivery-plan.md) B2 的配套建议；任务归属见[责任映射](0008-amendment-b-tickets.md)。本稿是待维护者批准的计划修订建议，不构成 #108 验收、DAG 启动或远端写入授权。依据为 `codex/v0.4.0-dag@b564f9e` 的 Spec 0008、`.dag/definition-github-spec-0008.json` 中 #108/#115 的完整定义，以及 #115 Maintainer Decision A。未接受的 `96a24a9` 仅用于说明验证缺口，不作为已交付能力或已复现运行故障。
+本文是[主修订](0008-amendment-b-delivery-plan.md) B2 的配套规范；任务归属见[责任映射](0008-amendment-b-tickets.md)。维护者已明确采用 B1–B3 推荐方案，包括第 1 节五项 B2 决定及终态 resume 路由。本文记录已批准的本地计划规范，尚未应用到 Tracker 或完成新的 Definition Checkpoint，不构成 #108 验收、DAG 启动或远端写入授权。依据为 `codex/v0.4.0-dag@b564f9e` 的 Spec 0008、`.dag/definition-github-spec-0008.json` 中 #108/#115 的完整定义，以及 #115 Maintainer Decision A。未接受的 `96a24a9` 仅用于说明验证缺口，不作为已交付能力或已复现运行故障。
 
-## 1. 修订目的与审批边界
+## 1. 修订目的与已批准边界
 
 保留 Spec 0008 的显式结果目录、精确 resume、完整 shard 写一次、manifest-last、可验篡改、有界 receipt、唯一公共 CLI 和 unchanged `--output` 语义。修订只把 #108 的并发、持久化、所有权和恢复义务写成可实现、可审查的协议，避免把“验证失败零修改”与“多步 apply 中途失败仍没有任何物理修改”混为一谈。
 
-以下决定必须由维护者明确批准并绑定到 DAG Definition，不能由执行者自行解释：
+以下五项决定均已随 B2 推荐方案获得维护者批准；落实时须绑定到 DAG Definition，不能由执行者自行改变：
 
-1. **生产文件系统支持范围。** 采用第 2 节所述本地文件系统能力边界；生产支持不从 deterministic Adapter 能运行推导。若现有发布承诺比此范围更广，批准前必须指出并决定相应平台的实现或范围迁移。
+1. **生产文件系统支持范围。** 采用第 2 节所述本地文件系统能力边界；生产支持不从 deterministic Adapter 能运行推导。若实施时发现现有发布承诺比此范围更广，须指出冲突并另行决定相应平台的实现或范围迁移，不静默改变既有承诺。
 2. **AC2 的原子性解释。** apply 前拒绝保证工具零修改；apply 开始后的故障保证持久化 journal 支持安全恢复，不承诺任意多文件物理原子回滚。把 AC2 按此解释落文属于验收边界决定。
 3. **故障范围。** 支持普通异常、进程突然终止和单次恢复再次中断；机器断电、内核崩溃或存储硬件违反已成功持久化承诺，不纳入本版本必备运行验收。该界定不允许忽略 `fsync` 失败或以读回成功代替持久化成功。
 4. **非合作并发写入。** 对检测到的外部替换、篡改、重定向保持失败关闭；不承诺工具可以在任意第三方持续改写同一目录时提供整个目录的线性一致快照或恢复到其调用前状态。
-5. **`resume` 的终态路由。** 建议使同请求 `mode=resume` 在识别到已提交 manifest 时只返回恢复的 receipt。它细化 #108 AC5，但改变 [Spec 0008](0008-v0.4.0-market-foundation-and-screening.md) 的 create/resume 条款“目标必须是未 finalize 的 partial”的限定，须明确批准；批准前不能把该 CLI 行为当作既有义务。
+5. **`resume` 的终态路由。** 同请求 `mode=resume` 在识别到已提交 manifest 时只返回恢复的 receipt。该路由已获批准，细化 #108 AC5，并修订 [Spec 0008](0008-v0.4.0-market-foundation-and-screening.md) 的 create/resume 条款“目标必须是未 finalize 的 partial”的限定；它是本次新增的集成义务，不表示旧版本已经实现。
 
 ## 2. 支持模型
 
@@ -74,7 +74,7 @@ deterministic Adapter 必须在 production anchored-FD 支持关闭时工作。�
 | Manifest committed | manifest 最后发布，内容及必要目录项持久化成功；所有文件摘要、计数及 identity 校验闭合 | 即使 receipt 尚未返回，也不再开放内容写入。显式恢复走 finalized-receipt recovery，返回同一确定性 receipt。普通写入、覆盖和删除仍被拒绝。 |
 | Sealed / receipt recoverable | manifest 和全部声明文件有效；没有未知 inventory；协议允许的清理已完成或有精确 ownership journal | 重复 receipt recovery 产生相同 receipt。若仍有可证明拥有的协议残留，只能按下一节规则清理；未知或被替换残留只读拒绝。 |
 
-本稿建议 `mode=resume` 先识别合法 partial 或已提交 manifest、receipt 丢失的状态；后者只走 receipt recovery，不重新执行研究、不改写完成文件、不新增 mode。该 CLI 路由须按第 1.5 项批准，再进入 #69/#97 的集成验收；Result Artifact 模块已有的 receipt recovery 义务不受待批准路由影响。
+`mode=resume` 先识别合法 partial 或已提交 manifest、receipt 丢失的状态；后者只走 receipt recovery，不重新执行研究、不改写完成文件、不新增 mode。该 CLI 路由已按第 1.5 项批准，须纳入 #69/#97 的集成验收；Result Artifact 模块已有的 receipt recovery 义务继续保留。
 
 ## 5. Ownership 与 finalized residue
 
@@ -119,21 +119,21 @@ Checkpoint 的 canonical UTF-8 编码大小上限继续精确为 **65,536 字节
 | 原 AC | 修订后承载与保留义务 | 变更性质 |
 |---|---|---|
 | AC1：owned state 加一个 unknown/tampered entry，拒绝且 pre-call tree/inode/bytes 不变 | 第 3 节全量 preflight；第 5 节 sealed-state 校验；第 7.1 项零修改证明 | 保留。工具自身在 preflight 期间不得先建临时文件再拒绝。 |
-| AC2：完整不可变计划、plan/apply 漂移、无部分 mutation | 第 1.2、2.2、3 节区分 apply 前拒绝和 apply 后恢复；所有条目先一起验证 | **需批准的原子性解释。** 不再把该文字解读为任意多文件物理原子回滚；不放松 apply 前零修改。 |
+| AC2：完整不可变计划、plan/apply 漂移、无部分 mutation | 第 1.2、2.2、3 节区分 apply 前拒绝和 apply 后恢复；所有条目先一起验证 | **已批准的原子性解释。** 不再把该文字解读为任意多文件物理原子回滚；不放松 apply 前零修改。 |
 | AC3：创建 marker 转移 atomic/recoverable，token/identity mismatch 不动 caller bytes | 第 4 节初始化状态和公开提交点；第 5 节 ownership；第 7.2/4/7 项 | 保留。原子性须绑定具体 namespace 提交点，marker 替换不能被无限扩展为跨文件原子事务。 |
-| AC4：每个 publication interruption 可恢复，未知残留不动 | 第 2.3、4、5、7.3–5 节，包含真实进程终止和恢复再次中断 | 保留并明确证明方式；故障范围决定须批准。实现不能把自身未建模窗口重新命名为 unknown 来免除恢复义务。 |
-| AC5：durable manifest 丢 receipt 可公开恢复，重复恢复确定 | 第 4 节 manifest committed/sealed；第 7.9 项 | 模块义务保留；`mode=resume` 终态路由按第 1.5 项另行批准。 |
+| AC4：每个 publication interruption 可恢复，未知残留不动 | 第 2.3、4、5、7.3–5 节，包含真实进程终止和恢复再次中断 | 保留并明确证明方式；故障范围已按 B2 批准。实现不能把自身未建模窗口重新命名为 unknown 来免除恢复义务。 |
+| AC5：durable manifest 丢 receipt 可公开恢复，重复恢复确定 | 第 4 节 manifest committed/sealed；第 7.9 项 | 模块义务保留；`mode=resume` 终态路由已按第 1.5 项批准。 |
 | AC6：finalized residue 的确切 name/identity 必须有持久化 ownership | 第 5 节和第 7.7 项 | 保留。内容和 manifest 不改写，只清理经全量验证的协议残留。 |
-| AC7：生产/确定性对等，全部接受的 failure phases，禁用 anchored-FD 不影响 deterministic | 第 2.1、7.3–8 节 | 保留；生产平台支持边界需批准，不能从 deterministic 对等推导生产支持。 |
+| AC7：生产/确定性对等，全部接受的 failure phases，禁用 anchored-FD 不影响 deterministic | 第 2.1、7.3–8 节 | 保留；生产平台支持边界已按 B2 批准，不能从 deterministic 对等推导生产支持。 |
 | AC8：检测 direct calls、aliases、global-object indirection，raw production persistence 不逃逸 | 第 3 节所有实际生产持久化与临时对象归属都经过 Adapter；继续原 architectural gate | 保留。概念状态表不授权 helper 绕过 Adapter。 |
-| AC9：既有 #67/#106 bounds、identity/resume、路径/并发、write-once、tamper/inventory、installed-copy/docs、`--output` | 第 2、4、5、6、7 节及原回归集 | 保留；任何平台或范围冲突在批准前显式列出。 |
+| AC9：既有 #67/#106 bounds、identity/resume、路径/并发、write-once、tamper/inventory、installed-copy/docs、`--output` | 第 2、4、5、6、7 节及原回归集 | 保留；后续发现的平台或范围冲突须显式列出并另行决策。 |
 | AC10：消费 #115 prepared-input，不重复生命周期验证 | 第 8 节、第 7.9 项 | 保留 Decision A，不扩大反射威胁模型。 |
 
 ## 10. 应精确更改 #108 的条目
 
 1. **Objective：** 保留完整生命周期交付目标；将“一项操作先观察全部状态、返回计划、重验后 apply”表述为第 3 节事务契约，补充 apply 后通过 journal 恢复的承诺，删除任何可被理解为任意多文件物理原子的措辞。
 2. **Scope and boundaries：** 新增第 2 节生产文件系统、合作并发、非合作修改与中断模型；保留 owned-only cleanup、manifest-last 和 #115 消费边界；明确 Adapter 的内部替换临时文件同样受 journal/inventory 规则约束。
-3. **AC2：** 批准后用第 9 节原子性解释替换现有泛化表述；完整计划在任何修改前全部通过，apply 后中断按已持久化 journal 恢复。
+3. **AC2：** 应用 Tracker 修订时，用第 9 节已批准的原子性解释替换现有泛化表述；完整计划在任何修改前全部通过，apply 后中断按已持久化 journal 恢复。
 4. **AC3/AC4：** 引用状态转移表，要求列出所有实际可持久化窗口、各自 ownership 证据和合法 create/resume 动作；保留 marker/target mismatch 零修改与每个接受阶段可恢复。
 5. **AC5/AC6：** 明确 manifest committed 后只允许 receipt recovery 及 journal-owned residue cleanup；增加公共 `mode=resume` 到 receipt recovery 的后续集成义务，不新增 mode，不重写任何完成内容。
 6. **AC7：** 将异常注入、真实进程终止、恢复再次中断和文件/目录持久化失败分开验收；生产/确定性对等仍为必要条件，生产支持范围单独记录。
