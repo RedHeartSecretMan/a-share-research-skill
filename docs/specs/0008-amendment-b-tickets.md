@@ -1,7 +1,7 @@
 # Spec 0008 Amendment B：任务修订与依赖
 
 基线：`codex/v0.4.0-dag` / `b564f9e3c64477d3c95277cfb9ebb2f58f278a23`，Spec 0008 与 `.dag/definition-github-spec-0008.json`。
-本文件是[主修订](0008-amendment-b-delivery-plan.md)的责任映射；[来源与时间契约](0008-amendment-b-source-time.md)、[结果包恢复协议](0008-amendment-b-artifact-protocol.md)与本文须一同审查。维护者已采用 B1–B3 推荐方案；本地修订尚未应用到 Tracker 或绑定为 Definition Checkpoint，不表示 Ticket 已接受或 DAG 已启动。V4-U、V4-I、V4-F 是逻辑 ID，不是 GitHub Issue 编号。
+本文件是[主修订](0008-amendment-b-delivery-plan.md)的责任映射；[来源与时间契约](0008-amendment-b-source-time.md)、[结果包恢复协议](0008-amendment-b-artifact-protocol.md)与本文须一同审查。维护者已采用 B1–B3 推荐方案，并另行授权 Tracker 应用与定义快照更新。正式任务与原生依赖已应用；这不表示 Ticket 已接受、Definition Checkpoint 已推广或 DAG 已启动。本文保留逻辑名称便于追踪：V4-F = #121、V4-U = #122、V4-I = #123。
 
 ## 1. 最小结构决定
 
@@ -162,7 +162,7 @@ V4-U 是实质数据依赖：用于当前 session expected membership；不得�
 `V4-F` 不依赖生产实现，不写发布资格、不更新 fixtures、不计入 #98 attestation，不提供通用探针公共 CLI。
 开始探索前，执行者先编制可审查的有限预算来源清单，固定候选 owners、访问范围、请求上限、证据保存/脱敏边界及停止条件，并取得维护者对该具体清单的确认；这些具体执行参数尚待形成，不需重复批准 B3 的政策选择。
 V4-F 产出“可行/有条件/未证实”的来源语义与覆盖证据。#112/#117/#118/U/I/#120 六张来源实现票均直接依赖 V4-F，消费各自相关证据；不阻断 #116/#119/#108 等纯基础票。
-V4-F 不依赖这些消费者，故加入后仍无环。其逻辑 ID 尚未映射真实 GitHub Issue，Tracker 与 Definition Checkpoint 仍待应用。
+V4-F 不依赖这些消费者，故加入后仍无环。其正式身份为 #121；完整任务与原生关系由回读快照保存，Definition Checkpoint 的接受与后续调度仍须遵循既定规则。
 
 V4-F Ticket 定义：
 

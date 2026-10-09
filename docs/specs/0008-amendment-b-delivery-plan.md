@@ -2,9 +2,9 @@
 
 ## 状态与适用范围
 
-**B1–B3 推荐方案已批准；本地修订已定稿，尚未应用到 GitHub Tracker 或生效 DAG。**
+**B1–B3 推荐方案已批准并应用到 GitHub Tracker；完整任务定义与原生依赖由回读快照和定义索引绑定。**
 
-本修订基于 `b564f9e3c64477d3c95277cfb9ebb2f58f278a23` 的 [Spec 0008](0008-v0.4.0-market-foundation-and-screening.md) 和[现行定义快照](../../.dag/definition-github-spec-0008.json)。2026-10-09（Asia/Shanghai），维护者明确确认：“采用 B1–B3 推荐方案”。批准覆盖下表及配套规范中的推荐分支，包括 B2 的五项细则与 B3 的独立来源可行性任务。该决定不接受任何历史实现候选，不改变现行定义索引；Tracker 应用与实施沿用原 Spec 的独立授权顺序。
+本修订以 `b564f9e3c64477d3c95277cfb9ebb2f58f278a23` 的 [Spec 0008](0008-v0.4.0-market-foundation-and-screening.md) 为基线；最新完整外部定义见[回读快照](../../.dag/definition-github-spec-0008.json)。2026-10-09（Asia/Shanghai），维护者明确确认“采用 B1–B3 推荐方案”，随后授权“应用 Tracker，并根据回读更新定义快照”。批准覆盖下表及配套规范中的推荐分支，包括 B2 的五项细则与 B3 的独立来源可行性任务。本修订不接受任何历史实现候选，不证明实现完成；Definition Checkpoint 的接受、集成发布和实施仍遵循各自授权与验证规则。
 
 v0.3.0 仍是当前稳定版本。单一公共 `run --request`、统一结果信封、三交易所分母、四因子公式、缺失不补值或重加权、原始排名不被候选失败改写等要求保持不变。本文生效后只按明确列出的条款修订 Spec 0008；其余义务继续有效。
 
@@ -27,7 +27,15 @@ v0.3.0 仍是当前稳定版本。单一公共 `run --request`、统一结果信
 5. #108 以明确状态、提交点、所有权和故障矩阵收敛恢复协议，继续消费 #115 的 prepared values。
 6. 在现有有限请求预算之外补容量证据，并区分 expected、eligible、ranked 与来源失败，明确最终发布的可用 owner 门禁。
 
-详细规范、任务映射和应用顺序见下列配套文档；它们与本文共同构成已批准、待应用的本地修订：
+新增任务使用实际创建并回读的正式身份：
+
+| 逻辑 ID | GitHub Issue | 责任 |
+| --- | --- | --- |
+| V4-F | [#121](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/121) | 有界来源可行性探索 |
+| V4-U | [#122](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/122) | 时点化三交易所证券池生产来源 |
+| V4-I | [#123](https://github.com/RedHeartSecretMan/a-share-research-skill/issues/123) | 盘中三交易所成交额与证券去重广度 |
+
+详细规范、任务映射和应用顺序见下列配套文档；它们与本文共同构成已批准的修订：
 
 - [来源、时间与候选契约](0008-amendment-b-source-time.md)
 - [结果包恢复协议](0008-amendment-b-artifact-protocol.md)

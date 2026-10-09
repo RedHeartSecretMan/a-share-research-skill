@@ -1,8 +1,24 @@
 {
   "inputs": [
     {
-      "blob_oid": "f3f3afe1cb1aa753a4510e9e218fce0cf393615f",
+      "blob_oid": "fefb611261506f223eeee54e0ce2e544bf1a6676",
       "path": ".dag/definition-github-spec-0008.json"
+    },
+    {
+      "blob_oid": "ab5562918e37bbe0c2b2933fd0971a3e69992a94",
+      "path": "docs/specs/0008-amendment-b-artifact-protocol.md"
+    },
+    {
+      "blob_oid": "17abdef4d26adce4bcd4629bf814f48285d28bd9",
+      "path": "docs/specs/0008-amendment-b-delivery-plan.md"
+    },
+    {
+      "blob_oid": "7d4ddf94a064db5a5b5a9be9d1e8e443deb0759a",
+      "path": "docs/specs/0008-amendment-b-source-time.md"
+    },
+    {
+      "blob_oid": "8427560ff11fae1c4b90e0d4df8e42d836834ab5",
+      "path": "docs/specs/0008-amendment-b-tickets.md"
     },
     {
       "blob_oid": "c40c8a83b9399d9384c314ff0153641e92607139",

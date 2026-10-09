@@ -2,11 +2,11 @@
 
 ## 决策状态与适用边界
 
-本文基于本地 `codex/v0.4.0-dag` 的 `b564f9e3c64477d3c95277cfb9ebb2f58f278a23`，补充 Spec 0008 中尚未闭合的生产来源责任、时间上下文和候选调用映射。维护者已明确采用 B1–B3 推荐方案；本文记录已批准的本地计划规范，尚未应用到 Tracker 或完成新的 Definition Checkpoint，也不表示实现或来源验证已经完成。该决策不包含 Tracker 写入或发布操作。
+本文以 `codex/v0.4.0-dag` 的 `b564f9e3c64477d3c95277cfb9ebb2f58f278a23` 为基线，补充 Spec 0008 中尚未闭合的生产来源责任、时间上下文和候选调用映射。维护者已采用 B1–B3 推荐方案，并另行授权 Tracker 应用与定义快照更新。本文对应的正式任务已应用；完整身份和定义见回读快照。这不表示实现、来源验证、Definition Checkpoint 接受或发布已经完成。
 
 v0.3.0 仍是当前稳定版本。已有 accepted commits 只证明各自已验收的接口与行为；确定性 Adapter、资格合同、离线测试通过和安装可加载均不能被表述为真实来源已可用，或新 workflow 已完成交付。本文不改写旧 release、tag、attestation 或 accepted Ticket 的历史记录。
 
-候选 `target_pe` 请求变化、保留旧 BSE/历史候选深研能力边界以及提前进行有界来源可行性探索均已按[主提案](0008-amendment-b-delivery-plan.md)的 B1–B3 推荐方案确定，无需再次选择同一方案。本文中的责任名称是本地计划名称，不是已创建的 GitHub Issue；正式 DAG 仍须完成主提案规定的 Tracker 应用与定义绑定流程。责任映射见[任务修订](0008-amendment-b-tickets.md)，持久化边界见[恢复协议](0008-amendment-b-artifact-protocol.md)。
+候选 `target_pe` 请求变化、保留旧 BSE/历史候选深研能力边界以及提前进行有界来源可行性探索均已按[主修订](0008-amendment-b-delivery-plan.md)的 B1–B3 推荐方案确定，无需再次选择同一方案。V4-F、V4-U、V4-I 分别对应正式任务 #121、#122、#123；执行前仍须完成规定的定义绑定与接受流程。责任映射见[任务修订](0008-amendment-b-tickets.md)，持久化边界见[恢复协议](0008-amendment-b-artifact-protocol.md)。
 
 ## 1. 三交易所历史 Universe 的生产来源责任
 

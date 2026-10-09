@@ -1,6 +1,6 @@
 # Spec 0008 Amendment B：结果包恢复协议
 
-本文是[主修订](0008-amendment-b-delivery-plan.md) B2 的配套规范；任务归属见[责任映射](0008-amendment-b-tickets.md)。维护者已明确采用 B1–B3 推荐方案，包括第 1 节五项 B2 决定及终态 resume 路由。本文记录已批准的本地计划规范，尚未应用到 Tracker 或完成新的 Definition Checkpoint，不构成 #108 验收、DAG 启动或远端写入授权。依据为 `codex/v0.4.0-dag@b564f9e` 的 Spec 0008、`.dag/definition-github-spec-0008.json` 中 #108/#115 的完整定义，以及 #115 Maintainer Decision A。未接受的 `96a24a9` 仅用于说明验证缺口，不作为已交付能力或已复现运行故障。
+本文是[主修订](0008-amendment-b-delivery-plan.md) B2 的配套规范；任务归属见[责任映射](0008-amendment-b-tickets.md)。维护者已采用 B1–B3 推荐方案，包括第 1 节五项 B2 决定及终态 resume 路由，并另行授权 Tracker 应用与定义快照更新。相应职责和 AC 已应用到 #108 等正式任务；这不构成 #108 验收、Definition Checkpoint 接受、DAG 启动或发布。基线依据为 `codex/v0.4.0-dag@b564f9e` 的 Spec 0008、当时 #108/#115 的完整定义及 #115 Maintainer Decision A；最新正式正文见 `.dag/definition-github-spec-0008.json`。未接受的 `96a24a9` 仅用于说明验证缺口，不作为已交付能力或已复现运行故障。
 
 ## 1. 修订目的与已批准边界
 
