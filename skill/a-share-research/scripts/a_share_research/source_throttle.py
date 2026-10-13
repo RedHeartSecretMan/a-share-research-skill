@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from random import uniform
 from threading import Lock
@@ -53,6 +54,14 @@ class RequestGateError(Exception):
         self.diagnostics = diagnostics
 
 
+class RequestGateBudgetError(Exception):
+    """The finite actual invocation budget prevented a further retry."""
+
+    def __init__(self, diagnostics: tuple[RequestGateDiagnostic, ...]) -> None:
+        super().__init__("The actual source invocation budget was exhausted.")
+        self.diagnostics = diagnostics
+
+
 class SerialRequestGate:
     """Serialize source calls while applying bounded pacing and retry delays."""
 
@@ -68,7 +77,16 @@ class SerialRequestGate:
     ) -> None:
         lower, upper = jitter_bounds
         if (
-            minimum_interval_seconds < 0
+            not all(
+                math.isfinite(value)
+                for value in (
+                    minimum_interval_seconds,
+                    lower,
+                    upper,
+                    *rate_limit_backoffs,
+                )
+            )
+            or minimum_interval_seconds < 0
             or lower < 0
             or upper < lower
             or upper > 5.0
@@ -90,15 +108,34 @@ class SerialRequestGate:
     ) -> tuple[T, tuple[RequestGateDiagnostic, ...]]:
         """Run one request serially, retrying only a bounded rate-limit error."""
 
+        return self._run(request, actual_attempt_budget=None)
+
+    def run_bounded(
+        self, request: Callable[[], T], *, actual_attempt_budget: int
+    ) -> tuple[T, tuple[RequestGateDiagnostic, ...]]:
+        """Bound every initial/retry callback at the actual invocation point."""
+        if (
+            not isinstance(actual_attempt_budget, int)
+            or isinstance(actual_attempt_budget, bool)
+            or actual_attempt_budget < 1
+        ):
+            raise ValueError("actual invocation budget is invalid")
+        return self._run(request, actual_attempt_budget=actual_attempt_budget)
+
+    def _run(
+        self, request: Callable[[], T], *, actual_attempt_budget: int | None
+    ) -> tuple[T, tuple[RequestGateDiagnostic, ...]]:
         diagnostics: list[RequestGateDiagnostic] = []
         with self._lock:
             backoff_index = 0
+            actual_attempts = 0
             while True:
                 paced = self._pace()
                 if paced is not None:
                     diagnostics.append(paced)
-                self._last_request_at = self._clock()
+                self._last_request_at = self._clock_value()
                 try:
+                    actual_attempts += 1
                     result = request()
                 except Exception as error:
                     if getattr(error, "code", None) != "rate_limited":
@@ -107,6 +144,11 @@ class SerialRequestGate:
                         if diagnostics:
                             raise RequestGateError(error, tuple(diagnostics)) from error
                         raise
+                    if (
+                        actual_attempt_budget is not None
+                        and actual_attempts >= actual_attempt_budget
+                    ):
+                        raise RequestGateBudgetError(tuple(diagnostics)) from None
                     attempt = backoff_index + 1
                     delay = self._delay(self._rate_limit_backoffs[backoff_index])
                     self._sleeper(delay)
@@ -125,7 +167,7 @@ class SerialRequestGate:
         if self._last_request_at is None:
             return None
         remaining = self._minimum_interval_seconds - (
-            self._clock() - self._last_request_at
+            self._clock_value() - self._last_request_at
         )
         if remaining <= 0:
             return None
@@ -136,10 +178,16 @@ class SerialRequestGate:
             delay_seconds=delay,
         )
 
+    def _clock_value(self) -> float:
+        value = self._clock()
+        if not math.isfinite(value):
+            raise ValueError("request gate clock is invalid")
+        return value
+
     def _delay(self, base: float) -> float:
         lower, upper = self._jitter_bounds
         jitter = self._jitter(lower, upper)
-        if jitter < lower or jitter > upper:
+        if not math.isfinite(jitter) or jitter < lower or jitter > upper:
             raise ValueError("request gate jitter escaped its configured bounds")
         return round(base + jitter, 9)
 
