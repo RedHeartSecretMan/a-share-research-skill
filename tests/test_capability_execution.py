@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -300,21 +301,29 @@ class InstalledCapabilityExecutionTests(unittest.TestCase):
         request = identity_request(allow_experimental=True)
         request["parameters"] = {"completeness_mode": "standard"}
 
-        started = time.monotonic()
-        completed = invoke_installed_identity(
-            request,
-            fixture_routes={
-                "query.sse.com.cn": "sse_600519.json",
-                "www.szse.cn": "szse_empty.json",
-                "www.cninfo.com.cn": "cninfo_stocks.json",
-            },
-            fixture_delays={
-                "query.sse.com.cn": 0.35,
-                "www.szse.cn": 0.35,
-                "www.cninfo.com.cn": 0.35,
-            },
-        )
-        elapsed = time.monotonic() - started
+        with tempfile.TemporaryDirectory() as directory:
+            timing_path = Path(directory) / "request-times.txt"
+            completed = invoke_installed_identity(
+                request,
+                fixture_routes={
+                    "query.sse.com.cn": "sse_600519.json",
+                    "www.szse.cn": "szse_empty.json",
+                    "www.cninfo.com.cn": "cninfo_stocks.json",
+                },
+                fixture_delays={
+                    "query.sse.com.cn": 0.35,
+                    "www.szse.cn": 0.35,
+                    "www.cninfo.com.cn": 0.35,
+                },
+                fixture_request_timing_path=timing_path,
+            )
+            # Transport spans exclude install setup and worker startup. Three
+            # serial 0.35 s requests still cannot satisfy the original 0.85 s.
+            spans = [line.split() for line in timing_path.read_text().splitlines()]
+            self.assertEqual(len(spans), 3)
+            elapsed = max(float(span[2]) for span in spans) - min(
+                float(span[1]) for span in spans
+            )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stderr, "")
@@ -789,7 +798,7 @@ class CapabilityExecutionPolicyTests(unittest.TestCase):
         )[0]
         outcome = _merge_operation_outcomes(first, second)
 
-        gate_diagnostics = outcome.diagnostics["request_gate"]
+        gate_diagnostics = outcome.to_dict()["diagnostics"]["request_gate"]
         self.assertEqual(
             [item["code"] for item in gate_diagnostics], ["source_request_paced"]
         )
@@ -1332,7 +1341,7 @@ class SameProviderExecutionTests(unittest.TestCase):
         self.assertEqual(sleeps, [0.5])
         self.assertEqual(outcomes[0].source_errors[0]["code"], "rate_limited")
         self.assertEqual(
-            outcomes[0].diagnostics["request_gate"],
+            outcomes[0].to_dict()["diagnostics"]["request_gate"],
             [{"code": "rate_limit_backoff", "delay_seconds": "0.500", "attempt": 1}],
         )
         self.assertEqual(outcomes[0].diagnostics["attempts"], 2)

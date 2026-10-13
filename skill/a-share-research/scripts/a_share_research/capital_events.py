@@ -119,7 +119,7 @@ def _sanitize_identity_outcomes(
     sanitized: list[OperationOutcome] = []
     for outcome in outcomes:
         observations: list[dict[str, object]] = []
-        for index, payload in enumerate(outcome.observations):
+        for index, payload in enumerate(outcome.to_dict()["observations"]):
             copied = json.loads(json.dumps(payload, ensure_ascii=False))
             if not isinstance(copied, dict):
                 raise ValueError("identity observation must be a JSON object")

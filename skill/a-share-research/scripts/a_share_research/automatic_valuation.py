@@ -645,7 +645,7 @@ def _execute_security_valuation(
     owned_evidence = [
         dict(observation)
         for outcome in outcomes
-        for observation in outcome.observations
+        for observation in outcome.to_dict()["observations"]
     ]
     all_keys = _valuation_observation_keys(tuple(outcomes))
     direct_calculations = [
@@ -906,7 +906,7 @@ def _scope_valuation_member(
     for outcome in outcomes:
         operation_id = f"{member_id}::{outcome.operation_id}"
         observations = []
-        for index, observation in enumerate(outcome.observations):
+        for index, observation in enumerate(outcome.to_dict()["observations"]):
             original_key = observation.get("id")
             local_key = (
                 str(original_key)
@@ -920,7 +920,7 @@ def _scope_valuation_member(
             payload["source_operation"] = operation_id
             observations.append(payload)
         source_errors = []
-        for source_error in outcome.source_errors:
+        for source_error in outcome.to_dict()["source_errors"]:
             payload = dict(source_error)
             payload["source_operation"] = operation_id
             source_errors.append(payload)
@@ -933,7 +933,7 @@ def _scope_valuation_member(
                 source_errors=tuple(source_errors),
                 field_dispositions=outcome.field_dispositions,
                 diagnostics=_scope_member_diagnostics(
-                    outcome.diagnostics, operation_id
+                    outcome.to_dict()["diagnostics"], operation_id
                 ),
             )
         )
@@ -1098,7 +1098,7 @@ def _statements_from_outcome(
         "balance": [],
         "cashflow": [],
     }
-    for evidence in outcome.observations:
+    for evidence in outcome.to_dict()["observations"]:
         if (
             evidence.get("source_operation") != outcome.operation_id
             or evidence.get("subject") != {"security": security}

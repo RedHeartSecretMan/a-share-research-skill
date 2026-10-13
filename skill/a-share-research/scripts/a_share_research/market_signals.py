@@ -130,7 +130,7 @@ def _sanitize_identity_outcomes(
     sanitized: list[OperationOutcome] = []
     for outcome in outcomes:
         observations: list[dict[str, object]] = []
-        for index, payload in enumerate(outcome.observations):
+        for index, payload in enumerate(outcome.to_dict()["observations"]):
             copied = json.loads(json.dumps(payload, ensure_ascii=False))
             if not isinstance(copied, dict):
                 raise ValueError("identity observation must be a JSON object")
@@ -165,7 +165,7 @@ def _namespace_identity_observations(
     key_map: dict[str, str] = {}
     for outcome in outcomes:
         observations: list[dict[str, object]] = []
-        for index, payload in enumerate(outcome.observations):
+        for index, payload in enumerate(outcome.to_dict()["observations"]):
             copied = json.loads(json.dumps(payload, ensure_ascii=False))
             if not isinstance(copied, dict):
                 raise ValueError("identity observation must be a JSON object")
@@ -1340,7 +1340,7 @@ def build_market_signals_result(
     )
     public_id_by_key: dict[str, str] = {}
     for outcome in (*identity_outcomes, *tuple(outcomes)):
-        for index, payload in enumerate(outcome.observations):
+        for index, payload in enumerate(outcome.to_dict()["observations"]):
             local_key = payload.get("id")
             key = (
                 local_key
@@ -1488,7 +1488,7 @@ def build_market_signals_result(
                 )
             }
             for outcome in outcomes
-            for error in outcome.source_errors
+            for error in outcome.to_dict()["source_errors"]
         ],
     )
     calculations: tuple[DirectTaskCalculation, ...] = tuple(

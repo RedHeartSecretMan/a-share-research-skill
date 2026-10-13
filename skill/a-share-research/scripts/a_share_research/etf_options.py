@@ -744,7 +744,7 @@ def _observations_by_kind(
     return tuple(
         item
         for outcome in outcomes
-        for item in outcome.observations
+        for item in outcome.to_dict()["observations"]
         if item.get("kind") == kind
     )
 

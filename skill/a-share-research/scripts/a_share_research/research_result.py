@@ -17,7 +17,23 @@ from decimal import (
     localcontext,
 )
 from hashlib import sha256
-from typing import Any, Collection, Literal, Mapping, NoReturn, Sequence, cast
+from types import MappingProxyType
+from typing import (
+    Any,
+    Collection,
+    Literal,
+    Mapping,
+    NoReturn,
+    Sequence,
+    TypedDict,
+    cast,
+)
+
+from .bounded_public_data import (
+    MAX_PUBLIC_DATA_DEPTH,
+    MAX_PUBLIC_DATA_ITEMS,
+    validate_bounded_public_data,
+)
 
 CoverageState = Literal[
     "not_requested",
@@ -1048,9 +1064,121 @@ class OperationReuseFacts:
         )
 
 
+def _plain_operation_value(
+    value: object,
+    *,
+    path: str,
+    observed: dict[int, tuple[object, object]] | None = None,
+) -> object:
+    """Observe a caller tree once, or project a sealed tree, as plain JSON data."""
+
+    item_count = 0
+    snapshots = {} if observed is None else observed
+    active: set[int] = set()
+
+    def visit(item: object, depth: int, *, observe_caller: bool = True) -> object:
+        nonlocal item_count
+        item_count += 1
+        if item_count > MAX_PUBLIC_DATA_ITEMS or depth > MAX_PUBLIC_DATA_DEPTH:
+            raise ValueError(f"{path} exceeds its structural bounds")
+        if observe_caller and isinstance(item, (Mapping, list, tuple)):
+            identity = id(item)
+            if identity in active:
+                raise ValueError(f"{path} contains a cyclic container")
+            if identity in snapshots:
+                # Recount expanded JSON bounds using detached data, without
+                # invoking a reused caller object's getters or iterator again.
+                item_count -= 1
+                return visit(snapshots[identity][1], depth, observe_caller=False)
+            active.add(identity)
+        if isinstance(item, Mapping):
+            result: dict[str, object] = {}
+            for key, nested in item.items():
+                if not isinstance(key, str):
+                    raise ValueError(f"{path} keys must be strings")
+                result[key] = visit(nested, depth + 1, observe_caller=observe_caller)
+            if observe_caller:
+                active.remove(id(item))
+                snapshots[id(item)] = (item, result)
+            return result
+        if isinstance(item, (list, tuple)):
+            sequence = [
+                visit(nested, depth + 1, observe_caller=observe_caller)
+                for nested in item
+            ]
+            if observe_caller:
+                active.remove(id(item))
+                snapshots[id(item)] = (item, sequence)
+            return sequence
+        if isinstance(item, float) and not math.isfinite(item):
+            raise ValueError(f"{path} contains a non-finite number")
+        if item is None or isinstance(item, (str, bool, int, float)):
+            return item
+        raise ValueError(f"{path} must be JSON-safe")
+
+    return visit(value, 0)
+
+
+def _seal_operation_value(value: object) -> object:
+    """Hide fresh backing dictionaries and remove every mutable sequence alias."""
+
+    if isinstance(value, dict):
+        return MappingProxyType(
+            {key: _seal_operation_value(nested) for key, nested in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_seal_operation_value(nested) for nested in value)
+    return value
+
+
+def _sealed_operation_object(
+    value: Mapping[str, object],
+    *,
+    path: str,
+    observed: dict[int, tuple[object, object]],
+    max_bytes: int = _MAX_RESULT_BYTES,
+) -> Mapping[str, object]:
+    plain = _plain_operation_value(value, path=path, observed=observed)
+    if not isinstance(plain, dict):
+        raise ValueError(f"{path} must be a JSON object")
+    # The JSON round trip normalizes accepted scalar subclasses to native
+    # scalars. Validation and freezing only read our detached snapshot.
+    try:
+        serialized = json.dumps(
+            plain,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{path} must be JSON-safe") from error
+    if len(serialized.encode("utf-8")) > max_bytes:
+        raise ValueError(f"{path} exceeds its bounded JSON size")
+    return cast(Mapping[str, object], _seal_operation_value(json.loads(serialized)))
+
+
+class OperationOutcomeProjection(TypedDict):
+    """Detached JSON-native material for operation proof consumers."""
+
+    capability_id: str
+    operation_id: str
+    execution: dict[str, object]
+    observations: list[dict[str, object]]
+    source_errors: list[dict[str, object]]
+    field_dispositions: list[dict[str, object]]
+    diagnostics: dict[str, object]
+    evidence_storage: dict[str, object] | None
+    reuse_facts: dict[str, object] | None
+
+
 @dataclass(frozen=True)
 class OperationOutcome:
-    """All public proof owned by exactly one source operation."""
+    """Own recursively sealed proof after one detached caller observation.
+
+    Read-only consumers may inspect mappings/tuples. Consumers that serialize or
+    require JSON-native dictionaries/lists must use ``to_dict()``; every call
+    returns fresh material with the same JSON bytes as the accepted owners.
+    """
 
     capability_id: str
     operation_id: str
@@ -1065,27 +1193,46 @@ class OperationOutcome:
     def __post_init__(self) -> None:
         if not self.capability_id.strip() or not self.operation_id.strip():
             raise ValueError("operation outcome identity must be non-empty")
+        observed: dict[int, tuple[object, object]] = {}
+        dispositions = tuple(self.field_dispositions)
         observations = tuple(
-            _json_object(item, path="operation observation")
+            _sealed_operation_object(
+                item, path="operation observation", observed=observed
+            )
             for item in self.observations
         )
         source_errors = tuple(
-            _json_object(item, path="operation source error")
+            _sealed_operation_object(
+                item, path="operation source error", observed=observed
+            )
             for item in self.source_errors
         )
-        diagnostics = dict(self.diagnostics)
-        _validate_diagnostic_keys(diagnostics)
-        diagnostics = _json_object(
-            diagnostics,
+        for error in source_errors:
+            _validate_diagnostic_keys(error)
+            validate_bounded_public_data(
+                error,
+                artifact="operation source error",
+                require_ascii_keys=False,
+            )
+        diagnostics = _sealed_operation_object(
+            self.diagnostics,
             path="operation diagnostics",
+            observed=observed,
             max_bytes=_MAX_DIAGNOSTIC_BYTES,
+        )
+        _validate_diagnostic_keys(diagnostics)
+        validate_bounded_public_data(
+            diagnostics,
+            artifact="operation diagnostics",
+            require_ascii_keys=False,
         )
         evidence_storage = (
             None
             if self.evidence_storage is None
-            else _json_object(
+            else _sealed_operation_object(
                 self.evidence_storage,
                 path="operation evidence storage audit",
+                observed=observed,
                 max_bytes=_MAX_DIAGNOSTIC_BYTES,
             )
         )
@@ -1094,7 +1241,7 @@ class OperationOutcome:
         ):
             raise ValueError("operation reuse facts are invalid")
         self._validate_ownership(observations, source_errors)
-        fields = [item.field for item in self.field_dispositions]
+        fields = [item.field for item in dispositions]
         if len(fields) != len(set(fields)):
             raise ValueError("operation field dispositions must be unique")
         _derive_operation_coverage(self.execution, observations, source_errors)
@@ -1102,6 +1249,7 @@ class OperationOutcome:
         object.__setattr__(self, "source_errors", source_errors)
         object.__setattr__(self, "diagnostics", diagnostics)
         object.__setattr__(self, "evidence_storage", evidence_storage)
+        object.__setattr__(self, "field_dispositions", dispositions)
 
     @property
     def coverage(self) -> CoverageState:
@@ -1125,6 +1273,50 @@ class OperationOutcome:
                 raise ValueError("operation cannot own a sibling source error")
             _validate_inner_source_operation(error, self.operation_id)
 
+    def to_dict(self) -> OperationOutcomeProjection:
+        """Project fresh plain dictionaries/lists; never expose sealed storage."""
+
+        return {
+            "capability_id": self.capability_id,
+            "operation_id": self.operation_id,
+            "execution": {
+                "state": self.execution.state,
+                "query_complete": self.execution.query_complete,
+            },
+            "observations": [
+                cast(
+                    dict[str, object],
+                    _plain_operation_value(item, path="operation observation"),
+                )
+                for item in self.observations
+            ],
+            "source_errors": [
+                cast(
+                    dict[str, object],
+                    _plain_operation_value(item, path="operation source error"),
+                )
+                for item in self.source_errors
+            ],
+            "field_dispositions": [item.to_dict() for item in self.field_dispositions],
+            "diagnostics": cast(
+                dict[str, object],
+                _plain_operation_value(self.diagnostics, path="operation diagnostics"),
+            ),
+            "evidence_storage": (
+                None
+                if self.evidence_storage is None
+                else cast(
+                    dict[str, object],
+                    _plain_operation_value(
+                        self.evidence_storage, path="operation evidence storage audit"
+                    ),
+                )
+            ),
+            "reuse_facts": None
+            if self.reuse_facts is None
+            else self.reuse_facts.to_dict(),
+        }
+
     def to_coverage_dict(
         self,
         *,
@@ -1137,6 +1329,7 @@ class OperationOutcome:
             raise ValueError("operation observation ownership is incomplete")
         if len(source_error_ids) != len(self.source_errors):
             raise ValueError("operation source-error ownership is incomplete")
+        projection = self.to_dict()
         result: dict[str, object] = {
             "capability_id": self.capability_id,
             "operation_id": self.operation_id,
@@ -1146,18 +1339,10 @@ class OperationOutcome:
             "observation_ids": list(observation_ids),
             "source_error_ids": list(source_error_ids),
             "field_dispositions": [item.to_dict() for item in self.field_dispositions],
-            "diagnostics": _json_copy(
-                self.diagnostics,
-                path="operation diagnostics",
-                max_bytes=_MAX_DIAGNOSTIC_BYTES,
-            ),
+            "diagnostics": projection["diagnostics"],
         }
         if self.evidence_storage is not None:
-            result["evidence_storage"] = _json_copy(
-                self.evidence_storage,
-                path="operation evidence storage audit",
-                max_bytes=_MAX_DIAGNOSTIC_BYTES,
-            )
+            result["evidence_storage"] = projection["evidence_storage"]
         return result
 
 
@@ -7330,7 +7515,7 @@ def fold_direct_task_research_result(
     for obligation in plan.obligations:
         owner = (obligation.capability_id, obligation.operation_id)
         outcome = outcomes_by_owner[owner]
-        for index, payload in enumerate(outcome.observations):
+        for index, payload in enumerate(outcome.to_dict()["observations"]):
             record_payload: dict[str, object] = {
                 "capability_id": outcome.capability_id,
                 "operation_id": outcome.operation_id,
@@ -7355,7 +7540,7 @@ def fold_direct_task_research_result(
     for obligation in plan.obligations:
         owner = (obligation.capability_id, obligation.operation_id)
         outcome = outcomes_by_owner[owner]
-        for error in outcome.source_errors:
+        for error in outcome.to_dict()["source_errors"]:
             error_payload = {
                 "capability_id": outcome.capability_id,
                 "operation_id": outcome.operation_id,
@@ -7743,7 +7928,7 @@ def fold_identity_research_result(
     observation_ids_by_operation: dict[str, list[str]] = {}
     for obligation in plan.obligations:
         outcome = outcomes_by_operation[obligation.operation_id]
-        for payload in outcome.observations:
+        for payload in outcome.to_dict()["observations"]:
             record_payload: dict[str, object] = {
                 "capability_id": outcome.capability_id,
                 "operation_id": outcome.operation_id,
@@ -7760,7 +7945,7 @@ def fold_identity_research_result(
     operation_coverage: dict[str, dict[str, object]] = {}
     for obligation in plan.obligations:
         outcome = outcomes_by_operation[obligation.operation_id]
-        for error in outcome.source_errors:
+        for error in outcome.to_dict()["source_errors"]:
             error_payload = {
                 "capability_id": outcome.capability_id,
                 "operation_id": outcome.operation_id,

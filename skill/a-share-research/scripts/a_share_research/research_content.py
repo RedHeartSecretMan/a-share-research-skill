@@ -322,7 +322,7 @@ def build_research_content_result(
         outcomes.append(outcome)
         accepted = [
             material
-            for payload in outcome.observations
+            for payload in outcome.to_dict()["observations"]
             for material in (_normalized_content_material(payload, query),)
             if material is not None
         ]
@@ -333,7 +333,7 @@ def build_research_content_result(
             limitation_codes.update(outcome.reuse_facts.degradation_codes)
         limitation_codes.update(
             code
-            for payload in outcome.observations
+            for payload in outcome.to_dict()["observations"]
             for code in cast(list[object], payload.get("limitations", []))
             if isinstance(code, str)
         )
@@ -1117,7 +1117,7 @@ def _content_outcome_license_fitness(
         )
         and all(
             _content_payload_has_license_status(observation, required_status)
-            for observation in outcome.observations
+            for observation in outcome.to_dict()["observations"]
         )
     )
 

@@ -197,6 +197,7 @@ def invoke_installed_identity(
     fixture_max_requests: dict[str, int] | None = None,
     fixture_child_only_markers: tuple[str, ...] = (),
     fixture_wire_secret_operation_id: str | None = None,
+    fixture_request_timing_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_root = Path(temporary_directory)
@@ -247,6 +248,7 @@ def invoke_installed_identity(
                         f"child_only = {child_only_literals!r}",
                         f"max_requests = {max_request_literals!r}",
                         f"wire_secret_operation_id = {wire_secret_operation_id!r}",
+                        f"request_timing_path = {None if fixture_request_timing_path is None else str(fixture_request_timing_path)!r}",
                         "if 'ASR_FIXTURE_PARENT_PID' not in os.environ: os.environ['ASR_FIXTURE_PARENT_PID'] = str(os.getpid())",
                         "parent_pid = int(os.environ['ASR_FIXTURE_PARENT_PID'])",
                         "class FixtureResponse:",
@@ -262,7 +264,11 @@ def invoke_installed_identity(
                         "    def open(self, request, timeout):",
                         "        if os.getpid() == parent_pid and any(marker in request.full_url for marker in child_only): raise AssertionError('route requires isolated worker')",
                         "        delay = next((value for marker, value in delays.items() if marker in request.full_url), 0.0)",
+                        "        started = time.monotonic()",
                         "        time.sleep(delay)",
+                        "        if request_timing_path:",
+                        "            with open(request_timing_path, 'a', encoding='utf-8') as timing_log:",
+                        "                timing_log.write(f'{os.getpid()} {started} {time.monotonic()}\\n')",
                         "        body = next((value for marker, value in routes.items() if marker in request.full_url), None)",
                         "        if body is None: raise AssertionError('unexpected identity source')",
                         "        return FixtureResponse(body)",
@@ -1826,7 +1832,7 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
                 diagnostics={"network": {"authorization_header": "SECRET_VALUE"}},
             )
 
-    def test_operation_outcome_rechecks_ownership_before_serialization(self) -> None:
+    def test_operation_outcome_seals_ownership_before_serialization(self) -> None:
         outcome = OperationOutcome(
             capability_id="security_identity_resolution",
             operation_id="fixture_identity@1",
@@ -1839,14 +1845,14 @@ class OperationOutcomeAdapterTests(unittest.TestCase):
             ),
         )
         observation = outcome.observations[0]
-        assert isinstance(observation, dict)
-        observation["source_operation"] = "sibling_identity@1"
+        with self.assertRaises(TypeError):
+            observation["source_operation"] = "sibling_identity@1"
 
-        with self.assertRaisesRegex(ValueError, "sibling observation"):
-            outcome.to_coverage_dict(
-                observation_ids=["observation-one"],
-                source_error_ids=[],
-            )
+        coverage = outcome.to_coverage_dict(
+            observation_ids=["observation-one"],
+            source_error_ids=[],
+        )
+        self.assertEqual(coverage["state"], "complete")
 
     def test_public_serialization_rechecks_operation_ownership(self) -> None:
         result = policy_blocked_identity_result()

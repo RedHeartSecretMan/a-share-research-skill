@@ -242,7 +242,7 @@ def invoke_installed_market_trend(
     acquire_parent_swap: tuple[Path, Path] | None = None,
     acquire_target_replacement: Path | None = None,
     source_retrieved_at: str = "2026-08-02T10:30:00+08:00",
-    fixed_research_now: str | None = None,
+    fixed_research_now: str | None = "2026-08-02T10:30:00+08:00",
     forbid_content_collect: bool = False,
     source_delay_seconds: float = 0,
     source_started_path: Path | None = None,

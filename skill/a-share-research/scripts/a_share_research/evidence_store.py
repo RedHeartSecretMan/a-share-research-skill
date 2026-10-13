@@ -409,8 +409,8 @@ def _resolve_persistent_operation_evidence(
             "state": outcome.execution.state,
             "query_complete": outcome.execution.query_complete,
         },
-        "observations": [_json_copy(item) for item in outcome.observations],
-        "source_errors": [_json_copy(item) for item in outcome.source_errors],
+        "observations": outcome.to_dict()["observations"],
+        "source_errors": outcome.to_dict()["source_errors"],
         "field_dispositions": [
             _json_copy(item.to_dict()) for item in outcome.field_dispositions
         ],

@@ -642,7 +642,7 @@ def _retained_claim_observations(
 ) -> tuple[Mapping[str, object], ...]:
     observations_by_key: dict[str, Mapping[str, object]] = {}
     for outcome in outcomes:
-        for index, observation in enumerate(outcome.observations):
+        for index, observation in enumerate(outcome.to_dict()["observations"]):
             local_id = observation.get("id")
             key = (
                 local_id
@@ -699,7 +699,7 @@ def _daily_bars_from_outcome(
     outcome: OperationOutcome,
 ) -> list[DailyBarObservation]:
     restored: list[DailyBarObservation] = []
-    for evidence in outcome.observations:
+    for evidence in outcome.to_dict()["observations"]:
         subject = evidence.get("subject")
         observed_value = evidence.get("observed_value")
         observation = evidence.get("observation")

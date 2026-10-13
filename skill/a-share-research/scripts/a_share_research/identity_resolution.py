@@ -262,7 +262,7 @@ def _identity_research_material(
     observation_keys = tuple(
         str(local_key)
         for outcome in outcomes
-        for index, payload in enumerate(outcome.observations)
+        for index, payload in enumerate(outcome.to_dict()["observations"])
         for local_key in (
             payload.get("id")
             if isinstance(payload.get("id"), str) and payload.get("id")
@@ -327,7 +327,7 @@ def _plan_official_identity_followups(
         for outcome in (
             [by_operation[operation_id]] if operation_id in by_operation else []
         )
-        for observation in outcome.observations
+        for observation in outcome.to_dict()["observations"]
         for identity in [_outcome_identity_payload(observation)]
         if isinstance(identity.get("code"), str)
     }
@@ -360,7 +360,7 @@ def _plan_official_identity_followups(
                 if corroborating_id in by_operation
                 else []
             )
-            for observation in corroborating.observations
+            for observation in corroborating.to_dict()["observations"]
             for identity in [_outcome_identity_payload(observation)]
             for code in [identity.get("code")]
             for exchange in [identity.get("exchange")]

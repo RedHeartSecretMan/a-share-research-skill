@@ -567,15 +567,16 @@ def _merge_operation_outcomes(
             ),
         )
     )
-    diagnostics = dict(previous.diagnostics)
+    diagnostics = previous.to_dict()["diagnostics"]
+    followup_diagnostics = followup.to_dict()["diagnostics"]
     previous_attempts = diagnostics.get("attempts", 0)
-    followup_attempts = followup.diagnostics.get("attempts", 0)
+    followup_attempts = followup_diagnostics.get("attempts", 0)
     if isinstance(previous_attempts, int) and isinstance(followup_attempts, int):
         diagnostics["attempts"] = previous_attempts + followup_attempts
-    if "timeout_seconds" in followup.diagnostics:
-        diagnostics["timeout_seconds"] = followup.diagnostics["timeout_seconds"]
-    previous_gate = previous.diagnostics.get("request_gate", ())
-    followup_gate = followup.diagnostics.get("request_gate", ())
+    if "timeout_seconds" in followup_diagnostics:
+        diagnostics["timeout_seconds"] = followup_diagnostics["timeout_seconds"]
+    previous_gate = diagnostics.get("request_gate", ())
+    followup_gate = followup_diagnostics.get("request_gate", ())
     if isinstance(previous_gate, list) and isinstance(followup_gate, list):
         diagnostics["request_gate"] = [*previous_gate, *followup_gate]
     elif isinstance(followup_gate, list):
@@ -988,6 +989,7 @@ def _worker_main() -> int:
 
 
 def _outcome_to_wire(outcome: OperationOutcome) -> dict[str, object]:
+    projection = outcome.to_dict()
     return {
         "wire_version": "1",
         "capability_id": outcome.capability_id,
@@ -996,10 +998,10 @@ def _outcome_to_wire(outcome: OperationOutcome) -> dict[str, object]:
             "state": outcome.execution.state,
             "query_complete": outcome.execution.query_complete,
         },
-        "observations": list(outcome.observations),
-        "source_errors": list(outcome.source_errors),
+        "observations": projection["observations"],
+        "source_errors": projection["source_errors"],
         "field_dispositions": [item.to_dict() for item in outcome.field_dispositions],
-        "diagnostics": dict(outcome.diagnostics),
+        "diagnostics": projection["diagnostics"],
     }
 
 

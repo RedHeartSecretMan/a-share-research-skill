@@ -57,7 +57,7 @@ class CloseResearchExecution:
         evidence = {
             str(payload.get("id")): payload
             for outcome in self.outcomes
-            for payload in outcome.observations
+            for payload in outcome.to_dict()["observations"]
             if isinstance(payload.get("id"), str)
         }
         selected_evidence = [evidence.get(key) for key in selected.evidence_keys]
