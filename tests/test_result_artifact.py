@@ -1981,3 +1981,230 @@ class ResultArtifactCreationPlanTests(unittest.TestCase):
                 ResultArtifact.validate_receipt(
                     root, identity, receipt, filesystem=filesystem
                 )
+
+
+class ResultArtifactProtocolTypeTests(unittest.TestCase):
+    def test_journal_sequence_requires_exact_integer_in_partial_and_sealed_states(
+        self,
+    ) -> None:
+        for sealed in (False, True):
+            for sequence in range(1, 3 if sealed else 2):
+                invalid_values = (
+                    (True, float(sequence)) if sequence == 1 else (float(sequence),)
+                )
+                for invalid in invalid_values:
+                    with self.subTest(
+                        sealed=sealed, sequence=sequence, invalid=invalid
+                    ):
+                        filesystem = DeterministicFilesystemAdapter(
+                            Path("/deterministic/model")
+                        )
+                        root, identity = Path("/caller/artifact"), artifact_identity()
+                        handle = ResultArtifact.create(
+                            root, identity, filesystem=filesystem
+                        )
+                        handle.write_completed_partition(partition())
+                        receipt = (
+                            handle.finalize(coverage=artifact_coverage())
+                            if sealed
+                            else None
+                        )
+                        journal = next(
+                            node.relative_path
+                            for node in filesystem.inventory(root).nodes
+                            if node.relative_path.startswith(
+                                f".protocol/txn-{sequence:06d}-"
+                            )
+                        )
+                        payload = json.loads(filesystem.read_bytes(root, journal))
+                        payload["sequence"] = invalid
+                        filesystem.tamper(
+                            root,
+                            journal,
+                            (
+                                json.dumps(
+                                    payload,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                )
+                                + "\n"
+                            ).encode(),
+                        )
+                        before = filesystem.inventory(root)
+                        with self.assertRaises(ValueError):
+                            ResultArtifact.resume(root, identity, filesystem=filesystem)
+                        self.assertEqual(filesystem.inventory(root), before)
+                        if sealed:
+                            with self.assertRaises(ValueError):
+                                ResultArtifact.validate_receipt(
+                                    root, identity, receipt, filesystem=filesystem
+                                )
+                            with self.assertRaises(ValueError):
+                                ResultArtifact.recover_finalized_receipt(
+                                    root, identity, filesystem=filesystem
+                                )
+                        else:
+                            with self.assertRaises(ValueError):
+                                handle.checkpoint()
+                            with self.assertRaises(ValueError):
+                                handle.read_completed_file(partition().relative_path)
+                        self.assertEqual(filesystem.inventory(root), before)
+
+    def test_every_persisted_protocol_structure_rejects_numeric_type_substitutions(
+        self,
+    ) -> None:
+        fields = (
+            ("owner", ("root_identity", 0)),
+            ("owner", ("directories", ".protocol", 0)),
+            ("journal-write", ("root_identity", 0)),
+            ("journal-write", ("stage_files", "journal", 0)),
+            ("journal-write", ("file", "byte_count")),
+            ("journal-write", ("file", "record_count")),
+            ("journal-finalize", ("coverage", "SSE", "acquired")),
+            ("checkpoint", ("completed_files", 0, "byte_count")),
+            ("checkpoint", ("completed_files", 0, "record_count")),
+            ("manifest", ("files", 0, "byte_count")),
+            ("manifest", ("files", 0, "record_count")),
+            ("manifest", ("totals", "file_count")),
+            ("manifest", ("totals", "record_count")),
+            ("manifest", ("coverage", "SSE", "acquired")),
+            ("receipt", ("file_count",)),
+            ("receipt", ("record_count",)),
+        )
+        for structure, coordinate in fields:
+            for representation in ("boolean", "float"):
+                with self.subTest(
+                    structure=structure,
+                    coordinate=coordinate,
+                    representation=representation,
+                ):
+                    filesystem = DeterministicFilesystemAdapter(
+                        Path("/deterministic/model")
+                    )
+                    root, identity = Path("/caller/artifact"), artifact_identity()
+                    handle = ResultArtifact.create(
+                        root, identity, filesystem=filesystem
+                    )
+                    handle.write_completed_partition(partition())
+                    receipt = handle.finalize(coverage=artifact_coverage())
+                    paths = {
+                        "owner": next(
+                            node.relative_path
+                            for node in filesystem.inventory(root).nodes
+                            if node.relative_path.startswith(".protocol/create-")
+                        ),
+                        "journal-write": next(
+                            node.relative_path
+                            for node in filesystem.inventory(root).nodes
+                            if node.relative_path.startswith(".protocol/txn-000001-")
+                        ),
+                        "journal-finalize": next(
+                            node.relative_path
+                            for node in filesystem.inventory(root).nodes
+                            if node.relative_path.startswith(".protocol/txn-000002-")
+                        ),
+                        "checkpoint": "checkpoint.json",
+                        "manifest": "manifest.json",
+                    }
+                    payload = (
+                        json.loads(json.dumps(receipt))
+                        if structure == "receipt"
+                        else json.loads(filesystem.read_bytes(root, paths[structure]))
+                    )
+                    cursor = payload
+                    for key in coordinate[:-1]:
+                        cursor = cursor[key]
+                    original = cursor[coordinate[-1]]
+                    numeric = (
+                        int(original, 16) if isinstance(original, str) else original
+                    )
+                    cursor[coordinate[-1]] = (
+                        bool(numeric) if representation == "boolean" else float(numeric)
+                    )
+                    if structure != "receipt":
+                        filesystem.tamper(
+                            root,
+                            paths[structure],
+                            (
+                                json.dumps(
+                                    payload,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                )
+                                + "\n"
+                            ).encode(),
+                        )
+                    before = filesystem.inventory(root)
+                    with self.assertRaises(ValueError):
+                        ResultArtifact.validate_receipt(
+                            root,
+                            identity,
+                            payload if structure == "receipt" else receipt,
+                            filesystem=filesystem,
+                        )
+                    if structure != "receipt":
+                        with self.assertRaises(ValueError):
+                            ResultArtifact.resume(root, identity, filesystem=filesystem)
+                    self.assertEqual(filesystem.inventory(root), before)
+
+    def test_tampered_pending_journal_blocks_all_recovery_mutations(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for operation in ("write", "finalize"):
+            sequence = 1 if operation == "write" else 2
+            for invalid in (True, float(sequence)):
+                with (
+                    self.subTest(operation=operation, invalid=invalid),
+                    tempfile.TemporaryDirectory() as temporary,
+                ):
+                    parent, identity = Path(temporary).resolve(), artifact_identity()
+                    root = parent / "artifact"
+
+                    class InterruptedPublication(ProductionFilesystemAdapter):
+                        armed = False
+
+                        def _phase(self, phase):
+                            if phase == "after_journal_publication" and self.armed:
+                                raise KeyboardInterrupt("pending publication")
+
+                    filesystem = InterruptedPublication()
+                    handle = ResultArtifact.create(
+                        root, identity, filesystem=filesystem
+                    )
+                    if operation == "finalize":
+                        handle.write_completed_partition(partition())
+                    filesystem.armed = True
+                    with self.assertRaises(KeyboardInterrupt):
+                        if operation == "write":
+                            handle.write_completed_partition(partition())
+                        else:
+                            handle.finalize(coverage=artifact_coverage())
+                    journal = next(
+                        (root / ".protocol").glob(f"txn-{sequence:06d}-*.json")
+                    )
+                    payload = json.loads(journal.read_bytes())
+                    payload["sequence"] = invalid
+                    journal.write_bytes(
+                        (
+                            json.dumps(
+                                payload,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                            + "\n"
+                        ).encode()
+                    )
+                    before = filesystem_tree(parent)
+                    with self.assertRaises(ValueError):
+                        ResultArtifact.resume(root, identity)
+                    self.assertEqual(filesystem_tree(parent), before)
+                    self.assertTrue(
+                        next(parent.glob(".result-artifact-*.stage")).exists()
+                    )
+                    if operation == "write":
+                        self.assertFalse((root / partition().relative_path).exists())
+                    else:
+                        self.assertFalse((root / "manifest.json").exists())

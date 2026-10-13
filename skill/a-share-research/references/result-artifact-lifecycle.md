@@ -61,6 +61,8 @@ artifact = ResultArtifact.create(
 
 preparation-abort 是明确的未提交状态，不是把自身窗口改称 unknown 来跳过验证。该阶段没有 publication intent，没有公开内容或新的完成声明；artifact 保持原已提交状态。没有已提交 journal 关联的外部对象不会被后续恢复扫描相似名称收养或删除。测试分别在每个实际 namespace/持久化边界由独立进程直接退出，再由新进程验证这些行为。
 
+持久化协议中的 journal sequence、文件 byte/record count、coverage 及 receipt count 必须保留精确 JSON 整数类型；boolean 或浮点数不能依靠 Python 数值相等冒充整数。owner 和 journal 的 filesystem identity 必须是固定宽度的十六进制字符串；checkpoint 与 manifest 还须匹配重建的 canonical 字节。这些校验先于恢复发布和 cleanup，不改变由 #117 解释的冻结 C 内容语义。
+
 完成 journal 留在 `.protocol/`，作为持久化 ownership 记录；它不是需要自动删除的残留。journal 提交后的 staging aliases 则有完整 ownership 和合法 cleanup 规则。纯 filename、token、内容 digest 或共享 inode 单独都不构成清理授权。删除或替换 journal、同字节新 inode、伪造 hard-link、unknown inventory 和 ancestor/root/stage 替换均失败关闭。
 
 ## 容量与持久化边界

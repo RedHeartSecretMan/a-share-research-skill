@@ -640,6 +640,8 @@ class _TransactionalAdapter:
                 node.relative_path != name
                 or journal["type"] != "publication"
                 or journal["creation_token"] != token
+                # JSON booleans and floats must not impersonate integer lineage.
+                or type(journal["sequence"]) is not int
                 or journal["sequence"] != sequence
             ):
                 raise ValueError(
