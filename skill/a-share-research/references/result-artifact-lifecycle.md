@@ -67,7 +67,7 @@ canonical UTF-8 checkpoint 的上限精确为 65,536 字节，包含完整 C。6
 
 #68/#69 必须在 artifact 开始写入前用固定计划声明完整 file-count envelope，包括三交易所分区及至多 20 个候选。`checkpoint_capacity()` 使用最长合法坐标、128 字节 schema token、真实最大 byte/record count、完整 C 及 JSON 标点计算最坏大小；identity 契约是每分量 64 位、固定 16 个十六进制字符。它返回固定开销、每条最大开销、pending/cleanup 布局及最坏总量。容量不足先调整合规 shard 方案或报告约束；不能提高上限、截断证券、丢弃 unranked 或取消已批准候选。
 
-每个文件及有关目录均需要 `fsync` 成功。失败时不凭读回、digest 或 inode 相符返回成功；显式恢复重新验证并同步必要边界。普通异常、`KeyboardInterrupt`、不执行 Python `finally` 的独立进程突然退出，以及恢复再次中断分别有验证。支持的是进程中断模型，不承诺机器断电、内核崩溃或硬件违反已成功持久化承诺时的恢复。
+每个文件及有关目录均需要 `fsync` 成功。失败时不凭读回、digest 或 inode 相符返回成功；显式恢复重新验证并同步必要边界，receipt 返回前再次检查已观察状态；这不扩展为任意非合作写入下的 CAS 或目录线性快照承诺。普通异常、`KeyboardInterrupt`、不执行 Python `finally` 的独立进程突然退出，以及恢复再次中断分别有验证。支持的是进程中断模型，不承诺机器断电、内核崩溃或硬件违反已成功持久化承诺时的恢复。
 
 ## 生产平台与验证范围
 

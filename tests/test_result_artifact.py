@@ -1578,3 +1578,175 @@ class ResultArtifactExceptionMatrixTests(unittest.TestCase):
                         restored.checkpoint()["frozen_context"]["screen_date"],
                         "2026-10-12",
                     )
+
+
+class ResultArtifactPublicationRevalidationTests(unittest.TestCase):
+    def test_prepared_create_descriptor_name_and_complete_inventory_are_revalidated(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for change in ("directory", "unknown-entry", "checkpoint"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                target = parent / "artifact"
+                before = []
+
+                class ReplacedRootAdapter(ProductionFilesystemAdapter):
+                    def _phase(self, phase):
+                        if phase == "after_create_prepared":
+                            stage = next(parent.glob(".result-artifact-create-*.stage"))
+                            if change == "directory":
+                                stage.rename(parent / "original-prepared-root")
+                                stage.mkdir()
+                                (stage / "caller-file").write_bytes(b"caller-owned")
+                            elif change == "unknown-entry":
+                                (stage / "caller-file").write_bytes(b"caller-owned")
+                            else:
+                                (stage / "checkpoint.json").write_bytes(b"caller-owned")
+                            before.append(filesystem_tree(parent))
+
+                with self.assertRaises(ValueError):
+                    ResultArtifact.create(
+                        target,
+                        identity,
+                        initial_context=frozen_context(),
+                        filesystem=ReplacedRootAdapter(),
+                    )
+                self.assertFalse(target.exists())
+                self.assertEqual(filesystem_tree(parent), before[0])
+
+    def test_prepared_write_checks_every_staged_object_before_journal_publication(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for change in ("data", "journal-inode", "unknown-entry"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                root = parent / "artifact"
+
+                class ReplacedStageAdapter(ProductionFilesystemAdapter):
+                    def _phase(self, phase):
+                        if phase == "after_stage_prepared":
+                            stage = next(parent.glob(".result-artifact-*.stage"))
+                            if change == "data":
+                                (stage / "data").write_bytes(b"caller-owned")
+                            elif change == "journal-inode":
+                                replacement = parent / "replacement"
+                                replacement.write_bytes(
+                                    (stage / "journal").read_bytes()
+                                )
+                                replacement.replace(stage / "journal")
+                            else:
+                                (stage / "caller-file").write_bytes(b"caller-owned")
+
+                handle = ResultArtifact.create(
+                    root, identity, filesystem=ReplacedStageAdapter()
+                )
+                before = filesystem_tree(root)
+                with self.assertRaises(ValueError):
+                    handle.write_completed_partition(partition())
+                self.assertEqual(filesystem_tree(root), before)
+
+    def test_sealed_recovery_rechecks_detectable_mutation_during_durability(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root, identity = Path(temporary).resolve() / "artifact", artifact_identity()
+            handle = ResultArtifact.create(root, identity)
+            handle.write_completed_partition(partition())
+            receipt = handle.finalize(coverage=artifact_coverage())
+
+            class MutatingSyncAdapter(ProductionFilesystemAdapter):
+                changed = False
+
+                def _phase(self, phase):
+                    if phase == "before_file_fsync" and not self.changed:
+                        self.changed = True
+                        target = root / partition().relative_path
+                        target.write_bytes(
+                            target.read_bytes().replace(b"1.20", b"9.99")
+                        )
+
+            with self.assertRaises(ValueError):
+                ResultArtifact.resume(root, identity, filesystem=MutatingSyncAdapter())
+            with self.assertRaises(ValueError):
+                ResultArtifact.validate_receipt(root, identity, receipt)
+
+
+class ResultArtifactInitialStageBindingTests(unittest.TestCase):
+    def test_created_stage_is_bound_before_initialization_writes(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for action in ("create", "write"):
+            with (
+                self.subTest(action=action),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                root = parent / "artifact"
+                before = []
+
+                class ReplacedEmptyStageAdapter(ProductionFilesystemAdapter):
+                    def _phase(self, phase):
+                        expected = (
+                            "after_create_stage_directory_created"
+                            if action == "create"
+                            else "after_stage_directory_created"
+                        )
+                        if phase == expected:
+                            stage = next(parent.glob(".result-artifact-*.stage"))
+                            stage.rename(parent / "original-empty-stage")
+                            stage.mkdir()
+                            (stage / "caller-file").write_bytes(b"caller-owned")
+                            before.append(filesystem_tree(parent))
+
+                if action == "write":
+                    handle = ResultArtifact.create(
+                        root, identity, filesystem=ReplacedEmptyStageAdapter()
+                    )
+                with self.assertRaises(ValueError):
+                    if action == "create":
+                        ResultArtifact.create(
+                            root, identity, filesystem=ReplacedEmptyStageAdapter()
+                        )
+                    else:
+                        handle.write_completed_partition(partition())
+                self.assertEqual(filesystem_tree(parent), before[0])
+
+
+class ResultArtifactPostpublicationOwnershipTests(unittest.TestCase):
+    def test_create_returns_no_handle_after_target_ownership_changes(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            target = parent / "artifact"
+            before = []
+
+            class ChangedTargetAdapter(ProductionFilesystemAdapter):
+                def _phase(self, phase):
+                    if phase == "after_create_publication":
+                        target.rename(parent / "original-published-root")
+                        target.mkdir()
+                        (target / "caller-file").write_bytes(b"caller-owned")
+                        before.append(filesystem_tree(parent))
+
+            with self.assertRaises(ValueError):
+                ResultArtifact.create(
+                    target,
+                    identity,
+                    initial_context=frozen_context(),
+                    filesystem=ChangedTargetAdapter(),
+                )
+            self.assertEqual(filesystem_tree(parent), before[0])
+            self.assertEqual((target / "caller-file").read_bytes(), b"caller-owned")

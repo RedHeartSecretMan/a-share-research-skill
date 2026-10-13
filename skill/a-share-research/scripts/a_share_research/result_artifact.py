@@ -18,7 +18,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
@@ -434,6 +434,7 @@ class _Stage:
     identity: _FileIdentity
     files: tuple[tuple[str, _FileIdentity], ...]
     journal_bytes: bytes = b""
+    expected_nodes: tuple[_Node, ...] | None = None
 
     def identities(self) -> dict[str, _FileIdentity]:
         return dict(self.files)
@@ -786,6 +787,8 @@ class _TransactionalAdapter:
                         )
             elif not committed:
                 raise ValueError("result artifact pending staging evidence is missing")
+            if observed_stage is not None:
+                stage = replace(stage, expected_nodes=observed_stage.nodes)
             transactions.append(
                 _Transaction(
                     name,
@@ -899,6 +902,7 @@ class _TransactionalAdapter:
                     else observation
                 )
                 store.sync()
+                self._revalidate(store, identity, observation)
                 if observation.manifest_bytes is not None:
                     return store.root_identity, _receipt(
                         identity,
@@ -1348,6 +1352,20 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                     raise ValueError(
                         "result artifact staging directory identity changed"
                     )
+                if stage.expected_nodes is not None and self.adapter._scan(
+                    opened
+                ) != _Snapshot(stage.identity, stage.expected_nodes):
+                    raise ValueError(
+                        "result artifact staging inventory or bytes changed before publication"
+                    )
+                named = os.stat(name, dir_fd=self.parent, follow_symlinks=False)
+                if (
+                    not stat.S_ISDIR(named.st_mode)
+                    or self.adapter._id(named) != stage.identity
+                ):
+                    raise ValueError(
+                        "result artifact staging name changed before publication"
+                    )
                 yield opened
             finally:
                 os.close(opened)
@@ -1383,12 +1401,24 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
             self._anchor()
             name = f".result-artifact-{token}.stage"
             os.mkdir(name, 0o700, dir_fd=self.parent)
+            created_identity = self.adapter._id(
+                os.stat(name, dir_fd=self.parent, follow_symlinks=False)
+            )
             self.adapter._phase("after_stage_directory_created")
             descriptor = os.open(
                 name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=self.parent
             )
             opened: dict[str, int] = {}
             try:
+                named = os.stat(name, dir_fd=self.parent, follow_symlinks=False)
+                if (
+                    self.adapter._id(os.fstat(descriptor)) != created_identity
+                    or self.adapter._id(named) != created_identity
+                    or self.adapter._scan(descriptor).nodes
+                ):
+                    raise ValueError(
+                        "result artifact new staging directory binding changed"
+                    )
                 for key in (
                     "data",
                     "journal",
@@ -1423,7 +1453,22 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                 self.adapter._sync_fd(descriptor, directory=True)
                 self.adapter._sync_fd(self.parent, directory=True)
                 self.adapter._phase("after_stage_prepared")
-                return _Stage(stage.token, stage.identity, stage.files, journal_bytes)
+                ids = stage.identities()
+                expected = [
+                    _Node("data", ids["data"], "file", data),
+                    _Node("journal", ids["journal"], "file", journal_bytes),
+                ]
+                if checkpoint is not None:
+                    expected.append(
+                        _Node("checkpoint", ids["checkpoint"], "file", checkpoint)
+                    )
+                return _Stage(
+                    stage.token,
+                    stage.identity,
+                    stage.files,
+                    journal_bytes,
+                    tuple(sorted(expected, key=lambda item: item.relative_path)),
+                )
             finally:
                 for fd in opened.values():
                     os.close(fd)
@@ -1623,12 +1668,24 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
             token = secrets.token_hex(32)
             stage_name = f".result-artifact-create-{token}.stage"
             os.mkdir(stage_name, 0o700, dir_fd=parent)
+            created_identity = self._id(
+                os.stat(stage_name, dir_fd=parent, follow_symlinks=False)
+            )
             self._phase("after_create_stage_directory_created")
             root = os.open(
                 stage_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent
             )
             try:
                 root_id = self._id(os.fstat(root))
+                named = os.stat(stage_name, dir_fd=parent, follow_symlinks=False)
+                if (
+                    root_id != created_identity
+                    or self._id(named) != created_identity
+                    or self._scan(root).nodes
+                ):
+                    raise ValueError(
+                        "result artifact new prepared root binding changed"
+                    )
                 directories: dict[str, _FileIdentity] = {}
                 for relative in _FIXED_DIRECTORIES:
                     os.mkdir(relative, 0o700, dir_fd=root)
@@ -1682,18 +1739,41 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                         os.close(directory)
                 self._sync_fd(root, directory=True)
                 self._sync_fd(parent, directory=True)
+                prepared_root = self._scan(root)
                 self._phase("after_create_prepared")
                 with self._parent(path) as (_, refreshed):
                     if refreshed != chain:
                         raise ValueError(
                             "result artifact ancestor identity changed before publication"
                         )
+                named_stage = os.stat(stage_name, dir_fd=parent, follow_symlinks=False)
+                if (
+                    not stat.S_ISDIR(named_stage.st_mode)
+                    or self._id(named_stage) != root_id
+                    or self._scan(root) != prepared_root
+                ):
+                    raise ValueError(
+                        "result artifact prepared root name, identity or inventory changed"
+                    )
                 # The complete self-identifying root is prepared and durable before
                 # its first public name. RENAME_EXCL never adopts an empty caller dir.
                 self._rename_exclusive(parent, stage_name, path.name)
                 self._phase("after_create_publication")
                 self._sync_fd(parent, directory=True)
                 self._sync_fd(root, directory=True)
+                with self._parent(path) as (current_parent, current_chain):
+                    published = os.stat(
+                        path.name, dir_fd=current_parent, follow_symlinks=False
+                    )
+                    if (
+                        current_chain != chain
+                        or not stat.S_ISDIR(published.st_mode)
+                        or self._id(published) != root_id
+                        or self._scan(root) != prepared_root
+                    ):
+                        raise ValueError(
+                            "result artifact published root ownership changed"
+                        )
                 return root_id
             finally:
                 os.close(root)
@@ -1927,12 +2007,24 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
             self.adapter._sync(directory=True)
             self.adapter._sync(directory=True)
             self.adapter._phase("after_stage_prepared")
-            return _Stage(token, stage_id, stage.files, journal_bytes)
+            return _Stage(
+                token,
+                stage_id,
+                stage.files,
+                journal_bytes,
+                tuple(sorted(nodes, key=lambda item: item.relative_path)),
+            )
 
         def _stage(self, stage: _Stage) -> _Snapshot:
             value = self.stage_snapshot(stage.token)
             if value is None or value.identity != stage.identity:
                 raise ValueError("result artifact staging directory identity changed")
+            if stage.expected_nodes is not None and value != _Snapshot(
+                stage.identity, stage.expected_nodes
+            ):
+                raise ValueError(
+                    "result artifact staging inventory or bytes changed before publication"
+                )
             return value
 
         def publish_journal(self, stage: _Stage, relative_path: str) -> None:
@@ -1981,9 +2073,16 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
 
         def cleanup(self, stage: _Stage, observed: _Snapshot) -> None:
             self._anchor()
+            if self._stage(stage) != observed:
+                raise ValueError("result artifact staging state changed before cleanup")
             remaining = observed.mapping()
             for name in sorted(remaining):
-                if self._stage(stage).mapping() != remaining:
+                current = self.stage_snapshot(stage.token)
+                if (
+                    current is None
+                    or current.identity != observed.identity
+                    or current.mapping() != remaining
+                ):
                     raise ValueError(
                         "result artifact staging state changed during cleanup"
                     )
