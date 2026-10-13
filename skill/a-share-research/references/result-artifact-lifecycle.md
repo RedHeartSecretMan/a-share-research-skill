@@ -42,7 +42,7 @@ artifact = ResultArtifact.create(
 
 ## 事务状态及提交点
 
-一个 artifact 的合作写入通过其目录 inode 的进程间锁串行化；不同 artifact 不共享全局事务锁。旧 handle 每次重新观察全部完成状态，并核对持久化 ownership、root 及 ancestor generation。
+一个 artifact 的合作写入通过其目录 inode 的进程间锁串行化。create 在 staged root 公开目标前取得同一 inode 的锁，保持至创建的持久化和 ownership 验证结束；其间 resume、write 和 finalize 排队，不把合法合作进度误判为外部篡改。不同 artifact 不共享全局事务锁。deterministic Adapter 同样在公开 root 前持有该 artifact 的锁；全局身份分配和独占名字登记只用短临界区，不包住 fault、持久化或整个创建事务。旧 handle 每次重新观察全部完成状态，并核对持久化 ownership、root 及 ancestor generation。
 
 | 状态 | 持久化证据与提交点 | 中断后公共动作 |
 | --- | --- | --- |

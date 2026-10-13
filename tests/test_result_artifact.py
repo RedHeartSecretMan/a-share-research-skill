@@ -2208,3 +2208,271 @@ class ResultArtifactProtocolTypeTests(unittest.TestCase):
                         self.assertFalse((root / partition().relative_path).exists())
                     else:
                         self.assertFalse((root / "manifest.json").exists())
+
+
+class ResultArtifactCreateLockTests(unittest.TestCase):
+    def test_create_commit_serializes_independent_resume_write_and_finalize(
+        self,
+    ) -> None:
+        import os
+        import subprocess
+        import sys
+        import time
+
+        worker = r"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from tests.test_result_artifact import artifact_identity, artifact_coverage, frozen_context, partition
+from a_share_research.result_artifact import ProductionFilesystemAdapter, ResultArtifact
+root, control, action = Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
+class PausedCreate(ProductionFilesystemAdapter):
+    def _phase(self, phase):
+        if phase == "after_create_publication":
+            (control / "published").write_text("ready")
+            deadline = time.monotonic() + 10
+            while not (control / "release").exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("test publication pause expired")
+                time.sleep(0.005)
+if action == "create":
+    ResultArtifact.create(root, artifact_identity(), initial_context=frozen_context(), filesystem=PausedCreate())
+    print("created")
+else:
+    (control / "attempted").write_text("ready")
+    handle = ResultArtifact.resume(root, artifact_identity())
+    (control / "resumed").write_text("ready")
+    if action == "write":
+        handle.write_completed_partition(partition())
+    elif action == "finalize":
+        handle.finalize(coverage=artifact_coverage())
+    print(action + " completed")
+"""
+        repository = Path(__file__).resolve().parents[1]
+        for action in ("resume", "write", "finalize"):
+            with (
+                self.subTest(action=action),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent = Path(temporary).resolve()
+                root, script = parent / "artifact", parent / "worker.py"
+                script.write_text(worker)
+                processes = []
+
+                def start(mode):
+                    process = subprocess.Popen(
+                        [
+                            sys.executable,
+                            str(script),
+                            str(repository),
+                            str(root),
+                            str(parent),
+                            mode,
+                        ],
+                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    processes.append(process)
+                    return process
+
+                def wait_marker(name):
+                    deadline = time.monotonic() + 5
+                    while not (parent / name).exists():
+                        if time.monotonic() >= deadline:
+                            self.fail(f"worker did not reach {name}")
+                        time.sleep(0.005)
+
+                creator = start("create")
+                try:
+                    wait_marker("published")
+                    follower = start(action)
+                    wait_marker("attempted")
+                    deadline = time.monotonic() + 0.25
+                    while (
+                        not (parent / "resumed").exists()
+                        and time.monotonic() < deadline
+                    ):
+                        time.sleep(0.005)
+                    entered_before_create_completed = (parent / "resumed").exists()
+                    (parent / "release").write_text("continue")
+                    created = creator.communicate(timeout=5)
+                    followed = follower.communicate(timeout=5)
+                    self.assertFalse(entered_before_create_completed)
+                    self.assertEqual(creator.returncode, 0, created)
+                    self.assertEqual(follower.returncode, 0, followed)
+                    resumed = ResultArtifact.resume(root, artifact_identity())
+                    if action == "finalize":
+                        self.assertIsInstance(resumed, dict)
+                        self.assertEqual(resumed["file_count"], 0)
+                    else:
+                        self.assertEqual(
+                            len(resumed.checkpoint()["completed_files"]),
+                            1 if action == "write" else 0,
+                        )
+                finally:
+                    (parent / "release").write_text("continue")
+                    for process in processes:
+                        try:
+                            process.communicate(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.communicate(timeout=5)
+
+    def test_deterministic_create_commit_uses_the_same_artifact_lock(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+
+        for action in ("resume", "write", "finalize"):
+            with self.subTest(action=action):
+                published, release, attempted, resumed = (
+                    Event(),
+                    Event(),
+                    Event(),
+                    Event(),
+                )
+
+                class PausedCreate(DeterministicFilesystemAdapter):
+                    def _phase(self, phase):
+                        super()._phase(phase)
+                        if phase == "after_create_publication":
+                            published.set()
+                            if not release.wait(timeout=5):
+                                raise RuntimeError("test publication pause expired")
+
+                filesystem = PausedCreate(Path("/deterministic/model"))
+                root, identity = Path("/caller/artifact"), artifact_identity()
+
+                def follow():
+                    attempted.set()
+                    handle = ResultArtifact.resume(
+                        root, identity, filesystem=filesystem
+                    )
+                    resumed.set()
+                    if action == "write":
+                        handle.write_completed_partition(partition())
+                    elif action == "finalize":
+                        handle.finalize(coverage=artifact_coverage())
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    creator = pool.submit(
+                        ResultArtifact.create,
+                        root,
+                        identity,
+                        initial_context=frozen_context(),
+                        filesystem=filesystem,
+                    )
+                    self.assertTrue(published.wait(timeout=5))
+                    follower = pool.submit(follow)
+                    self.assertTrue(attempted.wait(timeout=5))
+                    try:
+                        entered_before_create_completed = resumed.wait(timeout=0.1)
+                    finally:
+                        release.set()
+                    creator.result(timeout=5)
+                    follower.result(timeout=5)
+                    self.assertFalse(entered_before_create_completed)
+                final = ResultArtifact.resume(root, identity, filesystem=filesystem)
+                if action == "finalize":
+                    self.assertIsInstance(final, dict)
+                else:
+                    self.assertEqual(
+                        len(final.checkpoint()["completed_files"]),
+                        1 if action == "write" else 0,
+                    )
+
+    def test_paused_create_does_not_lock_another_artifact(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for backend in (ProductionFilesystemAdapter, DeterministicFilesystemAdapter):
+            with (
+                self.subTest(backend=backend.__name__),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                published, release = Event(), Event()
+
+                class PausedCreate(backend):
+                    paused = False
+
+                    def _phase(self, phase):
+                        super()._phase(phase)
+                        if phase == "after_create_publication" and not self.paused:
+                            self.paused = True
+                            published.set()
+                            if not release.wait(timeout=5):
+                                raise RuntimeError("test publication pause expired")
+
+                filesystem = (
+                    PausedCreate(parent)
+                    if backend is DeterministicFilesystemAdapter
+                    else PausedCreate()
+                )
+
+                def other_artifact():
+                    other = ResultArtifact.create(
+                        parent / "second",
+                        identity,
+                        initial_context=frozen_context(),
+                        filesystem=filesystem,
+                    )
+                    other.write_completed_partition(partition())
+                    return other.finalize(coverage=artifact_coverage())
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    first = pool.submit(
+                        ResultArtifact.create,
+                        parent / "first",
+                        identity,
+                        initial_context=frozen_context(),
+                        filesystem=filesystem,
+                    )
+                    self.assertTrue(published.wait(timeout=5))
+                    second = pool.submit(other_artifact)
+                    try:
+                        result = second.result(timeout=1)
+                        self.assertEqual(result["file_count"], 1)
+                    finally:
+                        release.set()
+                    first.result(timeout=5)
+                    second.result(timeout=5)
+
+    def test_deterministic_same_target_create_has_one_winner(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        ready = Barrier(2)
+
+        class RacingCreate(DeterministicFilesystemAdapter):
+            def _phase(self, phase):
+                super()._phase(phase)
+                if phase == "after_create_prepared":
+                    ready.wait(timeout=2)
+
+        filesystem = RacingCreate(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+
+        def create():
+            try:
+                ResultArtifact.create(
+                    root,
+                    identity,
+                    initial_context=frozen_context(),
+                    filesystem=filesystem,
+                )
+            except ValueError:
+                return "refused"
+            return "created"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = tuple(pool.map(lambda _: create(), range(2)))
+        self.assertCountEqual(results, ("created", "refused"))
+        self.assertEqual(
+            ResultArtifact.resume(root, identity, filesystem=filesystem).checkpoint()[
+                "completed_files"
+            ],
+            [],
+        )

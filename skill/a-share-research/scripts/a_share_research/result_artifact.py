@@ -1667,6 +1667,8 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
     def create(
         self, path: Path, identity: ResultArtifactIdentity, context: bytes | None = None
     ) -> _FileIdentity:
+        if fcntl is None:
+            raise ValueError("result artifact production persistence is unavailable")
         initial = _checkpoint(identity, context=context)
         with self._parent(path) as (parent, chain):
             self._supported(parent)
@@ -1704,6 +1706,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
             root = os.open(
                 stage_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent
             )
+            locked = False
             try:
                 root_id = self._id(os.fstat(root))
                 named = os.stat(stage_name, dir_fd=parent, follow_symlinks=False)
@@ -1715,6 +1718,10 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                     raise ValueError(
                         "result artifact new prepared root binding changed"
                     )
+                # The staged inode becomes the public root without changing its
+                # lock domain. Hold it before publication until create completes.
+                fcntl.flock(root, fcntl.LOCK_EX)
+                locked = True
                 directories: dict[str, _FileIdentity] = {}
                 for relative in _FIXED_DIRECTORIES:
                     coordinate = PurePosixPath(relative)
@@ -1863,7 +1870,11 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                         )
                 return root_id
             finally:
-                os.close(root)
+                try:
+                    if locked:
+                        fcntl.flock(root, fcntl.LOCK_UN)
+                finally:
+                    os.close(root)
 
 
 @dataclass(slots=True)
@@ -1979,46 +1990,49 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
         with self._allocation_lock:
             if str(path) in self._roots:
                 raise ValueError("result artifact create target already exists")
-            self._phase("before_apply")
-            token = secrets.token_hex(32)
-            root_id = self._allocate()
-            self._phase("after_create_stage_directory_created")
-            directories = {
-                relative: self._allocate() for relative in _FIXED_DIRECTORIES
-            }
-            cp_id, owner_id = self._allocate(), self._allocate()
-            owner_name = f".protocol/create-{token}.json"
-            owner = _creation_ownership(
-                identity,
-                context,
-                token,
-                root_id,
-                owner_id,
-                directories,
-                cp_id,
-                initial,
-                self._ancestor_identities,
-            )
-            nodes = {
-                relative: _Node(relative, value, "directory")
-                for relative, value in directories.items()
-            }
-            nodes["checkpoint.json"] = _Node("checkpoint.json", cp_id, "file", initial)
-            nodes[owner_name] = _Node(owner_name, owner_id, "file", owner)
-            self._sync()
-            self._phase("after_create_checkpoint_written")
-            self._sync()
-            self._phase("after_create_owner_written")
-            for _ in directories:
-                self._sync(directory=True)
-            self._phase("after_create_prepared")
-            if str(path) in self._roots:
-                raise ValueError("result artifact create target already exists")
-            expected_root = _Snapshot(
-                root_id,
-                tuple(sorted(nodes.values(), key=lambda node: node.relative_path)),
-            )
-            self._roots[str(path)] = _MemoryRoot(root_id, nodes, threading.RLock())
+        self._phase("before_apply")
+        token = secrets.token_hex(32)
+        root_id = self._allocate()
+        self._phase("after_create_stage_directory_created")
+        directories = {relative: self._allocate() for relative in _FIXED_DIRECTORIES}
+        cp_id, owner_id = self._allocate(), self._allocate()
+        owner_name = f".protocol/create-{token}.json"
+        owner = _creation_ownership(
+            identity,
+            context,
+            token,
+            root_id,
+            owner_id,
+            directories,
+            cp_id,
+            initial,
+            self._ancestor_identities,
+        )
+        nodes = {
+            relative: _Node(relative, value, "directory")
+            for relative, value in directories.items()
+        }
+        nodes["checkpoint.json"] = _Node("checkpoint.json", cp_id, "file", initial)
+        nodes[owner_name] = _Node(owner_name, owner_id, "file", owner)
+        self._sync()
+        self._phase("after_create_checkpoint_written")
+        self._sync()
+        self._phase("after_create_owner_written")
+        for _ in directories:
+            self._sync(directory=True)
+        self._phase("after_create_prepared")
+        expected_root = _Snapshot(
+            root_id,
+            tuple(sorted(nodes.values(), key=lambda node: node.relative_path)),
+        )
+        root = _MemoryRoot(root_id, nodes, threading.RLock())
+        with root.lock:
+            # Only the exclusive namespace publication uses the allocator lock;
+            # durability/fault/transaction work stays in this artifact's domain.
+            with self._allocation_lock:
+                if str(path) in self._roots:
+                    raise ValueError("result artifact create target already exists")
+                self._roots[str(path)] = root
             self._phase("after_create_publication")
             self._sync(directory=True)
             self._sync(directory=True)
