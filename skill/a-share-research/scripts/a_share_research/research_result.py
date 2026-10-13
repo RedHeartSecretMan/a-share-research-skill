@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import math
 import re
+from bisect import bisect_left
+from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -17,7 +19,6 @@ from decimal import (
     localcontext,
 )
 from hashlib import sha256
-from types import MappingProxyType
 from typing import (
     Any,
     Collection,
@@ -32,7 +33,6 @@ from typing import (
 from .bounded_public_data import (
     MAX_PUBLIC_DATA_DEPTH,
     MAX_PUBLIC_DATA_ITEMS,
-    validate_bounded_public_data,
 )
 
 CoverageState = Literal[
@@ -109,11 +109,14 @@ _EVIDENCE_ROLES = frozenset(
 )
 _DIAGNOSTIC_FORBIDDEN_FRAGMENTS = (
     "authorization",
+    "api_key",
+    "apikey",
     "cookie",
     "credential",
     "header",
     "host",
     "payload",
+    "password",
     "raw",
     "secret",
     "server",
@@ -327,7 +330,9 @@ def _validate_public_source_error(
 def _validate_diagnostic_keys(value: object) -> None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
-            normalized = key.casefold()
+            normalized = (
+                key.casefold().replace("-", "_").replace(".", "_").replace(" ", "_")
+            )
             if any(
                 fragment in normalized for fragment in _DIAGNOSTIC_FORBIDDEN_FRAGMENTS
             ):
@@ -1119,12 +1124,41 @@ def _plain_operation_value(
     return visit(value, 0)
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class _FrozenOperationMapping(Mapping[str, object]):
+    """Immutable tuples support mapping reads without a mutable backing dict.
+
+    Mapping's comparisons use detached dictionaries, so peer operators cannot
+    receive stored mutable data. A sorted tuple index keeps wide bounded objects
+    from requiring a linear search for every value during projection.
+    """
+
+    _keys: tuple[str, ...]
+    _lookup_keys: tuple[str, ...]
+    _values: tuple[object, ...]
+
+    def __getitem__(self, key: str) -> object:
+        index = bisect_left(self._lookup_keys, key)
+        if index == len(self._lookup_keys) or self._lookup_keys[index] != key:
+            raise KeyError(key)
+        return self._values[index]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._keys)
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+
 def _seal_operation_value(value: object) -> object:
     """Hide fresh backing dictionaries and remove every mutable sequence alias."""
 
     if isinstance(value, dict):
-        return MappingProxyType(
-            {key: _seal_operation_value(nested) for key, nested in value.items()}
+        ordered = sorted(value.items())
+        return _FrozenOperationMapping(
+            tuple(value),
+            tuple(key for key, _ in ordered),
+            tuple(_seal_operation_value(nested) for _, nested in ordered),
         )
     if isinstance(value, (list, tuple)):
         return tuple(_seal_operation_value(nested) for nested in value)
@@ -1209,11 +1243,6 @@ class OperationOutcome:
         )
         for error in source_errors:
             _validate_diagnostic_keys(error)
-            validate_bounded_public_data(
-                error,
-                artifact="operation source error",
-                require_ascii_keys=False,
-            )
         diagnostics = _sealed_operation_object(
             self.diagnostics,
             path="operation diagnostics",
@@ -1221,11 +1250,6 @@ class OperationOutcome:
             max_bytes=_MAX_DIAGNOSTIC_BYTES,
         )
         _validate_diagnostic_keys(diagnostics)
-        validate_bounded_public_data(
-            diagnostics,
-            artifact="operation diagnostics",
-            require_ascii_keys=False,
-        )
         evidence_storage = (
             None
             if self.evidence_storage is None

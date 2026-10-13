@@ -10,8 +10,14 @@ SKILL_ROOT = Path(__file__).resolve().parents[1] / "skill" / "a-share-research"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from a_share_research.research_result import (  # noqa: E402
+    DirectTaskPlan,
+    EvidenceUsePolicy,
+    FieldDisposition,
     OperationExecution,
+    OperationObligation,
     OperationOutcome,
+    ResearchDependency,
+    fold_direct_task_research_result,
     stable_result_id,
 )
 
@@ -121,6 +127,121 @@ class OperationOutcomeImmutabilityTests(unittest.TestCase):
         self.assertEqual(
             projection["evidence_storage"]["audit"], {"values": ["original"]}
         )
+
+    def test_mapping_operators_never_expose_mutable_stored_proof(self) -> None:
+        for field in (
+            "observations",
+            "source_errors",
+            "diagnostics",
+            "evidence_storage",
+        ):
+            for operation in ("equality", "inequality", "union", "reverse_union"):
+                with self.subTest(field=field, operation=operation):
+                    outcome = OperationOutcome(
+                        "fixture",
+                        "fixture@1",
+                        OperationExecution("failed"),
+                        observations=(
+                            {"source_operation": "fixture@1", "proof": {"values": [1]}},
+                        ),
+                        source_errors=(
+                            {
+                                "source_operation": "fixture@1",
+                                "code": "partial",
+                                "message": "safe",
+                                "details": {"values": [2]},
+                            },
+                        ),
+                        diagnostics={"attempts": {"values": [3]}},
+                        evidence_storage={"audit": {"values": [4]}},
+                    )
+                    before = json.dumps(outcome.to_dict(), sort_keys=True)
+                    roots = {
+                        "observations": outcome.observations[0]["proof"],
+                        "source_errors": outcome.source_errors[0]["details"],
+                        "diagnostics": outcome.diagnostics["attempts"],
+                        "evidence_storage": outcome.evidence_storage["audit"],
+                    }
+                    owned = roots[field]
+
+                    class Peer:
+                        def attempt(self, value):
+                            try:
+                                dict.__setitem__(value, "escaped", "changed")
+                            except TypeError:
+                                pass
+                            return False
+
+                        __eq__ = attempt
+                        __ne__ = attempt
+                        __or__ = attempt
+                        __ror__ = attempt
+
+                    if operation == "equality":
+                        owned == Peer()
+                    elif operation == "inequality":
+                        owned != Peer()
+                    elif operation == "union":
+                        owned | Peer()
+                    else:
+                        Peer() | owned
+                    self.assertNotIn("escaped", owned)
+                    self.assertEqual(
+                        json.dumps(outcome.to_dict(), sort_keys=True), before
+                    )
+
+    def test_public_builder_preserves_predecessor_source_error_strings(self) -> None:
+        plan = DirectTaskPlan(
+            task_type="release_source_error_test",
+            as_of="2026-08-12",
+            obligations=(
+                OperationObligation(
+                    "shared_source_error_contract",
+                    "fixture@1",
+                    "release_test",
+                    True,
+                    None,
+                    (EvidenceUsePolicy("release_test", "supporting"),),
+                ),
+            ),
+            dependencies=(ResearchDependency("release_test", "release_test", 1, True),),
+        )
+        for field in ("code", "message"):
+            for value in ("", " \t\n", "x" * 257, "x" * 65_537, "\u0000\n"):
+                with self.subTest(field=field, length=len(value)):
+                    error = {
+                        "source_operation": "fixture@1",
+                        "code": "missing_credential",
+                        "message": "safe",
+                        field: value,
+                    }
+                    outcome = OperationOutcome(
+                        "shared_source_error_contract",
+                        "fixture@1",
+                        OperationExecution("failed"),
+                        source_errors=(error,),
+                        field_dispositions=(
+                            FieldDisposition(
+                                "payload", "normalized", "observations[].payload"
+                            ),
+                        ),
+                    )
+                    result = fold_direct_task_research_result(
+                        plan,
+                        (outcome,),
+                        summary="Release source-error contract fixture.",
+                    ).to_dict()
+                    public = result["source_errors"][0]
+                    self.assertEqual(public[field], value)
+                    canonical = {
+                        "capability_id": "shared_source_error_contract",
+                        "operation_id": "fixture@1",
+                        "code": error["code"],
+                        "message": error["message"],
+                    }
+                    self.assertEqual(
+                        public["id"], stable_result_id("source-error", canonical)
+                    )
 
     def test_many_reused_nested_references_stay_within_json_bounds(self) -> None:
         shared = {"value": "original"}
