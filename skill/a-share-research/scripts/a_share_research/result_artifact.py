@@ -1696,6 +1696,15 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                 initial,
                 chain,
             )
+            # Absence is part of the preflight plan, just like ancestor ids.
+            # Recheck before the first private namespace mutation; RENAME_EXCL
+            # still handles later races after legal preparation has begun.
+            try:
+                os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise ValueError("result artifact create target changed before apply")
             token = secrets.token_hex(32)
             stage_name = f".result-artifact-create-{token}.stage"
             os.mkdir(stage_name, 0o700, dir_fd=parent)
@@ -1991,6 +2000,9 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
             if str(path) in self._roots:
                 raise ValueError("result artifact create target already exists")
         self._phase("before_apply")
+        with self._allocation_lock:
+            if str(path) in self._roots:
+                raise ValueError("result artifact create target changed before apply")
         token = secrets.token_hex(32)
         root_id = self._allocate()
         self._phase("after_create_stage_directory_created")

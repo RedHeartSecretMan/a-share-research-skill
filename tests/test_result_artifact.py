@@ -2476,3 +2476,104 @@ else:
             ],
             [],
         )
+
+
+class ResultArtifactCreatePreflightTests(unittest.TestCase):
+    def test_target_appearing_before_first_apply_refuses_without_private_staging(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for kind in ("directory", "file", "symlink", "owned-artifact"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                root = parent / "artifact"
+                foreign = parent / "foreign"
+                foreign.mkdir()
+                (foreign / "caller-file").write_bytes(b"caller-owned")
+                before = []
+
+                class TargetAppeared(ProductionFilesystemAdapter):
+                    def _phase(self, phase):
+                        if phase == "before_apply":
+                            if kind == "directory":
+                                root.mkdir()
+                                (root / "caller-file").write_bytes(b"caller-owned")
+                            elif kind == "file":
+                                root.write_bytes(b"caller-owned")
+                            elif kind == "symlink":
+                                root.symlink_to(foreign, target_is_directory=True)
+                            else:
+                                ResultArtifact.create(
+                                    root, identity, initial_context=frozen_context()
+                                )
+                            before.append(filesystem_tree(parent))
+
+                with self.assertRaises(ValueError):
+                    ResultArtifact.create(
+                        root,
+                        identity,
+                        initial_context=frozen_context(),
+                        filesystem=TargetAppeared(),
+                    )
+                self.assertEqual(filesystem_tree(parent), before[0])
+                self.assertEqual(
+                    tuple(parent.glob(".result-artifact-create-*.stage")), ()
+                )
+
+    def test_ancestor_drift_before_first_apply_refuses_without_staging_in_old_parent(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            anchor = parent / "anchor"
+            anchor.mkdir()
+            root = anchor / "artifact"
+            before = []
+
+            class AncestorChanged(ProductionFilesystemAdapter):
+                def _phase(self, phase):
+                    if phase == "before_apply":
+                        anchor.rename(parent / "original-anchor")
+                        anchor.mkdir()
+                        (anchor / "caller-file").write_bytes(b"caller-owned")
+                        before.append(filesystem_tree(parent))
+
+            with self.assertRaises(ValueError):
+                ResultArtifact.create(
+                    root,
+                    identity,
+                    initial_context=frozen_context(),
+                    filesystem=AncestorChanged(),
+                )
+            self.assertEqual(filesystem_tree(parent), before[0])
+            self.assertEqual(tuple((parent / "original-anchor").iterdir()), ())
+
+    def test_deterministic_target_drift_preserves_the_callers_published_artifact(
+        self,
+    ) -> None:
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        before = []
+
+        def publish_target():
+            caller = ResultArtifact.create(
+                root, identity, initial_context=frozen_context(), filesystem=filesystem
+            )
+            caller.write_completed_partition(partition())
+            before.append(filesystem.inventory(root))
+
+        filesystem.pause_next_before_apply(publish_target)
+        with self.assertRaises(ValueError):
+            ResultArtifact.create(
+                root, identity, initial_context=frozen_context(), filesystem=filesystem
+            )
+        self.assertEqual(filesystem.inventory(root), before[0])
+        self.assertEqual(
+            ResultArtifact.resume(root, identity, filesystem=filesystem).checkpoint()[
+                "completed_files"
+            ][0]["relative_path"],
+            partition().relative_path,
+        )

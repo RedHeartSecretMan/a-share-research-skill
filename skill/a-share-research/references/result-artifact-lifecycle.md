@@ -57,6 +57,8 @@ artifact = ResultArtifact.create(
 | Manifest committed / sealed | manifest 最后 exclusive 发布，所有声明、内容及必要持久化边界闭合 | resume 只返回原 receipt。已完成内容、checkpoint 完成事实和 manifest 都保持 sealed。 |
 | Owned stage cleanup | 先验证整个 sealed/partial 状态及全部待处理 stage，再重验并 apply | 仅移除 journal 明确拥有的 exact names/identities。一个无效的最后条目阻止首个 cleanup；apply 开始后中断不承诺多文件物理回滚。 |
 
+创建在首个私有 stage mkdir 前同时重验 ancestor 身份和 target 不存在的前提。target 在此之前出现时，不建立任何 staging；只有合法 apply 已开始之后的冲突或中断才进入 initial preparation-abort。这个观察重验不承诺 namespace CAS，后续竞争仍由 exclusive publication 拒绝。
+
 创建的预期库存从原始 canonical checkpoint、owner 字节和独占建立的描述符身份构造。目录、checkpoint、owner、持久化和公开边界均与该计划核对；scan 只提供观察，不能把写后出现的外部对象或改变过的元数据收养为预期状态。协议文件经已知目录描述符逐级打开，替换目录或 symlink 不能重定向后续写入。公开后只有仍能证明 target 名称、root 描述符和完整库存属于原计划，create 才返回 handle。拒绝不删除外部替换物。
 
 preparation-abort 是明确的未提交状态，不是把自身窗口改称 unknown 来跳过验证。该阶段没有 publication intent，没有公开内容或新的完成声明；artifact 保持原已提交状态。没有已提交 journal 关联的外部对象不会被后续恢复扫描相似名称收养或删除。测试分别在每个实际 namespace/持久化边界由独立进程直接退出，再由新进程验证这些行为。
