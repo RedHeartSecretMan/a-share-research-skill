@@ -38,7 +38,7 @@ artifact = ResultArtifact.create(
 
 `checkpoint()` 返回新的 plain JSON 副本，包括 C、完成文件声明及 identity。修改副本、普通 `==` 或 `|` 运算不会修改 artifact 或 handle 内状态。`read_completed_file(relative_path)` 在同一事务 Seam 内完整验证 inventory，只返回已完成文件的 canonical 字节；未完成文件、协议文件和路径逃逸被拒绝。恢复消费者由此重用冻结分区和排名，不直接操作文件系统。
 
-`write_completed_partition(prepared)` 和 `write_candidate(prepared)` 只消费 #115 正式工厂的 sealed values。完成坐标不能覆盖、追加或重复登记。`finalize(coverage=...)` 最后发布 manifest 并返回 receipt。`recover_finalized_receipt()` 提供相同的终态恢复；`validate_receipt()` 只验证。
+`write_completed_partition(prepared)` 和 `write_candidate(prepared)` 只消费 #115 正式工厂的 sealed values。完成坐标不能覆盖、追加或重复登记。`finalize(coverage=...)` 最后发布 manifest 并返回 receipt。`recover_finalized_receipt()` 提供相同的终态恢复；`validate_receipt()` 只验证精确 canonical receipt，计数必须是整数；JSON boolean 或浮点数不能冒充整数计数。
 
 ## 事务状态及提交点
 
@@ -56,6 +56,8 @@ artifact = ResultArtifact.create(
 | Finalize intent | 全部内容、coverage、manifest 和 bounded receipt 已预检；manifest 的精确 bytes/identity 已进入 journal | resume 完成 manifest publication；不改写完成分区或候选。 |
 | Manifest committed / sealed | manifest 最后 exclusive 发布，所有声明、内容及必要持久化边界闭合 | resume 只返回原 receipt。已完成内容、checkpoint 完成事实和 manifest 都保持 sealed。 |
 | Owned stage cleanup | 先验证整个 sealed/partial 状态及全部待处理 stage，再重验并 apply | 仅移除 journal 明确拥有的 exact names/identities。一个无效的最后条目阻止首个 cleanup；apply 开始后中断不承诺多文件物理回滚。 |
+
+创建的预期库存从原始 canonical checkpoint、owner 字节和独占建立的描述符身份构造。目录、checkpoint、owner、持久化和公开边界均与该计划核对；scan 只提供观察，不能把写后出现的外部对象或改变过的元数据收养为预期状态。协议文件经已知目录描述符逐级打开，替换目录或 symlink 不能重定向后续写入。公开后只有仍能证明 target 名称、root 描述符和完整库存属于原计划，create 才返回 handle。拒绝不删除外部替换物。
 
 preparation-abort 是明确的未提交状态，不是把自身窗口改称 unknown 来跳过验证。该阶段没有 publication intent，没有公开内容或新的完成声明；artifact 保持原已提交状态。没有已提交 journal 关联的外部对象不会被后续恢复扫描相似名称收养或删除。测试分别在每个实际 namespace/持久化边界由独立进程直接退出，再由新进程验证这些行为。
 

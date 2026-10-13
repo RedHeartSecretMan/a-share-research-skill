@@ -1750,3 +1750,234 @@ class ResultArtifactPostpublicationOwnershipTests(unittest.TestCase):
                 )
             self.assertEqual(filesystem_tree(parent), before[0])
             self.assertEqual((target / "caller-file").read_bytes(), b"caller-owned")
+
+
+class ResultArtifactCreationPlanTests(unittest.TestCase):
+    def test_each_create_phase_is_checked_against_original_plan(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for phase in (
+            "after_create_checkpoint_written",
+            "after_create_owner_written",
+            "after_create_prepared",
+            "after_create_publication",
+        ):
+            for change in (
+                "unknown",
+                "checkpoint",
+                "checkpoint-inode",
+                "directory",
+                *(
+                    ("owner", "owner-inode")
+                    if phase != "after_create_checkpoint_written"
+                    else ()
+                ),
+            ):
+                with (
+                    self.subTest(phase=phase, change=change),
+                    tempfile.TemporaryDirectory() as temporary,
+                ):
+                    parent, identity = Path(temporary).resolve(), artifact_identity()
+                    root = parent / "artifact"
+                    before = []
+
+                    class ChangedCreationPlan(ProductionFilesystemAdapter):
+                        def _phase(self, actual_phase):
+                            if actual_phase == phase:
+                                stage = (
+                                    root
+                                    if phase == "after_create_publication"
+                                    else next(
+                                        parent.glob(".result-artifact-create-*.stage")
+                                    )
+                                )
+                                if change == "unknown":
+                                    (stage / "foreign").write_bytes(b"caller-owned")
+                                elif change == "checkpoint":
+                                    (stage / "checkpoint.json").write_bytes(b"{}\n")
+                                elif change == "owner":
+                                    next(
+                                        (stage / ".protocol").glob("create-*.json")
+                                    ).write_bytes(b"{}\n")
+                                elif change.endswith("-inode"):
+                                    destination = (
+                                        stage / "checkpoint.json"
+                                        if change == "checkpoint-inode"
+                                        else next(
+                                            (stage / ".protocol").glob("create-*.json")
+                                        )
+                                    )
+                                    replacement = parent / "replacement"
+                                    replacement.write_bytes(destination.read_bytes())
+                                    replacement.replace(destination)
+                                else:
+                                    directory = (
+                                        stage / "partitions" / "universe" / "SSE"
+                                    )
+                                    directory.rmdir()
+                                    directory.mkdir()
+                                before.append(filesystem_tree(parent))
+
+                    with self.assertRaises(ValueError):
+                        ResultArtifact.create(
+                            root,
+                            identity,
+                            initial_context=frozen_context(),
+                            filesystem=ChangedCreationPlan(),
+                        )
+                    self.assertEqual(root.exists(), phase == "after_create_publication")
+                    self.assertEqual(filesystem_tree(parent), before[0])
+                    if root.exists():
+                        with self.assertRaises(ValueError):
+                            ResultArtifact.resume(root, identity)
+                        self.assertEqual(filesystem_tree(parent), before[0])
+
+    def test_create_durability_phases_keep_original_bytes_and_inventory(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for phase in ("before_file_fsync", "after_file_fsync"):
+            for occurrence in (1, 2):
+                with (
+                    self.subTest(phase=phase, occurrence=occurrence),
+                    tempfile.TemporaryDirectory() as temporary,
+                ):
+                    parent, identity = Path(temporary).resolve(), artifact_identity()
+                    root = parent / "artifact"
+                    before = []
+
+                    class ChangedDuringSync(ProductionFilesystemAdapter):
+                        seen = 0
+
+                        def _phase(self, actual_phase):
+                            if actual_phase == phase:
+                                self.seen += 1
+                                if self.seen == occurrence:
+                                    stage = next(
+                                        parent.glob(".result-artifact-create-*.stage")
+                                    )
+                                    destination = (
+                                        stage / "checkpoint.json"
+                                        if occurrence == 1
+                                        else next(
+                                            (stage / ".protocol").glob("create-*.json")
+                                        )
+                                    )
+                                    destination.write_bytes(b"{}\n")
+                                    before.append(filesystem_tree(parent))
+
+                    with self.assertRaises(ValueError):
+                        ResultArtifact.create(
+                            root, identity, filesystem=ChangedDuringSync()
+                        )
+                    self.assertFalse(root.exists())
+                    self.assertEqual(filesystem_tree(parent), before[0])
+
+        for phase in ("before_directory_fsync", "after_directory_fsync"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                root = parent / "artifact"
+                before = []
+
+                class ChangedInventoryDuringSync(ProductionFilesystemAdapter):
+                    changed = False
+                    prepared = False
+
+                    def _phase(self, actual_phase):
+                        if actual_phase == "after_create_owner_written":
+                            self.prepared = True
+                        if actual_phase == phase and self.prepared and not self.changed:
+                            self.changed = True
+                            stage = next(parent.glob(".result-artifact-create-*.stage"))
+                            (stage / ".protocol" / "foreign").write_bytes(
+                                b"caller-owned"
+                            )
+                            before.append(filesystem_tree(parent))
+
+                with self.assertRaises(ValueError):
+                    ResultArtifact.create(
+                        root, identity, filesystem=ChangedInventoryDuringSync()
+                    )
+                self.assertFalse(root.exists())
+                self.assertEqual(filesystem_tree(parent), before[0])
+
+    def test_deterministic_create_rechecks_original_published_plan(self) -> None:
+        for change in ("unknown", "checkpoint", "checkpoint-inode"):
+            with self.subTest(change=change):
+                root, identity = Path("/caller/artifact"), artifact_identity()
+                before = []
+
+                class ChangedPublishedPlan(DeterministicFilesystemAdapter):
+                    def _phase(self, phase):
+                        super()._phase(phase)
+                        if phase == "after_create_publication":
+                            self.tamper(
+                                root,
+                                "foreign" if change == "unknown" else "checkpoint.json",
+                                b"caller-owned"
+                                if change == "unknown"
+                                else self.read_bytes(root, "checkpoint.json"),
+                                replace_identity=change == "checkpoint-inode",
+                            )
+                            if change == "checkpoint":
+                                self.tamper(root, "checkpoint.json", b"{}\n")
+                            before.append(self.inventory(root))
+
+                filesystem = ChangedPublishedPlan(Path("/deterministic/model"))
+                with self.assertRaises(ValueError):
+                    ResultArtifact.create(root, identity, filesystem=filesystem)
+                self.assertEqual(filesystem.inventory(root), before[0])
+                with self.assertRaises(ValueError):
+                    ResultArtifact.resume(root, identity, filesystem=filesystem)
+                self.assertEqual(filesystem.inventory(root), before[0])
+
+    def test_changed_protocol_directory_cannot_redirect_owner_writes(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            root, foreign = parent / "artifact", parent / "foreign"
+            foreign.mkdir()
+            (foreign / "caller-file").write_bytes(b"caller-owned")
+            before = []
+
+            class RedirectedProtocol(ProductionFilesystemAdapter):
+                def _phase(self, phase):
+                    if phase == "after_create_checkpoint_written":
+                        stage = next(parent.glob(".result-artifact-create-*.stage"))
+                        (stage / ".protocol").rmdir()
+                        (stage / ".protocol").symlink_to(
+                            foreign, target_is_directory=True
+                        )
+                        before.append(filesystem_tree(parent))
+
+            with self.assertRaises(ValueError):
+                ResultArtifact.create(root, identity, filesystem=RedirectedProtocol())
+            self.assertEqual(filesystem_tree(parent), before[0])
+            self.assertEqual(
+                sorted(path.name for path in foreign.iterdir()), ["caller-file"]
+            )
+
+    def test_receipt_count_types_are_exact_canonical_json_integers(self) -> None:
+        for records, invalid_counts in ((0, (False, 0.0)), (1, (True, 1.0))):
+            with self.subTest(records=records):
+                filesystem = DeterministicFilesystemAdapter(
+                    Path("/deterministic/model")
+                )
+                root, identity = Path("/caller/artifact"), artifact_identity()
+                handle = ResultArtifact.create(root, identity, filesystem=filesystem)
+                if records:
+                    handle.write_completed_partition(partition())
+                receipt = handle.finalize(coverage=artifact_coverage())
+                before = filesystem.inventory(root)
+                for invalid in invalid_counts:
+                    for key in ("file_count", "record_count"):
+                        with self.subTest(value=invalid, key=key):
+                            bad = {**receipt, key: invalid}
+                            with self.assertRaises(ValueError):
+                                ResultArtifact.validate_receipt(
+                                    root, identity, bad, filesystem=filesystem
+                                )
+                            self.assertEqual(filesystem.inventory(root), before)
+                ResultArtifact.validate_receipt(
+                    root, identity, receipt, filesystem=filesystem
+                )

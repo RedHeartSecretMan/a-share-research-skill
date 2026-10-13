@@ -924,7 +924,9 @@ class _TransactionalAdapter:
                 )
                 if (
                     type(receipt) is not dict
-                    or receipt != expected_receipt
+                    or type(receipt.get("file_count")) is not int
+                    or type(receipt.get("record_count")) is not int
+                    or _json(receipt) != _json(expected_receipt)
                     or len(_json(receipt)[:-1]) > _MAX_RECEIPT_BYTES
                 ):
                     raise ValueError("result artifact receipt is invalid")
@@ -1635,6 +1637,31 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
             finally:
                 os.close(root)
 
+    @contextmanager
+    def _created_directory(
+        self, root: int, relative: str, known: Mapping[str, _FileIdentity]
+    ) -> Iterator[int]:
+        descriptor = os.dup(root)
+        prefix = ""
+        try:
+            if relative and relative != ".":
+                for component in relative.split("/"):
+                    prefix = component if not prefix else prefix + "/" + component
+                    following = os.open(
+                        component,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                    os.close(descriptor)
+                    descriptor = following
+                    if self._id(os.fstat(descriptor)) != known[prefix]:
+                        raise ValueError(
+                            "result artifact created directory identity changed"
+                        )
+            yield descriptor
+        finally:
+            os.close(descriptor)
+
     def create(
         self, path: Path, identity: ResultArtifactIdentity, context: bytes | None = None
     ) -> _FileIdentity:
@@ -1688,9 +1715,33 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                     )
                 directories: dict[str, _FileIdentity] = {}
                 for relative in _FIXED_DIRECTORIES:
-                    os.mkdir(relative, 0o700, dir_fd=root)
-                    directories[relative] = self._id(
-                        os.stat(relative, dir_fd=root, follow_symlinks=False)
+                    coordinate = PurePosixPath(relative)
+                    with self._created_directory(
+                        root, str(coordinate.parent), directories
+                    ) as directory_parent:
+                        os.mkdir(coordinate.name, 0o700, dir_fd=directory_parent)
+                        directories[relative] = self._id(
+                            os.stat(
+                                coordinate.name,
+                                dir_fd=directory_parent,
+                                follow_symlinks=False,
+                            )
+                        )
+                expected_directories = tuple(
+                    _Node(name, directory_id, "directory")
+                    for name, directory_id in directories.items()
+                )
+                directory_plan = _Snapshot(
+                    root_id,
+                    tuple(
+                        sorted(
+                            expected_directories, key=lambda node: node.relative_path
+                        )
+                    ),
+                )
+                if self._scan(root) != directory_plan:
+                    raise ValueError(
+                        "result artifact created directory inventory changed"
                     )
                 cp = os.open(
                     "checkpoint.json",
@@ -1701,45 +1752,79 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                 try:
                     cp_id = self._id(os.fstat(cp))
                     self._write(cp, initial)
+                    checkpoint_plan = _Snapshot(
+                        root_id,
+                        tuple(
+                            sorted(
+                                (
+                                    *expected_directories,
+                                    _Node("checkpoint.json", cp_id, "file", initial),
+                                ),
+                                key=lambda node: node.relative_path,
+                            )
+                        ),
+                    )
                     self._phase("after_create_checkpoint_written")
+                    if self._scan(root) != checkpoint_plan:
+                        raise ValueError(
+                            "result artifact initial checkpoint plan changed"
+                        )
                 finally:
                     os.close(cp)
                 owner_name = f".protocol/create-{token}.json"
-                owner = os.open(
-                    owner_name,
-                    os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                    0o600,
-                    dir_fd=root,
-                )
-                try:
-                    owner_bytes = _creation_ownership(
-                        identity,
-                        context,
-                        token,
-                        root_id,
-                        self._id(os.fstat(owner)),
-                        directories,
-                        cp_id,
-                        initial,
-                        chain,
-                    )
-                    self._write(owner, owner_bytes)
-                    self._phase("after_create_owner_written")
-                finally:
-                    os.close(owner)
-                for relative in reversed(_FIXED_DIRECTORIES):
-                    directory = os.open(
-                        relative,
-                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                        dir_fd=root,
+                with self._created_directory(root, _PROTOCOL, directories) as protocol:
+                    owner = os.open(
+                        PurePosixPath(owner_name).name,
+                        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600,
+                        dir_fd=protocol,
                     )
                     try:
-                        self._sync_fd(directory, directory=True)
+                        owner_id = self._id(os.fstat(owner))
+                        owner_bytes = _creation_ownership(
+                            identity,
+                            context,
+                            token,
+                            root_id,
+                            owner_id,
+                            directories,
+                            cp_id,
+                            initial,
+                            chain,
+                        )
+                        self._write(owner, owner_bytes)
+                        # Expected authority comes from the original plan and the
+                        # exclusive descriptors, never from a later scan.
+                        prepared_root = _Snapshot(
+                            root_id,
+                            tuple(
+                                sorted(
+                                    (
+                                        *checkpoint_plan.nodes,
+                                        _Node(
+                                            owner_name, owner_id, "file", owner_bytes
+                                        ),
+                                    ),
+                                    key=lambda node: node.relative_path,
+                                )
+                            ),
+                        )
+                        self._phase("after_create_owner_written")
+                        if self._scan(root) != prepared_root:
+                            raise ValueError(
+                                "result artifact creation ownership plan changed"
+                            )
                     finally:
-                        os.close(directory)
+                        os.close(owner)
+                for relative in reversed(_FIXED_DIRECTORIES):
+                    with self._created_directory(
+                        root, relative, directories
+                    ) as directory:
+                        self._sync_fd(directory, directory=True)
                 self._sync_fd(root, directory=True)
                 self._sync_fd(parent, directory=True)
-                prepared_root = self._scan(root)
+                if self._scan(root) != prepared_root:
+                    raise ValueError("result artifact prepared creation plan changed")
                 self._phase("after_create_prepared")
                 with self._parent(path) as (_, refreshed):
                     if refreshed != chain:
@@ -1927,10 +2012,16 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
             self._phase("after_create_prepared")
             if str(path) in self._roots:
                 raise ValueError("result artifact create target already exists")
+            expected_root = _Snapshot(
+                root_id,
+                tuple(sorted(nodes.values(), key=lambda node: node.relative_path)),
+            )
             self._roots[str(path)] = _MemoryRoot(root_id, nodes, threading.RLock())
             self._phase("after_create_publication")
             self._sync(directory=True)
             self._sync(directory=True)
+            if self.inventory(path) != expected_root:
+                raise ValueError("result artifact published creation plan changed")
             return root_id
 
     class _Session:
