@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from contextvars import ContextVar
 from http.client import HTTPMessage
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
@@ -58,6 +59,11 @@ class ProviderHttpInvocation(Protocol):
     """Owned leaf authorization shared by local and fixed worker transports."""
 
     def call(self, adapter: ProviderCallAdapter[T]) -> T: ...
+
+
+_SCOPED_HTTP_INVOCATION: ContextVar[ProviderHttpInvocation | None] = ContextVar(
+    "owned_http_invocation", default=None
+)
 
 
 @dataclass(frozen=True)
@@ -126,13 +132,15 @@ class UrlLibTransport:
 
     def _open(self, request: Request, *, timeout_seconds: float) -> HttpResponse:
         visited: dict[str, int] = {}
+        scoped = _SCOPED_HTTP_INVOCATION.get()
+        invocation = scoped if scoped is not None else self._provider_invocation
         while True:
             step = ProductionInvocationAdapter(
                 lambda: self._open_once(request, timeout_seconds=timeout_seconds)
             )
             outcome = (
-                self._provider_invocation.call(step)
-                if self._provider_invocation is not None
+                invocation.call(step)
+                if invocation is not None
                 else self._open_once(request, timeout_seconds=timeout_seconds)
             )
             if isinstance(outcome, HttpResponse):
@@ -922,11 +930,20 @@ class _BoundedIdentityTransport:
     provider_invocation: ProviderHttpInvocation | None = None
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
-        def request() -> HttpResponse:
-            if isinstance(self.delegate, UrlLibTransport):
+        if isinstance(self.delegate, UrlLibTransport):
+            if self.provider_invocation is None:
                 return self.delegate.get_with_timeout(
                     url, headers, self.timeout_seconds
                 )
+            token = _SCOPED_HTTP_INVOCATION.set(self.provider_invocation)
+            try:
+                return self.delegate.get_with_timeout(
+                    url, headers, self.timeout_seconds
+                )
+            finally:
+                _SCOPED_HTTP_INVOCATION.reset(token)
+
+        def request() -> HttpResponse:
             return self.delegate.get(url, headers)
 
         if self.provider_invocation is not None:
