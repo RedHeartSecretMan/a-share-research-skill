@@ -138,7 +138,7 @@ def invoke_copied_installed(
                         "class FixtureOpener:",
                         "    def open(self, request, timeout):",
                         "        return FixtureResponse(transport.get(request.full_url, dict(request.header_items())))",
-                        "urllib.request.build_opener = lambda: FixtureOpener()",
+                        "urllib.request.build_opener = lambda *handlers: FixtureOpener()",
                     )
                 ),
                 encoding="utf-8",

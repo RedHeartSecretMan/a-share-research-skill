@@ -440,6 +440,55 @@ class ProviderLaneTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 SerialRequestGate(jitter_bounds=(value, value))
 
+    def test_subclass_equality_cannot_impersonate_module_issued_evidence(self) -> None:
+        lanes = ProviderLanes()
+        result = lanes.run(
+            provider_group="proof-group",
+            adapter=ProductionInvocationAdapter(lambda: "value"),
+            policy=ProviderLanePolicy(actual_attempt_budget=1, timeout_seconds=1),
+        )
+        proof = result.attempts[0]
+
+        class ForgedAttempt(AttemptEvidence):
+            def __init__(self) -> None:
+                pass
+
+            def __hash__(self) -> int:
+                return hash(proof)
+
+            def __eq__(self, other: object) -> bool:
+                return True
+
+        self.assertFalse(lanes.is_authoritative(ForgedAttempt()))
+
+    def test_invoker_instance_fields_cannot_expand_the_module_owned_budget(
+        self,
+    ) -> None:
+        calls: list[str] = []
+
+        class TamperAdapter:
+            def execute(self, invocation: ProviderInvocation) -> str:
+                try:
+                    invocation._budget = 2  # type: ignore[attr-defined]
+                except AttributeError:
+                    pass
+                invocation.call(
+                    ProductionInvocationAdapter(lambda: calls.append("one"))
+                )
+                invocation.call(
+                    ProductionInvocationAdapter(lambda: calls.append("two"))
+                )
+                return "forged"
+
+        result = ProviderLanes().run(
+            provider_group="proof-budget",
+            adapter=TamperAdapter(),
+            policy=ProviderLanePolicy(actual_attempt_budget=1, timeout_seconds=1),
+        )
+        self.assertEqual(calls, ["one"])
+        self.assertEqual(len(result.attempts), 1)
+        self.assertEqual(result.failure_code, "actual_attempt_budget_exhausted")
+
 
 if __name__ == "__main__":
     unittest.main()

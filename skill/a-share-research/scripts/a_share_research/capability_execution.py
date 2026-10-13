@@ -10,7 +10,17 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic, sleep
-from typing import Callable, Literal, Mapping, Protocol, Sequence, cast
+from threading import Event, Thread
+from typing import (
+    IO,
+    Callable,
+    Literal,
+    Mapping,
+    Protocol,
+    Sequence,
+    TypeVar,
+    cast,
+)
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,7 +36,18 @@ if __package__ in {None, ""}:
         OperationObligation,
         OperationOutcome,
     )
-    from a_share_research.source_throttle import RequestGateError, SerialRequestGate
+    from a_share_research.source_throttle import (
+        RequestGateBudgetError,
+        RequestGateError,
+    )
+    from a_share_research.provider_lane import (
+        CancellationToken,
+        ProductionInvocationAdapter,
+        ProviderCallAdapter,
+        ProviderInvocation,
+        ProviderLanePolicy,
+        ProviderLanes,
+    )
 else:
     from .bounded_public_data import (
         MAX_PUBLIC_DATA_KEY_LENGTH as _MAX_WIRE_KEY_LENGTH,
@@ -40,7 +61,18 @@ else:
         OperationObligation,
         OperationOutcome,
     )
-    from .source_throttle import RequestGateError, SerialRequestGate
+    from .source_throttle import (
+        RequestGateBudgetError,
+        RequestGateError,
+    )
+    from .provider_lane import (
+        CancellationToken,
+        ProductionInvocationAdapter,
+        ProviderCallAdapter,
+        ProviderInvocation,
+        ProviderLanePolicy,
+        ProviderLanes,
+    )
 
 ExecutionTier = Literal["core", "standard_enrichment", "deep_extension"]
 CompletenessMode = Literal["standard", "fast"]
@@ -60,6 +92,17 @@ class _AttemptRunner(Protocol):
         request: BoundedOperationRequest,
         timeout_seconds: float,
         budget_limited: bool,
+    ) -> OperationOutcome: ...
+
+
+class _OwnedAttemptRunner(Protocol):
+    def __call__(
+        self,
+        operation: PlannedOperation,
+        request: BoundedOperationRequest,
+        timeout_seconds: float,
+        budget_limited: bool,
+        invocation: ProviderInvocation,
     ) -> OperationOutcome: ...
 
 
@@ -380,6 +423,7 @@ def execute_capability_plan(
     *,
     attempt_runner: _AttemptRunner | None = None,
     followup_planner: _FollowupPlanner | None = None,
+    owned_attempt_runner: _OwnedAttemptRunner | None = None,
 ) -> tuple[OperationOutcome, ...]:
     """Execute providers concurrently and return outcomes in declaration order."""
 
@@ -393,8 +437,13 @@ def execute_capability_plan(
         else:
             providers.setdefault(item.policy.provider_id, []).append(item)
 
+    provider_lanes = (
+        ProviderLanes() if attempt_runner is not None else _CAPABILITY_PROVIDER_LANES
+    )
     gates = {
-        provider_id: _provider_gate(items, deadline=deadline)
+        provider_id: _provider_gate(
+            items, deadline=deadline, provider_lanes=provider_lanes
+        )
         for provider_id, items in providers.items()
     }
     completed = dict(immediate)
@@ -408,6 +457,7 @@ def execute_capability_plan(
         deadline=deadline,
         completed=completed,
         attempt_runner=attempt_runner,
+        owned_attempt_runner=owned_attempt_runner,
     )
     request_counts = {
         (item.obligation.capability_id, item.obligation.operation_id): 1
@@ -447,6 +497,7 @@ def execute_capability_plan(
             deadline=deadline,
             completed=completed,
             attempt_runner=attempt_runner,
+            owned_attempt_runner=owned_attempt_runner,
             merge=True,
         )
 
@@ -473,15 +524,16 @@ def _ordered_outcomes(
 def _run_provider_phase(
     lanes: Mapping[str, tuple[tuple[PlannedOperation, BoundedOperationRequest], ...]],
     *,
-    gates: Mapping[str, SerialRequestGate],
+    gates: Mapping[str, _ProviderGate],
     deadline: float,
     completed: dict[tuple[str, str], OperationOutcome],
     attempt_runner: _AttemptRunner | None,
+    owned_attempt_runner: _OwnedAttemptRunner | None = None,
     merge: bool = False,
 ) -> None:
     if not lanes:
         return
-    executor = ThreadPoolExecutor(max_workers=len(lanes))
+    executor = ThreadPoolExecutor(max_workers=min(len(lanes), 3))
     queues = {provider_id: list(requests) for provider_id, requests in lanes.items()}
     futures: dict[
         Future[tuple[OperationOutcome, ...]],
@@ -498,6 +550,7 @@ def _run_provider_phase(
             deadline,
             gate=gates[provider_id],
             attempt_runner=attempt_runner,
+            owned_attempt_runner=owned_attempt_runner,
         )
         futures[future] = (provider_id, operation)
 
@@ -522,11 +575,23 @@ def _run_provider_phase(
                     else outcome
                 )
                 submit_next(provider_id)
-        unfinished: list[PlannedOperation] = []
-        for future, (provider_id, operation) in futures.items():
+        # The lane returns an immutable active/poisoned prefix at its deadline.
+        # Allow one bounded dispatcher grace to collect that authoritative
+        # prefix instead of discarding already-started HTTP invocations.
+        terminal, _ = wait(futures, timeout=0.1)
+        for future in terminal:
+            provider_id, _ = futures.pop(future)
+            outcome = future.result()[0]
+            owner = (outcome.capability_id, outcome.operation_id)
+            completed[owner] = (
+                _merge_operation_outcomes(completed[owner], outcome)
+                if merge and owner in completed
+                else outcome
+            )
+        unfinished = [item for queue in queues.values() for item, _ in queue]
+        for future, (_, operation) in futures.items():
             future.cancel()
             unfinished.append(operation)
-            unfinished.extend(item for item, _ in queues[provider_id])
         for operation in unfinished:
             owner = (
                 operation.obligation.capability_id,
@@ -611,13 +676,23 @@ def _execute_provider_lane(
     )
 
 
+_CAPABILITY_PROVIDER_LANES = ProviderLanes()
+
+
+@dataclass
+class _ProviderGate:
+    lanes: ProviderLanes
+    remaining: dict[tuple[str, str], int]
+
+
 def _provider_gate(
     operations: Sequence[PlannedOperation],
     *,
     deadline: float,
     clock: Callable[[], float] = monotonic,
     sleeper: Callable[[float], None] = sleep,
-) -> SerialRequestGate:
+    provider_lanes: ProviderLanes | None = None,
+) -> _ProviderGate:
     first_policy = operations[0].policy
     if any(
         item.policy.provider_id != first_policy.provider_id
@@ -626,16 +701,19 @@ def _provider_gate(
         for item in operations
     ):
         raise ValueError("same-provider operations use inconsistent gate policy")
-    return SerialRequestGate(
-        minimum_interval_seconds=first_policy.minimum_interval_seconds,
-        jitter_bounds=(0.0, 0.0),
-        rate_limit_backoffs=first_policy.rate_limit_backoffs,
-        clock=clock,
-        sleeper=_deadline_sleeper(
-            deadline=deadline,
+    return _ProviderGate(
+        provider_lanes
+        or ProviderLanes(
             clock=clock,
-            sleeper=sleeper,
+            sleeper=_deadline_sleeper(deadline=deadline, clock=clock, sleeper=sleeper),
         ),
+        {
+            (item.obligation.capability_id, item.obligation.operation_id): (
+                len(item.policy.rate_limit_backoffs) + 1
+            )
+            * item.policy.max_requests_per_plan
+            for item in operations
+        },
     )
 
 
@@ -643,48 +721,44 @@ def _execute_provider_requests(
     requests: tuple[tuple[PlannedOperation, BoundedOperationRequest], ...],
     deadline: float,
     *,
-    gate: SerialRequestGate,
+    gate: _ProviderGate,
     attempt_runner: _AttemptRunner | None = None,
+    owned_attempt_runner: _OwnedAttemptRunner | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> tuple[OperationOutcome, ...]:
-    runner = attempt_runner or _spawn_attempt
     outcomes: list[OperationOutcome] = []
     for item, request in requests:
         remaining = deadline - clock()
-        if remaining <= 0:
+        owner = (item.obligation.capability_id, item.obligation.operation_id)
+        budget = gate.remaining[owner]
+        if remaining <= 0 or budget <= 0:
             outcomes.append(
                 _failed_outcome(
                     item,
-                    code="plan_budget_exhausted",
-                    message="The capability plan budget expired before this operation started.",
+                    code="plan_budget_exhausted"
+                    if remaining <= 0
+                    else "actual_attempt_budget_exhausted",
+                    message="The declared source invocation budget was exhausted.",
                 )
             )
             continue
+        captured: list[OperationOutcome] = []
+        errors: list[BaseException] = []
 
-        def attempt(
-            operation: PlannedOperation = item,
-            operation_request: BoundedOperationRequest = request,
-        ) -> OperationOutcome:
+        def attempt() -> OperationOutcome:
             attempt_remaining = deadline - clock()
             if attempt_remaining <= 0:
-                return _failed_outcome(
-                    operation,
-                    code="plan_budget_exhausted",
-                    message=(
-                        "The capability plan budget expired before this operation "
-                        "attempt started."
-                    ),
-                )
-            budget_limited = _deadline_limits_attempt(
-                remaining_seconds=attempt_remaining,
-                operation_timeout_seconds=operation.policy.timeout_seconds,
+                raise _PlanDeadlineExpired
+            outcome = cast(_AttemptRunner, attempt_runner)(
+                item,
+                request,
+                min(item.policy.timeout_seconds, attempt_remaining),
+                _deadline_limits_attempt(
+                    remaining_seconds=attempt_remaining,
+                    operation_timeout_seconds=item.policy.timeout_seconds,
+                ),
             )
-            outcome = runner(
-                operation,
-                operation_request,
-                min(operation.policy.timeout_seconds, attempt_remaining),
-                budget_limited,
-            )
+            captured.append(outcome)
             if (
                 outcome.execution.state == "failed"
                 and len(outcome.source_errors) == 1
@@ -693,46 +767,91 @@ def _execute_provider_requests(
                 raise _RateLimitedOutcome(outcome)
             return outcome
 
-        try:
-            outcome, gate_diagnostics = gate.run(attempt)
-        except _PlanDeadlineExpired:
+        class OperationAdapter:
+            def execute(self, invocation: ProviderInvocation) -> OperationOutcome:
+                try:
+                    if attempt_runner is not None:
+                        return invocation.call(ProductionInvocationAdapter(attempt))
+                    timeout = min(
+                        item.policy.timeout_seconds, max(deadline - clock(), 0.0)
+                    )
+                    limited = _deadline_limits_attempt(
+                        remaining_seconds=max(deadline - clock(), 0.0),
+                        operation_timeout_seconds=item.policy.timeout_seconds,
+                    )
+                    if owned_attempt_runner is not None:
+                        return owned_attempt_runner(
+                            item, request, timeout, limited, invocation
+                        )
+                    return _spawn_attempt(
+                        item, request, timeout, limited, provider_invocation=invocation
+                    )
+                except BaseException as error:
+                    errors.append(error)
+                    raise
+
+        operation_bound = (
+            item.policy.timeout_seconds * (len(item.policy.rate_limit_backoffs) + 1)
+            + sum(item.policy.rate_limit_backoffs)
+            + item.policy.minimum_interval_seconds
+            * (len(item.policy.rate_limit_backoffs) + 1)
+        )
+        result = gate.lanes.run(
+            provider_group=item.policy.provider_id,
+            adapter=OperationAdapter(),
+            policy=ProviderLanePolicy(
+                actual_attempt_budget=budget,
+                timeout_seconds=min(remaining, operation_bound),
+                call_timeout_seconds=item.policy.timeout_seconds,
+                cancellation_grace_seconds=0.05,
+                minimum_interval_seconds=item.policy.minimum_interval_seconds,
+                jitter_bounds=(0.0, 0.0),
+                rate_limit_backoffs=item.policy.rate_limit_backoffs,
+            ),
+        )
+        if not gate.lanes.is_authoritative(result):
+            raise ValueError("provider lane result is not authoritative")
+        gate.remaining[owner] -= len(result.attempts)
+        if result.value is not None:
+            outcome = result.value
+        elif captured and result.failure_code == "rate_limited":
+            outcome = captured[-1]
+        elif errors and isinstance(errors[-1], _PlanDeadlineExpired):
             outcome = _failed_outcome(
                 item,
                 code="plan_budget_exhausted",
-                message=(
-                    "The capability plan budget expired while waiting for the "
-                    "provider gate."
-                ),
+                message="The capability plan budget expired while waiting for the provider gate.",
             )
-            gate_diagnostics = ()
-        except RequestGateError as error:
-            cause = error.cause
-            if isinstance(cause, _RateLimitedOutcome):
-                outcome = cause.outcome
-            else:
-                raise
-            gate_diagnostics = error.diagnostics
-        except _RateLimitedOutcome as error:
-            outcome = error.outcome
-            gate_diagnostics = ()
-        diagnostics = dict(outcome.diagnostics)
-        if gate_diagnostics:
+        elif errors and result.failure_code == "provider_call_failed":
+            raise errors[-1]
+        else:
+            expired = clock() >= deadline
+            outcome = _failed_outcome(
+                item,
+                code=(
+                    "plan_budget_exhausted"
+                    if expired
+                    else "operation_timeout"
+                    if result.status == "timed_out"
+                    else result.failure_code or "provider_call_failed"
+                ),
+                message="The bounded source operation could not complete.",
+            )
+        diagnostics = outcome.to_dict()["diagnostics"]
+        diagnostics["attempts"] = len(result.attempts)
+        if result.diagnostics:
             diagnostics["request_gate"] = [
                 {
-                    "code": item.code,
-                    "delay_seconds": _seconds(item.delay_seconds),
-                    **({"attempt": item.attempt} if item.attempt is not None else {}),
+                    "code": diagnostic.code,
+                    "delay_seconds": _seconds(diagnostic.delay_seconds),
+                    **(
+                        {"attempt": diagnostic.attempt}
+                        if diagnostic.attempt is not None
+                        else {}
+                    ),
                 }
-                for item in gate_diagnostics
+                for diagnostic in result.diagnostics
             ]
-            retry_count = sum(
-                item.code == "rate_limit_backoff" for item in gate_diagnostics
-            )
-            if retry_count:
-                final_attempts = diagnostics.get("attempts", 1)
-                diagnostics["attempts"] = (
-                    final_attempts if isinstance(final_attempts, int) else 1
-                ) + retry_count
         outcomes.append(
             OperationOutcome(
                 capability_id=outcome.capability_id,
@@ -782,7 +901,13 @@ def _spawn_attempt(
     request: BoundedOperationRequest,
     timeout_seconds: float,
     budget_limited: bool,
+    *,
+    provider_invocation: ProviderInvocation | None = None,
 ) -> OperationOutcome:
+    if provider_invocation is not None:
+        return _spawn_lane_attempt(
+            item, request, timeout_seconds, provider_invocation=provider_invocation
+        )
     wire_request = {
         "wire_version": "1",
         "operation_id": item.obligation.operation_id,
@@ -838,6 +963,253 @@ def _spawn_attempt(
             code="worker_protocol_error",
             message="The isolated source operation returned an invalid wire document.",
         )
+
+
+_WorkerValue = TypeVar("_WorkerValue")
+
+
+class _WorkerControlError(Exception):
+    """A fixed worker control message was absent or invalid."""
+
+
+class _WorkerHttpFailure(Exception):
+    def __init__(self, *, rate_limited: bool) -> None:
+        super().__init__("The owned worker HTTP attempt failed.")
+        self.code = "rate_limited" if rate_limited else "provider_call_failed"
+
+
+def _write_control(stream: IO[bytes], message: Mapping[str, object]) -> None:
+    stream.write(_encode_wire(message) + b"\n")
+    stream.flush()
+
+
+def _read_control(stream: IO[bytes]) -> dict[str, object]:
+    message = stream.readline(_MAX_WIRE_BYTES + 2)
+    if not message.endswith(b"\n"):
+        raise _WorkerControlError
+    return dict(_decode_wire(message[:-1]))
+
+
+class _WorkerCancellation:
+    """Request native termination without treating kill as quiescence proof."""
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        self._process = process
+        self._finished = Event()
+        self._observer: Thread | None = None
+
+    def observe(self, cancellation: CancellationToken) -> None:
+        if self._observer is not None:
+            return
+
+        def stop_on_cancel() -> None:
+            while not self._finished.is_set():
+                if cancellation.wait(0.005):
+                    try:
+                        self._process.kill()
+                    except OSError:
+                        pass
+                    return
+
+        self._observer = Thread(target=stop_on_cancel, daemon=True)
+        self._observer.start()
+
+    def close(self) -> None:
+        self._finished.set()
+        if self._observer is not None:
+            self._observer.join(0.05)
+
+
+class _WorkerHttpCall:
+    """One worker HTTP leaf; the parent lane authorizes every actual retry."""
+
+    def __init__(
+        self,
+        incoming: IO[bytes],
+        outgoing: IO[bytes],
+        call: int,
+        cancellation: _WorkerCancellation,
+    ) -> None:
+        self._incoming = incoming
+        self._outgoing = outgoing
+        self._call = call
+        self._cancellation = cancellation
+
+    def invoke(self, cancellation: CancellationToken) -> None:
+        self._cancellation.observe(cancellation)
+        _write_control(self._outgoing, {"kind": "invoke", "call": self._call})
+        terminal = _read_control(self._incoming)
+        if (
+            set(terminal) != {"kind", "call", "state", "rate_limited"}
+            or terminal.get("kind") != "terminal"
+            or not isinstance(terminal.get("call"), int)
+            or isinstance(terminal.get("call"), bool)
+            or terminal.get("call") != self._call
+            or terminal.get("state") not in {"succeeded", "failed"}
+            or not isinstance(terminal.get("rate_limited"), bool)
+        ):
+            raise _WorkerControlError
+        if terminal["state"] == "failed":
+            raise _WorkerHttpFailure(rate_limited=cast(bool, terminal["rate_limited"]))
+
+
+class _WorkerLeafInvocation:
+    """Fixed child transport bridge: no HTTP runs without parent authorization."""
+
+    def __init__(self) -> None:
+        self._sequence = 0
+
+    def call(self, adapter: ProviderCallAdapter[_WorkerValue]) -> _WorkerValue:
+        from a_share_research.identity_sources import TransportError
+
+        self._sequence += 1
+        call = self._sequence
+        _write_control(sys.stdout.buffer, {"kind": "begin", "call": call})
+        value: _WorkerValue | None = None
+        error: BaseException | None = None
+        attempted = False
+        while True:
+            command = _read_control(sys.stdin.buffer)
+            if (
+                not isinstance(command.get("call"), int)
+                or isinstance(command.get("call"), bool)
+                or command.get("call") != call
+            ):
+                raise _WorkerControlError
+            if set(command) == {"kind", "call"} and command.get("kind") == "invoke":
+                if attempted and error is None:
+                    raise _WorkerControlError
+                attempted = True
+                error = None
+                try:
+                    value = adapter.invoke(CancellationToken(Event()))
+                except BaseException as failure:
+                    error = failure
+                try:
+                    rate_limited = (
+                        error is not None
+                        and getattr(error, "code", None) == "rate_limited"
+                    )
+                except BaseException:
+                    rate_limited = False
+                _write_control(
+                    sys.stdout.buffer,
+                    {
+                        "kind": "terminal",
+                        "call": call,
+                        "state": "failed" if error is not None else "succeeded",
+                        "rate_limited": rate_limited,
+                    },
+                )
+                continue
+            if (
+                set(command) != {"kind", "call", "state"}
+                or command.get("kind") != "finish"
+                or command.get("state")
+                not in {"succeeded", "failed", "budget_exhausted", "cancelled"}
+            ):
+                raise _WorkerControlError
+            if command["state"] == "succeeded" and attempted and error is None:
+                return cast(_WorkerValue, value)
+            if error is not None:
+                raise error
+            code = (
+                "actual_attempt_budget_exhausted"
+                if command["state"] == "budget_exhausted"
+                else "provider_invocation_unavailable"
+            )
+            raise TransportError(
+                code, "The bounded provider invocation could not continue."
+            )
+
+
+def _spawn_lane_attempt(
+    item: PlannedOperation,
+    request: BoundedOperationRequest,
+    timeout_seconds: float,
+    *,
+    provider_invocation: ProviderInvocation,
+) -> OperationOutcome:
+    encoded = _encode_wire(
+        {
+            "wire_version": "1",
+            "lane_protocol": "1",
+            "operation_id": item.obligation.operation_id,
+            "timeout_seconds": timeout_seconds,
+            "request": {"kind": request.kind, "payload": dict(request.payload)},
+        },
+    )
+    try:
+        process = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--worker"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        return _failed_outcome(
+            item,
+            code="operation_isolation_failed",
+            message="The isolated source operation could not be started.",
+        )
+    cancellation = _WorkerCancellation(process)
+    try:
+        if process.stdin is None or process.stdout is None:
+            raise _WorkerControlError
+        process.stdin.write(encoded + b"\n")
+        process.stdin.flush()
+        sequence = 0
+        while True:
+            message = _read_control(process.stdout)
+            if set(message) == {"kind", "payload"} and message.get("kind") == "outcome":
+                payload = message["payload"]
+                if not isinstance(payload, dict):
+                    raise _WorkerControlError
+                outcome = _outcome_from_wire(item, payload)
+                process.wait()
+                if process.returncode != 0:
+                    raise _WorkerControlError
+                return outcome
+            sequence += 1
+            if (
+                set(message) != {"kind", "call"}
+                or message.get("kind") != "begin"
+                or not isinstance(message.get("call"), int)
+                or isinstance(message.get("call"), bool)
+                or message.get("call") != sequence
+            ):
+                raise _WorkerControlError
+            state = "succeeded"
+            try:
+                provider_invocation.call(
+                    _WorkerHttpCall(
+                        process.stdout, process.stdin, sequence, cancellation
+                    )
+                )
+            except RequestGateBudgetError:
+                state = "budget_exhausted"
+            except (RequestGateError, _WorkerHttpFailure):
+                state = "failed"
+            except _WorkerControlError:
+                raise
+            except Exception:
+                state = "cancelled"
+            _write_control(
+                process.stdin, {"kind": "finish", "call": sequence, "state": state}
+            )
+    except (OSError, TypeError, ValueError, _WorkerControlError):
+        _terminate_worker(process)
+        process.wait()
+        return _failed_outcome(
+            item,
+            code="operation_isolation_failed",
+            message="The isolated source operation could not produce a valid outcome.",
+        )
+    finally:
+        cancellation.close()
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            if pipe is not None:
+                pipe.close()
 
 
 def _terminate_worker(process: subprocess.Popen[bytes]) -> None:
@@ -936,18 +1308,15 @@ def _validate_bounded_wire_value(value: object) -> None:
 
 def _worker_main() -> int:
     try:
-        payload = _decode_wire(sys.stdin.buffer.read(_MAX_WIRE_BYTES + 1))
-        if (
-            set(payload)
-            != {
-                "wire_version",
-                "operation_id",
-                "timeout_seconds",
-                "request",
-            }
-            or payload.get("wire_version") != "1"
-        ):
+        payload = _decode_wire(sys.stdin.buffer.readline(_MAX_WIRE_BYTES + 2))
+        lane_protocol = payload.get("lane_protocol") == "1"
+        fields = {"wire_version", "operation_id", "timeout_seconds", "request"}
+        if lane_protocol:
+            fields.add("lane_protocol")
+        if set(payload) != fields or payload.get("wire_version") != "1":
             raise ValueError("operation request wire shape is invalid")
+        if not lane_protocol and sys.stdin.buffer.read(1):
+            raise ValueError("operation request has trailing data")
         operation_id = payload.get("operation_id")
         timeout_seconds = payload.get("timeout_seconds")
         request_value = payload.get("request")
@@ -970,7 +1339,13 @@ def _worker_main() -> int:
 
         matches = tuple(
             item
-            for item in build_default_identity_operations(UrlLibTransport())
+            for item in build_default_identity_operations(
+                UrlLibTransport(
+                    provider_invocation=_WorkerLeafInvocation()
+                    if lane_protocol
+                    else None
+                )
+            )
             if item.obligation.operation_id == operation_id
         )
         if len(matches) != 1:
@@ -982,9 +1357,15 @@ def _worker_main() -> int:
             ),
             timeout_seconds=cast(float, timeout_seconds),
         )
-        sys.stdout.buffer.write(_encode_wire(_outcome_to_wire(outcome)))
+        if lane_protocol:
+            _write_control(
+                sys.stdout.buffer,
+                {"kind": "outcome", "payload": _outcome_to_wire(outcome)},
+            )
+        else:
+            sys.stdout.buffer.write(_encode_wire(_outcome_to_wire(outcome)))
         return 0
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, _WorkerControlError):
         return 2
 
 

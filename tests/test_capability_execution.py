@@ -1047,7 +1047,7 @@ class SameProviderExecutionTests(unittest.TestCase):
         self.assertEqual(outcome.execution.state, "failed")
         self.assertEqual(outcome.observations[0]["value"], "retained")
         self.assertEqual(outcome.source_errors[0]["code"], "plan_budget_exhausted")
-        self.assertEqual(outcome.diagnostics["attempts"], 1)
+        self.assertEqual(outcome.diagnostics["attempts"], 2)
 
     def test_injected_adapters_use_the_bounded_in_process_backend(self) -> None:
         calls: list[tuple[str, float]] = []

@@ -272,7 +272,7 @@ def invoke_installed_identity(
                         "        body = next((value for marker, value in routes.items() if marker in request.full_url), None)",
                         "        if body is None: raise AssertionError('unexpected identity source')",
                         "        return FixtureResponse(body)",
-                        "urllib.request.build_opener = lambda: FixtureOpener()",
+                        "urllib.request.build_opener = lambda *handlers: FixtureOpener()",
                         "if timeouts or backoffs or max_requests:",
                         "    from a_share_research.capability_execution import OperationExecutionPolicy",
                         "    from a_share_research.identity_sources import build_default_identity_operations",

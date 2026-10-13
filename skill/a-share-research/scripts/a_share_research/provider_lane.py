@@ -8,7 +8,7 @@ from random import uniform
 from threading import Condition, Event, Thread, get_ident
 from time import monotonic, sleep
 from typing import Callable, Generic, Literal, Protocol, TypeVar, cast
-from weakref import WeakSet
+from weakref import WeakKeyDictionary, WeakSet
 
 from .source_throttle import (
     RequestGateBudgetError,
@@ -28,6 +28,7 @@ class ProviderLanePolicy:
 
     actual_attempt_budget: int
     timeout_seconds: float
+    call_timeout_seconds: float | None = None
     cancellation_grace_seconds: float = 0.05
     minimum_interval_seconds: float = 0.0
     jitter_bounds: tuple[float, float] = (0.0, 0.0)
@@ -40,6 +41,13 @@ class ProviderLanePolicy:
             or self.actual_attempt_budget < 1
             or not math.isfinite(self.timeout_seconds)
             or self.timeout_seconds <= 0
+            or (
+                self.call_timeout_seconds is not None
+                and (
+                    not math.isfinite(self.call_timeout_seconds)
+                    or self.call_timeout_seconds <= 0
+                )
+            )
             or not math.isfinite(self.cancellation_grace_seconds)
             or self.cancellation_grace_seconds < 0
             or not all(
@@ -147,6 +155,7 @@ class _InvocationUnavailable(Exception):
 
 @dataclass
 class _Attempt:
+    started_at: float
     state: Literal["succeeded", "failed", "active"] = "active"
 
 
@@ -161,6 +170,7 @@ class _Execution(Generic[T]):
         self.worker_ident: int | None = None
         self.open = True
         self.poisoned = False
+        self.call_timeout_seconds: float | None = None
 
 
 @dataclass
@@ -170,67 +180,83 @@ class _Group:
     execution: _Execution[object] | None = None
 
 
-class ProviderInvocation:
-    """Execution-owned leaf entry shared by nested helpers and page requests.
+@dataclass(frozen=True)
+class _InvocationState:
+    execution: _Execution[object]
+    group: _Group
+    condition: Condition
+    budget: int
 
-    Only the owning worker can use this invoker while its execution is open.
-    Outer coordination never consumes attempts; each atomic Adapter call does.
+
+_INVOCATION_STATES: WeakKeyDictionary[ProviderInvocation, _InvocationState] = (
+    WeakKeyDictionary()
+)
+
+
+class ProviderInvocation:
+    """Opaque execution-owned leaf entry shared by nested/page requests.
+
+    Only the owning worker can use the issued invoker while its execution is
+    open. No mutable budget or execution fields are exposed on the instance.
     """
 
-    def __init__(
-        self,
-        execution: _Execution[object],
-        group: _Group,
-        condition: Condition,
-        budget: int,
-    ) -> None:
-        self._execution = execution
-        self._group = group
-        self._condition = condition
-        self._budget = budget
+    __slots__ = ("__weakref__",)
+
+    def __init__(self) -> None:
+        raise TypeError("provider invokers can only be issued by their lane")
 
     def call(self, adapter: ProviderCallAdapter[T]) -> T:
-        execution = self._execution
-        with self._condition:
-            self._check_owner()
-            remaining = self._budget - len(execution.attempts)
+        if type(self) is not ProviderInvocation:
+            raise _InvocationUnavailable
+        state = _INVOCATION_STATES.get(self)
+        if state is None:
+            raise _InvocationUnavailable
+        execution = state.execution
+        with state.condition:
+            self._check_owner(state)
+            remaining = state.budget - len(execution.attempts)
             if remaining <= 0:
                 raise RequestGateBudgetError(())
 
         def invoke() -> T:
-            with self._condition:
-                self._check_owner()
-                if len(execution.attempts) >= self._budget:
+            with state.condition:
+                self._check_owner(state)
+                if len(execution.attempts) >= state.budget:
                     raise RequestGateBudgetError(())
-                attempt = _Attempt()
+                attempt = _Attempt(started_at=monotonic())
                 execution.attempts.append(attempt)
+                state.condition.notify_all()
             try:
                 value = adapter.invoke(CancellationToken(execution.cancel))
             except BaseException:
-                with self._condition:
+                with state.condition:
                     attempt.state = "failed"
+                    state.condition.notify_all()
                 raise
-            with self._condition:
+            with state.condition:
                 attempt.state = "succeeded"
+                state.condition.notify_all()
             return value
 
         try:
-            value, diagnostics = self._group.gate.run_bounded(
+            value, diagnostics = state.group.gate.run_bounded(
                 invoke, actual_attempt_budget=remaining
             )
         except (RequestGateBudgetError, RequestGateError) as error:
-            with self._condition:
+            with state.condition:
                 execution.diagnostics.extend(error.diagnostics)
             raise
-        with self._condition:
+        with state.condition:
             execution.diagnostics.extend(diagnostics)
         return value
 
-    def _check_owner(self) -> None:
+    @staticmethod
+    def _check_owner(state: _InvocationState) -> None:
         if (
-            not self._execution.open
-            or self._execution.cancel.is_set()
-            or self._execution.worker_ident != get_ident()
+            not state.execution.open
+            or state.execution.cancel.is_set()
+            or state.execution.worker_ident != get_ident()
+            or state.group.execution is not state.execution
         ):
             raise _InvocationUnavailable
 
@@ -261,7 +287,11 @@ class ProviderLanes:
     def is_authoritative(self, evidence: object) -> bool:
         """Reject constructed, copied or other-lane evidence at the owning seam."""
         with self._condition:
-            return isinstance(evidence, _IssuedEvidence) and evidence in self._proofs
+            return (
+                type(evidence)
+                in {AttemptEvidence, QuiescenceEvidence, ProviderLaneResult}
+                and evidence in self._proofs
+            )
 
     def quiescence(self, provider_group: str) -> QuiescenceEvidence:
         """Observe recovery without trusting an Adapter's cancellation claim."""
@@ -338,6 +368,7 @@ class ProviderLanes:
                     )
                 self._condition.wait(remaining)
             execution: _Execution[T] = _Execution()
+            execution.call_timeout_seconds = policy.call_timeout_seconds
             group.execution = cast(_Execution[object], execution)
             self._active_groups += 1
             worker = Thread(
@@ -358,8 +389,24 @@ class ProviderLanes:
                     failure_code="provider_invocation_unavailable",
                     quiescence_state="quiescent",
                 )
-        if execution.done.wait(max(deadline - monotonic(), 0.0)):
-            with self._condition:
+        with self._condition:
+            while not execution.done.is_set():
+                remaining = deadline - monotonic()
+                if (
+                    execution.call_timeout_seconds is not None
+                    and execution.attempts
+                    and execution.attempts[-1].state == "active"
+                ):
+                    remaining = min(
+                        remaining,
+                        execution.attempts[-1].started_at
+                        + execution.call_timeout_seconds
+                        - monotonic(),
+                    )
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
+            if execution.done.is_set():
                 return self._result(
                     provider_group,
                     execution,
@@ -389,12 +436,14 @@ class ProviderLanes:
         policy: ProviderLanePolicy,
     ) -> None:
         execution.worker_ident = get_ident()
-        invocation = ProviderInvocation(
-            cast(_Execution[object], execution),
-            group,
-            self._condition,
-            policy.actual_attempt_budget,
-        )
+        invocation = object.__new__(ProviderInvocation)
+        with self._condition:
+            _INVOCATION_STATES[invocation] = _InvocationState(
+                cast(_Execution[object], execution),
+                group,
+                self._condition,
+                policy.actual_attempt_budget,
+            )
         try:
             execution.value = adapter.execute(invocation)
         except RequestGateBudgetError:
@@ -414,6 +463,7 @@ class ProviderLanes:
         finally:
             with self._condition:
                 execution.open = False
+                _INVOCATION_STATES.pop(invocation, None)
                 group.execution = None
                 self._active_groups -= 1
                 execution.done.set()

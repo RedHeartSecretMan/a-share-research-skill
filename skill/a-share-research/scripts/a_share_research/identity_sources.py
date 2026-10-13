@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from http.client import HTTPMessage
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol, TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, build_opener
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .capability_execution import OperationExecutionPolicy
+from .provider_lane import (
+    ProductionInvocationAdapter,
+    ProviderCallAdapter,
+)
 from .research_result import (
     EvidenceUsePolicy,
     FieldDisposition,
@@ -46,11 +51,56 @@ class TransportError(Exception):
         self.code = code
 
 
+T = TypeVar("T")
+
+
+class ProviderHttpInvocation(Protocol):
+    """Owned leaf authorization shared by local and fixed worker transports."""
+
+    def call(self, adapter: ProviderCallAdapter[T]) -> T: ...
+
+
+@dataclass(frozen=True)
+class _RedirectTarget:
+    request: Request
+    status: int
+
+
+class _ExplicitRedirect(Exception):
+    def __init__(self, request: Request, status: int) -> None:
+        super().__init__("The source requested an explicit redirect.")
+        self.target = _RedirectTarget(request, status)
+
+
+class _ExplicitRedirectHandler(HTTPRedirectHandler):
+    """Keep urllib's redirect rules while returning to the counted leaf Seam."""
+
+    def redirect_request(
+        self,
+        request: Request,
+        response: Any,
+        status: int,
+        message: str,
+        headers: HTTPMessage,
+        url: str,
+    ) -> Request | None:
+        target = super().redirect_request(
+            request, response, status, message, headers, url
+        )
+        if target is None:
+            return None
+        response.close()
+        raise _ExplicitRedirect(target, status)
+
+
 class UrlLibTransport:
     """Standard-library HTTP transport for installed runtime use."""
 
-    def __init__(self) -> None:
-        self._opener = build_opener()
+    def __init__(
+        self, *, provider_invocation: ProviderHttpInvocation | None = None
+    ) -> None:
+        self._opener = build_opener(_ExplicitRedirectHandler())
+        self._provider_invocation = provider_invocation
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
         request = Request(url, headers=headers, method="GET")
@@ -75,6 +125,33 @@ class UrlLibTransport:
         return self._open(request, timeout_seconds=20.0)
 
     def _open(self, request: Request, *, timeout_seconds: float) -> HttpResponse:
+        visited: dict[str, int] = {}
+        while True:
+            step = ProductionInvocationAdapter(
+                lambda: self._open_once(request, timeout_seconds=timeout_seconds)
+            )
+            outcome = (
+                self._provider_invocation.call(step)
+                if self._provider_invocation is not None
+                else self._open_once(request, timeout_seconds=timeout_seconds)
+            )
+            if isinstance(outcome, HttpResponse):
+                return outcome
+            url = outcome.request.full_url
+            if (
+                visited.get(url, 0) >= HTTPRedirectHandler.max_repeats
+                or len(visited) >= HTTPRedirectHandler.max_redirections
+            ):
+                raise TransportError(
+                    "upstream_http_error",
+                    f"The source returned HTTP status {outcome.status}.",
+                )
+            visited[url] = visited.get(url, 0) + 1
+            request = outcome.request
+
+    def _open_once(
+        self, request: Request, *, timeout_seconds: float
+    ) -> HttpResponse | _RedirectTarget:
         try:
             with self._opener.open(request, timeout=timeout_seconds) as opened:
                 body = opened.read(MAX_RESPONSE_BYTES + 1)
@@ -91,6 +168,8 @@ class UrlLibTransport:
                         CHINA_STANDARD_TIME
                     ),
                 )
+        except _ExplicitRedirect as redirect:
+            return redirect.target
         except HTTPError as error:
             if error.code == 429:
                 raise TransportError(
@@ -788,14 +867,20 @@ class ProductionIdentityOperationAdapter:
         )
 
     def execute(
-        self, request: IdentityOperationRequest, timeout_seconds: float
+        self,
+        request: IdentityOperationRequest,
+        timeout_seconds: float,
+        *,
+        provider_invocation: ProviderHttpInvocation | None = None,
     ) -> OperationOutcome:
         if not request.query.strip():
             raise ValueError("identity operation query must be non-empty")
         if timeout_seconds <= 0:
             raise ValueError("identity operation timeout must be positive")
         bounded_transport = _BoundedIdentityTransport(
-            self.transport, timeout_seconds=timeout_seconds
+            self.transport,
+            timeout_seconds=timeout_seconds,
+            provider_invocation=provider_invocation,
         )
         try:
             query_result = self.operation.query(request.query, bounded_transport)
@@ -834,11 +919,19 @@ class ProductionIdentityOperationAdapter:
 class _BoundedIdentityTransport:
     delegate: HttpTransport
     timeout_seconds: float
+    provider_invocation: ProviderHttpInvocation | None = None
 
     def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
-        if isinstance(self.delegate, UrlLibTransport):
-            return self.delegate.get_with_timeout(url, headers, self.timeout_seconds)
-        return self.delegate.get(url, headers)
+        def request() -> HttpResponse:
+            if isinstance(self.delegate, UrlLibTransport):
+                return self.delegate.get_with_timeout(
+                    url, headers, self.timeout_seconds
+                )
+            return self.delegate.get(url, headers)
+
+        if self.provider_invocation is not None:
+            return self.provider_invocation.call(ProductionInvocationAdapter(request))
+        return request()
 
 
 def build_default_identity_operations(

@@ -19,9 +19,11 @@ from .identity_sources import (
     IdentityOperationAdapter,
     IdentityOperationRequest,
     SourceOperationError,
+    ProductionIdentityOperationAdapter,
     SseStockListOperation,
     SzseStockListOperation,
 )
+from .provider_lane import ProductionInvocationAdapter, ProviderInvocation
 from .research_result import (
     IdentityResearchPlan,
     OperationExecution,
@@ -160,20 +162,35 @@ def execute_security_identity_research(
         request: BoundedOperationRequest,
         timeout_seconds: float,
         budget_limited: bool,
+        invocation: ProviderInvocation,
     ) -> OperationOutcome:
         adapter = adapters.get(operation.obligation.operation_id)
         if adapter is None:
             raise ValueError("execution plan selected an unknown identity adapter")
         if adapter.execution_backend == "isolated_worker":
-            return _spawn_attempt(operation, request, timeout_seconds, budget_limited)
+            return _spawn_attempt(
+                operation,
+                request,
+                timeout_seconds,
+                budget_limited,
+                provider_invocation=invocation,
+            )
         if adapter.execution_backend != "in_process":
             raise ValueError("identity adapter execution backend is unsupported")
-        return adapter.execute(
-            IdentityOperationRequest(
-                query=cast(str, request.payload["query"]),
-                as_of=cast(str, request.payload["as_of"]),
-            ),
-            timeout_seconds=timeout_seconds,
+        source_request = IdentityOperationRequest(
+            query=cast(str, request.payload["query"]),
+            as_of=cast(str, request.payload["as_of"]),
+        )
+        if isinstance(adapter, ProductionIdentityOperationAdapter):
+            return adapter.execute(
+                source_request,
+                timeout_seconds=timeout_seconds,
+                provider_invocation=invocation,
+            )
+        return invocation.call(
+            ProductionInvocationAdapter(
+                lambda: adapter.execute(source_request, timeout_seconds=timeout_seconds)
+            )
         )
 
     def plan_followups(
@@ -194,7 +211,7 @@ def execute_security_identity_research(
                 "as_of": operation_request.as_of,
             },
         ),
-        attempt_runner=run_attempt,
+        owned_attempt_runner=run_attempt,
         followup_planner=plan_followups,
     )
     return _complete_identity_execution(plan, outcomes)
