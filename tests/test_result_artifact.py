@@ -1,0 +1,1580 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from tests.skill_imports import add_skill_scripts_to_path
+
+add_skill_scripts_to_path()
+
+from a_share_research.result_artifact import (  # noqa: E402
+    DeterministicFilesystemAdapter,
+    ResultArtifact,
+    ResultArtifactIdentity,
+)
+from a_share_research.result_artifact_inputs import (  # noqa: E402
+    prepare_candidate,
+    prepare_completed_partition,
+)
+
+
+def artifact_identity() -> ResultArtifactIdentity:
+    return ResultArtifactIdentity(
+        artifact_schema_version="1.0",
+        request_bytes=b'{"request":"semantic"}',
+        producer_bytes=b"producer-commit:fixed",
+        plan_bytes=b'{"plan":"fundamental_research_priority@1.0"}',
+        operation_manifest_bytes=b'{"operations":[]}',
+    )
+
+
+def artifact_coverage() -> dict[str, dict[str, int]]:
+    return {
+        exchange: {
+            key: 0
+            for key in (
+                "acquired",
+                "expected",
+                "failed",
+                "ranked",
+                "resolved",
+                "unranked",
+                "unsupported",
+            )
+        }
+        for exchange in ("BSE", "SSE", "SZSE")
+    }
+
+
+def partition(index: int = 0):
+    return prepare_completed_partition(
+        kind="universe",
+        exchange="SSE",
+        shard_index=index,
+        schema_version="1.0",
+        records=({"canonical_security_id": "SSE:600519", "score": "1.20"},),
+    )
+
+
+class ResultArtifactTests(unittest.TestCase):
+    def test_complete_lifecycle_returns_original_receipt_on_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "artifact"
+            identity = artifact_identity()
+            handle = ResultArtifact.create(root, identity)
+            handle.checkpoint()
+            handle.write_completed_partition(partition())
+            handle.write_candidate(
+                prepare_candidate(
+                    canonical_security_id="SSE:600519",
+                    schema_version="1.0",
+                    document={"status": "limited"},
+                )
+            )
+            receipt = handle.finalize(coverage=artifact_coverage())
+            self.assertEqual(receipt["file_count"], 2)
+            self.assertEqual(receipt["record_count"], 2)
+            self.assertEqual(ResultArtifact.resume(root, identity), receipt)
+            self.assertEqual(
+                ResultArtifact.recover_finalized_receipt(root, identity), receipt
+            )
+            ResultArtifact.validate_receipt(root, identity, receipt)
+            with self.assertRaises(ValueError):
+                handle.write_completed_partition(partition(1))
+            self.assertEqual(
+                (root / partition().relative_path).read_bytes(),
+                b'{"canonical_security_id":"SSE:600519","score":"1.20"}\n',
+            )
+
+    def test_two_handles_merge_completed_files_and_keep_write_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "artifact"
+            identity = artifact_identity()
+            first = ResultArtifact.create(root, identity)
+            second = ResultArtifact.resume(root, identity)
+            self.assertIsInstance(second, ResultArtifact)
+            first.write_completed_partition(partition())
+            second.write_completed_partition(partition(1))
+            with self.assertRaises(ValueError):
+                first.write_completed_partition(partition(1))
+            self.assertEqual(
+                first.finalize(coverage=artifact_coverage())["file_count"], 2
+            )
+
+    def test_deterministic_adapter_matches_production_public_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "artifact"
+            identity = artifact_identity()
+            production = ResultArtifact.create(root, identity)
+            fake = DeterministicFilesystemAdapter(Path(temporary).resolve() / "model")
+            deterministic = ResultArtifact.create(root, identity, filesystem=fake)
+            production.write_completed_partition(partition())
+            deterministic.write_completed_partition(partition())
+            self.assertEqual(
+                fake.read_bytes(root, "checkpoint.json"),
+                (root / "checkpoint.json").read_bytes(),
+            )
+            receipt = production.finalize(coverage=artifact_coverage())
+            self.assertEqual(
+                deterministic.finalize(coverage=artifact_coverage()), receipt
+            )
+            self.assertEqual(
+                fake.read_bytes(root, "manifest.json"),
+                (root / "manifest.json").read_bytes(),
+            )
+            self.assertEqual(
+                json.loads(fake.read_bytes(root, "manifest.json"))["status"],
+                "finalized",
+            )
+
+
+class ResultArtifactRecoveryTests(unittest.TestCase):
+    def test_each_publication_interruption_is_recoverable_and_write_once(self) -> None:
+        phases = (
+            "after_journal_publication",
+            "after_final_publication",
+            "after_checkpoint_replacement",
+            "after_stage_cleanup_item",
+            "after_stage_cleanup",
+        )
+        for phase in phases:
+            with self.subTest(phase=phase):
+                filesystem = DeterministicFilesystemAdapter(
+                    Path("/deterministic/model")
+                )
+                root, identity = Path("/caller/artifact"), artifact_identity()
+                handle = ResultArtifact.create(root, identity, filesystem=filesystem)
+                filesystem.interrupt_next(phase)
+                with self.assertRaises(KeyboardInterrupt):
+                    handle.write_completed_partition(partition())
+                restored = ResultArtifact.resume(root, identity, filesystem=filesystem)
+                self.assertIsInstance(restored, ResultArtifact)
+                with self.assertRaises(ValueError):
+                    restored.write_completed_partition(partition())
+                self.assertEqual(
+                    restored.finalize(coverage=artifact_coverage())["file_count"], 1
+                )
+
+    def test_manifest_commit_without_receipt_recovers_identically(self) -> None:
+        for phase in (
+            "after_journal_publication",
+            "after_manifest_publication",
+            "after_stage_cleanup_item",
+            "after_stage_cleanup",
+        ):
+            with self.subTest(phase=phase):
+                filesystem = DeterministicFilesystemAdapter(
+                    Path("/deterministic/model")
+                )
+                root, identity = Path("/caller/artifact"), artifact_identity()
+                handle = ResultArtifact.create(root, identity, filesystem=filesystem)
+                handle.write_completed_partition(partition())
+                filesystem.interrupt_next(phase)
+                with self.assertRaises(KeyboardInterrupt):
+                    handle.finalize(coverage=artifact_coverage())
+                first = ResultArtifact.resume(root, identity, filesystem=filesystem)
+                self.assertIsInstance(first, dict)
+                snapshot = filesystem.inventory(root)
+                second = ResultArtifact.resume(root, identity, filesystem=filesystem)
+                self.assertEqual(second, first)
+                self.assertEqual(filesystem.inventory(root), snapshot)
+
+    def test_unknown_last_entry_blocks_recovery_without_any_mutation(self) -> None:
+        for action in ("create", "write", "finalize"):
+            with self.subTest(action=action):
+                filesystem = DeterministicFilesystemAdapter(
+                    Path("/deterministic/model")
+                )
+                root, identity = Path("/caller/artifact"), artifact_identity()
+                if action == "create":
+                    filesystem.interrupt_next("after_create_publication")
+                    with self.assertRaises(KeyboardInterrupt):
+                        ResultArtifact.create(root, identity, filesystem=filesystem)
+                else:
+                    handle = ResultArtifact.create(
+                        root, identity, filesystem=filesystem
+                    )
+                    filesystem.interrupt_next("after_journal_publication")
+                    with self.assertRaises(KeyboardInterrupt):
+                        if action == "write":
+                            handle.write_completed_partition(partition())
+                        else:
+                            handle.finalize(coverage=artifact_coverage())
+                filesystem.tamper(root, "zz-unknown", b"caller bytes")
+                snapshot = filesystem.inventory(root)
+                with self.assertRaises(ValueError):
+                    ResultArtifact.resume(root, identity, filesystem=filesystem)
+                self.assertEqual(filesystem.inventory(root), snapshot)
+                self.assertEqual(
+                    filesystem.read_bytes(root, "zz-unknown"), b"caller bytes"
+                )
+
+    def test_preapply_inventory_drift_refuses_before_journal_publication(self) -> None:
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        handle = ResultArtifact.create(root, identity, filesystem=filesystem)
+        filesystem.pause_next_before_apply(
+            lambda: filesystem.tamper(root, "unknown", b"outside")
+        )
+        with self.assertRaises(ValueError):
+            handle.write_completed_partition(partition())
+        self.assertEqual(
+            set(
+                n.relative_path
+                for n in filesystem.inventory(root).nodes
+                if n.kind == "file"
+            ),
+            {
+                "checkpoint.json",
+                "unknown",
+                next(
+                    n.relative_path
+                    for n in filesystem.inventory(root).nodes
+                    if n.relative_path.startswith(".protocol/create-")
+                ),
+            },
+        )
+
+    def test_deterministic_adapter_operates_when_production_descriptors_are_disabled(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+        import a_share_research.result_artifact as module
+
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        with patch.object(module, "_USE_ANCHORED_DIRECTORY_FD", False):
+            handle = ResultArtifact.create(root, identity, filesystem=filesystem)
+            handle.write_completed_partition(partition())
+            receipt = handle.finalize(coverage=artifact_coverage())
+            self.assertEqual(
+                ResultArtifact.resume(root, identity, filesystem=filesystem), receipt
+            )
+
+    def test_new_inode_with_identical_protocol_bytes_is_unowned(self) -> None:
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        handle = ResultArtifact.create(root, identity, filesystem=filesystem)
+        handle.write_completed_partition(partition())
+        handle.finalize(coverage=artifact_coverage())
+        journal = next(
+            n
+            for n in filesystem.inventory(root).nodes
+            if n.relative_path.startswith(".protocol/txn-")
+        )
+        filesystem.tamper(
+            root, journal.relative_path, journal.encoded, replace_identity=True
+        )
+        snapshot = filesystem.inventory(root)
+        with self.assertRaises(ValueError):
+            ResultArtifact.resume(root, identity, filesystem=filesystem)
+        self.assertEqual(filesystem.inventory(root), snapshot)
+
+    def test_file_count_envelope_uses_maximal_schema_counts_and_identity_width(
+        self,
+    ) -> None:
+        proof = ResultArtifact.checkpoint_capacity(
+            artifact_identity(), partition_count=9, candidate_count=20
+        )
+        self.assertEqual(proof["file_count"], 29)
+        self.assertEqual(proof["identity_component_bits"], 64)
+        self.assertEqual(proof["identity_component_bytes"], 16)
+        self.assertLessEqual(proof["maximum_checkpoint_bytes"], 65_536)
+        with self.assertRaises(ValueError):
+            ResultArtifact.checkpoint_capacity(
+                artifact_identity(), partition_count=1_000, candidate_count=20
+            )
+
+
+_PROCESS = r"""
+import json, os, sys
+from pathlib import Path
+from tests.test_result_artifact import artifact_identity, artifact_coverage, partition, frozen_context
+from a_share_research.result_artifact import ProductionFilesystemAdapter, ResultArtifact
+class CrashAdapter(ProductionFilesystemAdapter):
+    def _phase(self, phase):
+        if phase == sys.argv[3]:
+            os._exit(77)
+root, action = Path(sys.argv[1]), sys.argv[2]
+identity, adapter = artifact_identity(), CrashAdapter()
+if action in {"create", "context-create"}:
+    result = ResultArtifact.create(root, identity, filesystem=adapter,
+                                   initial_context=frozen_context() if action == "context-create" else None)
+else:
+    result = ResultArtifact.resume(root, identity, filesystem=adapter)
+    if action == "write":
+        result.write_completed_partition(partition())
+    elif action == "finalize":
+        result = result.finalize(coverage=artifact_coverage())
+if isinstance(result, dict):
+    print(json.dumps(result, sort_keys=True))
+else:
+    print("partial")
+"""
+
+
+def filesystem_tree(root: Path):
+    return tuple(
+        sorted(
+            (
+                path.relative_to(root).as_posix(),
+                path.lstat().st_dev,
+                path.lstat().st_ino,
+                path.lstat().st_mtime_ns,
+                path.lstat().st_mode,
+                path.read_bytes() if path.is_file() and not path.is_symlink() else b"",
+            )
+            for path in (root, *root.rglob("*"))
+        )
+    )
+
+
+class ResultArtifactProductionRecoveryTests(unittest.TestCase):
+    def run_process(self, root: Path, action: str, phase: str = ""):
+        import os
+        import subprocess
+        import sys
+
+        return subprocess.run(
+            [sys.executable, "-c", _PROCESS, str(root), action, phase],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+    def assert_process_ok(self, result) -> None:
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_real_independent_exit_and_fresh_process_recovery_matrix(self) -> None:
+        matrix = (
+            ("create", "after_create_publication"),
+            ("write", "after_journal_publication"),
+            ("write", "after_final_publication"),
+            ("write", "after_checkpoint_replacement"),
+            ("write", "after_stage_cleanup_item"),
+            ("write", "after_stage_cleanup"),
+            ("finalize", "after_journal_publication"),
+            ("finalize", "after_manifest_publication"),
+            ("finalize", "after_stage_cleanup_item"),
+            ("finalize", "after_stage_cleanup"),
+        )
+        for action, phase in matrix:
+            with (
+                self.subTest(action=action, phase=phase),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary).resolve() / "artifact"
+                identity = artifact_identity()
+                if action != "create":
+                    handle = ResultArtifact.create(root, identity)
+                    if action == "finalize":
+                        handle.write_completed_partition(partition())
+                crashed = self.run_process(root, action, phase)
+                self.assertEqual(crashed.returncode, 77, crashed.stderr)
+                self.assertEqual(crashed.stdout, "")
+                restored = self.run_process(root, "resume")
+                self.assert_process_ok(restored)
+                if action == "finalize":
+                    receipt = json.loads(restored.stdout)
+                    stable = filesystem_tree(root)
+                    second = self.run_process(root, "resume")
+                    self.assert_process_ok(second)
+                    self.assertEqual(json.loads(second.stdout), receipt)
+                    self.assertEqual(filesystem_tree(root), stable)
+                else:
+                    self.assertEqual(restored.stdout.strip(), "partial")
+                    handle = ResultArtifact.resume(root, identity)
+                    if action == "write":
+                        with self.assertRaises(ValueError):
+                            handle.write_completed_partition(partition())
+                    self.assertEqual(
+                        handle.finalize(coverage=artifact_coverage())["file_count"],
+                        0 if action == "create" else 1,
+                    )
+
+    def test_recovery_is_itself_interrupted_then_third_process_finishes(self) -> None:
+        for finalizing in (False, True):
+            with (
+                self.subTest(finalizing=finalizing),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary).resolve() / "artifact"
+                identity = artifact_identity()
+                handle = ResultArtifact.create(root, identity)
+                if finalizing:
+                    handle.write_completed_partition(partition())
+                first = self.run_process(
+                    root,
+                    "finalize" if finalizing else "write",
+                    "after_manifest_publication"
+                    if finalizing
+                    else "after_final_publication",
+                )
+                self.assertEqual(first.returncode, 77, first.stderr)
+                second = self.run_process(
+                    root,
+                    "resume",
+                    "after_stage_cleanup_item"
+                    if finalizing
+                    else "after_checkpoint_replacement",
+                )
+                self.assertEqual(second.returncode, 77, second.stderr)
+                third = self.run_process(root, "resume")
+                self.assert_process_ok(third)
+                restored = ResultArtifact.resume(root, identity)
+                receipt = (
+                    restored
+                    if isinstance(restored, dict)
+                    else restored.finalize(coverage=artifact_coverage())
+                )
+                self.assertEqual(receipt["file_count"], 1)
+                control = ResultArtifact.create(
+                    Path(temporary).resolve() / "control", identity
+                )
+                control.write_completed_partition(partition())
+                self.assertEqual(
+                    control.finalize(coverage=artifact_coverage()), receipt
+                )
+
+    def test_real_file_and_directory_fsync_failures_never_return_success(self) -> None:
+        import os
+        import stat
+        from unittest.mock import patch
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        original_fsync = os.fsync
+        for kind in ("file", "directory"):
+            with (
+                self.subTest(kind=kind),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary).resolve() / "artifact"
+                identity = artifact_identity()
+
+                class FailingAdapter(ProductionFilesystemAdapter):
+                    armed = False
+
+                    def _phase(self, phase):
+                        if phase == (
+                            "after_checkpoint_replacement"
+                            if kind == "file"
+                            else "after_final_publication"
+                        ):
+                            self.armed = True
+
+                adapter = FailingAdapter()
+                handle = ResultArtifact.create(root, identity, filesystem=adapter)
+                failed = []
+
+                def fsync(descriptor):
+                    regular = stat.S_ISREG(os.fstat(descriptor).st_mode)
+                    if adapter.armed and regular == (kind == "file"):
+                        failed.append(descriptor)
+                        raise OSError("real fsync injected failure")
+                    return original_fsync(descriptor)
+
+                with patch(
+                    "a_share_research.result_artifact.os.fsync", side_effect=fsync
+                ):
+                    with self.assertRaises(ValueError):
+                        handle.write_completed_partition(partition())
+                self.assertTrue(failed)
+                restored = self.run_process(root, "resume")
+                self.assert_process_ok(restored)
+                recovered = ResultArtifact.resume(root, identity)
+                self.assertEqual(
+                    recovered.finalize(coverage=artifact_coverage())["file_count"], 1
+                )
+
+    def test_sealed_unknown_entry_and_same_byte_inode_replacement_are_zero_mutation(
+        self,
+    ) -> None:
+        for changed in ("unknown", "journal", "content", "manifest"):
+            with (
+                self.subTest(changed=changed),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary).resolve() / "artifact"
+                identity = artifact_identity()
+                handle = ResultArtifact.create(root, identity)
+                handle.write_completed_partition(partition())
+                handle.finalize(coverage=artifact_coverage())
+                if changed == "unknown":
+                    (root / "unknown").write_bytes(b"caller-owned")
+                else:
+                    target = (
+                        next((root / ".protocol").glob("txn-*.json"))
+                        if changed == "journal"
+                        else root
+                        / (
+                            partition().relative_path
+                            if changed == "content"
+                            else "manifest.json"
+                        )
+                    )
+                    replacement = Path(temporary).resolve() / "external-new-inode"
+                    replacement.write_bytes(target.read_bytes())
+                    replacement.replace(target)
+                before = filesystem_tree(root)
+                with self.assertRaises(ValueError):
+                    ResultArtifact.resume(root, identity)
+                self.assertEqual(filesystem_tree(root), before)
+
+    def test_owned_pending_state_with_last_unknown_entry_has_zero_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "artifact"
+            identity = artifact_identity()
+            ResultArtifact.create(root, identity)
+            result = self.run_process(root, "write", "after_journal_publication")
+            self.assertEqual(result.returncode, 77, result.stderr)
+            (root / "zz-unknown").write_bytes(b"caller-owned")
+            before = filesystem_tree(Path(temporary).resolve())
+            with self.assertRaises(ValueError):
+                ResultArtifact.resume(root, identity)
+            self.assertEqual(filesystem_tree(Path(temporary).resolve()), before)
+
+
+class ResultArtifactConfinementTests(unittest.TestCase):
+    def test_raw_production_persistence_is_confined_and_alias_gate_is_sensitive(
+        self,
+    ) -> None:
+        import ast
+        import a_share_research.result_artifact as module
+
+        raw_names = {
+            "open",
+            "close",
+            "dup",
+            "fstat",
+            "fsync",
+            "read",
+            "write",
+            "mkdir",
+            "link",
+            "rename",
+            "rmdir",
+            "stat",
+            "unlink",
+            "listdir",
+            "flock",
+            "CDLL",
+        }
+
+        class Probe(ast.NodeVisitor):
+            def __init__(self):
+                self.classes = []
+                self.objects = {"os", "fcntl", "ctypes"}
+                self.callables = set()
+                self.violations = []
+
+            def inside(self):
+                return "ProductionFilesystemAdapter" in self.classes
+
+            def visit_ClassDef(self, node):
+                self.classes.append(node.name)
+                self.generic_visit(node)
+                self.classes.pop()
+
+            def raw_object(self, node):
+                return isinstance(node, ast.Name) and node.id in self.objects
+
+            def raw_callable(self, node):
+                if isinstance(node, ast.Name):
+                    return node.id in self.callables
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id in {"staticmethod", "classmethod"}
+                    and node.args
+                ):
+                    return self.raw_callable(node.args[0])
+                return (
+                    isinstance(node, ast.Attribute)
+                    and node.attr in raw_names
+                    and self.raw_object(node.value)
+                )
+
+            def assignment(self, targets, value, line):
+                if self.inside():
+                    return
+                for target in targets:
+                    if self.raw_object(value) or self.raw_callable(value):
+                        self.violations.append(line)
+                        if isinstance(target, ast.Name):
+                            (
+                                self.objects
+                                if self.raw_object(value)
+                                else self.callables
+                            ).add(target.id)
+
+            def visit_Assign(self, node):
+                self.assignment(node.targets, node.value, node.lineno)
+                self.generic_visit(node)
+
+            def visit_AnnAssign(self, node):
+                if node.value is not None:
+                    self.assignment((node.target,), node.value, node.lineno)
+                self.generic_visit(node)
+
+            def visit_Import(self, node):
+                if not self.inside():
+                    for alias in node.names:
+                        if alias.name in {"os", "fcntl", "ctypes"}:
+                            self.objects.add(alias.asname or alias.name)
+                self.generic_visit(node)
+
+            def visit_ImportFrom(self, node):
+                if not self.inside() and node.module in {"os", "fcntl", "ctypes"}:
+                    for alias in node.names:
+                        if alias.name in raw_names:
+                            self.callables.add(alias.asname or alias.name)
+                            self.violations.append(node.lineno)
+                self.generic_visit(node)
+
+            def visit_Call(self, node):
+                if not self.inside() and self.raw_callable(node.func):
+                    self.violations.append(node.lineno)
+                if (
+                    not self.inside()
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "getattr"
+                    and len(node.args) >= 2
+                    and self.raw_object(node.args[0])
+                    and isinstance(node.args[1], ast.Constant)
+                    and node.args[1].value in raw_names
+                ):
+                    self.violations.append(node.lineno)
+                self.generic_visit(node)
+
+        actual = Probe()
+        actual.visit(ast.parse(Path(module.__file__).read_text()))
+        self.assertEqual(actual.violations, [])
+        for source in (
+            "os.open('x', 0)",
+            "raw = os\nraw.open('x', 0)",
+            "from os import open as persist\npersist('x', 0)",
+            "persist = os.open\npersist('x', 0)",
+            "globals()['raw'] = os",
+            "holder.raw = os",
+            "holder.persist = os.open",
+            "persist = staticmethod(os.open)",
+            "getattr(os, 'unlink')('x')",
+            "ctypes.CDLL(None)",
+        ):
+            with self.subTest(source=source):
+                probe = Probe()
+                probe.visit(ast.parse(source))
+                self.assertTrue(probe.violations)
+
+    def test_large_nonnegative_coverage_retains_the_existing_serialized_bound(
+        self,
+    ) -> None:
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        handle = ResultArtifact.create(root, identity, filesystem=filesystem)
+        coverage = artifact_coverage()
+        coverage["SSE"]["expected"] = 10**20
+        receipt = handle.finalize(coverage=coverage)
+        self.assertEqual(receipt["file_count"], 0)
+        self.assertEqual(
+            json.loads(filesystem.read_bytes(root, "manifest.json"))["coverage"]["SSE"][
+                "expected"
+            ],
+            10**20,
+        )
+
+
+def frozen_context():
+    return prepare_completed_partition(
+        kind="universe",
+        exchange="SSE",
+        shard_index=0,
+        schema_version="screening-context@1.0",
+        records=(
+            {
+                "requested_as_of": "2026-10-13",
+                "research_now": "2026-10-13T10:00:00+08:00",
+                "information_cutoff": "2026-10-13T10:00:00+08:00",
+                "screen_date": "2026-10-12",
+                "calendar_evidence_refs": ["calendar-proof-1"],
+            },
+        ),
+    )
+
+
+class ResultArtifactContextTests(unittest.TestCase):
+    def test_initial_context_is_frozen_without_pretending_a_shard_is_complete(
+        self,
+    ) -> None:
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        prepared = frozen_context()
+        handle = ResultArtifact.create(
+            root, identity, initial_context=prepared, filesystem=filesystem
+        )
+        checkpoint = handle.checkpoint()
+        self.assertEqual(checkpoint["completed_files"], [])
+        self.assertEqual(
+            checkpoint["frozen_context"]["research_now"], "2026-10-13T10:00:00+08:00"
+        )
+        self.assertEqual(checkpoint["identity"]["context_sha256"], prepared.sha256)
+        self.assertFalse(
+            any(
+                n.relative_path == prepared.relative_path
+                for n in filesystem.inventory(root).nodes
+            )
+        )
+        # The same actual coordinate remains available to a real universe shard.
+        handle.write_completed_partition(partition())
+        returned = handle.checkpoint()
+        checkpoint["frozen_context"]["research_now"] = "2026-10-14T10:00:00+08:00"
+        self.assertEqual(
+            returned["frozen_context"]["research_now"], "2026-10-13T10:00:00+08:00"
+        )
+        self.assertEqual(handle.finalize(coverage=artifact_coverage())["file_count"], 1)
+
+    def test_context_tamper_with_recomputed_local_digest_is_zero_mutation(self) -> None:
+        from hashlib import sha256
+
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        handle = ResultArtifact.create(
+            root, identity, initial_context=frozen_context(), filesystem=filesystem
+        )
+        checkpoint = handle.checkpoint()
+        checkpoint["frozen_context"]["information_cutoff"] = "2026-10-14T23:59:59+08:00"
+        record = (
+            json.dumps(
+                checkpoint["frozen_context"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
+        checkpoint["identity"]["context_sha256"] = sha256(record).hexdigest()
+        changed = (
+            json.dumps(
+                checkpoint, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()
+            + b"\n"
+        )
+        filesystem.tamper(root, "checkpoint.json", changed)
+        before = filesystem.inventory(root)
+        with self.assertRaises(ValueError):
+            ResultArtifact.resume(root, identity, filesystem=filesystem)
+        self.assertEqual(filesystem.inventory(root), before)
+
+
+class ResultArtifactContextBoundaryTests(unittest.TestCase):
+    run_process = ResultArtifactProductionRecoveryTests.run_process
+    assert_process_ok = ResultArtifactProductionRecoveryTests.assert_process_ok
+
+    def test_create_crash_before_first_shard_preserves_original_frozen_context(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "artifact"
+            result = self.run_process(
+                root, "context-create", "after_create_publication"
+            )
+            self.assertEqual(result.returncode, 77, result.stderr)
+            restored = self.run_process(root, "resume")
+            self.assert_process_ok(restored)
+            handle = ResultArtifact.resume(root, artifact_identity())
+            checkpoint = handle.checkpoint()
+            self.assertEqual(checkpoint["completed_files"], [])
+            self.assertEqual(
+                checkpoint["frozen_context"]["research_now"],
+                "2026-10-13T10:00:00+08:00",
+            )
+            self.assertEqual(checkpoint["frozen_context"]["screen_date"], "2026-10-12")
+            handle.write_completed_partition(partition())
+            receipt = handle.finalize(coverage=artifact_coverage())
+            self.assertEqual(ResultArtifact.resume(root, artifact_identity()), receipt)
+
+    def test_exact_checkpoint_65535_65536_65537_byte_boundaries(self) -> None:
+        baseline = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        empty_context = prepare_completed_partition(
+            kind="universe",
+            exchange="SSE",
+            shard_index=0,
+            schema_version="context@1.0",
+            records=({"notes": ""},),
+        )
+        ResultArtifact.create(
+            root, identity, initial_context=empty_context, filesystem=baseline
+        )
+        overhead = len(baseline.read_bytes(root, "checkpoint.json"))
+        for target in (65_535, 65_536, 65_537):
+            with self.subTest(target=target):
+                filesystem = DeterministicFilesystemAdapter(
+                    Path("/deterministic/model"), identity_start=(1 << 64) - 1000
+                )
+                prepared = prepare_completed_partition(
+                    kind="universe",
+                    exchange="SSE",
+                    shard_index=0,
+                    schema_version="context@1.0",
+                    records=({"notes": "p" * (target - overhead)},),
+                )
+                if target > 65_536:
+                    with self.assertRaises(ValueError):
+                        ResultArtifact.create(
+                            root,
+                            identity,
+                            initial_context=prepared,
+                            filesystem=filesystem,
+                        )
+                    self.assertFalse(filesystem.exists(root))
+                else:
+                    handle = ResultArtifact.create(
+                        root, identity, initial_context=prepared, filesystem=filesystem
+                    )
+                    self.assertEqual(
+                        len(filesystem.read_bytes(root, "checkpoint.json")), target
+                    )
+                    before = filesystem.inventory(root)
+                    with self.assertRaises(ValueError):
+                        handle.write_completed_partition(partition())
+                    self.assertEqual(filesystem.inventory(root), before)
+                    with self.assertRaises(ValueError):
+                        ResultArtifact.checkpoint_capacity(
+                            identity,
+                            partition_count=9,
+                            candidate_count=20,
+                            initial_context=prepared,
+                        )
+
+    def test_maximum_real_identity_width_remains_resumable_in_each_future_state(
+        self,
+    ) -> None:
+        for phase in (
+            "after_journal_publication",
+            "after_final_publication",
+            "after_checkpoint_replacement",
+            "after_stage_cleanup_item",
+        ):
+            with self.subTest(phase=phase):
+                filesystem = DeterministicFilesystemAdapter(
+                    Path("/deterministic/model"), identity_start=(1 << 64) - 1000
+                )
+                root, identity = Path("/caller/artifact"), artifact_identity()
+                handle = ResultArtifact.create(
+                    root,
+                    identity,
+                    initial_context=frozen_context(),
+                    filesystem=filesystem,
+                )
+                filesystem.interrupt_next(phase)
+                with self.assertRaises(KeyboardInterrupt):
+                    handle.write_completed_partition(partition())
+                restored = ResultArtifact.resume(root, identity, filesystem=filesystem)
+                self.assertEqual(
+                    restored.checkpoint()["frozen_context"]["screen_date"], "2026-10-12"
+                )
+                self.assertEqual(
+                    restored.finalize(coverage=artifact_coverage())["file_count"], 1
+                )
+
+
+class ResultArtifactPreparationAbortTests(unittest.TestCase):
+    run_process = ResultArtifactProductionRecoveryTests.run_process
+    assert_process_ok = ResultArtifactProductionRecoveryTests.assert_process_ok
+
+    def test_each_write_preparation_boundary_aborts_without_artifact_or_external_adoption(
+        self,
+    ) -> None:
+        phases = (
+            "after_stage_directory_created",
+            "after_stage_file_created",
+            "after_stage_data_written",
+            "after_stage_checkpoint_written",
+            "after_stage_journal_written",
+            "after_stage_prepared",
+        )
+        for phase in phases:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                parent = Path(temporary).resolve()
+                root, identity = parent / "artifact", artifact_identity()
+                handle = ResultArtifact.create(
+                    root, identity, initial_context=frozen_context()
+                )
+                original = filesystem_tree(root)
+                crashed = self.run_process(root, "write", phase)
+                self.assertEqual(crashed.returncode, 77, crashed.stderr)
+                self.assertEqual(filesystem_tree(root), original)
+                external = tuple(
+                    (p, filesystem_tree(p))
+                    for p in parent.glob(".result-artifact-*.stage")
+                )
+                self.assertTrue(external)
+                all_before = filesystem_tree(parent)
+                resumed = self.run_process(root, "resume")
+                self.assert_process_ok(resumed)
+                self.assertEqual(filesystem_tree(parent), all_before)
+                handle.write_completed_partition(partition())
+                self.assertEqual(len(handle.checkpoint()["completed_files"]), 1)
+                self.assertEqual(
+                    handle.finalize(coverage=artifact_coverage())["file_count"], 1
+                )
+                for staged, before in external:
+                    self.assertEqual(filesystem_tree(staged), before)
+
+    def test_each_initial_preparation_boundary_can_retry_create_without_adopting_staging(
+        self,
+    ) -> None:
+        for phase in (
+            "after_create_stage_directory_created",
+            "after_create_checkpoint_written",
+            "after_create_owner_written",
+            "after_create_prepared",
+        ):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                root = parent / "artifact"
+                crashed = self.run_process(root, "create", phase)
+                self.assertEqual(crashed.returncode, 77, crashed.stderr)
+                self.assertFalse(root.exists())
+                external = tuple(
+                    (p, filesystem_tree(p))
+                    for p in parent.glob(".result-artifact-create-*.stage")
+                )
+                self.assertTrue(external)
+                created = ResultArtifact.create(root, identity)
+                self.assertEqual(created.checkpoint()["completed_files"], [])
+                for staged, before in external:
+                    self.assertEqual(filesystem_tree(staged), before)
+                    self.assertNotEqual(root.stat().st_ino, staged.stat().st_ino)
+
+    def test_initial_abort_never_adopts_a_later_caller_target(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root, identity = Path(temporary).resolve() / "artifact", artifact_identity()
+            caller_state = []
+
+            class ExternalTargetAdapter(ProductionFilesystemAdapter):
+                def _phase(self, phase):
+                    if phase == "after_create_prepared":
+                        root.mkdir()
+                        (root / "caller-file").write_bytes(b"caller-owned")
+                        caller_state.append(filesystem_tree(root))
+
+            with self.assertRaises(ValueError):
+                ResultArtifact.create(
+                    root, identity, filesystem=ExternalTargetAdapter()
+                )
+            self.assertEqual(filesystem_tree(root), caller_state[0])
+            with self.assertRaises(ValueError):
+                ResultArtifact.resume(root, identity)
+            self.assertEqual(filesystem_tree(root), caller_state[0])
+
+
+class ResultArtifactReadTests(unittest.TestCase):
+    def test_only_completed_files_are_read_through_a_validated_transaction(
+        self,
+    ) -> None:
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        handle = ResultArtifact.create(root, identity, filesystem=filesystem)
+        with self.assertRaises(ValueError):
+            handle.read_completed_file(partition().relative_path)
+        handle.write_completed_partition(partition())
+        before = filesystem.inventory(root)
+        self.assertEqual(
+            handle.read_completed_file(partition().relative_path),
+            partition().content_bytes,
+        )
+        self.assertEqual(filesystem.inventory(root), before)
+        for unknown in (
+            "../checkpoint.json",
+            "checkpoint.json",
+            ".protocol/unknown",
+            "partitions/universe/SSE/part-00001.jsonl",
+        ):
+            with self.subTest(unknown=unknown), self.assertRaises(ValueError):
+                handle.read_completed_file(unknown)
+        filesystem.tamper(root, "unknown", b"outside")
+        before = filesystem.inventory(root)
+        with self.assertRaises(ValueError):
+            handle.read_completed_file(partition().relative_path)
+        self.assertEqual(filesystem.inventory(root), before)
+
+
+class ResultArtifactConcurrencyTests(unittest.TestCase):
+    def test_two_live_handles_can_write_concurrently_without_losing_a_shard(
+        self,
+    ) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root, identity = Path(temporary).resolve() / "artifact", artifact_identity()
+            first = ResultArtifact.create(root, identity)
+            second = ResultArtifact.resume(root, identity)
+            barrier = Barrier(2)
+
+            def write(handle, index):
+                barrier.wait(timeout=5)
+                handle.write_completed_partition(partition(index))
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(write, first, 0), pool.submit(write, second, 1)]
+                for future in futures:
+                    future.result(timeout=10)
+            self.assertEqual(
+                first.finalize(coverage=artifact_coverage())["file_count"], 2
+            )
+
+    def test_independent_processes_racing_exclusive_directory_publication_have_one_winner(
+        self,
+    ) -> None:
+        import os
+        import subprocess
+        import sys
+
+        worker = r"""
+import os, sys, time
+from pathlib import Path
+from tests.test_result_artifact import artifact_identity
+from a_share_research.result_artifact import ProductionFilesystemAdapter, ResultArtifact
+class BarrierAdapter(ProductionFilesystemAdapter):
+    def _phase(self, phase):
+        if phase == "after_create_prepared":
+            ready = Path(sys.argv[2])
+            (ready / str(os.getpid())).write_text("ready")
+            end = time.monotonic() + 5
+            while len(list(ready.iterdir())) != 2:
+                if time.monotonic() > end:
+                    raise RuntimeError("create barrier timed out")
+                time.sleep(0.005)
+try:
+    ResultArtifact.create(Path(sys.argv[1]), artifact_identity(), filesystem=BarrierAdapter())
+    print("winner")
+except ValueError:
+    print("refused")
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            root, ready = parent / "artifact", parent / "ready"
+            ready.mkdir()
+            processes = [
+                subprocess.Popen(
+                    [sys.executable, "-c", worker, str(root), str(ready)],
+                    cwd=Path(__file__).resolve().parents[1],
+                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for _ in range(2)
+            ]
+            outputs = []
+            for process in processes:
+                out, err = process.communicate(timeout=15)
+                self.assertEqual(process.returncode, 0, err)
+                outputs.append(out.strip())
+            self.assertCountEqual(outputs, ["winner", "refused"])
+            self.assertEqual(
+                ResultArtifact.resume(root, artifact_identity()).checkpoint()[
+                    "completed_files"
+                ],
+                [],
+            )
+
+    def test_write_and_finalize_serialize_and_old_handles_remain_sealed(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root, identity = Path(temporary).resolve() / "artifact", artifact_identity()
+            writer = ResultArtifact.create(root, identity)
+            finalizer = ResultArtifact.resume(root, identity)
+            barrier = Barrier(2)
+
+            def write():
+                barrier.wait(timeout=5)
+                try:
+                    writer.write_completed_partition(partition())
+                    return True
+                except ValueError:
+                    return False
+
+            def finalize():
+                barrier.wait(timeout=5)
+                return finalizer.finalize(coverage=artifact_coverage())
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                write_future, finalize_future = (
+                    pool.submit(write),
+                    pool.submit(finalize),
+                )
+                wrote, receipt = (
+                    write_future.result(timeout=10),
+                    finalize_future.result(timeout=10),
+                )
+            self.assertEqual(receipt["file_count"], 1 if wrote else 0)
+            self.assertEqual(ResultArtifact.resume(root, identity), receipt)
+            with self.assertRaises(ValueError):
+                writer.write_completed_partition(partition(1))
+
+    def test_different_artifacts_do_not_share_a_transaction_lock(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        entered, release = Event(), Event()
+
+        class PausedAdapter(ProductionFilesystemAdapter):
+            armed = False
+
+            def _phase(self, phase):
+                if self.armed and phase == "before_apply":
+                    self.armed = False
+                    entered.set()
+                    if not release.wait(timeout=5):
+                        raise RuntimeError("artifact lock pause timed out")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            adapter = PausedAdapter()
+            first = ResultArtifact.create(
+                parent / "first", identity, filesystem=adapter
+            )
+            second = ResultArtifact.create(parent / "second", identity)
+            adapter.armed = True
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(first.write_completed_partition, partition())
+                self.assertTrue(entered.wait(timeout=5))
+                try:
+                    second.write_completed_partition(partition())
+                    self.assertEqual(
+                        second.finalize(coverage=artifact_coverage())["file_count"], 1
+                    )
+                finally:
+                    release.set()
+                future.result(timeout=10)
+
+    def test_hostile_equality_and_union_can_only_mutate_detached_checkpoint(
+        self,
+    ) -> None:
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        handle = ResultArtifact.create(
+            root, identity, initial_context=frozen_context(), filesystem=filesystem
+        )
+        original = filesystem.inventory(root)
+
+        class Counterpart:
+            def __eq__(self, value):
+                dict.clear(value)
+                return False
+
+            def __ror__(self, value):
+                dict.__setitem__(value, "outside", "modified")
+                return value
+
+        detached = handle.checkpoint()
+        self.assertFalse(detached == Counterpart())
+        self.assertEqual(detached, {})
+        handle.checkpoint() | Counterpart()
+        self.assertEqual(filesystem.inventory(root), original)
+        self.assertEqual(
+            handle.checkpoint()["frozen_context"]["research_now"],
+            "2026-10-13T10:00:00+08:00",
+        )
+
+
+class ResultArtifactAdversarialFilesystemTests(unittest.TestCase):
+    run_process = ResultArtifactProductionRecoveryTests.run_process
+    assert_process_ok = ResultArtifactProductionRecoveryTests.assert_process_ok
+
+    def test_owned_stage_plus_unknown_or_same_byte_replacement_refuses_without_cleanup(
+        self,
+    ) -> None:
+        for change in ("unknown", "file", "directory"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                root = parent / "artifact"
+                ResultArtifact.create(root, identity)
+                crash = self.run_process(root, "write", "after_journal_publication")
+                self.assertEqual(crash.returncode, 77, crash.stderr)
+                stage = next(parent.glob(".result-artifact-*.stage"))
+                if change == "unknown":
+                    (stage / "zz-unknown").write_bytes(b"caller-owned")
+                elif change == "file":
+                    target = stage / "data"
+                    replacement = parent / "same-bytes"
+                    replacement.write_bytes(target.read_bytes())
+                    replacement.replace(target)
+                else:
+                    moved = parent / "moved-stage"
+                    stage.rename(moved)
+                    stage.mkdir()
+                    for source in moved.iterdir():
+                        (stage / source.name).write_bytes(source.read_bytes())
+                before = filesystem_tree(parent)
+                with self.assertRaises(ValueError):
+                    ResultArtifact.resume(root, identity)
+                self.assertEqual(filesystem_tree(parent), before)
+
+    def test_root_ancestor_and_fixed_directory_replacements_fail_closed(self) -> None:
+        import shutil
+
+        for change in ("root", "ancestor", "fixed-directory"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                ancestor = parent / "ancestor"
+                ancestor.mkdir()
+                root = ancestor / "artifact"
+                handle = ResultArtifact.create(root, identity)
+                if change == "root":
+                    root.rename(ancestor / "old-root")
+                    shutil.copytree(ancestor / "old-root", root)
+                elif change == "ancestor":
+                    ancestor.rename(parent / "old-ancestor")
+                    ancestor.symlink_to(
+                        parent / "old-ancestor", target_is_directory=True
+                    )
+                else:
+                    target = root / "partitions" / "universe" / "SSE"
+                    target.rmdir()
+                    target.mkdir()
+                before = filesystem_tree(parent)
+                with self.assertRaises(ValueError):
+                    handle.write_completed_partition(partition())
+                self.assertEqual(filesystem_tree(parent), before)
+
+    def test_deleted_journal_and_forged_hardlink_are_unowned(self) -> None:
+        import os
+
+        for change in ("deleted", "hardlink"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                root = parent / "artifact"
+                handle = ResultArtifact.create(root, identity)
+                handle.write_completed_partition(partition())
+                handle.finalize(coverage=artifact_coverage())
+                journal = next((root / ".protocol").glob("txn-*.json"))
+                if change == "deleted":
+                    journal.unlink()
+                else:
+                    os.link(journal, root / "forged-manifest-residue")
+                before = filesystem_tree(root)
+                with self.assertRaises(ValueError):
+                    ResultArtifact.resume(root, identity)
+                self.assertEqual(filesystem_tree(root), before)
+
+    def test_multi_entry_cleanup_plan_validates_last_entry_before_removing_first(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            root = parent / "artifact"
+            held = []
+
+            class HeldStageAdapter(ProductionFilesystemAdapter):
+                holding = False
+
+                def _phase(self, phase):
+                    if self.holding and phase == "after_checkpoint_replacement":
+                        self.holding = False
+                        stage = next(parent.glob(".result-artifact-*.stage"))
+                        destination = parent / f"held-owned-{len(held)}"
+                        held.append((stage, destination))
+                        stage.rename(destination)
+
+            adapter = HeldStageAdapter()
+            handle = ResultArtifact.create(root, identity, filesystem=adapter)
+            for index in range(2):
+                adapter.holding = True
+                handle.write_completed_partition(partition(index))
+            # Restore two exact durably journal-owned directories/inodes. No
+            # copies or invented token/ownership records enter this fixture.
+            for stage, destination in held:
+                destination.rename(stage)
+            unknown = held[-1][0] / "zz-unknown"
+            unknown.write_bytes(b"caller-owned")
+            before = filesystem_tree(parent)
+            with self.assertRaises(ValueError):
+                ResultArtifact.resume(root, identity)
+            self.assertEqual(filesystem_tree(parent), before)
+            self.assertTrue(held[0][0].exists())
+            unknown.unlink()  # The external fixture removes its own test object.
+            resumed = ResultArtifact.resume(root, identity)
+            self.assertEqual(len(resumed.checkpoint()["completed_files"]), 2)
+            self.assertTrue(all(not stage.exists() for stage, _ in held))
+            self.assertEqual(
+                resumed.finalize(coverage=artifact_coverage())["file_count"], 2
+            )
+
+
+class ResultArtifactAncestorGenerationTests(unittest.TestCase):
+    def test_moved_original_root_inside_replaced_ancestor_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            ancestor = parent / "ancestor"
+            ancestor.mkdir()
+            root = ancestor / "artifact"
+            handle = ResultArtifact.create(root, identity)
+            ancestor.rename(parent / "old-ancestor")
+            ancestor.mkdir()
+            (parent / "old-ancestor" / "artifact").rename(root)
+            before = filesystem_tree(parent)
+            with self.assertRaises(ValueError):
+                handle.write_completed_partition(partition())
+            self.assertEqual(filesystem_tree(parent), before)
+
+
+class ResultArtifactIntegrationTests(unittest.TestCase):
+    def test_prepared_authority_is_consumed_without_rereading_caller_mappings(
+        self,
+    ) -> None:
+        from collections.abc import Mapping
+
+        class OnePass(Mapping):
+            def __init__(self, value):
+                self.value, self.traversals = value, 0
+
+            def __getitem__(self, key):
+                raise AssertionError("caller mapping was reread")
+
+            def __len__(self):
+                raise AssertionError("caller mapping length was reread")
+
+            def __iter__(self):
+                raise AssertionError("caller mapping was iterated twice")
+
+            def items(self):
+                self.traversals += 1
+                if self.traversals != 1:
+                    raise AssertionError("caller mapping was observed twice")
+                return iter(tuple(self.value.items()))
+
+        caller_context = OnePass({"research_now": "2026-10-13T10:00:00+08:00"})
+        caller_partition = OnePass({"canonical_security_id": "SSE:600519"})
+        caller_candidate = OnePass({"status": "limited"})
+        prepared_context = prepare_completed_partition(
+            kind="universe",
+            exchange="SSE",
+            shard_index=0,
+            schema_version="context@1.0",
+            records=(caller_context,),
+        )
+        prepared_partition = prepare_completed_partition(
+            kind="universe",
+            exchange="SSE",
+            shard_index=0,
+            schema_version="1.0",
+            records=(caller_partition,),
+        )
+        prepared_candidate = prepare_candidate(
+            canonical_security_id="SSE:600519",
+            schema_version="1.0",
+            document=caller_candidate,
+        )
+        for caller in (caller_context, caller_partition, caller_candidate):
+            caller.value.clear()
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root, identity = Path("/caller/artifact"), artifact_identity()
+        handle = ResultArtifact.create(
+            root, identity, initial_context=prepared_context, filesystem=filesystem
+        )
+        handle.write_completed_partition(prepared_partition)
+        handle.write_candidate(prepared_candidate)
+        self.assertEqual(
+            handle.checkpoint()["frozen_context"]["research_now"],
+            "2026-10-13T10:00:00+08:00",
+        )
+        self.assertEqual(handle.finalize(coverage=artifact_coverage())["file_count"], 2)
+        self.assertTrue(
+            all(
+                caller.traversals == 1
+                for caller in (caller_context, caller_partition, caller_candidate)
+            )
+        )
+
+    def test_copied_installed_module_completes_and_recovers_bounded_receipt_without_path_leak(
+        self,
+    ) -> None:
+        import os
+        import shutil
+        import subprocess
+        import sys
+
+        source_skill = (
+            Path(__file__).resolve().parents[1] / "skill" / "a-share-research"
+        )
+        worker = r"""
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import a_share_research.result_artifact as module
+from a_share_research.result_artifact import ResultArtifact, ResultArtifactIdentity
+from a_share_research.result_artifact_inputs import prepare_completed_partition, prepare_candidate
+assert Path(module.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve())
+identity = ResultArtifactIdentity("1.0", b"request", b"producer", b"plan", b"operations")
+context = prepare_completed_partition(kind="universe", exchange="SSE", shard_index=0,
+    schema_version="context@1.0", records=({"research_now":"2026-10-13T10:00:00+08:00"},))
+root = Path(sys.argv[2])
+artifact = ResultArtifact.create(root, identity, initial_context=context)
+artifact.write_completed_partition(prepare_completed_partition(kind="universe", exchange="SSE", shard_index=0,
+    schema_version="1.0", records=({"canonical_security_id":"SSE:600519"},)))
+artifact.write_candidate(prepare_candidate(canonical_security_id="SSE:600519", schema_version="1.0", document={"status":"limited"}))
+coverage = {exchange:{key:0 for key in ("acquired","expected","failed","ranked","resolved","unranked","unsupported")}
+    for exchange in ("BSE","SSE","SZSE")}
+receipt = artifact.finalize(coverage=coverage)
+assert ResultArtifact.resume(root, identity) == receipt
+ResultArtifact.validate_receipt(root, identity, receipt)
+print(json.dumps(receipt, sort_keys=True))
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            installed = parent / "installed-skill"
+            shutil.copytree(
+                source_skill,
+                installed,
+                ignore=shutil.ignore_patterns(".runtime", "__pycache__", "*.pyc"),
+            )
+            root = parent / "caller-owned-artifact"
+            result = subprocess.run(
+                [sys.executable, "-c", worker, str(installed / "scripts"), str(root)],
+                cwd=parent,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["file_count"], 2)
+            self.assertLessEqual(len(result.stdout.encode()), 1024)
+            self.assertNotIn(str(root), result.stdout)
+            self.assertNotIn(str(installed), result.stdout)
+            for path in root.rglob("*"):
+                if path.is_file():
+                    self.assertNotIn(str(root).encode(), path.read_bytes())
+                    self.assertNotIn(str(installed).encode(), path.read_bytes())
+
+
+class ResultArtifactExceptionMatrixTests(unittest.TestCase):
+    def test_ordinary_io_and_keyboard_interrupt_use_the_same_recoverable_state_contract(
+        self,
+    ) -> None:
+        preparation = (
+            "before_apply",
+            "after_stage_directory_created",
+            "after_stage_file_created",
+            "after_stage_data_written",
+            "after_stage_checkpoint_written",
+            "after_stage_journal_written",
+            "after_stage_prepared",
+            "before_file_fsync",
+            "after_file_fsync",
+            "before_directory_fsync",
+            "after_directory_fsync",
+        )
+        publication = (
+            "after_journal_publication",
+            "after_final_publication",
+            "after_checkpoint_replacement",
+            "after_stage_cleanup_item",
+            "after_stage_cleanup",
+        )
+        for exception_type in (OSError, KeyboardInterrupt):
+            for phase in (*preparation, *publication):
+                with self.subTest(exception=exception_type.__name__, phase=phase):
+                    filesystem = DeterministicFilesystemAdapter(
+                        Path("/deterministic/model")
+                    )
+                    root, identity = Path("/caller/artifact"), artifact_identity()
+                    handle = ResultArtifact.create(
+                        root,
+                        identity,
+                        initial_context=frozen_context(),
+                        filesystem=filesystem,
+                    )
+                    before = filesystem.inventory(root)
+                    filesystem.fail_next(
+                        phase, exception_type("private path must not leak")
+                    )
+                    with self.assertRaises(
+                        ValueError if exception_type is OSError else KeyboardInterrupt
+                    ):
+                        handle.write_completed_partition(partition())
+                    restored = ResultArtifact.resume(
+                        root, identity, filesystem=filesystem
+                    )
+                    if phase in preparation:
+                        self.assertEqual(filesystem.inventory(root), before)
+                        restored.write_completed_partition(partition())
+                    else:
+                        with self.assertRaises(ValueError):
+                            restored.write_completed_partition(partition())
+                    self.assertEqual(
+                        restored.finalize(coverage=artifact_coverage())["file_count"], 1
+                    )
+
+    def test_initial_io_and_interrupt_failures_preserve_exclusive_create_recovery(
+        self,
+    ) -> None:
+        for exception_type in (OSError, KeyboardInterrupt):
+            for phase in (
+                "after_create_stage_directory_created",
+                "after_create_checkpoint_written",
+                "after_create_owner_written",
+                "after_create_prepared",
+                "after_create_publication",
+            ):
+                with self.subTest(exception=exception_type.__name__, phase=phase):
+                    filesystem = DeterministicFilesystemAdapter(
+                        Path("/deterministic/model")
+                    )
+                    root, identity = Path("/caller/artifact"), artifact_identity()
+                    filesystem.fail_next(phase, exception_type("interruption"))
+                    with self.assertRaises(
+                        ValueError if exception_type is OSError else KeyboardInterrupt
+                    ):
+                        ResultArtifact.create(
+                            root,
+                            identity,
+                            initial_context=frozen_context(),
+                            filesystem=filesystem,
+                        )
+                    if phase == "after_create_publication":
+                        restored = ResultArtifact.resume(
+                            root, identity, filesystem=filesystem
+                        )
+                    else:
+                        self.assertFalse(filesystem.exists(root))
+                        restored = ResultArtifact.create(
+                            root,
+                            identity,
+                            initial_context=frozen_context(),
+                            filesystem=filesystem,
+                        )
+                    self.assertEqual(restored.checkpoint()["completed_files"], [])
+                    self.assertEqual(
+                        restored.checkpoint()["frozen_context"]["screen_date"],
+                        "2026-10-12",
+                    )
