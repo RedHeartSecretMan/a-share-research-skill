@@ -1074,12 +1074,13 @@ def _plain_operation_value(
     *,
     path: str,
     observed: dict[int, tuple[object, object]] | None = None,
+    in_progress: set[int] | None = None,
 ) -> object:
     """Observe a caller tree once, or project a sealed tree, as plain JSON data."""
 
     item_count = 0
     snapshots = {} if observed is None else observed
-    active: set[int] = set()
+    active = set() if in_progress is None else in_progress
 
     def visit(item: object, depth: int, *, observe_caller: bool = True) -> object:
         nonlocal item_count
@@ -1122,6 +1123,35 @@ def _plain_operation_value(
         raise ValueError(f"{path} must be JSON-safe")
 
     return visit(value, 0)
+
+
+def _observe_operation_objects(
+    value: Sequence[Mapping[str, object]],
+    *,
+    path: str,
+    observed: dict[int, tuple[object, object]],
+    in_progress: set[int],
+) -> list[object]:
+    """Snapshot the outer proof collection once, keeping per-object bounds."""
+
+    identity = id(value)
+    if identity in in_progress:
+        raise ValueError(f"{path} contains a cyclic container")
+    if identity in observed:
+        snapshot = observed[identity][1]
+        if not isinstance(snapshot, list):
+            raise ValueError(f"{path} must be an array")
+        return snapshot
+    in_progress.add(identity)
+    snapshot = [
+        _plain_operation_value(
+            item, path=path, observed=observed, in_progress=in_progress
+        )
+        for item in value
+    ]
+    in_progress.remove(identity)
+    observed[identity] = (value, snapshot)
+    return snapshot
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -1170,9 +1200,12 @@ def _sealed_operation_object(
     *,
     path: str,
     observed: dict[int, tuple[object, object]],
+    in_progress: set[int],
     max_bytes: int = _MAX_RESULT_BYTES,
 ) -> Mapping[str, object]:
-    plain = _plain_operation_value(value, path=path, observed=observed)
+    plain = _plain_operation_value(
+        value, path=path, observed=observed, in_progress=in_progress
+    )
     if not isinstance(plain, dict):
         raise ValueError(f"{path} must be a JSON object")
     # The JSON round trip normalizes accepted scalar subclasses to native
@@ -1228,18 +1261,37 @@ class OperationOutcome:
         if not self.capability_id.strip() or not self.operation_id.strip():
             raise ValueError("operation outcome identity must be non-empty")
         observed: dict[int, tuple[object, object]] = {}
+        in_progress: set[int] = set()
         dispositions = tuple(self.field_dispositions)
+        observation_objects = _observe_operation_objects(
+            self.observations,
+            path="operation observation",
+            observed=observed,
+            in_progress=in_progress,
+        )
         observations = tuple(
             _sealed_operation_object(
-                item, path="operation observation", observed=observed
+                cast(Mapping[str, object], item),
+                path="operation observation",
+                observed=observed,
+                in_progress=in_progress,
             )
-            for item in self.observations
+            for item in observation_objects
+        )
+        source_error_objects = _observe_operation_objects(
+            self.source_errors,
+            path="operation source error",
+            observed=observed,
+            in_progress=in_progress,
         )
         source_errors = tuple(
             _sealed_operation_object(
-                item, path="operation source error", observed=observed
+                cast(Mapping[str, object], item),
+                path="operation source error",
+                observed=observed,
+                in_progress=in_progress,
             )
-            for item in self.source_errors
+            for item in source_error_objects
         )
         for error in source_errors:
             _validate_diagnostic_keys(error)
@@ -1247,6 +1299,7 @@ class OperationOutcome:
             self.diagnostics,
             path="operation diagnostics",
             observed=observed,
+            in_progress=in_progress,
             max_bytes=_MAX_DIAGNOSTIC_BYTES,
         )
         _validate_diagnostic_keys(diagnostics)
@@ -1257,6 +1310,7 @@ class OperationOutcome:
                 self.evidence_storage,
                 path="operation evidence storage audit",
                 observed=observed,
+                in_progress=in_progress,
                 max_bytes=_MAX_DIAGNOSTIC_BYTES,
             )
         )

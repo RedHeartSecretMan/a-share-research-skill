@@ -128,6 +128,58 @@ class OperationOutcomeImmutabilityTests(unittest.TestCase):
             projection["evidence_storage"]["audit"], {"values": ["original"]}
         )
 
+    def test_outer_proof_list_and_tuple_are_observed_once_across_fields(self) -> None:
+        def observe(caller):
+            caller.reads += 1
+            return iter(
+                [
+                    {
+                        "source_operation": "fixture@1",
+                        "code": "partial",
+                        "message": "safe",
+                        "value": f"pass-{caller.reads}",
+                    }
+                ]
+            )
+
+        class ChangingList(list):
+            __iter__ = observe
+
+        class ChangingTuple(tuple):
+            __iter__ = observe
+
+        for field in ("observations", "source_errors"):
+            for kind in (ChangingList, ChangingTuple):
+                with self.subTest(field=field, kind=kind.__name__):
+                    caller = kind()
+                    caller.reads = 0
+                    execution = (
+                        OperationExecution("failed")
+                        if field == "source_errors"
+                        else OperationExecution("succeeded", True)
+                    )
+                    outcome = OperationOutcome(
+                        "fixture",
+                        "fixture@1",
+                        execution,
+                        **{field: caller},
+                        diagnostics={"linked": caller},
+                        evidence_storage={"linked": caller},
+                    )
+                    projection = outcome.to_dict()
+                    expected = [
+                        {
+                            "source_operation": "fixture@1",
+                            "code": "partial",
+                            "message": "safe",
+                            "value": "pass-1",
+                        }
+                    ]
+                    self.assertEqual(caller.reads, 1)
+                    self.assertEqual(projection[field], expected)
+                    self.assertEqual(projection["diagnostics"]["linked"], expected)
+                    self.assertEqual(projection["evidence_storage"]["linked"], expected)
+
     def test_mapping_operators_never_expose_mutable_stored_proof(self) -> None:
         for field in (
             "observations",
