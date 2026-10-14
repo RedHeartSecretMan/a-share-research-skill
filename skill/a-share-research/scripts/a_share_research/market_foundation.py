@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Mapping, Protocol, Sequence, cast
 
 from .exact_normalization import ExactDecimalTerm, exact_scaled_sum
+from .identity_sources import SourceOperationError
 from .operation_release_matrix import (
     canonical_release_source_error_codes,
     derive_release_source_result,
@@ -134,6 +135,13 @@ class MarketFoundationOperationAdapter:
                     report = transport.acquire(selector, request, timeout, invocation)
                 except MarketFoundationPermissionDenied:
                     return _unavailable(contract, source_result="credential_blocked")
+                except SourceOperationError as error:
+                    return _unavailable(
+                        contract,
+                        error_code=error.code
+                        if error.source_operation == contract["producer_operation_id"]
+                        else "market_source_unavailable",
+                    )
                 # #116 supplies the detached recursively immutable snapshot.
                 snapshot = OperationOutcome(
                     str(contract["capability_id"]),
@@ -182,6 +190,10 @@ def build_default_market_foundation_operations(
     supplied = dict(transports or {})
     if set(supplied) - set(OWNER_IDS):
         raise ValueError("market transport owner is outside the qualified set")
+    if "bse_market_margin@1" not in supplied:
+        from .market_foundation_sources import BseMarketMarginReportTransport
+
+        supplied["bse_market_margin@1"] = BseMarketMarginReportTransport()
     contracts = _load_contracts()
     shared_lanes = lanes or ProviderLanes()
     return tuple(
@@ -275,9 +287,23 @@ def _source_units(contract: Mapping[str, object]) -> tuple[int, str, str]:
 
 
 def _unavailable(
-    contract: Mapping[str, object], *, source_result: str = "unavailable"
+    contract: Mapping[str, object],
+    *,
+    source_result: str = "unavailable",
+    error_code: str = "market_source_unavailable",
+    diagnostics: Mapping[str, object] | None = None,
 ) -> OperationOutcome:
     owner = str(contract["producer_operation_id"])
+    messages = {
+        "market_source_unavailable": "The market source did not provide a qualified report.",
+        "source_schema_unproved": "The source report shape is unproved.",
+        "source_response_unavailable": "The source response is unavailable.",
+        "source_report_date_mismatch": "The source report date does not match the request.",
+        "source_publication_unproved": "The source publication time is unproved.",
+        "source_report_empty_unqualified": "An empty source response does not prove zero business.",
+    }
+    if error_code not in messages:
+        error_code = "market_source_unavailable"
     return OperationOutcome(
         str(contract["capability_id"]),
         owner,
@@ -287,16 +313,17 @@ def _unavailable(
                 "source_operation": owner,
                 "code": "permission_denied"
                 if source_result == "credential_blocked"
-                else "market_source_unavailable",
+                else error_code,
                 "message": "The market source explicitly rejected permission."
                 if source_result == "credential_blocked"
-                else "The market source did not provide a qualified report.",
+                else messages[error_code],
             },
         ),
         field_dispositions=tuple(
             FieldDisposition(field, "normalized", str(destination))
             for field, destination in _mapping(contract["field_destinations"]).items()
         ),
+        diagnostics=diagnostics or {},
     )
 
 
@@ -307,7 +334,13 @@ def _normalize_report(
 ) -> OperationOutcome:
     try:
         report = _mapping(snapshot.observations[0]["report"])
-        if set(report) != _REPORT_KEYS:
+        extra = set(report) - _REPORT_KEYS
+        if (
+            not _REPORT_KEYS <= set(report)
+            or extra - {"display_precision", "source_time_candidates"}
+            or extra
+            and snapshot.operation_id != "bse_market_margin@1"
+        ):
             raise ValueError("market source report fields are invalid")
         scope = _mapping(contract["scope"])
         if (
@@ -316,13 +349,21 @@ def _normalize_report(
         ):
             raise ValueError("market source scope is invalid")
         report_day = _date(report["report_date"])
-        publication = _timestamp(report["published_at"])
+        publication = (
+            None
+            if report["published_at"] is None
+            and snapshot.operation_id == "bse_market_margin@1"
+            else _timestamp(report["published_at"])
+        )
         retrieval = _timestamp(report["retrieved_at"])
         if (
             report["report_date"] != request.report_date
-            or publication.date() < report_day
-            or publication > retrieval
-            or publication > _timestamp(request.information_cutoff)
+            or publication is not None
+            and (
+                publication.date() < report_day
+                or publication > retrieval
+                or publication > _timestamp(request.information_cutoff)
+            )
             or type(report["query_complete"]) is not bool
             or type(report["row_count"]) is not int
             or report["row_count"] < 0
@@ -367,6 +408,45 @@ def _normalize_report(
         metrics = {
             field: _number(exact_scaled_sum(values)) for field, values in terms.items()
         }
+        if publication is None:
+            precision = _mapping(report.get("display_precision", {}))
+            if set(precision) != set(fields) or any(
+                type(value) is not int or not 0 <= value <= 32
+                for value in precision.values()
+            ):
+                raise ValueError("source display precision is invalid")
+            candidates = _mapping(report.get("source_time_candidates", {}))
+            if set(candidates) - {"createTime", "lastUpdateTime", "sxrq"}:
+                raise ValueError("source time candidate fields are invalid")
+            for value in candidates.values():
+                if (
+                    not isinstance(value, str)
+                    or len(value) > 40
+                    or datetime.fromisoformat(value).utcoffset() != timedelta(hours=8)
+                ):
+                    raise ValueError("source time candidate is invalid")
+            proof = {
+                "report_date": request.report_date,
+                "retrieved_at": report["retrieved_at"],
+                "metrics": metrics,
+                "units": units,
+                "row_count": row_count,
+                "value_basis": "reported_display",
+                "display_precision": dict(precision),
+                "source_publication": "unknown",
+                "source_time_candidates": dict(candidates),
+                "source_time_qualification": "unqualified_source_record_times",
+                "source_date_qualification": "response_date_matches_request"
+                if row_count
+                else "date_control_only",
+            }
+            return _unavailable(
+                contract,
+                error_code="source_publication_unproved"
+                if row_count
+                else "source_report_empty_unqualified",
+                diagnostics={"unadopted_report": proof},
+            )
         payload = {
             "id": f"{snapshot.operation_id}:{request.report_date}",
             "source_operation": snapshot.operation_id,

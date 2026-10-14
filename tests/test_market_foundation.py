@@ -143,6 +143,10 @@ class MarketFoundationTests(unittest.TestCase):
         operations = build_default_market_foundation_operations()
         request = OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00")
         for operation in operations:
+            if operation.operation_id == "bse_market_margin@1":
+                # Its H/I-backed default HTTP path is tested with an owned fake
+                # in test_market_foundation_bse_margin; do not invoke it here.
+                continue
             with self.subTest(owner=operation.operation_id):
                 with self.assertRaises(UnprovedMarketFoundationSource):
                     operation.execute(request, 1)
