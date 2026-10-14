@@ -1434,10 +1434,37 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                                         )
                                     # An unpublished protected preparation may be
                                     # completed, never an already published store.
+                                    try:
+                                        os.mkdir("quarantine", 0o700, dir_fd=prepared)
+                                    except FileExistsError:
+                                        pass
+                                    self._phase(
+                                        "after_anchor_quarantine_directory_created"
+                                    )
+                                    quarantine = os.open(
+                                        "quarantine",
+                                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                        dir_fd=prepared,
+                                    )
+                                    try:
+                                        self._trusted(quarantine, private=True)
+                                        quarantine_identity = self._id(
+                                            os.fstat(quarantine)
+                                        )
+                                        if os.listdir(quarantine):
+                                            raise ValueError(
+                                                "result artifact bootstrap quarantine is invalid"
+                                            )
+                                        self._sync_fd(quarantine, directory=True)
+                                    finally:
+                                        os.close(quarantine)
                                     expected_domain: dict[str, object] = {
                                         "schema": "result-artifact-anchor-store@1.0",
                                         "identity": _hex_identity(
                                             self._id(os.fstat(prepared))
+                                        ),
+                                        "quarantine_identity": _hex_identity(
+                                            quarantine_identity
                                         ),
                                     }
                                     if "domain.json" in os.listdir(prepared):
@@ -1452,24 +1479,6 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                                         self._anchor_write(
                                             prepared, "domain.json", expected_domain
                                         )
-                                    try:
-                                        os.mkdir("quarantine", 0o700, dir_fd=prepared)
-                                    except FileExistsError:
-                                        pass
-                                    quarantine = os.open(
-                                        "quarantine",
-                                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                        dir_fd=prepared,
-                                    )
-                                    try:
-                                        self._trusted(quarantine, private=True)
-                                        if os.listdir(quarantine):
-                                            raise ValueError(
-                                                "result artifact bootstrap quarantine is invalid"
-                                            )
-                                        self._sync_fd(quarantine, directory=True)
-                                    finally:
-                                        os.close(quarantine)
                                     self._sync_fd(prepared, directory=True)
                                     self._sync_fd(descriptor, directory=True)
                                     self._phase("after_anchor_bootstrap_prepared")
@@ -1511,6 +1520,32 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
         finally:
             os.close(descriptor)
 
+    def _anchor_domain(self, directory: int) -> _FileIdentity:
+        domain = self._anchor_read(directory, "domain.json")
+        if (
+            set(domain) != {"schema", "identity", "quarantine_identity"}
+            or domain["schema"] != "result-artifact-anchor-store@1.0"
+            or _parse_identity(domain["identity"]) != self._id(os.fstat(directory))
+        ):
+            raise ValueError("result artifact trusted domain is invalid")
+        expected = _parse_identity(domain["quarantine_identity"])
+        quarantine = os.open(
+            "quarantine", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory
+        )
+        try:
+            self._trusted(quarantine, private=True)
+            if (
+                self._id(os.fstat(quarantine)) != expected
+                or self._id(
+                    os.stat("quarantine", dir_fd=directory, follow_symlinks=False)
+                )
+                != expected
+            ):
+                raise ValueError("result artifact trusted quarantine identity changed")
+        finally:
+            os.close(quarantine)
+        return expected
+
     def _bootstrap_preflight(self, parent: int, name: str) -> None:
         try:
             prepared = os.open(
@@ -1537,13 +1572,8 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                         )
                 finally:
                     os.close(descriptor)
-            if "domain.json" in names and self._anchor_read(
-                prepared, "domain.json"
-            ) != {
-                "schema": "result-artifact-anchor-store@1.0",
-                "identity": _hex_identity(self._id(os.fstat(prepared))),
-            }:
-                raise ValueError("result artifact bootstrap marker is damaged")
+            if "domain.json" in names:
+                self._anchor_domain(prepared)
             if "quarantine" in names:
                 quarantine = os.open(
                     "quarantine",
@@ -1603,14 +1633,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
             if missing and not creation:
                 raise ValueError("result artifact trusted store is missing")
             if not missing:
-                domain = self._anchor_read(descriptor, "domain.json")
-                if (
-                    set(domain) != {"schema", "identity"}
-                    or domain["schema"] != "result-artifact-anchor-store@1.0"
-                    or _parse_identity(domain["identity"])
-                    != self._id(os.fstat(descriptor))
-                ):
-                    raise ValueError("result artifact trusted domain is invalid")
+                self._anchor_domain(descriptor)
         finally:
             os.close(descriptor)
 
@@ -1673,13 +1696,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
 
     def _anchor_load(self, path: Path, identity: _FileIdentity) -> _Authority:
         with self._anchor_directory(path) as directory:
-            domain = self._anchor_read(directory, "domain.json")
-            if (
-                set(domain) != {"schema", "identity"}
-                or domain["schema"] != "result-artifact-anchor-store@1.0"
-                or _parse_identity(domain["identity"]) != self._id(os.fstat(directory))
-            ):
-                raise ValueError("result artifact trusted domain is invalid")
+            self._anchor_domain(directory)
             name = self._anchor_key(identity)
             authority = _authority_from(self._anchor_read(directory, name))
             try:
@@ -1730,13 +1747,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
         creation: bool = False,
     ) -> None:
         with self._anchor_directory(path, create=creation) as directory:
-            domain = self._anchor_read(directory, "domain.json")
-            if (
-                set(domain) != {"schema", "identity"}
-                or domain["schema"] != "result-artifact-anchor-store@1.0"
-                or _parse_identity(domain["identity"]) != self._id(os.fstat(directory))
-            ):
-                raise ValueError("result artifact trusted domain is invalid")
+            self._anchor_domain(directory)
             self._anchor_write(
                 directory,
                 self._anchor_key(identity),
@@ -2150,6 +2161,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
         @contextmanager
         def _quarantine(self) -> Iterator[int]:
             with self.adapter._anchor_directory(self.path) as anchors:
+                expected = self.adapter._anchor_domain(anchors)
                 descriptor = os.open(
                     "quarantine",
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -2157,6 +2169,10 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                 )
                 try:
                     self.adapter._trusted(descriptor, private=True)
+                    if self.adapter._id(os.fstat(descriptor)) != expected:
+                        raise ValueError(
+                            "result artifact trusted quarantine identity changed"
+                        )
                     yield descriptor
                 finally:
                     os.close(descriptor)
@@ -2457,6 +2473,8 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                         self.adapter._sync_fd(directory, directory=True)
             self.adapter._sync_fd(self.root, directory=True)
             self.adapter._sync_fd(self.parent, directory=True)
+            with self._quarantine() as quarantine:
+                self.adapter._sync_fd(quarantine, directory=True)
             self._anchor()
 
     @contextmanager
@@ -2772,6 +2790,7 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
         self._authorities: dict[_FileIdentity, _Authority] = {}
         self._pending_authorities: dict[_FileIdentity, _Authority | None] = {}
         self._trusted_bootstrapped = False
+        self._trusted_quarantine_present = False
         self._next_identity = identity_start
         self._allocation_lock = threading.RLock()
         self._fault: tuple[str, int, BaseException] | None = None
@@ -2843,6 +2862,7 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
                 self._phase("after_anchor_directory_created")
                 self._sync(directory=True)
                 self._phase("after_anchor_bootstrap_directory_created")
+                self._phase("after_anchor_quarantine_directory_created")
                 self._phase("after_anchor_record_created")
                 self._sync()
                 self._phase("after_anchor_record_written")
@@ -2850,9 +2870,14 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
                 self._sync(directory=True)
                 self._sync(directory=True)
                 self._phase("after_anchor_bootstrap_prepared")
+                self._trusted_quarantine_present = True
                 self._trusted_bootstrapped = True
                 self._phase("after_anchor_store_publication")
                 self._sync(directory=True)
+
+    def remove_trusted_quarantine(self) -> None:
+        """A controlled fixture loss of the protected fixed directory."""
+        self._trusted_quarantine_present = False
 
     def remove_trusted_record(self, path: Path) -> None:
         """A controlled fixture loss in the independent trusted domain."""
@@ -2894,12 +2919,16 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
     def create(
         self, path: Path, identity: ResultArtifactIdentity, context: bytes | None = None
     ) -> _FileIdentity:
+        if self._trusted_bootstrapped and not self._trusted_quarantine_present:
+            raise ValueError("result artifact trusted quarantine is missing")
         initial = _checkpoint(identity, context=context)
         with self._allocation_lock:
             if str(path) in self._roots:
                 raise ValueError("result artifact create target already exists")
         self._phase("before_apply")
         with self._allocation_lock:
+            if self._trusted_bootstrapped and not self._trusted_quarantine_present:
+                raise ValueError("result artifact trusted quarantine is missing")
             if str(path) in self._roots:
                 raise ValueError("result artifact create target changed before apply")
         token = secrets.token_hex(32)
@@ -2963,6 +2992,8 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
             self.ancestor_identities = adapter._ancestor_identities
 
         def _anchor(self) -> None:
+            if not self.adapter._trusted_quarantine_present:
+                raise ValueError("result artifact trusted quarantine is missing")
             if self.adapter._roots.get(str(self.path)) is not self.root:
                 raise ValueError("result artifact root identity changed")
 
@@ -3219,6 +3250,7 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
                 self.adapter._sync(directory=node.kind == "directory")
             self.adapter._sync(directory=True)
             self.adapter._sync(directory=True)
+            self.adapter._sync(directory=True)  # protected quarantine GC fence
 
     @contextmanager
     def _session(self, path: Path, expected: _FileIdentity | None) -> Iterator[_Store]:

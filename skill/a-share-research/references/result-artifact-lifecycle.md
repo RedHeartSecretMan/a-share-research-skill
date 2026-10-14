@@ -78,11 +78,11 @@ preparation-abort 是明确的未提交状态，不是把自身窗口改称 unkn
 | 受信状态 | 中断与拒绝规则 |
 | --- | --- |
 | Bootstrap preparation | 固定 `v1.preparing` 槽位处于受保护 parent；目录刚建立、marker 临时文件及 quarantine 初始化均是明确未发布准备态。合法新 create 可继续这一个有界槽位，完整 marker 与目录同步后才独占公开 `v1`。已提交 marker 损坏不重写。 |
-| Published store | domain marker 绑定 store descriptor identity。已发布目录缺 marker、损坏、错域或保护条件不符均失败关闭；resume 永不 bootstrap，旧无 anchor artifact 不自动接受。 |
+| Published store | domain marker 绑定 store 与固定 quarantine descriptor identities；create 的原预检和首次 apply 前重验都验证完整域。已发布目录缺 marker、损坏、错域或保护条件不符均失败关闭；resume 永不 bootstrap，旧无 anchor artifact 不自动接受。 |
 | Record preparation | 每 artifact 一个固定 `.pending` 槽位；它是未提交的私有准备字节，不能授权 artifact 动作。当前 canonical record 保持有效；原件完整写入并 fsync 后才原子发布。损坏或缺失的已发布 record 不从包重建。 |
 | Original transaction committed | 允许恰好一个受信原件尚未公开的末尾 journal。恢复要求精确旧 checkpoint、完整原始 stage、没有对应内容发布；先补 journal durability，再推进内容。缺中间项、多个缺项或已 published 项丢失拒绝。 |
 | Move intent / quarantine | 原始 stage 归属从受信原件取得；精确 inventory 校验后提交 move intent，以同 FS exclusive rename 移入受信 quarantine。原名与 quarantine 同时存在、未 closure 两者皆缺失或任何身份/字节变化均拒绝。 |
-| Closure / GC | artifact 完成并同步、move 两侧同步后才关闭进度；随后清理受信 quarantine 的合法剩余子集。再次中断可继续 GC，closed 后原名后建对象不重新收养或删除。sealed anchor 在成功返回 receipt 后保留，精确重复恢复不改写两域。 |
+| Closure / GC | artifact 完成并同步、move 两侧同步后才关闭进度；随后清理受信 quarantine 的合法剩余子集。再次中断可继续 GC；即使最后 rmdir 已可读回且没有 stage，receipt 返回前也重新同步 quarantine 目录，不能跳过失败的最后 durability 边界。closed 后原名后建对象不重新收养或删除。sealed anchor 在成功返回 receipt 后保留，精确重复恢复不改写两域。 |
 
 备份须在相关写入静止时配套保存 artifact 和受信状态；普通复制、旧状态恢复或位置/物理身份变化不构成有效重新绑定。v1 不提供自动迁移、无 anchor 升级、孤立原件清理或跨设备恢复。缺失/损坏时保留现场，可在新目标执行新的 create；不能从包导入可信原件。代码升级应保留 `.state`。分发和 clean-copy 排除 `.state`，不能携带其他运行的 authority；安装代码自包含并不表示 artifact 单独可移动恢复。
 

@@ -2922,13 +2922,35 @@ class ResultArtifactTrustedAnchorTests(_IsolatedArtifactTest):
                 self.assertEqual(process.returncode, 77, process.stderr)
                 if action == "create":
                     self.assertFalse(root.exists())
-                    recovered = ResultArtifact.create(
-                        root, artifact_identity(), filesystem=adapter
-                    )
-                else:
-                    recovered = ResultArtifact.resume(
-                        root, artifact_identity(), filesystem=adapter
-                    )
+                recovery = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        _PROCESS,
+                        str(root),
+                        "create" if action == "create" else "resume",
+                        "",
+                        str(anchors),
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                self.assertEqual(recovery.returncode, 0, recovery.stderr)
+                self.assertEqual(
+                    recovery.stdout.strip() == "partial",
+                    not (action == "finalize" and committed),
+                )
+                # The parent only reads the state already recovered by a new
+                # process; it is not the recovery worker or an authority cache.
+                recovered = ResultArtifact.resume(
+                    root,
+                    artifact_identity(),
+                    filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                )
                 if action == "finalize" and committed:
                     self.assertIsInstance(recovered, dict)
                     before = filesystem_tree(parent)
@@ -3270,6 +3292,151 @@ class ResultArtifactTrustedAnchorTests(_IsolatedArtifactTest):
                 with self.assertRaises(ValueError):
                     ResultArtifact.resume(root, artifact_identity(), filesystem=adapter)
                 self.assertEqual(filesystem_tree(parent), before)
+
+    def test_lost_or_replaced_quarantine_refuses_new_create_before_any_mutation(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for change in ("missing", "replacement", "before-apply"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent = Path(temporary).resolve()
+                anchors = parent / "trusted" / "anchors" / "v1"
+                adapter = ProductionFilesystemAdapter(anchor_root=anchors)
+                ResultArtifact.create(
+                    parent / "original", artifact_identity(), filesystem=adapter
+                )
+                quarantine = anchors / "quarantine"
+                if change == "replacement":
+                    quarantine.rename(anchors / "original-quarantine")
+                    quarantine.mkdir(mode=0o700)
+                elif change == "missing":
+                    quarantine.rmdir()
+                before = filesystem_tree(parent)
+                expected = []
+
+                class Drifted(ProductionFilesystemAdapter):
+                    def _phase(self, phase: str) -> None:
+                        if change == "before-apply" and phase == "before_apply":
+                            quarantine.rmdir()
+                            expected.append(filesystem_tree(parent))
+
+                with self.assertRaises(ValueError):
+                    ResultArtifact.create(
+                        parent / "new-artifact",
+                        artifact_identity(),
+                        filesystem=Drifted(anchor_root=anchors),
+                    )
+                self.assertEqual(
+                    filesystem_tree(parent), expected[0] if expected else before
+                )
+                self.assertFalse((parent / "new-artifact").exists())
+
+    def test_last_quarantine_gc_fsync_failure_requires_fresh_recovery_fence(
+        self,
+    ) -> None:
+        import os
+        import subprocess
+        import sys
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            root, anchors = parent / "artifact", parent / "trusted" / "anchors" / "v1"
+
+            class Failed(ProductionFilesystemAdapter):
+                removed = False
+
+                def _phase(self, phase: str) -> None:
+                    if phase == "after_stage_cleanup":
+                        self.removed = True
+
+                def _sync_fd(self, descriptor: int, *, directory: bool = False) -> None:
+                    if (
+                        self.removed
+                        and directory
+                        and os.fstat(descriptor).st_ino
+                        == (anchors / "quarantine").stat().st_ino
+                    ):
+                        raise OSError("quarantine directory durability failure")
+                    super()._sync_fd(descriptor, directory=directory)
+
+            handle = ResultArtifact.create(
+                root, artifact_identity(), filesystem=Failed(anchor_root=anchors)
+            )
+            with self.assertRaises(ValueError):
+                handle.finalize(coverage=artifact_coverage())
+            before = filesystem_tree(parent)
+            worker = r"""
+import os,sys,json
+from pathlib import Path
+from tests.test_result_artifact import artifact_identity
+from a_share_research.result_artifact import ResultArtifact,ProductionFilesystemAdapter
+root,anchors=Path(sys.argv[1]),Path(sys.argv[2])
+class Failed(ProductionFilesystemAdapter):
+    attempts=0
+    def _sync_fd(self,descriptor,*,directory=False):
+        if directory and os.fstat(descriptor).st_ino==(anchors/'quarantine').stat().st_ino:
+            self.attempts+=1
+            raise OSError('quarantine fence still unavailable')
+        super()._sync_fd(descriptor,directory=directory)
+adapter=Failed(anchor_root=anchors)
+try:
+    ResultArtifact.recover_finalized_receipt(root,artifact_identity(),filesystem=adapter)
+except ValueError:
+    print(json.dumps({'rejected':True,'attempts':adapter.attempts}))
+else:
+    print(json.dumps({'rejected':False,'attempts':adapter.attempts}))
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", worker, str(root), str(anchors)],
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            outcome = json.loads(result.stdout)
+            self.assertTrue(outcome["rejected"], outcome)
+            self.assertGreater(outcome["attempts"], 0)
+            self.assertEqual(filesystem_tree(parent), before)
+            receipt = ResultArtifact.recover_finalized_receipt(
+                root,
+                artifact_identity(),
+                filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+            )
+            self.assertEqual(receipt["file_count"], 0)
+
+    def test_deterministic_quarantine_loss_is_preflighted_in_both_windows(self) -> None:
+        for before_apply in (False, True):
+            with self.subTest(before_apply=before_apply):
+                filesystem = DeterministicFilesystemAdapter(
+                    Path("/deterministic/model")
+                )
+                root = Path("/caller/original")
+                ResultArtifact.create(root, artifact_identity(), filesystem=filesystem)
+                before = filesystem.inventory(root)
+                if before_apply:
+                    filesystem.pause_next_before_apply(
+                        filesystem.remove_trusted_quarantine
+                    )
+                else:
+                    filesystem.remove_trusted_quarantine()
+                with self.assertRaises(ValueError):
+                    ResultArtifact.create(
+                        Path("/caller/new"), artifact_identity(), filesystem=filesystem
+                    )
+                self.assertFalse(filesystem.exists(Path("/caller/new")))
+                self.assertEqual(filesystem.inventory(root), before)
+                with self.assertRaises(ValueError):
+                    ResultArtifact.resume(
+                        root, artifact_identity(), filesystem=filesystem
+                    )
 
     def test_rejected_create_does_not_bootstrap_trusted_state(self) -> None:
         from a_share_research.result_artifact import ProductionFilesystemAdapter
