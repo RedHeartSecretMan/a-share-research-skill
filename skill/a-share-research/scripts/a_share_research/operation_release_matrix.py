@@ -103,8 +103,8 @@ _MARKET_FOUNDATION_SOURCE_CAPABILITIES = {
 _MARKET_FOUNDATION_QUALIFICATION_SHA256 = {
     "bse_a_share_turnover@1": "1386cdd798189c690d8d50ec1dd195745de0935125dfca3b959800d136b050bc",
     "bse_market_margin@1": "d5c1d0074131050d652c001862e2104ce337afc1aa20e1752eb665fe61a694aa",
-    "sse_a_share_turnover@1": "3a218abbb6f49d5374e451aba5f3503a91effdcf256c0d681ec260943d5ac344",
-    "sse_market_margin@1": "a2b518173cf0b26c6de9ed81a72eb0618c6b2afffbc6a53cc1f1ef41d7382a64",
+    "sse_a_share_turnover@1": "11d15074300c2ecc0f7d112c81535baa9bc0026e3ff52dba67a5ea34586f51f1",
+    "sse_market_margin@1": "ef89f5df5bae9dada650235b436bb5c1fbcb54711669c2032f64e2593033c2cc",
     "szse_a_share_turnover@1": "208b3246cc3d72d7cf545d941a8afba1abb3b76e8e521cf1281a54d9f5541722",
     "szse_market_margin@1": "b750d817f118bf4fd187862156ac41ed39ea54ae85634d01f493e4c3c49e0907",
 }

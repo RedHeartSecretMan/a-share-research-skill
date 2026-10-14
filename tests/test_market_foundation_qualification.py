@@ -1006,7 +1006,7 @@ class MarketFoundationQualificationTests(unittest.TestCase):
         sse_margin = self._load_target_contract("sse_market_margin@1")
         self.assertEqual(sse_margin["request_selector"]["method"], "GET")
         self.assertIn(
-            "actual_wire_method_unproved",
+            "chosen_evidenced_path",
             sse_margin["request_selector"]["selector_kind"],
         )
         self.assertIn(
@@ -1018,6 +1018,23 @@ class MarketFoundationQualificationTests(unittest.TestCase):
             "createTime_lastUpdateTime_or_sxrq_are_not_proved_publication",
             bse_margin["response_shape"]["publication_time_rule"],
         )
+
+    def test_reopened_114_SSE_binds_observed_GET_with_fixed_public_Referer(
+        self,
+    ) -> None:
+        for operation_id in ("sse_a_share_turnover@1", "sse_market_margin@1"):
+            with self.subTest(operation=operation_id):
+                contract = self._load_target_contract(operation_id)
+                selector = contract["request_selector"]
+                self.assertEqual(selector["method"], "GET")
+                self.assertIn(
+                    "Referer_https://www.sse.com.cn/", selector["selector_kind"]
+                )
+                self.assertIn("chosen_evidenced_path", selector["selector_kind"])
+                self.assertIn(
+                    "no_header_necessity_or_causality_claim", selector["selector_kind"]
+                )
+                self.assertIn("publication", contract["state_mapping"]["unavailable"])
 
     def test_reopened_114_selected_backends_are_distinct_from_page_locators(
         self,

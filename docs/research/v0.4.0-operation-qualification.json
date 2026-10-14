@@ -1139,7 +1139,8 @@
         "skill/a-share-research/scripts/a_share_research/operation_release_matrix.py#load_market_foundation_qualification_fixtures",
         "skill/a-share-research/scripts/a_share_research/exact_normalization.py#exact_scaled_sum",
         "tests/test_market_foundation_qualification.py#test_issue_114_sse_a_share_turnover_contract",
-        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04"
+        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04",
+        "tests/test_market_foundation_qualification.py#test_reopened_114_SSE_binds_observed_GET_with_fixed_public_Referer"
       ],
       "gap_issues": [],
       "source_contract": {
@@ -1156,12 +1157,12 @@
         "scope": {
           "exchange": "SSE",
           "kind": "exchange_daily_A_share_stock_turnover",
-          "included_assets": "PRODUCT_CODE_01_main_board_A_plus_PRODUCT_CODE_03_STAR_market",
+          "included_assets": "PRODUCT_CODE_01_main_board_A_plus_PRODUCT_CODE_03_STAR_market_only_after_pure_A_CDR_exclusion_proof",
           "excluded_proxies": "PRODUCT_CODE_02_B_share_PRODUCT_CODE_11_buyback_PRODUCT_CODE_17_all_stock_and_fund_bond_single_security_index_turnover"
         },
         "request_selector": {
-          "method": "POST",
-          "selector_kind": "COMMON_SSE_SJ_GPSJ_CJGK_MRGK_C_exact_date_query_configured_POST_actual_POST_sample_System_Error",
+          "method": "GET",
+          "selector_kind": "COMMON_SSE_SJ_GPSJ_CJGK_MRGK_C_exact_date_GET_with_fixed_official_origin_Referer_https://www.sse.com.cn/_chosen_evidenced_path_no_header_necessity_or_causality_claim",
           "resource_url": "https://query.sse.com.cn/commonQuery.do",
           "date_selector": "SEARCH_DATE_equal_one_YYYY_MM_DD_and_PRODUCT_CODE_01_02_03_11_17",
           "max_requests": 1,
@@ -1191,7 +1192,7 @@
           "observed_empty": "both_complete_A_share_rows_explicitly_report_zero_turnover",
           "partial": "one_required_A_share_row_or_query_completeness_is_explicitly_incomplete",
           "credential_blocked": "official_source_explicitly_rejects_for_permission_or_credential",
-          "unavailable": "transport_schema_scope_date_unit_or_publication_contract_not_proved_System_Error_is_not_observed_empty",
+          "unavailable": "transport_schema_pure_A_CDR_exclusion_date_unit_or_publication_contract_not_proved_System_Error_is_not_observed_empty",
           "not_applicable": "forbidden_for_mandatory_turnover_partition"
         },
         "dependency_policy": {
@@ -1380,7 +1381,8 @@
         "skill/a-share-research/scripts/a_share_research/operation_release_matrix.py#load_market_foundation_qualification_fixtures",
         "skill/a-share-research/scripts/a_share_research/exact_normalization.py#exact_scaled_sum",
         "tests/test_market_foundation_qualification.py#test_issue_114_sse_market_margin_contract",
-        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04"
+        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04",
+        "tests/test_market_foundation_qualification.py#test_reopened_114_SSE_binds_observed_GET_with_fixed_public_Referer"
       ],
       "gap_issues": [],
       "source_contract": {
@@ -1402,7 +1404,7 @@
         },
         "request_selector": {
           "method": "GET",
-          "selector_kind": "RZRQ_HZ_INFO_summary_configured_POST_actual_wire_method_unproved_GET_requirement_not_verified",
+          "selector_kind": "RZRQ_HZ_INFO_summary_GET_with_fixed_official_origin_Referer_https://www.sse.com.cn/_chosen_evidenced_path_no_header_necessity_or_causality_claim",
           "resource_url": "https://query.sse.com.cn/commonSoaQuery.do",
           "date_selector": "beginDate_and_endDate_equal_one_YYYYMMDD_isPagination_true_pageHelp_pageSize_25_pageNo_beginPage_endPage_cacheSize_1_stockCode_empty",
           "max_requests": 1,
@@ -1436,7 +1438,7 @@
           "observed_empty": "complete_official_query_explicitly_reports_zero_rows",
           "partial": "official_query_or_required_field_inventory_is_explicitly_incomplete",
           "credential_blocked": "official_source_explicitly_rejects_for_permission_or_credential",
-          "unavailable": "transport_schema_actual_wire_method_scope_quantity_unit_publication_or_pagination_completeness_not_proved",
+          "unavailable": "transport_schema_scope_quantity_unit_publication_or_pagination_completeness_not_proved",
           "not_applicable": "forbidden_for_all_six_required_fields_by_the_cited_official_summary_rule"
         },
         "dependency_policy": {
