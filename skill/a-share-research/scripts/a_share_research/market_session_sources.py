@@ -12,6 +12,7 @@ import json
 import math
 import re
 import zipfile
+import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
@@ -428,6 +429,11 @@ def _text_docx(response: HttpResponse) -> str:
                 or sum(item.file_size for item in entries) > MAX_DOCUMENT_BYTES
             ):
                 raise CalendarSourceError("calendar_document_too_large")
+            if any(
+                item.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+                for item in entries
+            ):
+                raise CalendarSourceError("calendar_document_invalid")
             with archive.open("word/document.xml") as stream:
                 body = stream.read(MAX_DOCUMENT_BYTES + 1)
             if len(body) > MAX_DOCUMENT_BYTES:
@@ -442,6 +448,7 @@ def _text_docx(response: HttpResponse) -> str:
             ]
     except (
         zipfile.BadZipFile,
+        zlib.error,
         KeyError,
         RuntimeError,
         ElementTree.ParseError,
@@ -512,7 +519,70 @@ def _holiday_ranges(
         if (start, end, reopen) != (expected_start, expected_end, expected_reopen):
             raise CalendarSourceError("calendar_document_version_unproved")
         result.append((name, start, end, reopen))
+    _validate_annual_declarations(text, contract)
     return tuple(result)
+
+
+_DATE_TOKEN = r"(?:[0-9]{4}年)?[0-9]{1,2}月[0-9]{1,2}日(?:[（(][^）)]*[）)])?"
+
+
+def _annual_date(value: str, year: int) -> date:
+    match = re.fullmatch(
+        r"(?:([0-9]{4})年)?([0-9]{1,2})月([0-9]{1,2})日(?:[（(][^）)]*[）)])?",
+        value,
+    )
+    if match is None or (match[1] is not None and int(match[1]) != year):
+        raise CalendarSourceError("calendar_holiday_scope_unproved")
+    try:
+        return date(year, int(match[2]), int(match[3]))
+    except ValueError as error:
+        raise CalendarSourceError("calendar_holiday_scope_unproved") from error
+
+
+def _validate_annual_declarations(
+    text: str, contract: MarketSessionSourceContract
+) -> None:
+    # Consume every closure/opening declaration, not just the seven positive
+    # holiday signatures. Unknown statements cannot silently become weekdays.
+    closures = {
+        date.fromisoformat(first) + timedelta(days=offset)
+        for _, first, last, _ in contract.holiday_ranges
+        for offset in range(
+            (date.fromisoformat(last) - date.fromisoformat(first)).days + 1
+        )
+    }
+    closure_expression = (
+        _DATE_TOKEN + rf"(?:(?:至|、){_DATE_TOKEN})*(?:为)?(?:周末)?休市"
+    )
+    for match in re.finditer(closure_expression, text):
+        declaration = match[0]
+        declared_dates = [
+            _annual_date(value, contract.year)
+            for value in re.findall(_DATE_TOKEN, declaration)
+        ]
+        if "至" in declaration:
+            if len(declared_dates) != 2 or declared_dates[1] < declared_dates[0]:
+                raise CalendarSourceError("calendar_holiday_scope_unproved")
+            declared_dates = [
+                declared_dates[0] + timedelta(days=offset)
+                for offset in range((declared_dates[1] - declared_dates[0]).days + 1)
+            ]
+        if "周末" in declaration:
+            if any(value.weekday() < 5 for value in declared_dates):
+                raise CalendarSourceError("calendar_holiday_scope_unproved")
+        elif any(value not in closures for value in declared_dates):
+            raise CalendarSourceError("calendar_holiday_scope_unproved")
+    opening_expression = _DATE_TOKEN + r"(?:起)?照常开市"
+    expected_openings = {date.fromisoformat(row[3]) for row in contract.holiday_ranges}
+    actual_openings = {
+        _annual_date(re.findall(_DATE_TOKEN, match[0])[0], contract.year)
+        for match in re.finditer(opening_expression, text)
+    }
+    if actual_openings != expected_openings:
+        raise CalendarSourceError("calendar_holiday_scope_unproved")
+    remaining = re.sub(opening_expression, "", re.sub(closure_expression, "", text))
+    if re.search(r"休市(?!安排)|开市", remaining):
+        raise CalendarSourceError("calendar_holiday_scope_unproved")
 
 
 def _rule_text(
@@ -540,6 +610,37 @@ def _section(text: str, number: str) -> str:
     return cast(str, relevant[0])
 
 
+def _validate_deferments(text: str, contract: MarketSessionSourceContract) -> None:
+    statements = re.findall(
+        r"[^。！？]*(?:另行通知|暂不实施|暂缓实施|暂不适用|暂停实施)[^。！？]*",
+        text,
+    )
+    if contract.exchange == "BSE":
+        if len(statements) != 1 or "实施时间另行通知" not in statements[0]:
+            raise CalendarSourceError("calendar_rule_deferment_unproved")
+        statement = statements[0]
+        clauses = re.findall(r"(?<![0-9.])[0-9]+\.[0-9]+\.[0-9]+(?![0-9.])", statement)
+        if clauses != ["3.6.5", "3.7.1", "3.7.10", "4.5.1", "4.5.4"]:
+            raise CalendarSourceError("calendar_rule_deferment_unproved")
+        paragraph_scope = statement.split("3.6.5", 1)[1].split("3.7.1", 1)[0]
+        if re.sub(r"[第条款、，及和]", "", paragraph_scope) != "二三":
+            raise CalendarSourceError("calendar_rule_deferment_unproved")
+        for first, last in (("3.7.1", "3.7.10"), ("4.5.1", "4.5.4")):
+            between = statement.split(first, 1)[1].split(last, 1)[0]
+            if re.sub(r"[第条]", "", between) != "至":
+                raise CalendarSourceError("calendar_rule_deferment_unproved")
+    else:
+        # SSE's qualified Annex3 defers specified3.6 paragraphs, never3.7.
+        # Acquired contradictory or unrecognized deferred clauses fail closed.
+        known = {value.split(" ", 1)[0] for value in contract.deferred_sections}
+        for statement in statements:
+            deferred_clauses = set(
+                re.findall(r"(?<![0-9.])[0-9]+\.[0-9]+\.[0-9]+(?![0-9.])", statement)
+            )
+            if not deferred_clauses or not deferred_clauses <= known:
+                raise CalendarSourceError("calendar_rule_deferment_unproved")
+
+
 def _validate_rule(text: str | None, contract: MarketSessionSourceContract) -> None:
     if text is None:
         # Only the exact previously qualified PDF version has no live text
@@ -552,6 +653,7 @@ def _validate_rule(text: str | None, contract: MarketSessionSourceContract) -> N
         raise CalendarSourceError("calendar_rule_version_unproved")
     if contract.exchange == "BSE" and "现行有效" not in text:
         raise CalendarSourceError("calendar_rule_version_unproved")
+    _validate_deferments(text, contract)
     weekdays = _section(text, contract.weekday_section)
     if (
         "每周一至周五" not in weekdays
@@ -600,10 +702,6 @@ def _validate_rule(text: str | None, contract: MarketSessionSourceContract) -> N
             or "总量" not in daily
         ):
             raise CalendarSourceError("calendar_day_completion_unproved")
-        # The notice explicitly defers all of3.7; never derive the operative
-        # completion reference from its after-hours chapter.
-        if not all(value in text for value in ("3.7.1", "3.7.10", "另行通知")):
-            raise CalendarSourceError("calendar_rule_deferment_unproved")
     else:
         if "买卖A股" not in _section(text, "3.7.1"):
             raise CalendarSourceError("calendar_asset_scope_unproved")
@@ -637,6 +735,28 @@ def _declared_days(
     return days
 
 
+def _registered_metadata(contract: MarketSessionSourceContract) -> dict[str, object]:
+    return {
+        "proof_kind": "published_calendar_schedule",
+        "asset_scope": contract.asset_scope,
+        "calendar_document_number": contract.calendar_document_number,
+        "calendar_publication_date": contract.calendar_publication_date,
+        "rule_publication_date": contract.rule_publication_date,
+        "publication_precision": "day",
+        "availability_basis": contract.availability_basis,
+        "exact_first_available_at": None,
+        "rule_publication_reference": contract.rule_publication_uri,
+        "rule_format": contract.rule_format,
+        "rule_document_number": contract.rule_document_number,
+        "completion_kind": contract.completion_kind,
+        "completion_sections": list(contract.completion_sections),
+        "deferred_sections": list(contract.deferred_sections),
+        "known_exception_scope": contract.exception_scope,
+        "unbounded_later_exception_absence_proved": False,
+        "actual_trade_quote_or_publication_completeness_proved": False,
+    }
+
+
 def _calendar_from_documents(
     contract: MarketSessionSourceContract, annual: HttpResponse, rule: HttpResponse
 ) -> CalendarEvidence:
@@ -650,27 +770,13 @@ def _calendar_from_documents(
         _available_bound(contract.calendar_publication_date),
         _available_bound(contract.rule_publication_date),
     )
-    metadata: dict[str, object] = {
-        "proof_kind": "published_calendar_schedule",
-        "asset_scope": contract.asset_scope,
-        "calendar_document_number": contract.calendar_document_number,
-        "calendar_publication_date": contract.calendar_publication_date,
-        "rule_publication_date": contract.rule_publication_date,
-        "publication_precision": "day",
-        "availability_basis": contract.availability_basis,
-        "exact_first_available_at": None,
-        "rule_publication_reference": contract.rule_publication_uri,
-        "calendar_body_sha256": hashlib.sha256(annual.body).hexdigest(),
-        "rule_body_sha256": hashlib.sha256(rule.body).hexdigest(),
-        "rule_format": contract.rule_format,
-        "rule_document_number": contract.rule_document_number,
-        "completion_kind": contract.completion_kind,
-        "completion_sections": list(contract.completion_sections),
-        "deferred_sections": list(contract.deferred_sections),
-        "known_exception_scope": contract.exception_scope,
-        "unbounded_later_exception_absence_proved": False,
-        "actual_trade_quote_or_publication_completeness_proved": False,
-    }
+    metadata = _registered_metadata(contract)
+    metadata.update(
+        {
+            "calendar_body_sha256": hashlib.sha256(annual.body).hexdigest(),
+            "rule_body_sha256": hashlib.sha256(rule.body).hexdigest(),
+        }
+    )
     return CalendarEvidence(
         exchange=contract.exchange,
         evidence_id=f"{contract.exchange.lower()}-calendar-{contract.year}",
@@ -730,25 +836,7 @@ def _validate_registered_calendar(
         or calendar.days != _declared_days(contract, contract.holiday_ranges)
     ):
         raise CalendarSourceError("calendar_rule_version_unproved")
-    expected_metadata = {
-        "proof_kind": "published_calendar_schedule",
-        "asset_scope": contract.asset_scope,
-        "calendar_document_number": contract.calendar_document_number,
-        "calendar_publication_date": contract.calendar_publication_date,
-        "rule_publication_date": contract.rule_publication_date,
-        "publication_precision": "day",
-        "availability_basis": contract.availability_basis,
-        "exact_first_available_at": None,
-        "rule_publication_reference": contract.rule_publication_uri,
-        "rule_format": contract.rule_format,
-        "rule_document_number": contract.rule_document_number,
-        "completion_kind": contract.completion_kind,
-        "completion_sections": list(contract.completion_sections),
-        "deferred_sections": list(contract.deferred_sections),
-        "known_exception_scope": contract.exception_scope,
-        "unbounded_later_exception_absence_proved": False,
-        "actual_trade_quote_or_publication_completeness_proved": False,
-    }
+    expected_metadata = _registered_metadata(contract)
     if any(metadata.get(key) != value for key, value in expected_metadata.items()):
         raise CalendarSourceError("calendar_rule_version_unproved")
     for key in ("calendar_body_sha256", "rule_body_sha256"):

@@ -8,6 +8,7 @@ import unittest
 import zipfile
 import base64
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -171,6 +172,215 @@ class MarketSessionSourceTests(unittest.TestCase):
         self.assertIsNone(proofs[1]["source_metadata"]["exact_first_available_at"])
         self.assertEqual(proofs[1]["available_at"], "2026-04-25T00:00:00+08:00")
         self.assertEqual(proofs[1]["source_metadata"]["publication_precision"], "day")
+
+    def test_corrupt_deflate_is_partial_and_retains_unaffected_exchanges(self) -> None:
+        contracts, responses = source_fixtures()
+        sse = contracts[0]
+        response = responses[sse.rule_uri]
+        body = bytearray(response.body)
+        compressed_size = struct.unpack_from("<I", body, 18)[0]
+        name_length, extra_length = struct.unpack_from("<HH", body, 26)
+        start = 30 + name_length + extra_length
+        body[start : start + compressed_size] = b"\xff" * compressed_size
+        responses[sse.rule_uri] = replace(response, body=bytes(body))
+        outcome = ProductionMarketSessionAdapter(
+            DocumentTransport(responses),
+            contracts,
+            clock=lambda: FIRST,
+            execution_clock=lambda: CHECKED,
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+        self.assertEqual(outcome.coverage, "partial")
+        self.assertEqual(
+            [e["code"] for e in outcome.source_errors], ["calendar_document_invalid"]
+        )
+        self.assertEqual(
+            [
+                item["payload"]["calendar_proof"]["exchange"]
+                for item in outcome.to_dict()["observations"]
+            ],
+            ["SZSE", "BSE"],
+        )
+
+    def test_invalid_docx_packages_remain_sanitized_partial_outcomes(self) -> None:
+        for variant in (
+            "unsupported_compression",
+            "bad_crc",
+            "missing_document",
+            "invalid_xml",
+        ):
+            with self.subTest(variant=variant):
+                contracts, responses = source_fixtures()
+                sse = contracts[0]
+                response = responses[sse.rule_uri]
+                if variant in {"unsupported_compression", "bad_crc"}:
+                    body = bytearray(response.body)
+                    central = body.index(b"PK\x01\x02")
+                    if variant == "unsupported_compression":
+                        struct.pack_into("<H", body, 8, 99)
+                        struct.pack_into("<H", body, central + 10, 99)
+                    else:
+                        struct.pack_into("<I", body, central + 16, 0)
+                    invalid = bytes(body)
+                else:
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(
+                        buffer, "w", compression=zipfile.ZIP_STORED
+                    ) as archive:
+                        archive.writestr(
+                            "other.xml"
+                            if variant == "missing_document"
+                            else "word/document.xml",
+                            "<broken>",
+                        )
+                    invalid = buffer.getvalue()
+                responses[sse.rule_uri] = replace(response, body=invalid)
+                outcome = ProductionMarketSessionAdapter(
+                    DocumentTransport(responses),
+                    contracts,
+                    clock=lambda: FIRST,
+                    execution_clock=lambda: CHECKED,
+                ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                self.assertEqual(outcome.coverage, "partial")
+                self.assertEqual(
+                    [e["code"] for e in outcome.source_errors],
+                    ["calendar_document_invalid"],
+                )
+                self.assertEqual(len(outcome.observations), 2)
+
+    def test_bse_qualified_paragraph_and_range_wording_is_recognized(self) -> None:
+        contracts, responses = source_fixtures()
+        bse = contracts[2]
+        responses[bse.rule_uri] = replace(
+            responses[bse.rule_uri],
+            body=responses[bse.rule_uri].body.replace(
+                "3.6.5第二三款、3.7.1至3.7.10及4.5.1至4.5.4".encode(),
+                "第3.6.5条第二款、第三款，第3.7.1条至第3.7.10条、第4.5.1条至第4.5.4条".encode(),
+            ),
+        )
+        outcome = ProductionMarketSessionAdapter(
+            DocumentTransport(responses),
+            contracts,
+            clock=lambda: FIRST,
+            execution_clock=lambda: CHECKED,
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+        self.assertEqual(outcome.coverage, "complete", outcome.source_errors)
+
+    def test_unknown_annual_closures_fail_closed_before_rule_acquisition(self) -> None:
+        for declaration in (
+            "补充休市安排：2026年10月14日（星期三）休市。",
+            "10月14日至10月15日休市。",
+            "10月14日、10月15日为周末休市。",
+            "2027年10月14日休市。",
+            "临时全天休市。",
+            "10月5日照常开市。",
+        ):
+            with self.subTest(declaration=declaration):
+                contracts, responses = source_fixtures()
+                bse = contracts[2]
+                responses[bse.calendar_uri] = replace(
+                    responses[bse.calendar_uri],
+                    body=responses[bse.calendar_uri].body.replace(
+                        b"</body>", declaration.encode() + b"</body>"
+                    ),
+                )
+                transport = DocumentTransport(responses)
+                outcome = ProductionMarketSessionAdapter(
+                    transport,
+                    contracts,
+                    clock=lambda: FIRST,
+                    execution_clock=lambda: CHECKED,
+                ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                self.assertEqual(outcome.coverage, "partial")
+                self.assertNotIn(bse.rule_uri, transport.calls)
+                self.assertEqual(
+                    [e["code"] for e in outcome.source_errors],
+                    ["calendar_holiday_scope_unproved"],
+                )
+                self.assertEqual(
+                    [
+                        item["payload"]["calendar_proof"]["exchange"]
+                        for item in outcome.to_dict()["observations"]
+                    ],
+                    ["SSE", "SZSE"],
+                )
+
+    def test_explicit_annual_weekend_closures_preserve_qualified_schedule(self) -> None:
+        contracts, responses = source_fixtures()
+        for contract in contracts:
+            responses[contract.calendar_uri] = replace(
+                responses[contract.calendar_uri],
+                body=responses[contract.calendar_uri].body.replace(
+                    b"</body>",
+                    "另外，1月4日（星期日）、2月14日（星期六）、2月28日（星期六）、5月9日（星期六）、9月20日（星期日）、10月10日（星期六）为周末休市。".encode()
+                    + b"</body>",
+                ),
+            )
+        outcome = ProductionMarketSessionAdapter(
+            DocumentTransport(responses),
+            contracts,
+            clock=lambda: FIRST,
+            execution_clock=lambda: CHECKED,
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+        self.assertEqual(outcome.coverage, "complete", outcome.source_errors)
+
+    def test_bse_deferment_inventory_cannot_hide_operative_completion_clauses(
+        self,
+    ) -> None:
+        original = "3.6.5第二三款、3.7.1至3.7.10及4.5.1至4.5.4的实施时间另行通知。"
+        for deferred in (
+            "3.6.4、" + original,
+            "3.6.8、" + original,
+            "3.6.5、3.7.1至3.7.10及4.5.1至4.5.4的实施时间另行通知。",
+            original + "3.6.4的实施时间另行通知。",
+            original + "3.6.8暂不实施。",
+        ):
+            with self.subTest(deferred=deferred):
+                contracts, responses = source_fixtures()
+                bse = contracts[2]
+                responses[bse.rule_uri] = replace(
+                    responses[bse.rule_uri],
+                    body=responses[bse.rule_uri].body.replace(
+                        original.encode(), deferred.encode()
+                    ),
+                )
+                outcome = ProductionMarketSessionAdapter(
+                    DocumentTransport(responses),
+                    contracts,
+                    clock=lambda: FIRST,
+                    execution_clock=lambda: CHECKED,
+                ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                self.assertEqual(outcome.coverage, "partial")
+                self.assertEqual(
+                    [e["code"] for e in outcome.source_errors],
+                    ["calendar_rule_deferment_unproved"],
+                )
+
+    def test_sse_operative_afterhours_cannot_be_silently_deferred(self) -> None:
+        contracts, responses = source_fixtures()
+        sse = contracts[0]
+        with zipfile.ZipFile(io.BytesIO(responses[sse.rule_uri].body)) as archive:
+            xml = archive.read("word/document.xml")
+        xml = xml.replace(
+            b"</w:body>",
+            "<w:p><w:r><w:t>3.7.1至3.7.10的实施时间另行通知。</w:t></w:r></w:p></w:body>".encode(),
+        )
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("word/document.xml", xml)
+        responses[sse.rule_uri] = replace(
+            responses[sse.rule_uri], body=buffer.getvalue()
+        )
+        outcome = ProductionMarketSessionAdapter(
+            DocumentTransport(responses),
+            contracts,
+            clock=lambda: FIRST,
+            execution_clock=lambda: CHECKED,
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+        self.assertEqual(outcome.coverage, "partial")
+        self.assertEqual(
+            [e["code"] for e in outcome.source_errors],
+            ["calendar_rule_deferment_unproved"],
+        )
 
     def test_invalid_bindings_are_rejected_before_any_document_request(self) -> None:
         contracts, responses = source_fixtures()
