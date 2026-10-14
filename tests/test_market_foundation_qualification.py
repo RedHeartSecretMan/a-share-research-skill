@@ -48,10 +48,10 @@ FIXTURE_PATH = (
 LONG_DECIMAL_SOURCE = "12345678901234567890123456789.1"
 LONG_DECIMAL_CASES = {
     "bse_a_share_turnover@1": {
-        "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": LONG_DECIMAL_SOURCE},
+        "source_fields": {"A_SHARE_TURNOVER_CNY": LONG_DECIMAL_SOURCE},
         "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
-        "exact": "123456789012345678901234567891000.0",
-        "forged": "1.234567890123456789012345679E32",
+        "exact": LONG_DECIMAL_SOURCE,
+        "forged": "1.234567890123456789012345679E28",
     },
     "bse_market_margin@1": {
         "source_fields": {"FINANCING_BALANCE": LONG_DECIMAL_SOURCE},
@@ -75,23 +75,23 @@ LONG_DECIMAL_CASES = {
         "forged": "1.234567890123456789012345679E28",
     },
     "szse_a_share_turnover@1": {
-        "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": LONG_DECIMAL_SOURCE},
+        "source_fields": {"A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": LONG_DECIMAL_SOURCE},
         "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
-        "exact": "123456789012345678901234567891000.0",
-        "forged": "1.234567890123456789012345679E32",
+        "exact": "1234567890123456789012345678910000000.0",
+        "forged": "1.234567890123456789012345679E36",
     },
     "szse_market_margin@1": {
         "source_fields": {"FINANCING_BALANCE": LONG_DECIMAL_SOURCE},
         "destination": "observations.payload.observation.metrics.financing_balance_CNY",
-        "exact": LONG_DECIMAL_SOURCE,
-        "forged": "1.234567890123456789012345679E28",
+        "exact": "1234567890123456789012345678910000000.0",
+        "forged": "1.234567890123456789012345679E36",
     },
 }
 EXTREME_DECIMAL_CASES = {
     "bse_a_share_turnover@1": {
-        "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "1e1000000"},
+        "source_fields": {"A_SHARE_TURNOVER_CNY": "1e1000000"},
         "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
-        "exact": "1e1000004",
+        "exact": "1e1000000",
     },
     "bse_market_margin@1": {
         "source_fields": {"FINANCING_BALANCE": "1e1000000"},
@@ -112,14 +112,14 @@ EXTREME_DECIMAL_CASES = {
         "exact": "1e1000000",
     },
     "szse_a_share_turnover@1": {
-        "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "1e1000000"},
+        "source_fields": {"A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": "1e1000000"},
         "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
-        "exact": "1e1000004",
+        "exact": "1e1000008",
     },
     "szse_market_margin@1": {
         "source_fields": {"FINANCING_BALANCE": "1e1000000"},
         "destination": "observations.payload.observation.metrics.financing_balance_CNY",
-        "exact": "1e1000000",
+        "exact": "1e1000008",
     },
 }
 DECIMAL_CONTEXTS = ((6, 9, -9), (28, 99, -99), (80, 999, -999))
@@ -309,7 +309,7 @@ class MarketFoundationQualificationTests(unittest.TestCase):
         assert isinstance(selector, dict)
         assert isinstance(normalization, dict)
         self.assertIn("scsj_gprdgk_after", selector["selector_kind"])
-        self.assertIn("10000", normalization["scale"])
+        self.assertIn("100000000", normalization["scale"])
         self.assertIn("A_share", normalization["asset_filter"])
         self.assertIn("index_proxy", normalization["asset_filter"])
 
@@ -324,9 +324,11 @@ class MarketFoundationQualificationTests(unittest.TestCase):
         normalization = contract["normalization"]
         assert isinstance(selector, dict)
         assert isinstance(normalization, dict)
-        self.assertEqual(selector["max_requests"], 2)
+        self.assertEqual(selector["max_requests"], 1)
         self.assertIn("daily_report", selector["selector_kind"])
-        self.assertIn("10000", normalization["scale"])
+        self.assertEqual(
+            normalization["scale"], "raw_hqcjje_CNY_retained_as_exact_decimal_CNY"
+        )
 
     def _assert_margin_contract(self, operation_id: str, exchange: str) -> None:
         contract = self._assert_first_party_contract(
@@ -683,7 +685,7 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                 "print(json.dumps({'count':len(q),'contracts':sum(x.source_contract is not None for x in q),'fixtures':len(fixtures)},sort_keys=True))"
             )
             completed = subprocess.run(
-                [sys.executable, "-I", "-c", probe],
+                [sys.executable, "-I", "-B", "-c", probe],
                 cwd=root,
                 check=False,
                 capture_output=True,
@@ -776,7 +778,7 @@ class MarketFoundationQualificationTests(unittest.TestCase):
             szse_contract["normalization"],
             {
                 "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable",
-                "money_scale": "official_CNY_values_retained_as_exact_decimal_CNY",
+                "money_scale": "multiply_each_hundred_million_CNY_value_by_100000000_using_exact_decimal",
                 "quantity_scale": "official_share_values_retained_as_exact_decimal_shares",
             },
         )
@@ -902,9 +904,7 @@ class MarketFoundationQualificationTests(unittest.TestCase):
         ):
             mutation = deepcopy(fixtures)
             complete = mutation["fixtures"][0]["complete"]
-            complete["source_fields"]["A_SHARE_TURNOVER_TEN_THOUSAND_CNY"] = (
-                source_value
-            )
+            complete["source_fields"]["A_SHARE_TURNOVER_CNY"] = source_value
             complete["normalized_destinations"][
                 "observations.payload.observation.metrics.turnover_amount_CNY"
             ] = destination_value
@@ -957,6 +957,203 @@ class MarketFoundationQualificationTests(unittest.TestCase):
                 fixture_payload,
                 qualifications,
             )
+
+    def test_reopened_114_unproved_source_semantics_preserve_owner_failure_contract(
+        self,
+    ) -> None:
+        qualifications = {
+            item.producer_operation_id: item for item in self._load_qualifications()
+        }
+        for operation_id, raw_quantity in (
+            ("sse_market_margin@1", "source_stock_shares_fund_or_CDR_units_bond_lots"),
+            ("szse_market_margin@1", "source_hundred_million_shares_or_fund_units"),
+        ):
+            qualification = qualifications[operation_id]
+            with self.subTest(operation=operation_id):
+                self.assertEqual(qualification.disposition, "pending_dependency")
+                self.assertIn(raw_quantity, qualification.unit_semantics["quantity"])
+                self.assertIn(
+                    "requires_independent", qualification.unit_semantics["quantity"]
+                )
+                contract = dict(qualification.source_contract or {})
+                self.assertIn(
+                    "all_six_fields",
+                    contract["field_applicability"]["applicable_fields"],
+                )
+                self.assertEqual(
+                    contract["field_applicability"]["not_applicable_fields"], "none"
+                )
+                self.assertIn("quantity_unit", contract["state_mapping"]["unavailable"])
+                self.assertIn("publication", contract["state_mapping"]["unavailable"])
+                self.assertIn(
+                    "source_explicit_timestamp_required",
+                    contract["response_shape"]["publication_time_rule"],
+                )
+                for source_field in (
+                    "SECURITIES_LENDING_QUANTITY",
+                    "SECURITIES_LENDING_SELL_QUANTITY",
+                ):
+                    self.assertTrue(
+                        contract["field_destinations"][source_field].endswith("_shares")
+                    )
+        szse_daily = self._load_target_contract("szse_a_share_turnover@1")
+        self.assertIn(
+            "include_CDR_and_are_unavailable", szse_daily["scope"]["included_assets"]
+        )
+        self.assertIn(
+            "CDR_total_never_complete", szse_daily["state_mapping"]["unavailable"]
+        )
+        sse_margin = self._load_target_contract("sse_market_margin@1")
+        self.assertEqual(sse_margin["request_selector"]["method"], "GET")
+        self.assertIn(
+            "actual_wire_method_unproved",
+            sse_margin["request_selector"]["selector_kind"],
+        )
+        self.assertIn(
+            "pageCount_total_pageNo_pageSize_completeness_required",
+            sse_margin["response_shape"]["shape"],
+        )
+        bse_margin = self._load_target_contract("bse_market_margin@1")
+        self.assertIn(
+            "createTime_lastUpdateTime_or_sxrq_are_not_proved_publication",
+            bse_margin["response_shape"]["publication_time_rule"],
+        )
+
+    def test_reopened_114_selected_backends_are_distinct_from_page_locators(
+        self,
+    ) -> None:
+        expected = {
+            "sse_a_share_turnover@1": "https://query.sse.com.cn/commonQuery.do",
+            "sse_market_margin@1": "https://query.sse.com.cn/commonSoaQuery.do",
+            "szse_a_share_turnover@1": "https://www.szse.cn/api/report/ShowReport/data",
+            "szse_market_margin@1": "https://www.szse.cn/api/report/ShowReport/data",
+            "bse_a_share_turnover@1": "https://www.bse.cn/marketStatController/dailyReport.do",
+            "bse_market_margin@1": "https://www.bse.cn/rzrqjyyexxController/summaryInfoResult.do",
+        }
+        for operation_id, endpoint in expected.items():
+            with self.subTest(operation=operation_id):
+                contract = self._load_target_contract(operation_id)
+                self.assertEqual(contract["request_selector"]["resource_url"], endpoint)
+                self.assertNotEqual(contract["provider"]["documentation_url"], endpoint)
+
+    def test_reopened_114_SSE_endpoint_authority_rejects_unproved_URLs(
+        self,
+    ) -> None:
+        original = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        bad_urls = {
+            "sse_a_share_turnover@1": (
+                "https://query.sse.com.cn/commonSoaQuery.do",
+                "https://query.sse.com.cn/otherQuery.do",
+                "https://query.sse.com.cn/commonQuery.do?date=2026-10-14",
+                "https://user:secret@query.sse.com.cn/commonQuery.do",
+                "https://query.sse.com.cn/commonQuery.do#fragment",
+                "https://query.sse.com.cn:443/commonQuery.do",
+                "https://www.sse.com.cn/market/stockdata/overview/day/",
+            ),
+            "sse_market_margin@1": (
+                "https://query.sse.com.cn/commonQuery.do",
+                "https://query.sse.com.cn/otherQuery.do",
+                "https://user:secret@query.sse.com.cn/commonSoaQuery.do",
+            ),
+            "szse_market_margin@1": ("https://query.sse.com.cn/commonSoaQuery.do",),
+        }
+        for operation_id, urls in bad_urls.items():
+            for url in urls:
+                mutation = deepcopy(original)
+                operation = next(
+                    item
+                    for item in mutation["operations"]
+                    if item["producer_operation_id"] == operation_id
+                )
+                operation["source_contract"]["request_selector"]["resource_url"] = url
+                with self.subTest(operation=operation_id, url=url):
+                    with self.assertRaisesRegex(
+                        ValueError, "source resource URL is invalid"
+                    ):
+                        load_operation_qualification_manifest(
+                            mutation,
+                            expected_producer_operation_ids=tuple(
+                                item["producer_operation_id"]
+                                for item in mutation["operations"]
+                            ),
+                        )
+
+    def test_reopened_114_szse_daily_money_uses_source_hundred_million_CNY(
+        self,
+    ) -> None:
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        fixture = next(
+            item
+            for item in fixtures["fixtures"]
+            if item["producer_operation_id"] == "szse_a_share_turnover@1"
+        )
+        source_field = next(iter(fixture["complete"]["source_fields"]))
+        self._assert_decimal_cases_are_context_independent(
+            {
+                "szse_a_share_turnover@1": {
+                    "source_fields": {source_field: LONG_DECIMAL_SOURCE},
+                    "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
+                    "exact": "1234567890123456789012345678910000000",
+                    "forged": "123456789012345678901234567891000",
+                },
+            },
+            reject_forged=True,
+        )
+
+    def test_reopened_114_bse_daily_raw_money_is_CNY(self) -> None:
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        source_field = next(iter(fixtures["fixtures"][0]["complete"]["source_fields"]))
+        self._assert_decimal_cases_are_context_independent(
+            {
+                "bse_a_share_turnover@1": {
+                    "source_fields": {source_field: LONG_DECIMAL_SOURCE},
+                    "destination": "observations.payload.observation.metrics.turnover_amount_CNY",
+                    "exact": LONG_DECIMAL_SOURCE,
+                    "forged": "123456789012345678901234567891000",
+                },
+            },
+            reject_forged=True,
+        )
+
+    def test_reopened_114_szse_margin_money_uses_source_hundred_million_CNY(
+        self,
+    ) -> None:
+        # SZSE 1837_xxpl tab1 declares 亿元 for each of these four fields.
+        fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        qualifications = self._load_qualifications()
+        fields = {
+            "FINANCING_BALANCE": "financing_balance_CNY",
+            "FINANCING_BUY_AMOUNT": "financing_buy_amount_CNY",
+            "SECURITIES_LENDING_BALANCE": "securities_lending_balance_CNY",
+            "MARGIN_TOTAL_BALANCE": "margin_total_balance_CNY",
+        }
+        for source_field, metric in fields.items():
+            case = deepcopy(fixtures)
+            fixture = next(
+                item
+                for item in case["fixtures"]
+                if item["producer_operation_id"] == "szse_market_margin@1"
+            )
+            fixture["complete"]["source_fields"][source_field] = LONG_DECIMAL_SOURCE
+            destination = f"observations.payload.observation.metrics.{metric}"
+            fixture["complete"]["normalized_destinations"][destination] = (
+                "1234567890123456789012345678910000000"
+            )
+            for precision, emax, emin in DECIMAL_CONTEXTS:
+                with self.subTest(field=source_field, precision=precision):
+                    with localcontext() as context:
+                        context.prec, context.Emax, context.Emin = precision, emax, emin
+                        loaded = load_market_foundation_qualification_fixtures(
+                            case,
+                            qualifications,
+                        )
+                    self.assertEqual(len(loaded), 6)
+            fixture["complete"]["normalized_destinations"][destination] = (
+                LONG_DECIMAL_SOURCE
+            )
+            with self.subTest(field=source_field, old_identity_scale=True):
+                with self.assertRaisesRegex(ValueError, "normalization"):
+                    load_market_foundation_qualification_fixtures(case, qualifications)
 
     def test_issue_114_all_six_owners_normalize_long_coefficients_exactly(
         self,
@@ -1192,10 +1389,10 @@ class MarketFoundationQualificationTests(unittest.TestCase):
         )
         forged_fixture_authority = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
         forged_complete = forged_fixture_authority["fixtures"][0]["complete"]
-        forged_complete["source_fields"]["A_SHARE_TURNOVER_TEN_THOUSAND_CNY"] = "2"
+        forged_complete["source_fields"]["A_SHARE_TURNOVER_CNY"] = "2"
         forged_complete["normalized_destinations"][
             "observations.payload.observation.metrics.turnover_amount_CNY"
-        ] = "20000"
+        ] = "2"
         with self.assertRaisesRegex(ValueError, "fixture authority drifted"):
             build_operation_release_matrix(
                 **matrix_inputs,

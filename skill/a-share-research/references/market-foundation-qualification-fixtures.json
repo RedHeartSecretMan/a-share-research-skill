@@ -8,8 +8,8 @@
         "query_complete": true,
         "report_date": "2026-08-26",
         "published_at": "2026-08-26T18:00:00+08:00",
-        "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "125000.50"},
-        "normalized_destinations": {"observations.payload.observation.metrics.turnover_amount_CNY": "1250005000"}
+        "source_fields": {"A_SHARE_TURNOVER_CNY": "125000.50"},
+        "normalized_destinations": {"observations.payload.observation.metrics.turnover_amount_CNY": "125000.50"}
       },
       "observed_empty": {
         "query_complete": true,
@@ -17,7 +17,7 @@
         "state": "observed_empty",
         "report_date": "2026-08-26",
         "published_at": "2026-08-26T18:00:00+08:00",
-        "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "0"},
+        "source_fields": {"A_SHARE_TURNOVER_CNY": "0"},
         "normalized_destinations": {"observations.payload.observation.metrics.turnover_amount_CNY": "0"}
       },
       "unavailable": {"query_complete": false, "reason": "required_report_unit_missing", "state": "unavailable"}
@@ -76,8 +76,8 @@
         "query_complete": true,
         "report_date": "2026-08-26",
         "published_at": "2026-08-26T18:00:00+08:00",
-        "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "225000.75"},
-        "normalized_destinations": {"observations.payload.observation.metrics.turnover_amount_CNY": "2250007500"}
+        "source_fields": {"A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": "225000.75"},
+        "normalized_destinations": {"observations.payload.observation.metrics.turnover_amount_CNY": "22500075000000"}
       },
       "observed_empty": {
         "query_complete": true,
@@ -85,7 +85,7 @@
         "state": "observed_empty",
         "report_date": "2026-08-26",
         "published_at": "2026-08-26T18:00:00+08:00",
-        "source_fields": {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "0"},
+        "source_fields": {"A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": "0"},
         "normalized_destinations": {"observations.payload.observation.metrics.turnover_amount_CNY": "0"}
       },
       "unavailable": {"query_complete": false, "reason": "required_A_share_total_missing", "state": "unavailable"}
@@ -97,7 +97,7 @@
         "query_complete": true,
         "report_date": "2026-08-26",
         "published_at": "2026-08-26T18:00:00+08:00",
-        "source_fields": {"FINANCING_BALANCE": "1205000", "FINANCING_BUY_AMOUNT": "102500", "SECURITIES_LENDING_SELL_QUANTITY": "20000", "SECURITIES_LENDING_QUANTITY": "80000", "SECURITIES_LENDING_BALANCE": "307500", "MARGIN_TOTAL_BALANCE": "1512500"},
+        "source_fields": {"FINANCING_BALANCE": "0.01205", "FINANCING_BUY_AMOUNT": "0.001025", "SECURITIES_LENDING_SELL_QUANTITY": "20000", "SECURITIES_LENDING_QUANTITY": "80000", "SECURITIES_LENDING_BALANCE": "0.003075", "MARGIN_TOTAL_BALANCE": "0.015125"},
         "normalized_destinations": {"observations.payload.observation.metrics.financing_balance_CNY": "1205000", "observations.payload.observation.metrics.financing_buy_amount_CNY": "102500", "observations.payload.observation.metrics.securities_lending_sell_quantity_shares": "20000", "observations.payload.observation.metrics.securities_lending_quantity_shares": "80000", "observations.payload.observation.metrics.securities_lending_balance_CNY": "307500", "observations.payload.observation.metrics.margin_total_balance_CNY": "1512500"}
       },
       "observed_empty": {"query_complete": true, "row_count": 0, "state": "observed_empty", "report_date": "2026-08-26", "published_at": "2026-08-26T18:00:00+08:00"},

@@ -69,6 +69,12 @@ _QUALIFIED_FIRST_PARTY_HOSTS = {
     "sse": "www.sse.com.cn",
     "szse": "www.szse.cn",
 }
+# Only these reviewed six-owner SSE selectors use the query host. Provider
+# documentation and terms remain bound to www.sse.com.cn.
+_MARKET_FOUNDATION_SSE_RESOURCE_URLS = {
+    "sse_a_share_turnover@1": "https://query.sse.com.cn/commonQuery.do",
+    "sse_market_margin@1": "https://query.sse.com.cn/commonSoaQuery.do",
+}
 _SOURCE_CONTRACT_KEYS = {
     "producer_operation_id",
     "capability_id",
@@ -95,15 +101,15 @@ _MARKET_FOUNDATION_SOURCE_CAPABILITIES = {
 # Canonical-JSON digests pin every reviewed public qualification fact and
 # nested source contract to its exact operation owner.
 _MARKET_FOUNDATION_QUALIFICATION_SHA256 = {
-    "bse_a_share_turnover@1": "5761adb40b2d2023aef578d977f382586ffab1d3de3a8e5110241ea8b675a776",
-    "bse_market_margin@1": "a41d52ee4975e1879891608071e287401dc7c66be21bc9633410cfe40ebab944",
-    "sse_a_share_turnover@1": "c02f9ffea373119928d3e4b7850a141ef0ee16c955cf1205c23b397c7338bd3e",
-    "sse_market_margin@1": "9e9f63d48867e996d39ed38a106af9483750b55ced651718e4c7ce00627591d6",
-    "szse_a_share_turnover@1": "c5f3ff7e6e46e33d14461005fb006294ee053f91bcb93f6291e781bdc8522a56",
-    "szse_market_margin@1": "c6dd9fe0f7900c1612ed3e0c26508f0c71e512a2b83bc2fa3fb4b37a3dc7b265",
+    "bse_a_share_turnover@1": "1386cdd798189c690d8d50ec1dd195745de0935125dfca3b959800d136b050bc",
+    "bse_market_margin@1": "d5c1d0074131050d652c001862e2104ce337afc1aa20e1752eb665fe61a694aa",
+    "sse_a_share_turnover@1": "3a218abbb6f49d5374e451aba5f3503a91effdcf256c0d681ec260943d5ac344",
+    "sse_market_margin@1": "a2b518173cf0b26c6de9ed81a72eb0618c6b2afffbc6a53cc1f1ef41d7382a64",
+    "szse_a_share_turnover@1": "208b3246cc3d72d7cf545d941a8afba1abb3b76e8e521cf1281a54d9f5541722",
+    "szse_market_margin@1": "b750d817f118bf4fd187862156ac41ed39ea54ae85634d01f493e4c3c49e0907",
 }
 _MARKET_FOUNDATION_FIXTURE_SHA256 = (
-    "6ff5e67208789a855c2db9d4a23945442539f2e3e032df74af311bc7d64e1146"
+    "011835aad2d8f436ee219dc81545a59ddf37366074175a4c31ac89cd7ec76353"
 )
 
 
@@ -118,6 +124,9 @@ class _MarketFoundationNormalizationRule:
     unavailable_reason: str
 
 
+# These deterministic arithmetic examples consume logical, already-qualified
+# fields. Their quantity terms retain independently proved canonical shares;
+# they do not qualify raw mixed stock/fund/CDR/lots units or publication times.
 _MARGIN_FIELD_DESTINATIONS = {
     "FINANCING_BALANCE": "observations.payload.observation.metrics.financing_balance_CNY",
     "FINANCING_BUY_AMOUNT": "observations.payload.observation.metrics.financing_buy_amount_CNY",
@@ -129,16 +138,16 @@ _MARGIN_FIELD_DESTINATIONS = {
 _MARKET_FOUNDATION_NORMALIZATION_RULES = {
     "bse_a_share_turnover@1": _MarketFoundationNormalizationRule(
         contract={
-            "asset_filter": "accept_only_the_official_BSE_stock_daily_report_total",
-            "scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
+            "asset_filter": "accept_only_the_official_BSE_stock_daily_report_class_2_total_never_add_XJX",
+            "scale": "raw_hqcjje_CNY_retained_as_exact_decimal_CNY",
             "date": "require_report_date_equal_requested_completed_trading_date",
         },
         field_destinations={
-            "A_SHARE_TURNOVER_TEN_THOUSAND_CNY": (
+            "A_SHARE_TURNOVER_CNY": (
                 "observations.payload.observation.metrics.turnover_amount_CNY"
             )
         },
-        source_scale_exponents={"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": 4},
+        source_scale_exponents={"A_SHARE_TURNOVER_CNY": 0},
         observed_empty_row_count=1,
         unavailable_reason="required_report_unit_missing",
     ),
@@ -180,27 +189,34 @@ _MARKET_FOUNDATION_NORMALIZATION_RULES = {
     ),
     "szse_a_share_turnover@1": _MarketFoundationNormalizationRule(
         contract={
-            "asset_filter": "accept_only_row_explicitly_labeled_A_share_total_and_reject_stock_or_index_proxy",
-            "scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
+            "asset_filter": "accept_only_row_explicitly_proved_pure_A_share_total_reject_CDR_inclusive_gp_xz_cy_stock_or_index_proxy",
+            "scale": "multiply_hundred_million_CNY_by_100000000_using_exact_decimal",
             "date": "require_report_date_equal_requested_completed_trading_date",
         },
         field_destinations={
-            "A_SHARE_TURNOVER_TEN_THOUSAND_CNY": (
+            "A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": (
                 "observations.payload.observation.metrics.turnover_amount_CNY"
             )
         },
-        source_scale_exponents={"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": 4},
+        source_scale_exponents={"A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": 8},
         observed_empty_row_count=1,
         unavailable_reason="required_A_share_total_missing",
     ),
     "szse_market_margin@1": _MarketFoundationNormalizationRule(
         contract={
-            "money_scale": "official_CNY_values_retained_as_exact_decimal_CNY",
+            "money_scale": "multiply_each_hundred_million_CNY_value_by_100000000_using_exact_decimal",
             "quantity_scale": "official_share_values_retained_as_exact_decimal_shares",
             "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable",
         },
         field_destinations=_MARGIN_FIELD_DESTINATIONS,
-        source_scale_exponents={field: 0 for field in _MARGIN_FIELD_DESTINATIONS},
+        source_scale_exponents={
+            "FINANCING_BALANCE": 8,
+            "FINANCING_BUY_AMOUNT": 8,
+            "SECURITIES_LENDING_SELL_QUANTITY": 0,
+            "SECURITIES_LENDING_QUANTITY": 0,
+            "SECURITIES_LENDING_BALANCE": 8,
+            "MARGIN_TOTAL_BALANCE": 8,
+        },
         observed_empty_row_count=0,
         unavailable_reason="required_summary_field_missing",
     ),
@@ -2208,11 +2224,16 @@ def _validated_source_contract(
     } or selector.get("method") not in {"GET", "POST"}:
         raise ValueError("qualification request selector is invalid")
     _text(selector.get("selector_kind"), "qualification selector kind")
-    _qualified_first_party_url(
+    sse_resource_url = _MARKET_FOUNDATION_SSE_RESOURCE_URLS.get(producer_operation_id)
+    resource_url = _qualified_first_party_url(
         selector.get("resource_url"),
         "source resource URL",
-        expected_hostname=expected_hostname,
+        expected_hostname=(
+            "query.sse.com.cn" if sse_resource_url is not None else expected_hostname
+        ),
     )
+    if sse_resource_url is not None and resource_url != sse_resource_url:
+        raise ValueError("source resource URL is invalid")
     _text(selector.get("date_selector"), "qualification date selector")
     for key in ("max_requests", "max_pages"):
         bound = selector.get(key)
