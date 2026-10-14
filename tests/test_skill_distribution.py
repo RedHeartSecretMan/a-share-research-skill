@@ -177,7 +177,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             completed = _install_fake_locked_runtime(installed, temporary_root)
 
             checked = subprocess.run(
@@ -271,7 +273,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
 
             completed = subprocess.run(
                 [
@@ -333,7 +337,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             external_site = temporary_root / "external-site"
             external_site.mkdir()
             lock_lines = [
@@ -389,7 +395,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             installation = _install_fake_locked_runtime(installed, temporary_root)
             runtime = installed / ".runtime"
             external_runtime = temporary_root / "external-runtime"
@@ -430,7 +438,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             external_runtime = temporary_root / "external-runtime"
             external_runtime.mkdir()
             (installed / ".runtime").symlink_to(
@@ -453,7 +463,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             installation = _install_fake_locked_runtime(installed, temporary_root)
             external_module = temporary_root / "external-operation.py"
             external_module.write_text("external operation", encoding="utf-8")
@@ -504,7 +516,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             installation = _install_fake_locked_runtime(installed, temporary_root)
             shutil.rmtree(installed / ".runtime" / "httpx")
 
@@ -537,7 +551,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             installation = _install_fake_locked_runtime(installed, temporary_root)
             module = installed / ".runtime" / "httpx" / "__init__.py"
             external_module = temporary_root / "external-httpx.py"
@@ -572,7 +588,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             installation = _install_fake_locked_runtime(installed, temporary_root)
             (
                 installed / "scripts" / "a_share_research" / "communication_sources.py"
@@ -607,7 +625,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             installation = _install_fake_locked_runtime(installed, temporary_root)
 
             completed = subprocess.run(
@@ -672,7 +692,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             with (installed / "requirements.lock").open(
                 "a",
                 encoding="utf-8",
@@ -1554,7 +1576,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             request = temporary_root / "research-task.json"
             request.write_text(
                 json.dumps(
@@ -1608,7 +1632,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             requests = {
                 "current": {
                     "schema_version": "1.0",
@@ -1757,7 +1783,9 @@ class SkillDistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "candidate-install" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             artifact_path = temporary_root / "future-screen-artifact"
             entrypoint = installed / "scripts" / "entrypoint.py"
             recursion_probe = """
@@ -1897,7 +1925,9 @@ runpy.run_path(entrypoint, run_name="__main__")
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
 
             for command in ("close", "validate-bundle", "valuation"):
                 with self.subTest(command=command):
@@ -1924,7 +1954,9 @@ runpy.run_path(entrypoint, run_name="__main__")
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             request = temporary_root / "research-task.json"
             request.write_text(
                 json.dumps(
@@ -1981,7 +2013,9 @@ runpy.run_path(entrypoint, run_name="__main__")
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             installed = temporary_root / "installed" / "a-share-research"
-            shutil.copytree(SKILL_ROOT, installed)
+            shutil.copytree(
+                SKILL_ROOT, installed, ignore=shutil.ignore_patterns(".state")
+            )
             request = temporary_root / "research-task.json"
             request.write_text(
                 json.dumps(

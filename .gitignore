@@ -5,6 +5,7 @@
 .ruff_cache/
 .venv/
 /skill/a-share-research/.runtime/
+/skill/a-share-research/.state/
 __pycache__/
 *.pyc
 htmlcov/

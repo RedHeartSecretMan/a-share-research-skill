@@ -1,7 +1,8 @@
 """Journalled, write-once Result Artifact lifecycle on a local filesystem.
 
 A transaction publishes its complete immutable journal before publishing content.
-Completed journals are durable ownership records, not disposable recovery debris.
+Original ownership is committed in an independently protected local domain;
+artifact journals are checked against those originals, never self-authenticating.
 The checkpoint and manifest contain only canonical public metadata; physical
 identities and staging coordinates stay inside the Adapter's protocol records.
 """
@@ -34,6 +35,9 @@ _MAX_CHECKPOINT_BYTES = 65_536
 _MAX_MANIFEST_BYTES = 65_536
 _MAX_FILE_BYTES = 64 * 1024 * 1024
 _MAX_RECEIPT_BYTES = 1024
+_MAX_ANCHOR_BYTES = 4 * 1024 * 1024
+_MAX_ANCHOR_TRANSACTIONS = 512
+_DEFAULT_ANCHOR_ROOT = Path(__file__).parents[2] / ".state/result-artifact-anchors/v1"
 _MAX_IDENTITY = (1 << 64) - 1
 _PROTOCOL = ".protocol"
 _EXCHANGES = ("BSE", "SSE", "SZSE")
@@ -440,11 +444,96 @@ class _Stage:
         return dict(self.files)
 
 
+@dataclass(frozen=True, slots=True)
+class _Authority:
+    creation: _Node
+    journals: tuple[_Node, ...] = ()
+    published: tuple[str, ...] = ()
+    claimed: tuple[str, ...] = ()
+    closed: tuple[str, ...] = ()
+
+
+def _authority_payload(value: _Authority) -> dict[str, object]:
+    def node(item: _Node) -> dict[str, object]:
+        return {
+            "relative_path": item.relative_path,
+            "identity": _hex_identity(item.identity),
+            "encoded": item.encoded.decode("utf-8"),
+        }
+
+    return {
+        "schema": "result-artifact-anchor@1.0",
+        "creation": node(value.creation),
+        "journals": [node(item) for item in value.journals],
+        "published": list(value.published),
+        "claimed": list(value.claimed),
+        "closed": list(value.closed),
+    }
+
+
+def _authority_from(value: object) -> _Authority:
+    if (
+        type(value) is not dict
+        or set(value)
+        != {"schema", "creation", "journals", "published", "claimed", "closed"}
+        or value["schema"] != "result-artifact-anchor@1.0"
+    ):
+        raise ValueError("result artifact trusted record is invalid")
+
+    def node(item: object) -> _Node:
+        if type(item) is not dict or set(item) != {
+            "relative_path",
+            "identity",
+            "encoded",
+        }:
+            raise ValueError("result artifact trusted record is invalid")
+        name, encoded = item["relative_path"], item["encoded"]
+        if type(name) is not str or type(encoded) is not str:
+            raise ValueError("result artifact trusted record is invalid")
+        result = _Node(
+            name, _parse_identity(item["identity"]), "file", encoded.encode("utf-8")
+        )
+        _object(result.encoded)
+        return result
+
+    journals, published, claimed, closed = (
+        value["journals"],
+        value["published"],
+        value["claimed"],
+        value["closed"],
+    )
+    if type(journals) is not list or len(journals) > _MAX_ANCHOR_TRANSACTIONS:
+        raise ValueError("result artifact trusted history is invalid")
+    if any(
+        type(items) is not list
+        or any(type(item) is not str for item in items)
+        or len(set(items)) != len(items)
+        for items in (published, claimed, closed)
+    ):
+        raise ValueError("result artifact trusted closure is invalid")
+    parsed = tuple(node(item) for item in journals)
+    tokens = tuple(_identifier(_object(item.encoded)["token"]) for item in parsed)
+    if (
+        len(set(tokens)) != len(tokens)
+        or not set(published) <= set(tokens)
+        or not set(claimed) <= set(published)
+        or not set(closed) <= set(claimed)
+    ):
+        raise ValueError("result artifact trusted closure is invalid")
+    return _Authority(
+        node(value["creation"]), parsed, tuple(published), tuple(claimed), tuple(closed)
+    )
+
+
 class _Store(Protocol):
     root_identity: _FileIdentity
     ancestor_identities: tuple[_FileIdentity, ...]
 
     def snapshot(self) -> _Snapshot: ...
+    def authority(self) -> _Authority: ...
+    def remember(self, name: str, stage: _Stage) -> None: ...
+    def published(self, token: str) -> None: ...
+    def close(self, token: str) -> None: ...
     def stage_snapshot(self, token: str) -> _Snapshot | None: ...
     def prepare(
         self,
@@ -547,6 +636,9 @@ class _TransactionalAdapter:
         if len(owners) != 1 or owners[0].kind != "file":
             raise ValueError("result artifact creation ownership is invalid")
         owner_node = owners[0]
+        authority = store.authority()
+        if owner_node != authority.creation:
+            raise ValueError("result artifact creation differs from trusted commitment")
         owner = _object(owner_node.encoded)
         if set(owner) != {
             "type",
@@ -613,6 +705,15 @@ class _TransactionalAdapter:
             (n for n in snapshot.nodes if n.relative_path.startswith(".protocol/txn-")),
             key=lambda n: n.relative_path,
         )
+        actual_journals = tuple(journal_nodes)
+        trusted_journals = authority.journals
+        unpublished = (
+            len(actual_journals) + 1 == len(trusted_journals)
+            and actual_journals == trusted_journals[:-1]
+        )
+        if actual_journals != trusted_journals and not unpublished:
+            raise ValueError("result artifact journal differs from trusted commitment")
+        journal_nodes = list(trusted_journals)
         for sequence, node in enumerate(journal_nodes, 1):
             if node.kind != "file":
                 raise ValueError("result artifact publication journal is invalid")
@@ -664,6 +765,9 @@ class _TransactionalAdapter:
                 raise ValueError("result artifact staged ownership is invalid")
             file = None if journal["file"] is None else _stored_file(journal["file"])
             is_last = sequence == len(journal_nodes)
+            missing_journal = unpublished and is_last
+            if missing_journal and tx_token in authority.published:
+                raise ValueError("result artifact committed journal is missing")
             required_stage_names = {"data", "journal"} | (
                 {"checkpoint"} if file is not None else set()
             )
@@ -680,6 +784,13 @@ class _TransactionalAdapter:
                 tuple(sorted(stage_ids.items())),
                 node.encoded,
             )
+            if missing_journal and (
+                cp.identity != current_id
+                or _digest(cp.encoded) != current_digest
+                or (file is not None and file.relative_path in nodes)
+                or (file is None and "manifest.json" in nodes)
+            ):
+                raise ValueError("result artifact unpublished intent state changed")
             next_id: _FileIdentity | None = None
             next_digest: str | None = None
             coverage: dict[str, dict[str, int]] | None = None
@@ -787,8 +898,8 @@ class _TransactionalAdapter:
                         raise ValueError(
                             "result artifact pending staging evidence is incomplete"
                         )
-            elif not committed:
-                raise ValueError("result artifact pending staging evidence is missing")
+            elif not committed or tx_token not in authority.closed:
+                raise ValueError("result artifact unclosed staging evidence is missing")
             if observed_stage is not None:
                 stage = replace(stage, expected_nodes=observed_stage.nodes)
             transactions.append(
@@ -803,7 +914,8 @@ class _TransactionalAdapter:
                 )
             )
             stages.append((tx_token, observed_stage))
-            expected_names.add(name)
+            if not missing_journal:
+                expected_names.add(name)
         if not pending:
             if (
                 cp.identity != current_id
@@ -849,6 +961,13 @@ class _TransactionalAdapter:
             destination = (
                 tx.file.relative_path if tx.file is not None else "manifest.json"
             )
+            if tx.name not in nodes:
+                store.publish_journal(tx.stage, tx.name)
+            if tx.stage.token not in store.authority().published:
+                journal_visible = self._observe(store, identity)
+                store.sync()
+                self._revalidate(store, identity, journal_visible)
+                store.published(tx.stage.token)
             if destination not in nodes:
                 store.publish_file(tx.stage, destination)
             if tx.file is not None:
@@ -864,6 +983,8 @@ class _TransactionalAdapter:
         ):
             if stage_snapshot is not None:
                 store.cleanup(tx.stage, stage_snapshot)
+            if tx.stage.token not in store.authority().closed:
+                store.close(tx.stage.token)
         return self._observe(store, identity)
 
     def read(
@@ -961,8 +1082,6 @@ class _TransactionalAdapter:
                 _receipt(identity, observation.files, data, observation.context)
             else:
                 raise ValueError("result artifact transaction is invalid")
-            self._phase("before_apply")
-            self._revalidate(store, identity, observation)
             token = secrets.token_hex(32)
             sequence = len(observation.transactions) + 1
             old_cp = observation.snapshot.mapping()["checkpoint.json"]
@@ -996,11 +1115,48 @@ class _TransactionalAdapter:
                     }
                 )
 
+            name = f".protocol/txn-{sequence:06d}-{token}.json"
+            authority = store.authority()
+            if len(authority.journals) >= _MAX_ANCHOR_TRANSACTIONS:
+                raise ValueError("result artifact trusted history exceeds capacity")
+            maximum_identity = (_MAX_IDENTITY, _MAX_IDENTITY)
+            preview_stage = _Stage(
+                token,
+                maximum_identity,
+                tuple(
+                    (key, maximum_identity)
+                    for key in (
+                        "data",
+                        "journal",
+                        *(("checkpoint",) if next_cp is not None else ()),
+                    )
+                ),
+            )
+            preview = replace(
+                authority,
+                journals=(
+                    *authority.journals,
+                    _Node(name, maximum_identity, "file", journal(preview_stage)),
+                ),
+                published=(*authority.published, token),
+                claimed=(*authority.claimed, token),
+                closed=(*authority.closed, token),
+            )
+            payload = _authority_payload(preview)
+            if (
+                len(_json({"payload": payload, "sha256": _digest(_json(payload))}))
+                > _MAX_ANCHOR_BYTES
+            ):
+                raise ValueError("result artifact trusted record exceeds capacity")
+            self._phase("before_apply")
+            self._revalidate(store, identity, observation)
             stage = store.prepare(token, data, next_cp, journal)
             # Staging has not published any artifact name. Recheck the full old
             # artifact before its journal becomes visible, then recover from disk.
             self._revalidate(store, identity, observation)
-            store.publish_journal(stage, f".protocol/txn-{sequence:06d}-{token}.json")
+            store.remember(name, stage)
+            store.publish_journal(stage, name)
+            store.published(stage.token)
             published = self._observe(store, identity)
             completed = self._recover(store, identity, published)
             if action == "finalize":
@@ -1022,6 +1178,571 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
     before creating a staging object. Directory rename is exclusive; checkpoint
     replacement is a cooperative-lock operation, never an inode CAS promise.
     """
+
+    def __init__(self, *, anchor_root: Path | None = None) -> None:
+        if anchor_root is not None:
+            _path(anchor_root)
+        self._anchor_root = anchor_root
+
+    def _anchor_path(self) -> Path:
+        return (
+            self._anchor_root if self._anchor_root is not None else _DEFAULT_ANCHOR_ROOT
+        )
+
+    def _trusted_volume(self, descriptor: int) -> None:
+        if sys.platform != "darwin":
+            return
+        libc = ctypes.CDLL(None, use_errno=True)
+        symbol = {"arm64": "fstatfs", "x86_64": "fstatfs$INODE64"}.get(
+            os.uname().machine
+        )
+        if symbol is None:
+            raise ValueError("result artifact trusted volume ABI is unavailable")
+        try:
+            query = getattr(libc, symbol)
+            query.argtypes = [ctypes.c_int, ctypes.POINTER(self._DarwinStatfs)]
+            query.restype = ctypes.c_int
+            mount = self._DarwinStatfs()
+            if (
+                query(descriptor, ctypes.byref(mount)) != 0
+                or mount.f_flags & 0x00200000
+            ):
+                raise ValueError(
+                    "result artifact trusted ownership enforcement is unavailable"
+                )
+            capabilities = libc.fgetattrlist
+            capabilities.argtypes = [
+                ctypes.c_int,
+                ctypes.POINTER(self._AttrList),
+                ctypes.c_void_p,
+                ctypes.c_size_t,
+                ctypes.c_uint,
+            ]
+            capabilities.restype = ctypes.c_int
+            reply = self._Capabilities()
+            request = self._AttrList(5, 0, 0, 0x80020000, 0, 0, 0)
+            if (
+                capabilities(
+                    descriptor,
+                    ctypes.byref(request),
+                    ctypes.byref(reply),
+                    ctypes.sizeof(reply),
+                    0,
+                )
+                != 0
+                or not reply.valid[1] & 0x400
+                or not reply.capabilities[1] & 0x400
+                or not reply.valid[0] & 0x00400000
+                or reply.capabilities[0] & 0x00400000
+            ):
+                raise ValueError(
+                    "result artifact trusted permission capabilities are unavailable"
+                )
+        except AttributeError:
+            raise ValueError(
+                "result artifact trusted permission capabilities are unavailable"
+            ) from None
+
+    def _trusted_acl(self, descriptor: int) -> None:
+        self._trusted_volume(descriptor)
+        libc = ctypes.CDLL(None, use_errno=True)
+        if sys.platform == "darwin":
+            try:
+                get_acl, entry, tag, free = (
+                    libc.acl_get_fd,
+                    libc.acl_get_entry,
+                    libc.acl_get_tag_type,
+                    libc.acl_free,
+                )
+                get_acl.argtypes, get_acl.restype = [ctypes.c_int], ctypes.c_void_p
+                entry.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_int,
+                    ctypes.POINTER(ctypes.c_void_p),
+                ]
+                entry.restype = ctypes.c_int
+                tag.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+                tag.restype = ctypes.c_int
+                free.argtypes, free.restype = [ctypes.c_void_p], ctypes.c_int
+                ctypes.set_errno(0)
+                acl = get_acl(descriptor)
+                error = ctypes.get_errno()
+                if not acl:
+                    if error == errno.ENOENT:
+                        return
+                    raise ValueError("result artifact trusted ACL is unavailable")
+                try:
+                    valid = libc.acl_valid
+                    valid.argtypes, valid.restype = [ctypes.c_void_p], ctypes.c_int
+                    if valid(acl) != 0:
+                        raise ValueError(
+                            "result artifact trusted ACL handle is invalid"
+                        )
+                    current = ctypes.c_void_p()
+                    for index in range(129):
+                        ctypes.set_errno(0)
+                        result = entry(
+                            acl, 0 if index == 0 else 1, ctypes.byref(current)
+                        )
+                        error = ctypes.get_errno()
+                        if result == -1 and error == errno.EINVAL:
+                            return
+                        kind = ctypes.c_int()
+                        if (
+                            result != 0
+                            or index == 128
+                            or tag(current, ctypes.byref(kind)) != 0
+                            or kind.value != 2
+                        ):
+                            raise ValueError(
+                                "result artifact trusted ACL grants extra access"
+                            )
+                finally:
+                    if free(acl) != 0:
+                        raise ValueError("result artifact trusted ACL release failed")
+            except AttributeError:
+                raise ValueError("result artifact trusted ACL is unavailable") from None
+        elif sys.platform == "linux":
+            try:
+                query = libc.fgetxattr
+                query.argtypes = [
+                    ctypes.c_int,
+                    ctypes.c_char_p,
+                    ctypes.c_void_p,
+                    ctypes.c_size_t,
+                ]
+                query.restype = ctypes.c_ssize_t
+                metadata = os.fstat(descriptor)
+                for name in (
+                    b"system.posix_acl_access",
+                    *(
+                        (b"system.posix_acl_default",)
+                        if stat.S_ISDIR(metadata.st_mode)
+                        else ()
+                    ),
+                ):
+                    buffer = ctypes.create_string_buffer(4096)
+                    ctypes.set_errno(0)
+                    count = query(descriptor, name, buffer, len(buffer))
+                    if count < 0 and ctypes.get_errno() == errno.ENODATA:
+                        continue
+                    if count != 28 or name.endswith(b"default"):
+                        raise ValueError(
+                            "result artifact trusted ACL is unavailable or extended"
+                        )
+                    encoded = buffer.raw[:28]
+                    if int.from_bytes(encoded[:4], "little") != 2:
+                        raise ValueError("result artifact trusted ACL is invalid")
+                    for offset, kind, permissions in (
+                        (4, 1, (metadata.st_mode >> 6) & 7),
+                        (12, 4, (metadata.st_mode >> 3) & 7),
+                        (20, 32, metadata.st_mode & 7),
+                    ):
+                        if (
+                            int.from_bytes(encoded[offset : offset + 2], "little"),
+                            int.from_bytes(encoded[offset + 2 : offset + 4], "little"),
+                            int.from_bytes(encoded[offset + 4 : offset + 8], "little"),
+                        ) != (kind, permissions, 0xFFFFFFFF):
+                            raise ValueError("result artifact trusted ACL is extended")
+            except AttributeError:
+                raise ValueError("result artifact trusted ACL is unavailable") from None
+        else:
+            raise ValueError("result artifact trusted ACL is unavailable")
+
+    def _trusted(
+        self, descriptor: int, *, private: bool = False, file: bool = False
+    ) -> None:
+        metadata = os.fstat(descriptor)
+        if metadata.st_uid not in ({os.geteuid()} if private else {os.geteuid(), 0}):
+            raise ValueError("result artifact trusted owner is invalid")
+        mode = stat.S_IMODE(metadata.st_mode)
+        if file:
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or mode != 0o600
+                or metadata.st_nlink != 1
+            ):
+                raise ValueError(
+                    "result artifact trusted record permissions are invalid"
+                )
+        elif not stat.S_ISDIR(metadata.st_mode) or (private and mode != 0o700):
+            raise ValueError(
+                "result artifact trusted directory permissions are invalid"
+            )
+        elif mode & 0o022 and not (metadata.st_uid == 0 and mode & stat.S_ISVTX):
+            raise ValueError("result artifact trusted ancestor permits replacement")
+        self._trusted_acl(descriptor)
+
+    @contextmanager
+    def _anchor_directory(self, path: Path, *, create: bool = False) -> Iterator[int]:
+        anchor = self._anchor_path()
+        if anchor == path or anchor in path.parents or path in anchor.parents:
+            raise ValueError("result artifact and trusted store overlap")
+        descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            self._trusted(descriptor)
+            components = anchor.parts[1:]
+            for index, component in enumerate(components):
+                private = index == len(components) - 1
+                try:
+                    following = os.open(
+                        component,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                except FileNotFoundError:
+                    if not create:
+                        raise ValueError(
+                            "result artifact trusted store is missing"
+                        ) from None
+                    if index == len(components) - 1:
+                        # Only bootstrap uses a shared short lock. Artifact work
+                        # and all later record updates keep their per-root lock.
+                        fcntl.flock(descriptor, fcntl.LOCK_EX)
+                        try:
+                            try:
+                                concurrent = os.open(
+                                    component,
+                                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                    dir_fd=descriptor,
+                                )
+                            except FileNotFoundError:
+                                concurrent = None
+                            if concurrent is not None:
+                                os.close(concurrent)
+                            else:
+                                temporary = component + ".preparing"
+                                try:
+                                    os.mkdir(temporary, 0o700, dir_fd=descriptor)
+                                except FileExistsError:
+                                    pass
+                                self._phase("after_anchor_bootstrap_directory_created")
+                                prepared = os.open(
+                                    temporary,
+                                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                    dir_fd=descriptor,
+                                )
+                                try:
+                                    self._trusted(prepared, private=True)
+                                    if not set(os.listdir(prepared)) <= {
+                                        "domain.json",
+                                        "domain.json.pending",
+                                        "quarantine",
+                                    }:
+                                        raise ValueError(
+                                            "result artifact bootstrap inventory is invalid"
+                                        )
+                                    # An unpublished protected preparation may be
+                                    # completed, never an already published store.
+                                    expected_domain: dict[str, object] = {
+                                        "schema": "result-artifact-anchor-store@1.0",
+                                        "identity": _hex_identity(
+                                            self._id(os.fstat(prepared))
+                                        ),
+                                    }
+                                    if "domain.json" in os.listdir(prepared):
+                                        if (
+                                            self._anchor_read(prepared, "domain.json")
+                                            != expected_domain
+                                        ):
+                                            raise ValueError(
+                                                "result artifact bootstrap marker is damaged"
+                                            )
+                                    else:
+                                        self._anchor_write(
+                                            prepared, "domain.json", expected_domain
+                                        )
+                                    try:
+                                        os.mkdir("quarantine", 0o700, dir_fd=prepared)
+                                    except FileExistsError:
+                                        pass
+                                    quarantine = os.open(
+                                        "quarantine",
+                                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                        dir_fd=prepared,
+                                    )
+                                    try:
+                                        self._trusted(quarantine, private=True)
+                                        if os.listdir(quarantine):
+                                            raise ValueError(
+                                                "result artifact bootstrap quarantine is invalid"
+                                            )
+                                        self._sync_fd(quarantine, directory=True)
+                                    finally:
+                                        os.close(quarantine)
+                                    self._sync_fd(prepared, directory=True)
+                                    self._sync_fd(descriptor, directory=True)
+                                    self._phase("after_anchor_bootstrap_prepared")
+                                    self._rename_exclusive(
+                                        descriptor, temporary, component
+                                    )
+                                    self._phase("after_anchor_store_publication")
+                                    self._sync_fd(descriptor, directory=True)
+                                finally:
+                                    os.close(prepared)
+                        finally:
+                            fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    else:
+                        try:
+                            os.mkdir(component, 0o700, dir_fd=descriptor)
+                        except FileExistsError:
+                            pass
+                        self._phase("after_anchor_directory_created")
+                        self._sync_fd(descriptor, directory=True)
+                    following = os.open(
+                        component,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                if index >= len(components) - 3:
+                    # Re-prove a parent entry left readable by an interrupted
+                    # mkdir/publication before treating the child as durable.
+                    self._sync_fd(descriptor, directory=True)
+                os.close(descriptor)
+                descriptor = following
+                self._trusted(descriptor, private=private)
+            self._supported(descriptor)
+            with self._parent(path) as (parent, _):
+                if os.fstat(parent).st_dev != os.fstat(descriptor).st_dev:
+                    raise ValueError(
+                        "result artifact trusted store must use the same filesystem"
+                    )
+            yield descriptor
+        finally:
+            os.close(descriptor)
+
+    def _bootstrap_preflight(self, parent: int, name: str) -> None:
+        try:
+            prepared = os.open(
+                name + ".preparing",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent,
+            )
+        except FileNotFoundError:
+            return
+        try:
+            self._trusted(prepared, private=True)
+            names = set(os.listdir(prepared))
+            if not names <= {"domain.json", "domain.json.pending", "quarantine"}:
+                raise ValueError("result artifact bootstrap inventory is invalid")
+            for filename in names - {"quarantine"}:
+                descriptor = os.open(
+                    filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=prepared
+                )
+                try:
+                    self._trusted(descriptor, private=True, file=True)
+                    if os.fstat(descriptor).st_size > _MAX_ANCHOR_BYTES:
+                        raise ValueError(
+                            "result artifact bootstrap preparation exceeds capacity"
+                        )
+                finally:
+                    os.close(descriptor)
+            if "domain.json" in names and self._anchor_read(
+                prepared, "domain.json"
+            ) != {
+                "schema": "result-artifact-anchor-store@1.0",
+                "identity": _hex_identity(self._id(os.fstat(prepared))),
+            }:
+                raise ValueError("result artifact bootstrap marker is damaged")
+            if "quarantine" in names:
+                quarantine = os.open(
+                    "quarantine",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=prepared,
+                )
+                try:
+                    self._trusted(quarantine, private=True)
+                    if os.listdir(quarantine):
+                        raise ValueError(
+                            "result artifact bootstrap quarantine is invalid"
+                        )
+                finally:
+                    os.close(quarantine)
+        finally:
+            os.close(prepared)
+
+    def _anchor_preflight(self, path: Path, parent: int, *, creation: bool) -> None:
+        anchor = self._anchor_path()
+        _path(anchor)
+        if anchor == path or anchor in path.parents or path in anchor.parents:
+            raise ValueError("result artifact and trusted store overlap")
+        descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        missing = False
+        try:
+            self._trusted(descriptor)
+            components = anchor.parts[1:]
+            for index, component in enumerate(components):
+                try:
+                    following = os.open(
+                        component,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                except FileNotFoundError:
+                    if index == len(components) - 1:
+                        self._bootstrap_preflight(descriptor, component)
+                    missing = True
+                    break
+                os.close(descriptor)
+                descriptor = following
+                self._trusted(descriptor, private=index == len(components) - 1)
+            self._supported(descriptor)
+            if os.fstat(descriptor).st_dev != os.fstat(parent).st_dev:
+                raise ValueError(
+                    "result artifact trusted store must use the same filesystem"
+                )
+            if creation:
+                if (
+                    os.access not in os.supports_dir_fd
+                    or os.access not in os.supports_effective_ids
+                    or not os.access(
+                        ".", os.W_OK | os.X_OK, dir_fd=descriptor, effective_ids=True
+                    )
+                ):
+                    raise ValueError("result artifact trusted store must be writable")
+            if missing and not creation:
+                raise ValueError("result artifact trusted store is missing")
+            if not missing:
+                domain = self._anchor_read(descriptor, "domain.json")
+                if (
+                    set(domain) != {"schema", "identity"}
+                    or domain["schema"] != "result-artifact-anchor-store@1.0"
+                    or _parse_identity(domain["identity"])
+                    != self._id(os.fstat(descriptor))
+                ):
+                    raise ValueError("result artifact trusted domain is invalid")
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _anchor_key(identity: _FileIdentity) -> str:
+        return "-".join(_hex_identity(identity)) + ".json"
+
+    def _anchor_read(self, directory: int, name: str) -> dict[str, object]:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        try:
+            self._trusted(descriptor, private=True, file=True)
+            envelope = _object(
+                self._read(descriptor, _MAX_ANCHOR_BYTES), _MAX_ANCHOR_BYTES
+            )
+            if (
+                set(envelope) != {"payload", "sha256"}
+                or _digest(_json(envelope["payload"])) != envelope["sha256"]
+                or type(envelope["payload"]) is not dict
+            ):
+                raise ValueError("result artifact trusted record is damaged")
+            return cast(dict[str, object], envelope["payload"])
+        finally:
+            os.close(descriptor)
+
+    def _anchor_write(
+        self,
+        directory: int,
+        name: str,
+        payload: dict[str, object],
+        *,
+        exclusive: bool = False,
+    ) -> None:
+        encoded = _json({"payload": payload, "sha256": _digest(_json(payload))})
+        if len(encoded) > _MAX_ANCHOR_BYTES:
+            raise ValueError("result artifact trusted record exceeds capacity")
+        temporary = name + ".pending"
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory,
+            )
+        except FileExistsError:
+            descriptor = os.open(temporary, os.O_RDWR | os.O_NOFOLLOW, dir_fd=directory)
+            self._trusted(descriptor, private=True, file=True)
+            os.ftruncate(descriptor, 0)
+        try:
+            self._phase("after_anchor_record_created")
+            self._write(descriptor, encoded)
+            self._phase("after_anchor_record_written")
+        finally:
+            os.close(descriptor)
+        if exclusive:
+            self._rename_exclusive(directory, temporary, name)
+        else:
+            os.rename(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+        self._phase("after_anchor_record_publication")
+        self._sync_fd(directory, directory=True)
+
+    def _anchor_load(self, path: Path, identity: _FileIdentity) -> _Authority:
+        with self._anchor_directory(path) as directory:
+            domain = self._anchor_read(directory, "domain.json")
+            if (
+                set(domain) != {"schema", "identity"}
+                or domain["schema"] != "result-artifact-anchor-store@1.0"
+                or _parse_identity(domain["identity"]) != self._id(os.fstat(directory))
+            ):
+                raise ValueError("result artifact trusted domain is invalid")
+            name = self._anchor_key(identity)
+            authority = _authority_from(self._anchor_read(directory, name))
+            try:
+                pending = os.open(
+                    name + ".pending", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory
+                )
+            except FileNotFoundError:
+                pending = None
+            if pending is not None:
+                try:
+                    self._trusted(pending, private=True, file=True)
+                    if os.fstat(pending).st_size > _MAX_ANCHOR_BYTES:
+                        raise ValueError(
+                            "result artifact trusted preparation exceeds capacity"
+                        )
+                finally:
+                    os.close(pending)
+            quarantine = os.open(
+                "quarantine",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=directory,
+            )
+            try:
+                self._trusted(quarantine, private=True)
+                expected = {
+                    name + "." + _identifier(_object(node.encoded)["token"])
+                    for node in authority.journals
+                }
+                related = {
+                    item
+                    for item in os.listdir(quarantine)
+                    if item.startswith(name + ".")
+                }
+                if not related <= expected:
+                    raise ValueError(
+                        "result artifact trusted quarantine has unknown inventory"
+                    )
+            finally:
+                os.close(quarantine)
+            return authority
+
+    def _anchor_save(
+        self,
+        path: Path,
+        identity: _FileIdentity,
+        authority: _Authority,
+        *,
+        creation: bool = False,
+    ) -> None:
+        with self._anchor_directory(path, create=creation) as directory:
+            domain = self._anchor_read(directory, "domain.json")
+            if (
+                set(domain) != {"schema", "identity"}
+                or domain["schema"] != "result-artifact-anchor-store@1.0"
+                or _parse_identity(domain["identity"]) != self._id(os.fstat(directory))
+            ):
+                raise ValueError("result artifact trusted domain is invalid")
+            self._anchor_write(
+                directory,
+                self._anchor_key(identity),
+                _authority_payload(authority),
+                exclusive=creation,
+            )
 
     class _AttrList(ctypes.Structure):
         _fields_ = [
@@ -1155,7 +1876,13 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
             raise ValueError("result artifact production persistence is unavailable")
         self._sync_fd(directory, directory=True)
 
-    def _rename_exclusive(self, parent: int, source: str, destination: str) -> None:
+    def _rename_exclusive(
+        self,
+        parent: int,
+        source: str,
+        destination: str,
+        destination_parent: int | None = None,
+    ) -> None:
         libc = ctypes.CDLL(None, use_errno=True)
         function = libc.renameatx_np if sys.platform == "darwin" else libc.renameat2
         function.argtypes = [
@@ -1169,7 +1896,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
         result = function(
             parent,
             os.fsencode(source),
-            parent,
+            parent if destination_parent is None else destination_parent,
             os.fsencode(destination),
             4 if sys.platform == "darwin" else 1,
         )
@@ -1380,20 +2107,108 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
             self._anchor()
             return value
 
-        def stage_snapshot(self, token: str) -> _Snapshot | None:
+        def authority(self) -> _Authority:
             self._anchor()
+            return self.adapter._anchor_load(self.path, self.root_identity)
+
+        def remember(self, name: str, stage: _Stage) -> None:
+            authority = self.authority()
+            if len(authority.journals) >= _MAX_ANCHOR_TRANSACTIONS:
+                raise ValueError("result artifact trusted history exceeds capacity")
+            journal = _Node(
+                name, stage.identities()["journal"], "file", stage.journal_bytes
+            )
+            self.adapter._anchor_save(
+                self.path,
+                self.root_identity,
+                replace(authority, journals=(*authority.journals, journal)),
+            )
+            self.adapter._phase("after_anchor_transaction_commitment")
+
+        def published(self, token: str) -> None:
+            authority = self.authority()
+            if token not in authority.published:
+                self.adapter._anchor_save(
+                    self.path,
+                    self.root_identity,
+                    replace(authority, published=(*authority.published, token)),
+                )
+                self.adapter._phase("after_anchor_journal_published")
+
+        def close(self, token: str) -> None:
+            authority = self.authority()
+            if token not in authority.claimed:
+                raise ValueError("result artifact staging move is not committed")
+            if token not in authority.closed:
+                self.adapter._anchor_save(
+                    self.path,
+                    self.root_identity,
+                    replace(authority, closed=(*authority.closed, token)),
+                )
+                self.adapter._phase("after_anchor_cleanup_closure")
+
+        @contextmanager
+        def _quarantine(self) -> Iterator[int]:
+            with self.adapter._anchor_directory(self.path) as anchors:
+                descriptor = os.open(
+                    "quarantine",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=anchors,
+                )
+                try:
+                    self.adapter._trusted(descriptor, private=True)
+                    yield descriptor
+                finally:
+                    os.close(descriptor)
+
+        def _quarantine_name(self, token: str) -> str:
+            return self.adapter._anchor_key(self.root_identity) + "." + token
+
+        def _stage_at(self, directory: int, name: str) -> _Snapshot | None:
             try:
                 descriptor = os.open(
-                    f".result-artifact-{token}.stage",
+                    name,
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=self.parent,
+                    dir_fd=directory,
                 )
             except FileNotFoundError:
                 return None
             try:
-                return self.adapter._scan(descriptor)
+                value = self.adapter._scan(descriptor)
+                if (
+                    self.adapter._id(
+                        os.stat(
+                            name,
+                            dir_fd=directory,
+                            follow_symlinks=False,
+                        )
+                    )
+                    != value.identity
+                ):
+                    raise ValueError("result artifact staging name changed")
+                return value
             finally:
                 os.close(descriptor)
+
+        def stage_snapshot(self, token: str) -> _Snapshot | None:
+            self._anchor()
+            authority = self.authority()
+            external = self._stage_at(self.parent, f".result-artifact-{token}.stage")
+            with self._quarantine() as directory:
+                quarantined = self._stage_at(directory, self._quarantine_name(token))
+            if external is not None and (
+                token in authority.closed or quarantined is not None
+            ):
+                raise ValueError("result artifact closed or duplicated staging name")
+            if quarantined is not None and token not in authority.claimed:
+                raise ValueError("result artifact uncommitted quarantine entry")
+            if (
+                token in authority.claimed
+                and token not in authority.closed
+                and (external is None and quarantined is None)
+            ):
+                raise ValueError("result artifact committed staging move is missing")
+            return external if external is not None else quarantined
 
         def prepare(
             self,
@@ -1555,39 +2370,67 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
 
         def cleanup(self, stage: _Stage, observed: _Snapshot) -> None:
             self._anchor()
-            with self._stage(stage) as descriptor:
-                remaining = observed.mapping()
-                for name in sorted(remaining):
-                    self._anchor()
-                    actual = self.adapter._scan(descriptor)
-                    if (
-                        actual.identity != observed.identity
-                        or actual.mapping() != remaining
+            if self.stage_snapshot(stage.token) != observed:
+                raise ValueError("result artifact staging changed before cleanup")
+            authority = self.authority()
+            if stage.token not in authority.claimed:
+                self.adapter._anchor_save(
+                    self.path,
+                    self.root_identity,
+                    replace(authority, claimed=(*authority.claimed, stage.token)),
+                )
+                self.adapter._phase("after_anchor_stage_claimed")
+            with self._quarantine() as quarantine:
+                name = self._quarantine_name(stage.token)
+                external_name = f".result-artifact-{stage.token}.stage"
+                external = self._stage_at(self.parent, external_name)
+                quarantined = self._stage_at(quarantine, name)
+                if external is not None:
+                    if quarantined is not None or external != observed:
+                        raise ValueError("result artifact staging changed before move")
+                    # Only the exact inventory observed before apply may enter trust.
+                    self.adapter._rename_exclusive(
+                        self.parent, external_name, name, quarantine
+                    )
+                    self.adapter._phase("after_anchor_stage_quarantined")
+                if self.stage_snapshot(stage.token) != observed:
+                    raise ValueError("result artifact quarantined staging changed")
+                self.adapter._sync_fd(self.parent, directory=True)
+                self.adapter._sync_fd(quarantine, directory=True)
+                self.close(stage.token)
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=quarantine,
+                )
+                try:
+                    remaining = observed.mapping()
+                    for item in sorted(remaining):
+                        self._anchor()
+                        actual = self.adapter._scan(descriptor)
+                        if (
+                            actual.identity != observed.identity
+                            or actual.mapping() != remaining
+                            or self.stage_snapshot(stage.token) != actual
+                        ):
+                            raise ValueError(
+                                "result artifact quarantine changed during cleanup"
+                            )
+                        os.unlink(item, dir_fd=descriptor)
+                        del remaining[item]
+                        self.adapter._phase("after_stage_cleanup_item")
+                        self.adapter._sync_fd(descriptor, directory=True)
+                    if self._stage_at(quarantine, name) != _Snapshot(
+                        observed.identity, ()
                     ):
                         raise ValueError(
-                            "result artifact staging state changed during cleanup"
+                            "result artifact quarantine changed during cleanup"
                         )
-                    os.unlink(name, dir_fd=descriptor)
-                    del remaining[name]
-                    self.adapter._phase("after_stage_cleanup_item")
-                    self.adapter._sync_fd(descriptor, directory=True)
-                self._anchor()
-                if self.adapter._scan(descriptor).nodes:
-                    raise ValueError(
-                        "result artifact staging state changed during cleanup"
-                    )
-                metadata = os.stat(
-                    f".result-artifact-{stage.token}.stage",
-                    dir_fd=self.parent,
-                    follow_symlinks=False,
-                )
-                if self.adapter._id(metadata) != stage.identity:
-                    raise ValueError(
-                        "result artifact staging directory identity changed"
-                    )
-                os.rmdir(f".result-artifact-{stage.token}.stage", dir_fd=self.parent)
-                self.adapter._phase("after_stage_cleanup")
-                self.adapter._sync_fd(self.parent, directory=True)
+                    os.rmdir(name, dir_fd=quarantine)
+                    self.adapter._phase("after_stage_cleanup")
+                    self.adapter._sync_fd(quarantine, directory=True)
+                finally:
+                    os.close(descriptor)
 
         def sync(self) -> None:
             self._anchor()
@@ -1631,6 +2474,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                 fcntl.flock(root, fcntl.LOCK_EX)
                 try:
                     self._supported(parent)
+                    self._anchor_preflight(path, parent, creation=False)
                     session = self._Session(self, path, parent, chain, root)
                     session._anchor()
                     yield session
@@ -1672,6 +2516,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
         initial = _checkpoint(identity, context=context)
         with self._parent(path) as (parent, chain):
             self._supported(parent)
+            self._anchor_preflight(path, parent, creation=True)
             try:
                 os.stat(path.name, dir_fd=parent, follow_symlinks=False)
             except FileNotFoundError:
@@ -1705,6 +2550,7 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                 pass
             else:
                 raise ValueError("result artifact create target changed before apply")
+            self._anchor_preflight(path, parent, creation=True)
             token = secrets.token_hex(32)
             stage_name = f".result-artifact-create-{token}.stage"
             os.mkdir(stage_name, 0o700, dir_fd=parent)
@@ -1858,6 +2704,19 @@ class ProductionFilesystemAdapter(_TransactionalAdapter):
                     raise ValueError(
                         "result artifact prepared root name, identity or inventory changed"
                     )
+                self._anchor_save(
+                    path,
+                    root_id,
+                    _Authority(
+                        next(
+                            node
+                            for node in prepared_root.nodes
+                            if node.relative_path == owner_name
+                        )
+                    ),
+                    creation=True,
+                )
+                self._phase("after_anchor_creation_commitment")
                 # The complete self-identifying root is prepared and durable before
                 # its first public name. RENAME_EXCL never adopts an empty caller dir.
                 self._rename_exclusive(parent, stage_name, path.name)
@@ -1909,6 +2768,10 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
         )
         self._roots: dict[str, _MemoryRoot] = {}
         self._stages: dict[tuple[str, str], _Snapshot] = {}
+        self._quarantined: dict[tuple[str, str], _Snapshot] = {}
+        self._authorities: dict[_FileIdentity, _Authority] = {}
+        self._pending_authorities: dict[_FileIdentity, _Authority | None] = {}
+        self._trusted_bootstrapped = False
         self._next_identity = identity_start
         self._allocation_lock = threading.RLock()
         self._fault: tuple[str, int, BaseException] | None = None
@@ -1958,6 +2821,42 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
         kind = "directory" if directory else "file"
         self._phase(f"before_{kind}_fsync")
         self._phase(f"after_{kind}_fsync")
+
+    def _commit_authority(self, identity: _FileIdentity, authority: _Authority) -> None:
+        payload = _authority_payload(authority)
+        encoded = _json({"payload": payload, "sha256": _digest(_json(payload))})
+        if len(encoded) > _MAX_ANCHOR_BYTES:
+            raise ValueError("result artifact trusted record exceeds capacity")
+        self._pending_authorities[identity] = None
+        self._phase("after_anchor_record_created")
+        self._pending_authorities[identity] = authority
+        self._sync()
+        self._phase("after_anchor_record_written")
+        self._authorities[identity] = authority
+        del self._pending_authorities[identity]
+        self._phase("after_anchor_record_publication")
+        self._sync(directory=True)
+
+    def _bootstrap_authority(self) -> None:
+        with self._allocation_lock:
+            if not self._trusted_bootstrapped:
+                self._phase("after_anchor_directory_created")
+                self._sync(directory=True)
+                self._phase("after_anchor_bootstrap_directory_created")
+                self._phase("after_anchor_record_created")
+                self._sync()
+                self._phase("after_anchor_record_written")
+                self._phase("after_anchor_record_publication")
+                self._sync(directory=True)
+                self._sync(directory=True)
+                self._phase("after_anchor_bootstrap_prepared")
+                self._trusted_bootstrapped = True
+                self._phase("after_anchor_store_publication")
+                self._sync(directory=True)
+
+    def remove_trusted_record(self, path: Path) -> None:
+        """A controlled fixture loss in the independent trusted domain."""
+        del self._authorities[self._roots[str(path)].identity]
 
     def exists(self, path: Path) -> bool:
         return str(path) in self._roots
@@ -2039,6 +2938,9 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
         )
         root = _MemoryRoot(root_id, nodes, threading.RLock())
         with root.lock:
+            self._bootstrap_authority()
+            self._commit_authority(root_id, _Authority(nodes[owner_name]))
+            self._phase("after_anchor_creation_commitment")
             # Only the exclusive namespace publication uses the allocator lock;
             # durability/fault/transaction work stays in this artifact's domain.
             with self._allocation_lock:
@@ -2068,9 +2970,88 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
             self._anchor()
             return self.adapter.inventory(self.path)
 
+        def authority(self) -> _Authority:
+            self._anchor()
+            try:
+                authority = self.adapter._authorities[self.root_identity]
+                tokens = {
+                    _identifier(_object(node.encoded)["token"])
+                    for node in authority.journals
+                }
+                if any(
+                    path == str(self.path) and token not in tokens
+                    for path, token in self.adapter._quarantined
+                ):
+                    raise ValueError(
+                        "result artifact trusted quarantine has unknown inventory"
+                    )
+                return authority
+            except KeyError:
+                raise ValueError("result artifact trusted record is missing") from None
+
+        def remember(self, name: str, stage: _Stage) -> None:
+            authority = self.authority()
+            if len(authority.journals) >= _MAX_ANCHOR_TRANSACTIONS:
+                raise ValueError("result artifact trusted history exceeds capacity")
+            self.adapter._commit_authority(
+                self.root_identity,
+                replace(
+                    authority,
+                    journals=(
+                        *authority.journals,
+                        _Node(
+                            name,
+                            stage.identities()["journal"],
+                            "file",
+                            stage.journal_bytes,
+                        ),
+                    ),
+                ),
+            )
+            self.adapter._phase("after_anchor_transaction_commitment")
+
+        def published(self, token: str) -> None:
+            authority = self.authority()
+            if token not in authority.published:
+                self.adapter._commit_authority(
+                    self.root_identity,
+                    replace(authority, published=(*authority.published, token)),
+                )
+                self.adapter._phase("after_anchor_journal_published")
+
+        def close(self, token: str) -> None:
+            authority = self.authority()
+            if token not in authority.claimed:
+                raise ValueError("result artifact staging move is not committed")
+            if token not in authority.closed:
+                self.adapter._commit_authority(
+                    self.root_identity,
+                    replace(authority, closed=(*authority.closed, token)),
+                )
+                self.adapter._phase("after_anchor_cleanup_closure")
+
         def stage_snapshot(self, token: str) -> _Snapshot | None:
             self._anchor()
-            return self.adapter._stages.get((str(self.path), token))
+            authority = self.authority()
+            key = (str(self.path), token)
+            external, quarantined = (
+                self.adapter._stages.get(key),
+                self.adapter._quarantined.get(key),
+            )
+            if external is not None and (
+                token in authority.closed or quarantined is not None
+            ):
+                raise ValueError("result artifact closed or duplicated staging name")
+            if quarantined is not None and token not in authority.claimed:
+                raise ValueError("result artifact uncommitted quarantine entry")
+            if (
+                token in authority.claimed
+                and token not in authority.closed
+                and external is None
+                and quarantined is None
+            ):
+                raise ValueError("result artifact committed staging move is missing")
+            return external if external is not None else quarantined
 
         def prepare(
             self,
@@ -2194,6 +3175,22 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
             self._anchor()
             if self._stage(stage) != observed:
                 raise ValueError("result artifact staging state changed before cleanup")
+            authority = self.authority()
+            if stage.token not in authority.claimed:
+                self.adapter._commit_authority(
+                    self.root_identity,
+                    replace(authority, claimed=(*authority.claimed, stage.token)),
+                )
+                self.adapter._phase("after_anchor_stage_claimed")
+            key = (str(self.path), stage.token)
+            if key in self.adapter._stages:
+                if key in self.adapter._quarantined:
+                    raise ValueError("result artifact duplicated staging name")
+                self.adapter._quarantined[key] = self.adapter._stages.pop(key)
+                self.adapter._phase("after_anchor_stage_quarantined")
+            self.adapter._sync(directory=True)
+            self.adapter._sync(directory=True)
+            self.close(stage.token)
             remaining = observed.mapping()
             for name in sorted(remaining):
                 current = self.stage_snapshot(stage.token)
@@ -2206,13 +3203,13 @@ class DeterministicFilesystemAdapter(_TransactionalAdapter):
                         "result artifact staging state changed during cleanup"
                     )
                 del remaining[name]
-                self.adapter._stages[(str(self.path), stage.token)] = _Snapshot(
+                self.adapter._quarantined[key] = _Snapshot(
                     observed.identity,
                     tuple(sorted(remaining.values(), key=lambda n: n.relative_path)),
                 )
                 self.adapter._phase("after_stage_cleanup_item")
                 self.adapter._sync(directory=True)
-            del self.adapter._stages[(str(self.path), stage.token)]
+            del self.adapter._quarantined[key]
             self.adapter._phase("after_stage_cleanup")
             self.adapter._sync(directory=True)
 

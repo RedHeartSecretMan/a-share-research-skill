@@ -58,7 +58,22 @@ def partition(index: int = 0):
     )
 
 
-class ResultArtifactTests(unittest.TestCase):
+class _IsolatedArtifactTest(unittest.TestCase):
+    def setUp(self) -> None:
+        from unittest.mock import patch
+        import a_share_research.result_artifact as module
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.anchor_root = (
+            Path(temporary.name).resolve() / ".state" / "result-artifact-anchors" / "v1"
+        )
+        isolated = patch.object(module, "_DEFAULT_ANCHOR_ROOT", self.anchor_root)
+        isolated.start()
+        self.addCleanup(isolated.stop)
+
+
+class ResultArtifactTests(_IsolatedArtifactTest):
     def test_complete_lifecycle_returns_original_receipt_on_resume(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "artifact"
@@ -130,7 +145,7 @@ class ResultArtifactTests(unittest.TestCase):
             )
 
 
-class ResultArtifactRecoveryTests(unittest.TestCase):
+class ResultArtifactRecoveryTests(_IsolatedArtifactTest):
     def test_each_publication_interruption_is_recoverable_and_write_once(self) -> None:
         phases = (
             "after_journal_publication",
@@ -294,11 +309,15 @@ from pathlib import Path
 from tests.test_result_artifact import artifact_identity, artifact_coverage, partition, frozen_context
 from a_share_research.result_artifact import ProductionFilesystemAdapter, ResultArtifact
 class CrashAdapter(ProductionFilesystemAdapter):
+    seen = 0
     def _phase(self, phase):
-        if phase == sys.argv[3]:
-            os._exit(77)
+        wanted, _, occurrence = sys.argv[3].partition("@")
+        if phase == wanted:
+            self.seen += 1
+            if self.seen == int(occurrence or "1"):
+                os._exit(77)
 root, action = Path(sys.argv[1]), sys.argv[2]
-identity, adapter = artifact_identity(), CrashAdapter()
+identity, adapter = artifact_identity(), CrashAdapter(anchor_root=Path(sys.argv[4]))
 if action in {"create", "context-create"}:
     result = ResultArtifact.create(root, identity, filesystem=adapter,
                                    initial_context=frozen_context() if action == "context-create" else None)
@@ -331,14 +350,22 @@ def filesystem_tree(root: Path):
     )
 
 
-class ResultArtifactProductionRecoveryTests(unittest.TestCase):
+class ResultArtifactProductionRecoveryTests(_IsolatedArtifactTest):
     def run_process(self, root: Path, action: str, phase: str = ""):
         import os
         import subprocess
         import sys
 
         return subprocess.run(
-            [sys.executable, "-c", _PROCESS, str(root), action, phase],
+            [
+                sys.executable,
+                "-c",
+                _PROCESS,
+                str(root),
+                action,
+                phase,
+                str(self.anchor_root),
+            ],
             cwd=Path(__file__).resolve().parents[1],
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             capture_output=True,
@@ -541,7 +568,7 @@ class ResultArtifactProductionRecoveryTests(unittest.TestCase):
             self.assertEqual(filesystem_tree(Path(temporary).resolve()), before)
 
 
-class ResultArtifactConfinementTests(unittest.TestCase):
+class ResultArtifactConfinementTests(_IsolatedArtifactTest):
     def test_raw_production_persistence_is_confined_and_alias_gate_is_sensitive(
         self,
     ) -> None:
@@ -709,7 +736,7 @@ def frozen_context():
     )
 
 
-class ResultArtifactContextTests(unittest.TestCase):
+class ResultArtifactContextTests(_IsolatedArtifactTest):
     def test_initial_context_is_frozen_without_pretending_a_shard_is_complete(
         self,
     ) -> None:
@@ -773,7 +800,7 @@ class ResultArtifactContextTests(unittest.TestCase):
         self.assertEqual(filesystem.inventory(root), before)
 
 
-class ResultArtifactContextBoundaryTests(unittest.TestCase):
+class ResultArtifactContextBoundaryTests(_IsolatedArtifactTest):
     run_process = ResultArtifactProductionRecoveryTests.run_process
     assert_process_ok = ResultArtifactProductionRecoveryTests.assert_process_ok
 
@@ -886,7 +913,7 @@ class ResultArtifactContextBoundaryTests(unittest.TestCase):
                 )
 
 
-class ResultArtifactPreparationAbortTests(unittest.TestCase):
+class ResultArtifactPreparationAbortTests(_IsolatedArtifactTest):
     run_process = ResultArtifactProductionRecoveryTests.run_process
     assert_process_ok = ResultArtifactProductionRecoveryTests.assert_process_ok
 
@@ -979,7 +1006,7 @@ class ResultArtifactPreparationAbortTests(unittest.TestCase):
             self.assertEqual(filesystem_tree(root), caller_state[0])
 
 
-class ResultArtifactReadTests(unittest.TestCase):
+class ResultArtifactReadTests(_IsolatedArtifactTest):
     def test_only_completed_files_are_read_through_a_validated_transaction(
         self,
     ) -> None:
@@ -1010,7 +1037,7 @@ class ResultArtifactReadTests(unittest.TestCase):
         self.assertEqual(filesystem.inventory(root), before)
 
 
-class ResultArtifactConcurrencyTests(unittest.TestCase):
+class ResultArtifactConcurrencyTests(_IsolatedArtifactTest):
     def test_two_live_handles_can_write_concurrently_without_losing_a_shard(
         self,
     ) -> None:
@@ -1058,7 +1085,7 @@ class BarrierAdapter(ProductionFilesystemAdapter):
                     raise RuntimeError("create barrier timed out")
                 time.sleep(0.005)
 try:
-    ResultArtifact.create(Path(sys.argv[1]), artifact_identity(), filesystem=BarrierAdapter())
+    ResultArtifact.create(Path(sys.argv[1]), artifact_identity(), filesystem=BarrierAdapter(anchor_root=Path(sys.argv[3])))
     print("winner")
 except ValueError:
     print("refused")
@@ -1069,7 +1096,14 @@ except ValueError:
             ready.mkdir()
             processes = [
                 subprocess.Popen(
-                    [sys.executable, "-c", worker, str(root), str(ready)],
+                    [
+                        sys.executable,
+                        "-c",
+                        worker,
+                        str(root),
+                        str(ready),
+                        str(self.anchor_root),
+                    ],
                     cwd=Path(__file__).resolve().parents[1],
                     env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
                     stdout=subprocess.PIPE,
@@ -1194,7 +1228,7 @@ except ValueError:
         )
 
 
-class ResultArtifactAdversarialFilesystemTests(unittest.TestCase):
+class ResultArtifactAdversarialFilesystemTests(_IsolatedArtifactTest):
     run_process = ResultArtifactProductionRecoveryTests.run_process
     assert_process_ok = ResultArtifactProductionRecoveryTests.assert_process_ok
 
@@ -1297,20 +1331,24 @@ class ResultArtifactAdversarialFilesystemTests(unittest.TestCase):
                 holding = False
 
                 def _phase(self, phase):
-                    if self.holding and phase == "after_checkpoint_replacement":
+                    if self.holding and phase == "after_anchor_cleanup_closure":
                         self.holding = False
-                        stage = next(parent.glob(".result-artifact-*.stage"))
-                        destination = parent / f"held-owned-{len(held)}"
+                        stage = next((self._anchor_path() / "quarantine").iterdir())
+                        destination = self._anchor_path() / f"held-owned-{len(held)}"
                         held.append((stage, destination))
                         stage.rename(destination)
+                        raise KeyboardInterrupt(
+                            "closed cleanup residue held by fixture"
+                        )
 
-            adapter = HeldStageAdapter()
+            adapter = HeldStageAdapter(anchor_root=self.anchor_root)
             handle = ResultArtifact.create(root, identity, filesystem=adapter)
             for index in range(2):
                 adapter.holding = True
-                handle.write_completed_partition(partition(index))
-            # Restore two exact durably journal-owned directories/inodes. No
-            # copies or invented token/ownership records enter this fixture.
+                with self.assertRaises(KeyboardInterrupt):
+                    handle.write_completed_partition(partition(index))
+            # Restore exact closed quarantine residues from two transactions.
+            # This trusted fixture does not invent records or copy identities.
             for stage, destination in held:
                 destination.rename(stage)
             unknown = held[-1][0] / "zz-unknown"
@@ -1329,7 +1367,7 @@ class ResultArtifactAdversarialFilesystemTests(unittest.TestCase):
             )
 
 
-class ResultArtifactAncestorGenerationTests(unittest.TestCase):
+class ResultArtifactAncestorGenerationTests(_IsolatedArtifactTest):
     def test_moved_original_root_inside_replaced_ancestor_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             parent, identity = Path(temporary).resolve(), artifact_identity()
@@ -1346,7 +1384,7 @@ class ResultArtifactAncestorGenerationTests(unittest.TestCase):
             self.assertEqual(filesystem_tree(parent), before)
 
 
-class ResultArtifactIntegrationTests(unittest.TestCase):
+class ResultArtifactIntegrationTests(_IsolatedArtifactTest):
     def test_prepared_authority_is_consumed_without_rereading_caller_mappings(
         self,
     ) -> None:
@@ -1451,11 +1489,17 @@ print(json.dumps(receipt, sort_keys=True))
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary).resolve()
             installed = parent / "installed-skill"
-            shutil.copytree(
-                source_skill,
-                installed,
-                ignore=shutil.ignore_patterns(".runtime", "__pycache__", "*.pyc"),
+            packaging_source = parent / "packaging-source"
+            excluded = shutil.ignore_patterns(
+                ".state", ".runtime", "__pycache__", "*.pyc"
             )
+            shutil.copytree(source_skill, packaging_source, ignore=excluded)
+            (packaging_source / ".state").mkdir()
+            (packaging_source / ".state" / "unrelated-authority").write_bytes(
+                b"another installation's state"
+            )
+            shutil.copytree(packaging_source, installed, ignore=excluded)
+            self.assertFalse((installed / ".state").exists())
             root = parent / "caller-owned-artifact"
             result = subprocess.run(
                 [sys.executable, "-c", worker, str(installed / "scripts"), str(root)],
@@ -1471,13 +1515,16 @@ print(json.dumps(receipt, sort_keys=True))
             self.assertLessEqual(len(result.stdout.encode()), 1024)
             self.assertNotIn(str(root), result.stdout)
             self.assertNotIn(str(installed), result.stdout)
-            for path in root.rglob("*"):
+            self.assertTrue(
+                (installed / ".state" / "result-artifact-anchors" / "v1").is_dir()
+            )
+            for path in (*root.rglob("*"), *(installed / ".state").rglob("*")):
                 if path.is_file():
                     self.assertNotIn(str(root).encode(), path.read_bytes())
                     self.assertNotIn(str(installed).encode(), path.read_bytes())
 
 
-class ResultArtifactExceptionMatrixTests(unittest.TestCase):
+class ResultArtifactExceptionMatrixTests(_IsolatedArtifactTest):
     def test_ordinary_io_and_keyboard_interrupt_use_the_same_recoverable_state_contract(
         self,
     ) -> None:
@@ -1580,7 +1627,7 @@ class ResultArtifactExceptionMatrixTests(unittest.TestCase):
                     )
 
 
-class ResultArtifactPublicationRevalidationTests(unittest.TestCase):
+class ResultArtifactPublicationRevalidationTests(_IsolatedArtifactTest):
     def test_prepared_create_descriptor_name_and_complete_inventory_are_revalidated(
         self,
     ) -> None:
@@ -1683,7 +1730,7 @@ class ResultArtifactPublicationRevalidationTests(unittest.TestCase):
                 ResultArtifact.validate_receipt(root, identity, receipt)
 
 
-class ResultArtifactInitialStageBindingTests(unittest.TestCase):
+class ResultArtifactInitialStageBindingTests(_IsolatedArtifactTest):
     def test_created_stage_is_bound_before_initialization_writes(self) -> None:
         from a_share_research.result_artifact import ProductionFilesystemAdapter
 
@@ -1724,7 +1771,7 @@ class ResultArtifactInitialStageBindingTests(unittest.TestCase):
                 self.assertEqual(filesystem_tree(parent), before[0])
 
 
-class ResultArtifactPostpublicationOwnershipTests(unittest.TestCase):
+class ResultArtifactPostpublicationOwnershipTests(_IsolatedArtifactTest):
     def test_create_returns_no_handle_after_target_ownership_changes(self) -> None:
         from a_share_research.result_artifact import ProductionFilesystemAdapter
 
@@ -1752,7 +1799,7 @@ class ResultArtifactPostpublicationOwnershipTests(unittest.TestCase):
             self.assertEqual((target / "caller-file").read_bytes(), b"caller-owned")
 
 
-class ResultArtifactCreationPlanTests(unittest.TestCase):
+class ResultArtifactCreationPlanTests(_IsolatedArtifactTest):
     def test_each_create_phase_is_checked_against_original_plan(self) -> None:
         from a_share_research.result_artifact import ProductionFilesystemAdapter
 
@@ -1983,7 +2030,7 @@ class ResultArtifactCreationPlanTests(unittest.TestCase):
                 )
 
 
-class ResultArtifactProtocolTypeTests(unittest.TestCase):
+class ResultArtifactProtocolTypeTests(_IsolatedArtifactTest):
     def test_journal_sequence_requires_exact_integer_in_partial_and_sealed_states(
         self,
     ) -> None:
@@ -2210,7 +2257,7 @@ class ResultArtifactProtocolTypeTests(unittest.TestCase):
                         self.assertFalse((root / "manifest.json").exists())
 
 
-class ResultArtifactCreateLockTests(unittest.TestCase):
+class ResultArtifactCreateLockTests(_IsolatedArtifactTest):
     def test_create_commit_serializes_independent_resume_write_and_finalize(
         self,
     ) -> None:
@@ -2226,6 +2273,8 @@ sys.path.insert(0, sys.argv[1])
 from tests.test_result_artifact import artifact_identity, artifact_coverage, frozen_context, partition
 from a_share_research.result_artifact import ProductionFilesystemAdapter, ResultArtifact
 root, control, action = Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
+import a_share_research.result_artifact as module
+module._DEFAULT_ANCHOR_ROOT = Path(sys.argv[5])
 class PausedCreate(ProductionFilesystemAdapter):
     def _phase(self, phase):
         if phase == "after_create_publication":
@@ -2268,6 +2317,7 @@ else:
                             str(root),
                             str(parent),
                             mode,
+                            str(self.anchor_root),
                         ],
                         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
                         stdout=subprocess.PIPE,
@@ -2478,7 +2528,7 @@ else:
         )
 
 
-class ResultArtifactCreatePreflightTests(unittest.TestCase):
+class ResultArtifactCreatePreflightTests(_IsolatedArtifactTest):
     def test_target_appearing_before_first_apply_refuses_without_private_staging(
         self,
     ) -> None:
@@ -2577,3 +2627,665 @@ class ResultArtifactCreatePreflightTests(unittest.TestCase):
             ][0]["relative_path"],
             partition().relative_path,
         )
+
+
+class ResultArtifactTrustedAnchorTests(_IsolatedArtifactTest):
+    def test_explicit_trusted_domain_preserves_public_bytes_and_is_required_on_resume(
+        self,
+    ) -> None:
+        import shutil
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            root, anchors = parent / "artifact", parent / "trusted" / "v1"
+            filesystem = ProductionFilesystemAdapter(anchor_root=anchors)
+            handle = ResultArtifact.create(
+                root, identity, initial_context=frozen_context(), filesystem=filesystem
+            )
+            handle.write_completed_partition(partition())
+            receipt = handle.finalize(coverage=artifact_coverage())
+            self.assertTrue(anchors.is_dir())
+            self.assertEqual(
+                ResultArtifact.resume(
+                    root,
+                    identity,
+                    filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                ),
+                receipt,
+            )
+            before = filesystem_tree(root)
+            shutil.move(anchors, parent / "saved-anchors")
+            with self.assertRaises(ValueError):
+                ResultArtifact.resume(
+                    root,
+                    identity,
+                    filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                )
+            self.assertEqual(filesystem_tree(root), before)
+            self.assertFalse(anchors.exists())
+
+    def test_changed_artifact_journal_cannot_change_trusted_expected_ownership(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            root, anchors = parent / "artifact", parent / "trusted" / "v1"
+            filesystem = ProductionFilesystemAdapter(anchor_root=anchors)
+            handle = ResultArtifact.create(
+                root, identity, initial_context=frozen_context(), filesystem=filesystem
+            )
+            handle.write_completed_partition(partition())
+            receipt = handle.finalize(coverage=artifact_coverage())
+            journal = next((root / ".protocol").glob("txn-000002-*.json"))
+            payload = json.loads(journal.read_bytes())
+            payload["stage_identity"][1] = "f" * 16
+            journal.write_bytes(
+                (
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode()
+            )
+            before = filesystem_tree(parent)
+            with self.assertRaises(ValueError):
+                ResultArtifact.validate_receipt(
+                    root, identity, receipt, filesystem=filesystem
+                )
+            with self.assertRaises(ValueError):
+                ResultArtifact.resume(root, identity, filesystem=filesystem)
+            self.assertEqual(filesystem_tree(parent), before)
+
+    def test_trusted_tail_committed_before_artifact_journal_recovers_normally(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for operation in ("write", "finalize"):
+            with (
+                self.subTest(operation=operation),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent, identity = Path(temporary).resolve(), artifact_identity()
+                root, anchors = parent / "artifact", parent / "trusted" / "v1"
+
+                class InterruptedCommitment(ProductionFilesystemAdapter):
+                    armed = False
+
+                    def _phase(self, phase):
+                        if (
+                            self.armed
+                            and phase == "after_anchor_transaction_commitment"
+                        ):
+                            raise KeyboardInterrupt("trusted tail committed")
+
+                filesystem = InterruptedCommitment(anchor_root=anchors)
+                handle = ResultArtifact.create(
+                    root,
+                    identity,
+                    initial_context=frozen_context(),
+                    filesystem=filesystem,
+                )
+                if operation == "finalize":
+                    handle.write_completed_partition(partition())
+                filesystem.armed = True
+                with self.assertRaises(KeyboardInterrupt):
+                    if operation == "write":
+                        handle.write_completed_partition(partition())
+                    else:
+                        handle.finalize(coverage=artifact_coverage())
+                recovered = ResultArtifact.resume(
+                    root,
+                    identity,
+                    filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                )
+                if operation == "write":
+                    self.assertEqual(len(recovered.checkpoint()["completed_files"]), 1)
+                    receipt = recovered.finalize(coverage=artifact_coverage())
+                else:
+                    receipt = recovered
+                self.assertEqual(receipt["file_count"], 1)
+
+    def test_published_store_missing_marker_is_not_rebootstrapped(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            anchors = parent / "trusted" / "v1"
+            filesystem = ProductionFilesystemAdapter(anchor_root=anchors)
+            ResultArtifact.create(
+                parent / "first",
+                identity,
+                initial_context=frozen_context(),
+                filesystem=filesystem,
+            )
+            (anchors / "domain.json").unlink()
+            before = filesystem_tree(parent)
+            with self.assertRaises(ValueError):
+                ResultArtifact.create(
+                    parent / "second",
+                    identity,
+                    initial_context=frozen_context(),
+                    filesystem=filesystem,
+                )
+            self.assertEqual(filesystem_tree(parent), before)
+
+    def test_cleanup_claim_move_closure_and_gc_interruptions_recover(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        phases = (
+            "after_anchor_stage_claimed",
+            "after_anchor_stage_quarantined",
+            "after_anchor_cleanup_closure",
+            "after_stage_cleanup_item",
+            "after_stage_cleanup",
+        )
+        for phase in phases:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                parent = Path(temporary).resolve()
+                root, anchors = parent / "artifact", parent / "trusted" / "v1"
+
+                class Interrupted(ProductionFilesystemAdapter):
+                    armed = False
+
+                    def _phase(self, current: str) -> None:
+                        if self.armed and current == phase:
+                            self.armed = False
+                            raise KeyboardInterrupt("ordinary cleanup interruption")
+
+                adapter = Interrupted(anchor_root=anchors)
+                handle = ResultArtifact.create(
+                    root, artifact_identity(), filesystem=adapter
+                )
+                adapter.armed = True
+                with self.assertRaises(KeyboardInterrupt):
+                    handle.write_completed_partition(partition())
+                recovered = ResultArtifact.resume(
+                    root,
+                    artifact_identity(),
+                    filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                )
+                self.assertIsInstance(recovered, ResultArtifact)
+                self.assertEqual(len(recovered.checkpoint()["completed_files"]), 1)
+                receipt = recovered.finalize(coverage=artifact_coverage())
+                self.assertEqual(receipt["file_count"], 1)
+                self.assertEqual(tuple((anchors / "quarantine").iterdir()), ())
+                self.assertEqual(
+                    ResultArtifact.resume(
+                        root,
+                        artifact_identity(),
+                        filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                    ),
+                    receipt,
+                )
+
+    def test_closed_external_stage_name_is_never_readopted_or_deleted(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            root, anchors = parent / "artifact", parent / "trusted" / "v1"
+            adapter = ProductionFilesystemAdapter(anchor_root=anchors)
+            handle = ResultArtifact.create(
+                root, artifact_identity(), filesystem=adapter
+            )
+            handle.write_completed_partition(partition())
+            receipt = handle.finalize(coverage=artifact_coverage())
+            journal = json.loads(
+                sorted((root / ".protocol").glob("txn-*.json"))[-1].read_bytes()
+            )
+            foreign = parent / f".result-artifact-{journal['token']}.stage"
+            foreign.mkdir()
+            (foreign / "caller-file").write_text("belongs to caller")
+            before = filesystem_tree(parent)
+            with self.assertRaises(ValueError):
+                ResultArtifact.resume(root, artifact_identity(), filesystem=adapter)
+            self.assertEqual(filesystem_tree(parent), before)
+            self.assertEqual(receipt["file_count"], 1)
+
+    def test_real_process_anchor_bootstrap_transaction_and_cleanup_matrix(self) -> None:
+        import os
+        import subprocess
+        import sys
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        matrix = (
+            *(
+                ("create", phase, False)
+                for phase in (
+                    "after_anchor_directory_created",
+                    "after_anchor_bootstrap_directory_created",
+                    "after_anchor_record_created",
+                    "after_anchor_record_written",
+                    "after_anchor_record_publication",
+                    "after_anchor_bootstrap_prepared",
+                    "after_anchor_store_publication",
+                    "after_anchor_record_created@2",
+                    "after_anchor_record_written@2",
+                    "after_anchor_record_publication@2",
+                    "after_anchor_creation_commitment",
+                )
+            ),
+            *(
+                (action, phase, committed)
+                for action in ("write", "finalize")
+                for phase, committed in (
+                    ("after_anchor_record_created", False),
+                    ("after_anchor_record_written", False),
+                    ("after_anchor_record_publication", True),
+                    ("after_anchor_transaction_commitment", True),
+                    ("after_anchor_journal_published", True),
+                    ("after_anchor_stage_claimed", True),
+                    ("after_anchor_stage_quarantined", True),
+                    ("after_anchor_cleanup_closure", True),
+                    ("after_stage_cleanup_item", True),
+                    ("after_stage_cleanup", True),
+                )
+            ),
+        )
+        for action, phase, committed in matrix:
+            with (
+                self.subTest(action=action, phase=phase),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent = Path(temporary).resolve()
+                root, anchors = (
+                    parent / "artifact",
+                    parent / "trusted" / "anchors" / "v1",
+                )
+                adapter = ProductionFilesystemAdapter(anchor_root=anchors)
+                if action != "create":
+                    ResultArtifact.create(root, artifact_identity(), filesystem=adapter)
+                process = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        _PROCESS,
+                        str(root),
+                        action,
+                        phase,
+                        str(anchors),
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                self.assertEqual(process.returncode, 77, process.stderr)
+                if action == "create":
+                    self.assertFalse(root.exists())
+                    recovered = ResultArtifact.create(
+                        root, artifact_identity(), filesystem=adapter
+                    )
+                else:
+                    recovered = ResultArtifact.resume(
+                        root, artifact_identity(), filesystem=adapter
+                    )
+                if action == "finalize" and committed:
+                    self.assertIsInstance(recovered, dict)
+                    before = filesystem_tree(parent)
+                    self.assertEqual(
+                        ResultArtifact.resume(
+                            root, artifact_identity(), filesystem=adapter
+                        ),
+                        recovered,
+                    )
+                    self.assertEqual(filesystem_tree(parent), before)
+                else:
+                    self.assertIsInstance(recovered, ResultArtifact)
+                    count = 1 if action == "write" and committed else 0
+                    self.assertEqual(
+                        len(recovered.checkpoint()["completed_files"]), count
+                    )
+                    if action == "write" and not committed:
+                        recovered.write_completed_partition(partition())
+                        count = 1
+                    self.assertEqual(
+                        recovered.finalize(coverage=artifact_coverage())["file_count"],
+                        count,
+                    )
+
+    def test_anchor_wrong_domain_record_damage_and_permissions_are_zero_mutation(
+        self,
+    ) -> None:
+        import os
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for change in (
+            "wrong-domain",
+            "missing-record",
+            "damaged-record",
+            "record-mode",
+            "directory-mode",
+        ):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent = Path(temporary).resolve()
+                root, anchors = (
+                    parent / "artifact",
+                    parent / "trusted" / "anchors" / "v1",
+                )
+                adapter = ProductionFilesystemAdapter(anchor_root=anchors)
+                handle = ResultArtifact.create(
+                    root, artifact_identity(), filesystem=adapter
+                )
+                receipt = handle.finalize(coverage=artifact_coverage())
+                record = next(
+                    path
+                    for path in anchors.glob("*.json")
+                    if path.name != "domain.json"
+                )
+                if change == "wrong-domain":
+                    wrong = parent / "other" / "anchors" / "v1"
+                    ResultArtifact.create(
+                        parent / "other-artifact",
+                        artifact_identity(),
+                        filesystem=ProductionFilesystemAdapter(anchor_root=wrong),
+                    )
+                    adapter = ProductionFilesystemAdapter(anchor_root=wrong)
+                elif change == "missing-record":
+                    record.unlink()
+                elif change == "damaged-record":
+                    record.write_bytes(b"ordinary damaged local record")
+                elif change == "record-mode":
+                    os.chmod(record, 0o644)
+                else:
+                    os.chmod(anchors, 0o755)
+                before = filesystem_tree(parent)
+                with self.assertRaises(ValueError):
+                    ResultArtifact.resume(root, artifact_identity(), filesystem=adapter)
+                with self.assertRaises(ValueError):
+                    ResultArtifact.validate_receipt(
+                        root, artifact_identity(), receipt, filesystem=adapter
+                    )
+                self.assertEqual(filesystem_tree(parent), before)
+
+    def test_anchor_symlink_unverifiable_acl_same_filesystem_and_overlap_preflight(
+        self,
+    ) -> None:
+        import os
+        from unittest.mock import patch
+        import a_share_research.result_artifact as module
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for change in ("symlink", "acl", "different-filesystem", "overlap"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent = Path(temporary).resolve()
+                anchors, root = (
+                    parent / "trusted" / "anchors" / "v1",
+                    parent / "new-artifact",
+                )
+                ResultArtifact.create(
+                    parent / "existing-artifact",
+                    artifact_identity(),
+                    filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                )
+                if change == "symlink":
+                    alias = parent / "alias"
+                    alias.symlink_to(anchors.parent, target_is_directory=True)
+                    adapter = ProductionFilesystemAdapter(anchor_root=alias / "v1")
+                elif change == "overlap":
+                    adapter = ProductionFilesystemAdapter(
+                        anchor_root=root / ".state" / "anchors" / "v1"
+                    )
+                else:
+                    adapter = ProductionFilesystemAdapter(anchor_root=anchors)
+                before = filesystem_tree(parent)
+                if change == "acl":
+                    with patch.object(
+                        adapter,
+                        "_trusted_acl",
+                        side_effect=ValueError("unverifiable ACL"),
+                    ):
+                        with self.assertRaises(ValueError):
+                            ResultArtifact.create(
+                                root, artifact_identity(), filesystem=adapter
+                            )
+                elif change == "different-filesystem":
+                    native = os.fstat
+                    anchor_inode = anchors.stat().st_ino
+
+                    def different(descriptor):
+                        value = native(descriptor)
+                        if value.st_ino == anchor_inode:
+                            values = list(value)
+                            values[2] += 1
+                            return os.stat_result(values)
+                        return value
+
+                    with patch.object(module.os, "fstat", side_effect=different):
+                        with self.assertRaisesRegex(ValueError, "same filesystem"):
+                            ResultArtifact.create(
+                                root, artifact_identity(), filesystem=adapter
+                            )
+                else:
+                    with self.assertRaises(ValueError):
+                        ResultArtifact.create(
+                            root, artifact_identity(), filesystem=adapter
+                        )
+                self.assertEqual(filesystem_tree(parent), before)
+                self.assertFalse(root.exists())
+
+    def test_deterministic_anchor_fault_phases_match_transaction_recovery(self) -> None:
+        for action in ("write", "finalize"):
+            for phase, committed in (
+                ("after_anchor_record_created", False),
+                ("after_anchor_record_written", False),
+                ("after_anchor_record_publication", True),
+                ("after_anchor_transaction_commitment", True),
+                ("after_anchor_stage_claimed", True),
+                ("after_anchor_stage_quarantined", True),
+                ("after_anchor_cleanup_closure", True),
+            ):
+                with self.subTest(action=action, phase=phase):
+                    filesystem = DeterministicFilesystemAdapter(
+                        Path("/deterministic/model")
+                    )
+                    root = Path("/caller/artifact")
+                    handle = ResultArtifact.create(
+                        root, artifact_identity(), filesystem=filesystem
+                    )
+                    filesystem.interrupt_next(phase)
+                    with self.assertRaises(KeyboardInterrupt):
+                        if action == "write":
+                            handle.write_completed_partition(partition())
+                        else:
+                            handle.finalize(coverage=artifact_coverage())
+                    recovered = ResultArtifact.resume(
+                        root, artifact_identity(), filesystem=filesystem
+                    )
+                    if action == "finalize" and committed:
+                        self.assertEqual(recovered["file_count"], 0)
+                    else:
+                        self.assertEqual(
+                            len(recovered.checkpoint()["completed_files"]),
+                            int(action == "write" and committed),
+                        )
+                    filesystem.remove_trusted_record(root)
+                    before = filesystem.inventory(root)
+                    with self.assertRaises(ValueError):
+                        ResultArtifact.resume(
+                            root, artifact_identity(), filesystem=filesystem
+                        )
+                    self.assertEqual(filesystem.inventory(root), before)
+
+    def test_anchor_capacity_is_preflighted_with_full_future_closure(self) -> None:
+        from unittest.mock import patch
+        import a_share_research.result_artifact as module
+
+        filesystem = DeterministicFilesystemAdapter(Path("/deterministic/model"))
+        root = Path("/caller/artifact")
+        handle = ResultArtifact.create(root, artifact_identity(), filesystem=filesystem)
+        before = filesystem.inventory(root)
+        with patch.object(module, "_MAX_ANCHOR_BYTES", 1024):
+            with self.assertRaisesRegex(ValueError, "trusted record exceeds capacity"):
+                handle.write_completed_partition(partition())
+        self.assertEqual(filesystem.inventory(root), before)
+        handle.write_completed_partition(partition())
+        self.assertEqual(handle.finalize(coverage=artifact_coverage())["file_count"], 1)
+
+    def test_real_anchor_recovery_can_be_interrupted_again(self) -> None:
+        import os
+        import subprocess
+        import sys
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for action in ("write", "finalize"):
+            with (
+                self.subTest(action=action),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent = Path(temporary).resolve()
+                root, anchors = (
+                    parent / "artifact",
+                    parent / "trusted" / "anchors" / "v1",
+                )
+                adapter = ProductionFilesystemAdapter(anchor_root=anchors)
+                ResultArtifact.create(
+                    root,
+                    artifact_identity(),
+                    initial_context=frozen_context(),
+                    filesystem=adapter,
+                )
+                for current_action, phase in (
+                    (action, "after_anchor_transaction_commitment"),
+                    ("resume", "after_anchor_stage_quarantined"),
+                    ("resume", "after_anchor_cleanup_closure"),
+                ):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-c",
+                            _PROCESS,
+                            str(root),
+                            current_action,
+                            phase,
+                            str(anchors),
+                        ],
+                        cwd=Path(__file__).resolve().parents[1],
+                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 77, result.stderr)
+                recovered = ResultArtifact.resume(
+                    root, artifact_identity(), filesystem=adapter
+                )
+                if action == "write":
+                    self.assertEqual(
+                        recovered.checkpoint()["frozen_context"],
+                        json.loads(frozen_context().content_bytes),
+                    )
+                    self.assertEqual(len(recovered.checkpoint()["completed_files"]), 1)
+                    recovered = recovered.finalize(coverage=artifact_coverage())
+                before = filesystem_tree(parent)
+                self.assertEqual(
+                    ResultArtifact.resume(
+                        root, artifact_identity(), filesystem=adapter
+                    ),
+                    recovered,
+                )
+                self.assertEqual(filesystem_tree(parent), before)
+
+    def test_unpublished_bootstrap_marker_damage_refuses_before_any_mutation(
+        self,
+    ) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            root, anchors = parent / "artifact", parent / "trusted" / "anchors" / "v1"
+
+            class Interrupted(ProductionFilesystemAdapter):
+                def _phase(self, phase: str) -> None:
+                    if phase == "after_anchor_bootstrap_prepared":
+                        raise KeyboardInterrupt("bootstrap prepared")
+
+            with self.assertRaises(KeyboardInterrupt):
+                ResultArtifact.create(
+                    root,
+                    artifact_identity(),
+                    filesystem=Interrupted(anchor_root=anchors),
+                )
+            marker = anchors.with_name("v1.preparing") / "domain.json"
+            marker.write_bytes(b"damaged committed bootstrap marker")
+            before = filesystem_tree(parent)
+            with self.assertRaises(ValueError):
+                ResultArtifact.create(
+                    root,
+                    artifact_identity(),
+                    filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                )
+            self.assertEqual(filesystem_tree(parent), before)
+            self.assertFalse(root.exists())
+
+    def test_related_trusted_preparation_and_quarantine_inventory_are_validated(
+        self,
+    ) -> None:
+        import os
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        for change in ("pending-mode", "unknown-quarantine"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                parent = Path(temporary).resolve()
+                root, anchors = (
+                    parent / "artifact",
+                    parent / "trusted" / "anchors" / "v1",
+                )
+                adapter = ProductionFilesystemAdapter(anchor_root=anchors)
+                handle = ResultArtifact.create(
+                    root, artifact_identity(), filesystem=adapter
+                )
+                handle.finalize(coverage=artifact_coverage())
+                record = next(
+                    path
+                    for path in anchors.glob("*.json")
+                    if path.name != "domain.json"
+                )
+                if change == "pending-mode":
+                    pending = record.with_name(record.name + ".pending")
+                    pending.write_bytes(b"interrupted private preparation")
+                    os.chmod(pending, 0o644)
+                else:
+                    (anchors / "quarantine" / (record.name + "." + "f" * 64)).mkdir()
+                before = filesystem_tree(parent)
+                with self.assertRaises(ValueError):
+                    ResultArtifact.resume(root, artifact_identity(), filesystem=adapter)
+                self.assertEqual(filesystem_tree(parent), before)
+
+    def test_rejected_create_does_not_bootstrap_trusted_state(self) -> None:
+        from a_share_research.result_artifact import ProductionFilesystemAdapter
+
+        with tempfile.TemporaryDirectory() as temporary:
+            parent, identity = Path(temporary).resolve(), artifact_identity()
+            root, anchors = parent / "artifact", parent / "trusted" / "v1"
+            root.mkdir()
+            (root / "caller-file").write_bytes(b"caller-owned")
+            before = filesystem_tree(parent)
+            with self.assertRaises(ValueError):
+                ResultArtifact.create(
+                    root,
+                    identity,
+                    initial_context=frozen_context(),
+                    filesystem=ProductionFilesystemAdapter(anchor_root=anchors),
+                )
+            self.assertEqual(filesystem_tree(parent), before)
+            self.assertFalse(anchors.exists())
