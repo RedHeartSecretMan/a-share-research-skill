@@ -141,6 +141,50 @@ Checkpoint 的 canonical UTF-8 编码大小上限继续精确为 **65,536 字节
 8. **Verification：** 加入第 7 节矩阵；保留全量 Python 3.12、Ruff、精确 strict mypy、Skill/distribution/installed-copy、scope/leak 和独立 Standards/Spec review 门禁。静态 readback 或异常测试不得标记为真实突然终止或 durability 运行证据。
 9. **Dependencies / outputs：** 保持 #115 → #108 → #68 的现有边；本稿不自动新增 Ticket。若后续证明需要先独立交付事务 Adapter，该拆票应以已冻结的状态/ownership/故障契约作为输出，另行批准 tracker 重接，不能按 create/resume/finalize 或单个失败 helper 再切碎同一状态机。
 
+## 11. 受信本地归属承诺（A）
+
+维护者已选择推荐 A：由工具在结果包及其暂存域之外保留原始 ownership 承诺。此节补充 B2，并在受信状态、恢复信任来源及其维护责任上优先于此前文字；其余 AC、公共 Interface、图与质量门禁保持不变。两份可被同一外部主体修改的 artifact 内记录互相校验，只能证明当前一致，不能充当原始归属的独立依据。
+
+### 11.1 保护主体、位置与支持条件
+
+默认受信根为 `<skill-root>/.state/result-artifact-anchors/v1`，与可重建的 `.runtime` 依赖目录分开。它是工具管理的本机持久状态，信任级别与安装代码相同。部署方必须保证不受信的结果包编辑者不能改写代码、受信根或其控制目录；本版本不抵抗能够改写这些受信部分的主体，也不把目录名、随机 token 或摘要本身称为权限保护。
+
+生产 Adapter 在原有内部 Seam 中接收受信根配置以支持测试隔离和受信安装配置；不增加 ResearchTask、CLI、receipt 或调用者 commitment 参数，不从请求或环境变量接受受信根，不自动改用其他目录。默认位置必须属于私有、可写且受支持的安装区域；只读或不符合保护条件的安装不能静默降级。未使用 Result Artifact 的请求不初始化该状态。
+
+- 受信目录由有效用户拥有，权限为 `0700`；记录为 `0600`。祖先由有效用户或受信系统账户拥有，不能允许不受信主体创建、替换或重定向受信路径。所有相关路径组件按锚定父目录描述符访问并拒绝 symlink，持续核对类型、owner 和身份。OS ACL 等额外授权不得使这些保护失效；不能仅凭 mode 位断言满足保护条件。能力或保护条件无法确认时，在首次修改前失败关闭。
+- 结果包、公开目标及其 artifact 暂存域与受信根不得形成祖先/后代重叠；不能从结果包复制或恢复受信根。受信域自身的事务准备对象仍属于受信协议 inventory，不是外部 artifact 暂存域。
+- v1 保留同文件系统范围：受信根和目标父目录必须具有一致的文件系统设备身份，且都满足第 2.1 节的本地能力要求；新建根在创建前从已验证父目录判定该条件。不同文件系统在首次修改前拒绝。每次 rename 只具有单个 namespace 操作的原子性，不宣称双目录或跨文件系统原子事务。
+
+### 11.2 最小持久状态与授权方向
+
+受信状态至少表示 store schema/domain、原始 creation ownership、每个事务不可被 artifact 当前声明覆盖的原始 journal 承诺与必要事务头，以及已持久化的提交/cleanup 进度。它绑定真实 artifact、工作对象、文件和目录身份、确切相对名称、请求/producer/plan/operation identity、原始字节摘要和允许动作。具体编码、索引及合并方式由 Adapter 实现，但不能只保存会随 artifact 一起重建的校验和。
+
+授权方向固定为“已验证受信承诺 → 对照 artifact 完整状态 → 合法动作”。恢复不得以当前 artifact journal/binding 更新原始期望，也不得凭同名、同字节或新 inode 重新认领。closure 必须阻止已清理或已完成事务再次授权删除后来出现的对象。对应当存在却缺失、损坏、错域、身份不符或无法验证的受信状态，create/resume/receipt recovery 均保留现场并失败关闭；不得自动修复、重建或从结果包导入可信原件。
+
+真实结果路径与 `mode` 继续只在内存使用；受信记录、公共输出、日志和其他 artifact 文件不得保存其原文。私有定位只能使用必要的不可逆 locator 或实际对象身份，不改变原请求语义摘要。受信根位置、权限、非确定性物理身份及其摘要不进入要求字节对等的公共 checkpoint、manifest 或 receipt。生产与 deterministic Adapter 的 canonical 公共字节对等要求不变。
+
+### 11.3 创建、提交、恢复与零修改
+
+1. 构造 Adapter、observe 和 preflight 保持只读。验证失败零修改同时覆盖结果包、调用者区域和受信存储；不能先创建 `.state`、marker、锁文件或修复权限再拒绝。只有已通过完整预检的合法 create 进入 apply 后才能 bootstrap 缺失 store。resume、receipt validation/recovery 永不 bootstrap。
+2. 首次 bootstrap、创建准备对象、登记真实身份、发布 creation header、事务原件及进度替换的每个可持久化窗口都必须有确定的恢复规则。受信域内也不能以“尚未登记”忽略自身产生的状态；记录损坏与合法中断状态须可区分。创建后、ownership 登记前的突然终止仍属于 AC4。
+3. creation 承诺必须在公开目标前达到所需 durability；每个事务的原始承诺必须先于对应 artifact journal 或对象发布持久化。checkpoint/manifest 成功完成文件及目录持久化之后，才能关闭对应受信提交状态。两域之间的中断通过明确状态推进恢复，不能从可读回推导 `fsync` 成功。
+4. 新进程只从磁盘受信状态恢复，不借用旧进程内存。每次恢复先校验完整受信记录、artifact inventory 与所有计划条目，首个修改前重验；只操作确切拥有的对象。cleanup 及其 closure 的先后顺序必须支持再次中断，且不得重复授权后来创建的同名对象。
+5. 已提交 manifest 的 receipt 丢失时，原受信状态仍须支持恢复相同 receipt；finalize 或成功返回 receipt 不自动删除该依据。没有待处理状态的精确 resume/重复 receipt recovery 不改写两域。
+
+checkpoint 的精确 65,536 字节边界、所有未来状态及 file-count envelope 继续有效。外置承诺不允许把 checkpoint 所需的逻辑事实外移来规避上限；另须声明受信记录的有限大小、每 artifact 文件数、活动事务/closure 保留规则与最大批准工作量下的磁盘占用，禁止无界事务历史。受信状态的所有原语、权限检查、故障注入和持久化仍封装在同一个 ProductionFilesystemAdapter 边界，继续接受原 architectural gate；deterministic Adapter 在独立内存域模拟该契约。
+
+### 11.4 维护、分发与消费责任
+
+受信状态与 artifact 是配套恢复材料。备份必须在没有相关写入的受信维护边界上取得一致状态；普通 artifact 复制、安装复制或恢复旧版 anchor 不能证明原始物理身份。v1 不提供自动重新绑定、跨设备迁移、孤立记录清理或无 anchor 旧包升级。位置或对象身份变化、配套记录缺失、落后的进度不满足恢复条件时明确拒绝，保留现有包；可在新的目标执行新的 create。不得把这些限制隐去，也不得以恢复旧备份跳过身份、generation 或完整状态校验。
+
+| Owner | 新增交付义务 |
+| --- | --- |
+| #108 | 交付本节受信承诺、完整中断恢复、同文件系统/权限/错域检查、容量与 failure-closed 行为；通过公开模块 Seam 覆盖 artifact ownership 声明变化而原受信记录不变、记录缺失/损坏、同名后建对象、create bootstrap 中断、receipt 丢失及 recovery 再次中断。原全量门禁与完整双审保留。 |
+| #69 | 在原 create/resume 公共编排内使用工具配置的同一受信域；恢复先验归属与 C，再开始新的来源调用。受信状态无效时不重新取数、不另建 anchor、不改排名或已有包；不新增用户字段或 mode。 |
+| #97 | copied-installed E2E 验证独立进程使用同一受信根、丢 receipt 恢复、anchor 缺失/损坏拒绝及路径不泄漏；分发与 clean-copy 排除 `.state`，安装不携带其他运行的受信记录。说明首次合法 create 初始化、保护条件、同文件系统限制、备份/迁移边界和丢失后处理。自包含安装代码不等于仅凭 artifact 就能跨安装自动恢复。 |
+
+#68 继续消费原 Result Artifact Interface 和容量判定，不新增受信存储管理责任。#115 工厂、C 的 #117 语义责任、#116/#119 既有输出不变；不增加硬依赖，不修改 #121 的具体来源审批或 #98 的最终发布门禁。
+
 ## 证据定位
 
 - Spec 0008：190–220 行（路径、create/resume、摘要、manifest、write-once、恢复）；246–254 行（Result Artifact 与文件系统 Seam）；256–265 行（失败与无泄漏）；347–351 行（V4-08 验收）；359–375 行（候选与公共 E2E）。

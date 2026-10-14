@@ -118,14 +118,14 @@ V4-U 是实质数据依赖：用于当前 session expected membership；不得�
 | #118 | 固定四指数继续消费 #117 session context | 保留原四项身份与源时间 AC；与 I 组合时保留可比价格/时间语义，不能被完成日指数值代理当前值 |
 | #112 | 明确完成交易日 A 股成交额与已公开两融→日报 partition/fold；消费者由 #93 改为 #96 | 六 owner、exact normalization、applicability、三所必需与源状态 AC 全保留；不得承担 60 秒盘中快照承诺 |
 | #115 | 保留已接受的两个 prepared-input 工厂；#108 优先经现有安全记录表达 C，不改工厂权威 | C 日历/时点语义由 #117 验证；Decision A 与 ordinary hostile input AC 全保留；若现有工厂无法表达批准后的结构，先明确新增变更责任与验证，再更新定义，不借历史接受直接覆盖 |
-| #108 | 完成原 lifecycle；持久化与复验 C/producer/plan/operation identity；实现批准后的文件系统支持与恢复协议 | 保留 prevalidate-before-mutate、ownership、write-once、manifest-last、tamper/unknown residue 拒绝；按协议变化更新 checkpoint/manifest/receipt 测试，不另拆 repair 票 |
+| #108 | 完成原 lifecycle；持久化与复验 C/producer/plan/operation identity；实现批准后的文件系统支持与恢复协议及独立受信本地 ownership 承诺 | 保留 prevalidate-before-mutate、ownership、write-once、manifest-last、tamper/unknown residue 拒绝；按协议变化更新 checkpoint/manifest/receipt 测试，不另拆 repair 票 |
 | #119 | 一条 provider lane 管 initial/retry/timeout/quiescence；U/I/120 复用 | actual attempts 与 observable invocation 一致；不扩为通用调度框架；容量测试从 setup 外计时，清除 ignored runtime 污染 |
 | #120 | C+V4-U→时点合格 factor partitions；不再假设只有合成 Universe 可用 | 每证券身份/日期/cutoff 与 C 一致；20 个适用成交日、财务 available_at、factor-local unranked、实际预算 AC 保留；增加最大批准规模容量证据 |
 | #68 | 合格 factor+C 引用→固定四因子排名与 artifact 分区 | 固定数学/权重/并列/unranked 不变；三所小型纵向案例验证 C、分母与 artifact 引用，缺失不得改分母或重加权 |
-| #69 | C+冻结排名→有界候选、receipt；C 由 #117 提供，不由候选链反向供应上游 | 按已批准 B1 同步严格输入、模板与候选映射：standard 显式 target_pe，fast 禁止；缺类别证据不补值，BSE/历史限制显式 blocked；create 捕获一次时钟，resume 复用原 C；按已批准 B2 接入 finalized receipt recovery；失败不改排名 |
+| #69 | C+冻结排名→有界候选、receipt；C 由 #117 提供，不由候选链反向供应上游 | 按已批准 B1 同步严格输入、模板与候选映射：standard 显式 target_pe，fast 禁止；缺类别证据不补值，BSE/历史限制显式 blocked；create 捕获一次时钟，resume 复用原 C；按已批准 B2/A 接入受信归属校验及 finalized receipt recovery；anchor 无效时不新取数或重建可信原件，失败不改排名 |
 | #93 | #117 session+#118 indices+V4-I turnover/breadth→market_wide_intraday fold | 去除日报/行业广度代理；保留 60 秒双边界、失败隔离、会话外 skip；I 的分母不完整不得生成完整市场结论 |
 | #96 | #93+#112→十五项 overview @2.0 | completed-session 与 current-session obligations 分别声明；保留已有十能力/tier；新增广度 owner 服务既定盘中 capability，不擅增第十六能力 |
-| #97 | 两条完成链→干净 installed-copy E2E、文档和分发 | 三所合成端到端场景、跨日 resume、C 漂移、真实平台持久化和干净复制测试；不复制 .runtime/pycache；全部版本与公开能力一致 |
+| #97 | 两条完成链→干净 installed-copy E2E、文档和分发 | 三所合成端到端场景、跨日 resume、C 漂移、真实平台持久化和干净复制测试；不复制 .runtime/pycache/.state；验证受信状态跨进程恢复与缺失拒绝，说明初始化/保护/同文件系统/备份迁移边界；全部版本与公开能力一致 |
 | #98 | clean candidate→typed attempts→final evidence→durable matrix | 精确 owner 分母与下表 release-critical capability 均闭合；已批准 B3 的 early feasibility 不可代替同候选新鲜 attestation |
 
 ### C 的 create / resume 约束
@@ -135,6 +135,10 @@ V4-U 是实质数据依赖：用于当前 session expected membership；不得�
 3. resume 先由 #108 复验请求/producer/plan/operation/C 摘要及已完成字节，再由 #117 复核保存的上下文语义与证明；禁止按恢复当天重新计算 cutoff。
 4. #69 对候选复用同一内部 frozen context；仅请求日期相同不等于 cutoff 相同。保持原唯一公共 CLI 和单一 `as_of`；仅 B1 显式批准的筛选 inputs 变化例外。
 5. 原日历证明不全或持久化 C 漂移时失败关闭；不通过临时重取新上下文绕过同请求 resume 约束。
+
+### A 的受信本地状态
+
+[恢复协议第 11 节](0008-amendment-b-artifact-protocol.md#11-受信本地归属承诺a)为 #108/#69/#97 的完整规范增量。#108 拥有工具管理的包外原始承诺与事务恢复；#69 只在原公共编排内消费；#97 负责 copied-installed 验证和维护文档。状态丢失不从 artifact 反向重建，验证拒绝的零修改同时覆盖受信域。已 Accepted 输入、#68 的模块 Interface、C 的语义责任与所有硬依赖不变。外置记录须有有限容量/保留规则，不得规避 canonical checkpoint 的 65,536 字节和未来状态证明。
 
 ## 6. 原验收义务保留矩阵
 
