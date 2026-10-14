@@ -283,6 +283,27 @@ def _validate_bindings(bindings: Mapping[str, object]) -> None:
             raise _ContextError("context_binding_mismatch")
 
 
+def _retrieval_lower_bound(calendar: CalendarEvidence) -> datetime:
+    available = _aware(calendar.available_at)
+    metadata = calendar.source_metadata
+    if metadata is None or metadata.get("publication_precision") != "day":
+        return available
+    try:
+        values = tuple(
+            metadata[key]
+            for key in ("calendar_publication_date", "rule_publication_date")
+        )
+        if any(not isinstance(value, str) for value in values):
+            raise _ContextError("calendar_timestamp_unproved")
+        published = max(_date(cast(str, value)) for value in values)
+        day_start = datetime.combine(published, time.min, ASIA_SHANGHAI)
+        if available != day_start + timedelta(days=1):
+            raise _ContextError("calendar_timestamp_unproved")
+        return day_start
+    except (KeyError, TypeError, OverflowError, _ContextError) as error:
+        raise _ContextError("calendar_timestamp_unproved") from error
+
+
 def _validate_calendars(
     calendars: Sequence[CalendarEvidence], cutoff: datetime, now: datetime
 ) -> tuple[CalendarEvidence, ...]:
@@ -336,6 +357,7 @@ def _validate_calendars(
             raise _ContextError("calendar_session_conflict")
         if (
             _aware(calendar.retrieved_at) > now
+            or _aware(calendar.retrieved_at) < _retrieval_lower_bound(calendar)
             or _aware(calendar.available_at) > cutoff
         ):
             raise _ContextError("calendar_timestamp_unproved")

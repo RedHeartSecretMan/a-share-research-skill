@@ -72,7 +72,8 @@ class MarketSessionSourceContract:
     rule_document_number: str | None
     rule_publication_uri: str
     rule_publication_date: str
-    rule_pdf_sha256: str | None
+    calendar_body_sha256: str | None
+    rule_body_sha256: str | None
     effective_from: str
     effective_to: str
     weekday_section: str
@@ -279,8 +280,22 @@ class ProductionMarketSessionAdapter:
                         self._execution_clock()
                     ):
                         raise CalendarSourceError("calendar_timestamp_unproved")
+                    publication = (
+                        contract.calendar_publication_date
+                        if uri == contract.calendar_uri
+                        else contract.rule_publication_date
+                    )
+                    if _instant(response.retrieved_at) < datetime.combine(
+                        date.fromisoformat(publication), time.min, ASIA_SHANGHAI
+                    ):
+                        raise CalendarSourceError("calendar_timestamp_unproved")
                     if uri == contract.calendar_uri:
                         _holiday_ranges(_text_html(response), contract)
+                        _verify_document_version(
+                            response,
+                            contract.calendar_body_sha256,
+                            "calendar_document_version_unproved",
+                        )
                     responses.append(response)
                 calendars.append(
                     _calendar_from_documents(contract, responses[0], responses[1])
@@ -544,13 +559,7 @@ def _validate_annual_declarations(
 ) -> None:
     # Consume every closure/opening declaration, not just the seven positive
     # holiday signatures. Unknown statements cannot silently become weekdays.
-    closures = {
-        date.fromisoformat(first) + timedelta(days=offset)
-        for _, first, last, _ in contract.holiday_ranges
-        for offset in range(
-            (date.fromisoformat(last) - date.fromisoformat(first)).days + 1
-        )
-    }
+    closures = _closed_dates(contract.holiday_ranges)
     closure_expression = (
         _DATE_TOKEN + rf"(?:(?:至|、){_DATE_TOKEN})*(?:为)?(?:周末)?休市"
     )
@@ -585,6 +594,15 @@ def _validate_annual_declarations(
         raise CalendarSourceError("calendar_holiday_scope_unproved")
 
 
+def _verify_document_version(
+    response: HttpResponse, expected: str | None, code: str
+) -> None:
+    # Whole qualified bytes bind all declarations, including language not
+    # interpreted by the named-clause parser. Unknown revisions are not proof.
+    if expected is None or hashlib.sha256(response.body).hexdigest() != expected:
+        raise CalendarSourceError(code)
+
+
 def _rule_text(
     response: HttpResponse, contract: MarketSessionSourceContract
 ) -> str | None:
@@ -592,7 +610,7 @@ def _rule_text(
         _response(response, MAX_DOCUMENT_BYTES)
         if (
             not response.body.startswith(b"%PDF-")
-            or hashlib.sha256(response.body).hexdigest() != contract.rule_pdf_sha256
+            or hashlib.sha256(response.body).hexdigest() != contract.rule_body_sha256
         ):
             raise CalendarSourceError("calendar_rule_version_unproved")
         return None
@@ -709,18 +727,22 @@ def _validate_rule(text: str | None, contract: MarketSessionSourceContract) -> N
             raise CalendarSourceError("calendar_day_completion_unproved")
 
 
-def _declared_days(
-    contract: MarketSessionSourceContract, holidays: Sequence[Sequence[str]]
-) -> tuple[CalendarDay, ...]:
-    start = date.fromisoformat(contract.effective_from)
-    end = date.fromisoformat(contract.effective_to)
-    closures = {
+def _closed_dates(holidays: Sequence[Sequence[str]]) -> set[date]:
+    return {
         date.fromisoformat(first) + timedelta(days=offset)
         for _, first, last, _ in holidays
         for offset in range(
             (date.fromisoformat(last) - date.fromisoformat(first)).days + 1
         )
     }
+
+
+def _declared_days(
+    contract: MarketSessionSourceContract, holidays: Sequence[Sequence[str]]
+) -> tuple[CalendarDay, ...]:
+    start = date.fromisoformat(contract.effective_from)
+    end = date.fromisoformat(contract.effective_to)
+    closures = _closed_dates(holidays)
     days = tuple(
         CalendarDay(
             (day := start + timedelta(days=offset)).isoformat(),
@@ -762,6 +784,12 @@ def _calendar_from_documents(
 ) -> CalendarEvidence:
     holidays = _holiday_ranges(_text_html(annual), contract)
     _validate_rule(_rule_text(rule, contract), contract)
+    _verify_document_version(
+        annual, contract.calendar_body_sha256, "calendar_document_version_unproved"
+    )
+    _verify_document_version(
+        rule, contract.rule_body_sha256, "calendar_rule_version_unproved"
+    )
     start = date.fromisoformat(contract.effective_from)
     end = date.fromisoformat(contract.effective_to)
     days = _declared_days(contract, holidays)
@@ -846,7 +874,7 @@ def _validate_registered_calendar(
         ):
             raise CalendarSourceError("calendar_rule_version_unproved")
     if (
-        contract.rule_format == "pdf"
-        and metadata.get("rule_body_sha256") != contract.rule_pdf_sha256
+        metadata.get("calendar_body_sha256") != contract.calendar_body_sha256
+        or metadata.get("rule_body_sha256") != contract.rule_body_sha256
     ):
         raise CalendarSourceError("calendar_rule_version_unproved")

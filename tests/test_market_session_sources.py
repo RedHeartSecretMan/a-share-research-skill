@@ -48,9 +48,6 @@ def source_fixtures():
         replace(
             item,
             synthetic=True,
-            rule_pdf_sha256=hashlib.sha256(pdf).hexdigest()
-            if item.rule_format == "pdf"
-            else None,
         )
         for item in load_market_session_source_contracts()
     )
@@ -131,7 +128,23 @@ def source_fixtures():
         bodies[item.rule_uri] = HttpResponse(
             200, mime, body, datetime(2026, 10, 14, 10, 0, 2, tzinfo=TZ)
         )
-    return contracts, bodies
+    return bind_synthetic_document_versions(contracts, bodies), bodies
+
+
+def bind_synthetic_document_versions(contracts, responses):
+    # This is a fixture qualification seam, never a production catalogue edit.
+    # Ordinary acquisition drift does not invoke it. All bodies are synthetic.
+    assert all(item.synthetic for item in contracts)
+    return tuple(
+        replace(
+            item,
+            calendar_body_sha256=hashlib.sha256(
+                responses[item.calendar_uri].body
+            ).hexdigest(),
+            rule_body_sha256=hashlib.sha256(responses[item.rule_uri].body).hexdigest(),
+        )
+        for item in contracts
+    )
 
 
 class DocumentTransport:
@@ -257,6 +270,7 @@ class MarketSessionSourceTests(unittest.TestCase):
                 "第3.6.5条第二款、第三款，第3.7.1条至第3.7.10条、第4.5.1条至第4.5.4条".encode(),
             ),
         )
+        contracts = bind_synthetic_document_versions(contracts, responses)
         outcome = ProductionMarketSessionAdapter(
             DocumentTransport(responses),
             contracts,
@@ -315,6 +329,7 @@ class MarketSessionSourceTests(unittest.TestCase):
                     + b"</body>",
                 ),
             )
+        contracts = bind_synthetic_document_versions(contracts, responses)
         outcome = ProductionMarketSessionAdapter(
             DocumentTransport(responses),
             contracts,
@@ -381,6 +396,168 @@ class MarketSessionSourceTests(unittest.TestCase):
             [e["code"] for e in outcome.source_errors],
             ["calendar_rule_deferment_unproved"],
         )
+
+    def test_acquired_rule_contradictions_are_unknown_versions_without_context(
+        self,
+    ) -> None:
+        changes = (
+            (
+                "15:00至15:30对大宗交易进行成交确认",
+                "15:00至15:30不对大宗交易进行成交确认",
+            ),
+            (
+                "大宗交易成交量在结束后计入该证券当日成交总量",
+                "大宗交易成交量在结束后不计入该证券当日成交总量",
+            ),
+            (
+                "9:15至9:25为开盘集合竞价时间，9:30至11:30、13:00至14:57为连续竞价时间",
+                "9:15至9:25为连续竞价时间，9:30至11:30、13:00至14:57为开盘集合竞价时间",
+            ),
+            ("本所市场休市。", "本所市场休市。2026年10月14日休市。"),
+            (
+                "15:00至15:30对大宗交易进行成交确认。",
+                "15:00至15:30对大宗交易进行成交确认。因调整，15:00至15:30不进行成交确认。",
+            ),
+        )
+        for before, after in changes:
+            with self.subTest(after=after):
+                contracts, responses = source_fixtures()
+                bse = contracts[2]
+                responses[bse.rule_uri] = replace(
+                    responses[bse.rule_uri],
+                    body=responses[bse.rule_uri].body.replace(
+                        before.encode(), after.encode()
+                    ),
+                )
+                afternoon = datetime(2026, 10, 14, 15, 30, tzinfo=TZ)
+                outcome = ProductionMarketSessionAdapter(
+                    DocumentTransport(responses),
+                    contracts,
+                    clock=lambda: afternoon,
+                    execution_clock=lambda: afternoon,
+                ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                self.assertEqual(outcome.coverage, "partial")
+                self.assertEqual(
+                    [e["code"] for e in outcome.source_errors],
+                    ["calendar_rule_version_unproved"],
+                )
+                self.assertTrue(
+                    all(
+                        "context" not in item["payload"]
+                        for item in outcome.observations
+                    )
+                )
+
+    def test_unknown_annual_exceptions_cannot_reuse_registered_version(self) -> None:
+        for contract_index in (0, 1, 2):
+            with self.subTest(exchange=contract_index):
+                contracts, responses = source_fixtures()
+                contract = contracts[contract_index]
+                responses[contract.calendar_uri] = replace(
+                    responses[contract.calendar_uri],
+                    body=responses[contract.calendar_uri].body.replace(
+                        b"</body>",
+                        "以上关闭安排暂不适用，假期期间仍接受证券交易。".encode()
+                        + b"</body>",
+                    ),
+                )
+                transport = DocumentTransport(responses)
+                outcome = ProductionMarketSessionAdapter(
+                    transport,
+                    contracts,
+                    clock=lambda: FIRST,
+                    execution_clock=lambda: CHECKED,
+                ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                self.assertEqual(outcome.coverage, "partial")
+                self.assertNotIn(contract.rule_uri, transport.calls)
+                self.assertEqual(
+                    [e["code"] for e in outcome.source_errors],
+                    ["calendar_document_version_unproved"],
+                )
+
+    def test_each_document_retrieved_before_publication_day_is_rejected(self) -> None:
+        for contract_index in (0, 1, 2):
+            for document in ("calendar", "rule"):
+                with self.subTest(exchange=contract_index, document=document):
+                    contracts, responses = source_fixtures()
+                    contract = contracts[contract_index]
+                    uri = (
+                        contract.calendar_uri
+                        if document == "calendar"
+                        else contract.rule_uri
+                    )
+                    responses[uri] = replace(
+                        responses[uri], retrieved_at=datetime(2020, 1, 1, tzinfo=TZ)
+                    )
+                    outcome = ProductionMarketSessionAdapter(
+                        DocumentTransport(responses),
+                        contracts,
+                        clock=lambda: FIRST,
+                        execution_clock=lambda: CHECKED,
+                    ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                    self.assertEqual(outcome.coverage, "partial")
+                    self.assertEqual(
+                        [e["code"] for e in outcome.source_errors],
+                        ["calendar_timestamp_unproved"],
+                    )
+
+    def test_restored_proof_cannot_admit_prepublication_retrieval(self) -> None:
+        contracts, responses = source_fixtures()
+        original = (
+            ProductionMarketSessionAdapter(
+                DocumentTransport(responses),
+                contracts,
+                clock=lambda: FIRST,
+                execution_clock=lambda: CHECKED,
+            )
+            .execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+            .to_dict()["observations"][0]["payload"]["context"]
+        )
+        changed = deepcopy(original)
+        for proof in changed["calendar_proofs"]:
+            proof["retrieved_at"] = "2020-01-01T00:00:00+08:00"
+        del changed["digest"]
+        digest = hashlib.sha256(
+            json.dumps(
+                changed, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode()
+        ).hexdigest()
+        changed["digest"] = digest
+        transport = DocumentTransport({})
+        outcome = ProductionMarketSessionAdapter(
+            transport,
+            contracts,
+            clock=lambda: CHECKED,
+            execution_clock=lambda: CHECKED,
+        ).execute(
+            MarketSessionOperationRequest("2026-10-14", BINDINGS, changed, digest), 5
+        )
+        self.assertEqual(outcome.coverage, "failed")
+        self.assertEqual(
+            outcome.source_errors[0]["code"], "calendar_timestamp_unproved"
+        )
+        self.assertEqual(transport.calls, [])
+
+    def test_retrieval_during_publication_day_does_not_require_next_midnight(
+        self,
+    ) -> None:
+        contracts, responses = source_fixtures()
+        for contract in contracts:
+            for uri, day in (
+                (contract.calendar_uri, contract.calendar_publication_date),
+                (contract.rule_uri, contract.rule_publication_date),
+            ):
+                responses[uri] = replace(
+                    responses[uri],
+                    retrieved_at=datetime.fromisoformat(day + "T12:00:00+08:00"),
+                )
+        outcome = ProductionMarketSessionAdapter(
+            DocumentTransport(responses),
+            contracts,
+            clock=lambda: FIRST,
+            execution_clock=lambda: CHECKED,
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+        self.assertEqual(outcome.coverage, "complete", outcome.source_errors)
 
     def test_invalid_bindings_are_rejected_before_any_document_request(self) -> None:
         contracts, responses = source_fixtures()
@@ -562,6 +739,7 @@ class MarketSessionSourceTests(unittest.TestCase):
                 "国家法定假日".encode(), "国家法定节假日".encode()
             ),
         )
+        contracts = bind_synthetic_document_versions(contracts, responses)
         outcome = ProductionMarketSessionAdapter(
             DocumentTransport(responses),
             contracts,
@@ -635,6 +813,7 @@ class MarketSessionSourceTests(unittest.TestCase):
             .replace(b"9:25", b"09:25")
             .replace(b"9:30", b"09:30"),
         )
+        contracts = bind_synthetic_document_versions(contracts, responses)
         outcome = ProductionMarketSessionAdapter(
             DocumentTransport(responses),
             contracts,

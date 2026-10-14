@@ -107,6 +107,43 @@ class MarketSessionContextTests(unittest.TestCase):
             ["SSE", "SZSE", "BSE"],
         )
 
+    def test_retrieval_before_calendar_availability_is_an_impossible_timestamp(
+        self,
+    ) -> None:
+        now = datetime(2026, 10, 14, 10, tzinfo=TZ)
+        impossible = tuple(
+            replace(item, retrieved_at="2020-01-01T00:00:00+08:00")
+            for item in calendars()
+        )
+        outcome = DeterministicMarketSessionAdapter(
+            impossible, clock=lambda: now
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 1)
+        self.assertEqual(outcome.coverage, "failed")
+        self.assertEqual(
+            outcome.source_errors[0]["code"], "calendar_timestamp_unproved"
+        )
+
+    def test_day_precision_retrieval_uses_day_start_not_conservative_upper_bound(
+        self,
+    ) -> None:
+        now = datetime(2026, 10, 14, 10, tzinfo=TZ)
+        proof = tuple(
+            replace(
+                item,
+                retrieved_at="2026-09-30T12:00:00+08:00",
+                source_metadata={
+                    "publication_precision": "day",
+                    "calendar_publication_date": "2026-09-30",
+                    "rule_publication_date": "2026-09-29",
+                },
+            )
+            for item in calendars()
+        )
+        outcome = DeterministicMarketSessionAdapter(proof, clock=lambda: now).execute(
+            MarketSessionOperationRequest("2026-10-14", BINDINGS), 1
+        )
+        self.assertEqual(outcome.coverage, "complete", outcome.source_errors)
+
     def test_all_regular_auction_phases_and_proved_closed_days(self) -> None:
         for timestamp, phase, screen_date in (
             ("2026-10-14T09:00:00+08:00", "pre_open", "2026-10-13"),

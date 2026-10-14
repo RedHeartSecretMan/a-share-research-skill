@@ -6,7 +6,6 @@
     "2026-07-06",
     "2026-12-31"
   ],
-  "pdf_version_policy": "exact qualified body digest binds only this named version; any other body fails closed and requires reviewed source-version qualification",
   "sources": [
     {
       "exchange": "SSE",
@@ -31,7 +30,6 @@
         "3.6.9 specified VWAP",
         "3.6.10 specified VWAP"
       ],
-      "rule_pdf_sha256": null,
       "year": 2026,
       "version": "sse-a-share-calendar-rule-2026-v1",
       "calendar_publication_date": "2025-12-22",
@@ -96,7 +94,9 @@
       "availability_basis": "registered_explicit_publication_day_conservative_following_midnight",
       "exception_scope": "declared_2026_annual_schedule_and_named_rule_notice_known_exceptions",
       "synthetic": false,
-      "rule_document_number": null
+      "rule_document_number": null,
+      "calendar_body_sha256": "c531e4ed2328b40ef4ce0abf961a044aeff802e60eb2e2f24ec2e9d8b2e48674",
+      "rule_body_sha256": "fc922c433438b2636cb631eab25cca405209712acbb6aaded768c45456ff8888"
     },
     {
       "exchange": "SZSE",
@@ -115,7 +115,6 @@
         "3.6.3"
       ],
       "deferred_sections": [],
-      "rule_pdf_sha256": "9b66f8b0db70f84a25ef1ccb4ee2351001724e408117552d75f6d8993483c586",
       "year": 2026,
       "version": "szse-a-share-calendar-rule-2026-v1",
       "calendar_publication_date": "2025-12-22",
@@ -180,7 +179,9 @@
       "availability_basis": "registered_explicit_publication_day_conservative_following_midnight",
       "exception_scope": "declared_2026_annual_schedule_and_named_rule_notice_known_exceptions",
       "synthetic": false,
-      "rule_document_number": null
+      "rule_document_number": null,
+      "calendar_body_sha256": "1656d8708d5faed33c7588538639d96128f39fdface02cfa6eb66d796c40f14e",
+      "rule_body_sha256": "9b66f8b0db70f84a25ef1ccb4ee2351001724e408117552d75f6d8993483c586"
     },
     {
       "exchange": "BSE",
@@ -203,7 +204,6 @@
         "3.7.1-3.7.10",
         "4.5.1-4.5.4"
       ],
-      "rule_pdf_sha256": null,
       "year": 2026,
       "version": "bse-a-share-calendar-rule-2026-v1",
       "calendar_publication_date": "2025-12-22",
@@ -268,7 +268,10 @@
       "availability_basis": "registered_explicit_publication_day_conservative_following_midnight",
       "exception_scope": "declared_2026_annual_schedule_and_named_rule_notice_known_exceptions",
       "synthetic": false,
-      "rule_document_number": "北证公告〔2026〕17号"
+      "rule_document_number": "北证公告〔2026〕17号",
+      "calendar_body_sha256": "1d6178157837f021dcb98c1206ee2f6f8cafcadbbb5b1cb0ac3637bbe82387ab",
+      "rule_body_sha256": "f15d8685e71e5686343600d68a7c8c8d11386bee54fc998b5638273c9ae1fbc4"
     }
-  ]
+  ],
+  "document_version_policy": "Every annual and rule response is bound to its independently qualified exact body digest; any changed bytes fail closed and require reviewed source-version qualification. Text parsers validate the named structure and semantics but do not grant authority to unknown revisions."
 }
