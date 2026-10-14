@@ -92,6 +92,10 @@ _MARKET_FOUNDATION_SOURCE_CAPABILITIES = {
     "szse_a_share_turnover@1": "whole_market_turnover",
     "szse_market_margin@1": "whole_market_margin",
 }
+MARKET_FOUNDATION_OPERATION_APPLICATIONS = tuple(
+    (capability, owner)
+    for owner, capability in _MARKET_FOUNDATION_SOURCE_CAPABILITIES.items()
+)
 # Canonical-JSON digests pin every reviewed public qualification fact and
 # nested source contract to its exact operation owner.
 _MARKET_FOUNDATION_QUALIFICATION_SHA256 = {
@@ -1837,7 +1841,7 @@ def _validate_sanitized_direct_contract(
         operations = _mapping(capability.get("operations"), "release operations")
         for operation_id, raw_operation in operations.items():
             operation = _mapping(raw_operation, "release operation")
-            if set(operation) != {
+            expected_operation_keys = {
                 "capability_id",
                 "operation_id",
                 "execution_state",
@@ -1845,7 +1849,10 @@ def _validate_sanitized_direct_contract(
                 "query_complete",
                 "source_error_codes",
                 "field_dispositions",
-            }:
+            }
+            if "market_foundation_report_facts" in operation:
+                expected_operation_keys.add("market_foundation_report_facts")
+            if set(operation) != expected_operation_keys:
                 raise ValueError("sanitized release operation is invalid")
             if _owner(operation) != (capability_id, operation_id):
                 raise ValueError("sanitized release operation owner is invalid")
@@ -1981,6 +1988,21 @@ def _operation_source_result(operation: Mapping[str, object]) -> str:
     execution_state = _text(operation.get("execution_state"), "release execution state")
     if execution_state != "failed" and source_error_codes:
         raise ValueError("release source error codes require failed execution")
+    owner = operation.get("operation_id")
+    market_capability = (
+        _MARKET_FOUNDATION_SOURCE_CAPABILITIES.get(owner)
+        if isinstance(owner, str)
+        else None
+    )
+    if market_capability is not None:
+        if operation.get("capability_id") != market_capability:
+            raise ValueError("market report qualification owner is invalid")
+        if (
+            execution_state == "succeeded" or operation.get("state") == "partial"
+        ) and "market_foundation_report_facts" not in operation:
+            raise ValueError("market report source result requires report proof")
+    if "market_foundation_report_facts" in operation:
+        return _market_foundation_report_source_result(operation)
     coverage_state = _text(operation.get("state"), "release coverage state")
     query_complete = operation.get("query_complete")
     if execution_state == "succeeded":
@@ -2003,6 +2025,132 @@ def _operation_source_result(operation: Mapping[str, object]) -> str:
         if query_complete is None and coverage_state == execution_state:
             return "unavailable"
     raise ValueError("release operation execution facts are invalid")
+
+
+def market_foundation_report_facts(
+    operation: Mapping[str, object], payloads: Sequence[Mapping[str, object]]
+) -> dict[str, object] | None:
+    """Project only exact-owner normalized report facts, never diagnostics."""
+
+    owner = operation.get("operation_id")
+    if owner not in _MARKET_FOUNDATION_SOURCE_CAPABILITIES:
+        return None
+    if not payloads:
+        return None
+    if len(payloads) != 1 or payloads[0].get("source_operation") != owner:
+        raise ValueError("market report observation ownership is invalid")
+    payload = payloads[0]
+    report = _mapping(payload.get("observation"), "market report observation")
+    expected_keys = {
+        "exchange",
+        "asset_scope",
+        "report_date",
+        "published_at",
+        "row_count",
+        "metrics",
+        "units",
+    }
+    if set(report) != expected_keys:
+        raise ValueError("market report observation fields are invalid")
+    facts = deepcopy(dict(report))
+    checked = dict(operation, market_foundation_report_facts=facts)
+    _market_foundation_report_source_result(checked)
+    retrieved_at = _verified_at(
+        _text(payload.get("retrieved_at"), "market report retrieval")
+    )
+    publication = _verified_at(
+        _text(facts["published_at"], "market report publication")
+    )
+    if retrieved_at < publication:
+        raise ValueError("market report retrieval precedes publication")
+    return facts
+
+
+def _market_foundation_report_source_result(operation: Mapping[str, object]) -> str:
+    owner = _text(operation.get("operation_id"), "market report owner")
+    capability = _MARKET_FOUNDATION_SOURCE_CAPABILITIES.get(owner)
+    if capability is None or operation.get("capability_id") != capability:
+        raise ValueError("market report qualification owner is invalid")
+    report = _mapping(
+        operation.get("market_foundation_report_facts"), "market report facts"
+    )
+    if set(report) != {
+        "exchange",
+        "asset_scope",
+        "report_date",
+        "published_at",
+        "row_count",
+        "metrics",
+        "units",
+    }:
+        raise ValueError("market report facts fields are invalid")
+    exchange = owner.split("_", 1)[0].upper()
+    margin = capability == "whole_market_margin"
+    expected_scope = (
+        {
+            "SSE": "exchange_wide_official_margin_trading_summary",
+            "SZSE": "exchange_wide_official_margin_trading_total",
+            "BSE": "exchange_wide_official_margin_trading_aggregate",
+        }[exchange]
+        if margin
+        else "exchange_daily_A_share_stock_turnover"
+    )
+    if report["exchange"] != exchange or report["asset_scope"] != expected_scope:
+        raise ValueError("market report qualification scope is invalid")
+    _validate_market_foundation_fixture_time(report)
+    row_count = _strict_integer(report["row_count"], "market report row count")
+    expected_rows = 2 if owner == "sse_a_share_turnover@1" else 1
+    if not 0 <= row_count <= expected_rows:
+        raise ValueError("market report row inventory is invalid")
+    metrics = _mapping(report["metrics"], "market report metrics")
+    units = _mapping(report["units"], "market report units")
+    expected_fields = {
+        destination.rsplit(".", 1)[1]
+        for destination in _MARKET_FOUNDATION_NORMALIZATION_RULES[
+            owner
+        ].field_destinations.values()
+    }
+    execution = operation.get("execution_state")
+    coverage = operation.get("state")
+    complete = (
+        execution == "succeeded"
+        and operation.get("query_complete") is True
+        and coverage == "complete"
+    )
+    partial = coverage == "partial" and (
+        execution == "succeeded"
+        and operation.get("query_complete") is False
+        or execution == "failed"
+        and operation.get("query_complete") is None
+    )
+    if not complete and not partial:
+        raise ValueError("market report facts contradict operation execution")
+    empty = complete and margin and row_count == 0
+    if (
+        set(metrics) != (set() if empty else expected_fields)
+        if complete
+        else not set(metrics) <= expected_fields
+    ) or set(units) != set(metrics):
+        raise ValueError("market report required field inventory is invalid")
+    if complete and not empty and row_count != expected_rows:
+        raise ValueError("market report required row inventory is invalid")
+    values: list[Decimal] = []
+    for field, value in metrics.items():
+        if not isinstance(value, str) or len(value) > 256:
+            raise ValueError("market report normalized decimal is invalid")
+        number = _exact_fixture_decimal(value, "market report normalized decimal")
+        if number < 0 or units[field] != (
+            "shares" if field.endswith("_shares") else "CNY"
+        ):
+            raise ValueError("market report normalized unit/value is invalid")
+        values.append(number)
+    if partial:
+        return "partial"
+    return (
+        "observed_empty"
+        if empty or not margin and all(value.is_zero() for value in values)
+        else "complete"
+    )
 
 
 def _unique_evidence(

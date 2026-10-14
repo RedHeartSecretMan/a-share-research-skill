@@ -26,6 +26,12 @@ owner 输出直接由 #116 的 `OperationOutcome` 脱离调用者后递归封存
 固定的安全错误状态、资格中的来源定位以及由执行获得的调用次数；调用者提供的诊断、
 locator、异常文本和 attempts 不成为权威。
 
+来源状态统一调用已有发布 Module 的 canonical helper。六 owner 的有界 report facts 从
+规范化 observation 和引用关系派生，包含已验证的范围、日期、发布时间、行数、字段和单位，
+不会采信诊断中的状态文字。明确零成交额和零条两融记录可以保留报告证据与
+`observed_empty` 来源状态；有 observation 时的运行时 coverage 仍按 #116 原规则为
+`complete`。发布采集保留同一份有界事实并调用同一 helper，旧 owner 的行为不变。
+
 SSE、SZSE、BSE 成交额分区都是必需分母。只有三所分区日期、范围和 CNY 单位符合合同，
 才形成总计。两融按字段折叠，保留各所分区；目前六条已接受 owner 合同对全部六个字段
 明确禁止 `not_applicable`，因此任何缺失或调用者声明都不能缩小某个字段的交易所分母。

@@ -92,6 +92,25 @@ def margin_report(exchange: str) -> dict[str, object]:
 
 
 class MarketFoundationTests(unittest.TestCase):
+    def test_failed_owner_keeps_declared_fields_and_safe_error_projection(self):
+        report = turnover_report("SSE", {"TRADE_AMT_01": "30", "TRADE_AMT_03": "5"})
+        report["source_units"]["TRADE_AMT_01"] = "shares"
+        operations = build_default_market_foundation_operations(
+            transports={"sse_a_share_turnover@1": ReportTransport(report)}
+        )
+        outcome = operations[0].execute(
+            OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00"), 1
+        )
+        self.assertEqual(outcome.execution.state, "failed")
+        self.assertEqual(
+            {item.field for item in outcome.field_dispositions},
+            {"TRADE_AMT_01", "TRADE_AMT_03"},
+        )
+        self.assertEqual(
+            outcome.to_dict()["source_errors"][0]["message"],
+            "The market source did not provide a qualified report.",
+        )
+
     def test_real_leaf_calls_cannot_exceed_the_qualified_owner_budget(self):
         class OverBudgetTransport:
             def __init__(self):

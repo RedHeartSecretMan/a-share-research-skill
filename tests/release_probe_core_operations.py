@@ -27,6 +27,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from a_share_research.operation_release_matrix import (  # noqa: E402
+    MARKET_FOUNDATION_OPERATION_APPLICATIONS,
     ReleasePlanSnapshot,
     build_operation_release_matrix,
     canonical_release_as_of,
@@ -37,6 +38,7 @@ from a_share_research.operation_release_matrix import (  # noqa: E402
     load_active_operation_qualification_manifest,
     load_operation_qualification_manifest,  # noqa: F401
     load_release_probe_evidence,
+    market_foundation_report_facts,
 )
 from a_share_research.research_result import (  # noqa: E402
     _validate_public_source_error,
@@ -854,6 +856,9 @@ def sanitize_public_result(
     coverage = _mapping(result.get("coverage"), "public result contract coverage")
     source_errors = _source_errors_by_id(result.get("source_errors"))
     referenced_source_error_ids: set[str] = set()
+    observations = _sequence(
+        result.get("observations", ()), "public report observations"
+    )
     if plan.get("task_type") == "research_workflow":
         safe_result, safe_evidence = _sanitize_workflow_result(
             plan=plan,
@@ -865,6 +870,7 @@ def sanitize_public_result(
             source_errors=source_errors,
             verified_at=verified_at,
             referenced_source_error_ids=referenced_source_error_ids,
+            observations=observations,
         )
         if referenced_source_error_ids != set(source_errors):
             raise ValueError("public result contract source error IDs do not close")
@@ -882,6 +888,7 @@ def sanitize_public_result(
         source_errors=source_errors,
         verified_at=verified_at,
         referenced_source_error_ids=referenced_source_error_ids,
+        observations=observations,
     )
     if referenced_source_error_ids != set(source_errors):
         raise ValueError("public result contract source error IDs do not close")
@@ -906,6 +913,7 @@ def _sanitize_plan_contract(
     source_errors: Mapping[str, tuple[str, str, object, str | None]],
     verified_at: str,
     referenced_source_error_ids: set[str],
+    observations: Sequence[object],
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
     """Reduce one direct or workflow-leaf plan to its formal contracts."""
 
@@ -959,6 +967,7 @@ def _sanitize_plan_contract(
             task_type=cast(str, safe_plan["task_type"]),
             source_errors=source_errors,
             referenced_source_error_ids=referenced_source_error_ids,
+            observations=observations,
         )
         aggregate_output = safe_coverage.setdefault(capability_id, {"operations": {}})
         aggregate_operations = cast(
@@ -994,6 +1003,7 @@ def _sanitize_workflow_result(
     source_errors: Mapping[str, tuple[str, str, object, str | None]],
     verified_at: str,
     referenced_source_error_ids: set[str],
+    observations: Sequence[object],
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
     plan_steps = _sequence(plan.get("steps"), "public workflow plan steps")
     registry_steps = _mapping(registry.get("steps"), "public workflow registry steps")
@@ -1047,6 +1057,7 @@ def _sanitize_workflow_result(
                 source_errors=source_errors,
                 verified_at=verified_at,
                 referenced_source_error_ids=referenced_source_error_ids,
+                observations=observations,
             )
             if (
                 safe_leaf_plan["task_type"] != safe_step["task_type"]
@@ -1181,6 +1192,7 @@ def _safe_operation(
     task_type: str,
     source_errors: Mapping[str, tuple[str, str, object, str | None]],
     referenced_source_error_ids: set[str],
+    observations: Sequence[object],
 ) -> dict[str, object]:
     if (
         value.get("capability_id") != capability_id
@@ -1260,7 +1272,7 @@ def _safe_operation(
             raise ValueError("source error scope is invalid for this task")
         referenced_source_error_ids.add(source_error_id)
         source_error_codes.extend(canonical_release_source_error_codes((error_code,)))
-    return {
+    safe: dict[str, object] = {
         "capability_id": capability_id,
         "operation_id": operation_id,
         "execution_state": execution_state,
@@ -1271,6 +1283,42 @@ def _safe_operation(
         ),
         "field_dispositions": safe_dispositions,
     }
+    if operation_id in {owner for _, owner in MARKET_FOUNDATION_OPERATION_APPLICATIONS}:
+        if (
+            capability_id,
+            operation_id,
+        ) not in MARKET_FOUNDATION_OPERATION_APPLICATIONS:
+            raise ValueError("market report public capability ownership is invalid")
+        observation_ids = _string_list_or_empty(
+            value.get("observation_ids", ()), "market report observation IDs"
+        )
+        payloads: list[Mapping[str, object]] = []
+        seen: set[str] = set()
+        for raw in observations:
+            if not isinstance(raw, Mapping) or raw.get("id") not in observation_ids:
+                continue
+            observation = _mapping(raw, "market report public observation")
+            observation_id = _text(
+                observation.get("id"), "market report observation id"
+            )
+            if (
+                observation_id in seen
+                or observation.get("capability_id") != capability_id
+                or observation.get("operation_id") != operation_id
+            ):
+                raise ValueError(
+                    "market report public observation ownership is invalid"
+                )
+            seen.add(observation_id)
+            payloads.append(
+                _mapping(observation.get("payload"), "market report payload")
+            )
+        if seen != set(observation_ids):
+            raise ValueError("market report observation references do not close")
+        facts = market_foundation_report_facts(safe, payloads)
+        if facts is not None:
+            safe["market_foundation_report_facts"] = facts
+    return safe
 
 
 def _source_errors_by_id(

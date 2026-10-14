@@ -3662,6 +3662,10 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                     ),
                 )
 
+            def post(self, url: str, headers: dict[str, str], body: bytes) -> object:
+                del body
+                return self.get(url, headers)
+
         def execute(
             command: list[str], **_: object
         ) -> subprocess.CompletedProcess[str]:
@@ -3670,9 +3674,15 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps(health), "")
             request = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
             sent_requests.append(deepcopy(request))
+            transport = UnavailableTransport()
             public = research(
                 request,
-                identity_transport=UnavailableTransport(),
+                identity_transport=transport,
+                content_transport=transport,
+                capital_transport=transport,
+                market_signal_transport=transport,
+                etf_option_transport=transport,
+                intraday_transport=transport,
                 research_now=datetime(
                     2026,
                     8,

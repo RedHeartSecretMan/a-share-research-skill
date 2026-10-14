@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Mapping, Protocol, Sequence, cast
 
 from .exact_normalization import ExactDecimalTerm, exact_scaled_sum
-from .operation_release_matrix import load_operation_qualification_manifest
+from .operation_release_matrix import (
+    canonical_release_source_error_codes,
+    derive_release_source_result,
+    load_operation_qualification_manifest,
+    market_foundation_report_facts,
+)
 from .provider_lane import ProviderInvocation, ProviderLanePolicy, ProviderLanes
 from .research_result import FieldDisposition, OperationExecution, OperationOutcome
 
@@ -283,9 +288,15 @@ def _unavailable(
                 "code": "permission_denied"
                 if source_result == "credential_blocked"
                 else "market_source_unavailable",
+                "message": "The market source explicitly rejected permission."
+                if source_result == "credential_blocked"
+                else "The market source did not provide a qualified report.",
             },
         ),
-        diagnostics={"source_result": source_result},
+        field_dispositions=tuple(
+            FieldDisposition(field, "normalized", str(destination))
+            for field, destination in _mapping(contract["field_destinations"]).items()
+        ),
     )
 
 
@@ -356,15 +367,6 @@ def _normalize_report(
         metrics = {
             field: _number(exact_scaled_sum(values)) for field, values in terms.items()
         }
-        source_result = (
-            "partial"
-            if not complete
-            else "observed_empty"
-            if empty
-            or not margin
-            and all(_decimal(value) == 0 for value in metrics.values())
-            else "complete"
-        )
         payload = {
             "id": f"{snapshot.operation_id}:{request.report_date}",
             "source_operation": snapshot.operation_id,
@@ -375,9 +377,9 @@ def _normalize_report(
                 "asset_scope": scope["kind"],
                 "report_date": request.report_date,
                 "published_at": report["published_at"],
+                "row_count": row_count,
                 "metrics": metrics,
                 "units": units,
-                "source_result": source_result,
             },
         }
         return OperationOutcome(
@@ -389,7 +391,6 @@ def _normalize_report(
                 FieldDisposition(field, "normalized", str(destination))
                 for field, destination in destinations.items()
             ),
-            diagnostics={"source_result": source_result},
         )
     except (KeyError, TypeError, ValueError, InvalidOperation):
         return _unavailable(contract)
@@ -427,10 +428,8 @@ def fold_market_foundation(
         count = operation._attempt_count(outcome) if outcome is not None else None
         trusted = outcome is not None and count is not None
         result = (
-            str(outcome.diagnostics["source_result"])
+            _report_source_result(outcome)
             if trusted and outcome is not None
-            else "not_requested"
-            if outcome is None
             else "unavailable"
         )
         material: dict[str, object] | None = None
@@ -463,6 +462,7 @@ def fold_market_foundation(
                 else "failed",
                 "source_result": result,
                 "attempts": count if count is not None else 0,
+                "attempted": count is not None and count > 0,
             }
         )
         kind = "turnover" if "a_share_turnover" in owner else "margin"
@@ -487,6 +487,26 @@ def fold_market_foundation(
             "totals": _margin_totals(partitions["margin"]),
         },
     }
+
+
+def _report_source_result(outcome: OperationOutcome) -> str:
+    projection = outcome.to_dict()
+    operation: dict[str, object] = {
+        "capability_id": outcome.capability_id,
+        "operation_id": outcome.operation_id,
+        "execution_state": outcome.execution.state,
+        "state": outcome.coverage,
+        "query_complete": outcome.execution.query_complete,
+        "source_error_codes": list(
+            canonical_release_source_error_codes(
+                tuple(error.get("code") for error in projection["source_errors"])
+            )
+        ),
+    }
+    facts = market_foundation_report_facts(operation, projection["observations"])
+    if facts is not None:
+        operation["market_foundation_report_facts"] = facts
+    return derive_release_source_result((operation,))
 
 
 def _total(
