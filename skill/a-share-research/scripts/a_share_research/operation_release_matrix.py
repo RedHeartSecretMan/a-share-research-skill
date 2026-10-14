@@ -1795,7 +1795,7 @@ def _validate_sanitized_direct_contract(
         _safe_release_reference(obligation.get("source_role"), "release source role")
         if not isinstance(obligation.get("experimental"), bool) or obligation.get(
             "exchange"
-        ) not in {None, "SSE", "SZSE"}:
+        ) not in {None, "SSE", "SZSE", "BSE"}:
             raise ValueError("sanitized release plan obligation is invalid")
         for raw_use in _sequence(
             obligation.get("evidence_uses"), "release obligation evidence uses"

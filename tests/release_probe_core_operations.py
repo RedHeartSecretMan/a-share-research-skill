@@ -1123,7 +1123,12 @@ def _safe_obligation(value: Mapping[str, object]) -> dict[str, object]:
         )
     experimental = value.get("experimental")
     exchange = value.get("exchange")
-    if not isinstance(experimental, bool) or exchange not in {None, "SSE", "SZSE"}:
+    if not isinstance(experimental, bool) or exchange not in {
+        None,
+        "SSE",
+        "SZSE",
+        "BSE",
+    }:
         raise ValueError("public result contract operation obligation is invalid")
     return {
         "capability_id": _text(value.get("capability_id"), "capability id"),
