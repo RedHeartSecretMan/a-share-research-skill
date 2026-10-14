@@ -1,43 +1,47 @@
 # Market Session Context Module
 
-This is the internal #117 implementation checkpoint for the approved v0.4.0 work. It is not a released workflow, default production calendar owner, or live qualification. The existing public `run --request` Interface and v0.3.0 workflows retain their published contracts.
+This internal v0.4.0 Module implements `market_trading_session` through the existing `execute(OperationRequest, timeout_seconds) -> OperationOutcome` Adapter Interface. It does not add a public command or activate a workflow. Source operations for quotes, daily totals and financial facts remain responsible for their own applicability and completeness.
 
-## Interface and authority
+## Default source path
 
-`DeterministicMarketSessionAdapter.execute(MarketSessionOperationRequest, timeout_seconds)` returns the existing immutable `OperationOutcome`. Its clock is injected and read once per execution. Fixtures explicitly mark `synthetic: true`; they demonstrate deterministic behavior, not exchange-source authenticity.
+`build_default_market_session_adapter` loads the three fixed first-party document contracts in [market-session-sources.json](market-session-sources.json). It performs no acquisition during construction. Execute makes at most six sequential document requests: one annual closure notice and one current rule document for each of SSE, SZSE and BSE. It has no retry, redirect, account API, browser-cookie import or fallback route. An unrecognized annual notice stops that exchange before its rule request; successful other exchange proofs remain visible.
 
-A complete `CalendarEvidence` names its exchange, calendar/rule/completion evidence IDs, version, source locators, effective and covered ranges, first availability, actual retrieval time, explicit daily states and regular-auction schedule. Every date in a proved range must be present. Unknown/stale authority, missing exchanges or dates, conflicting states/schedules and impossible source times fail closed. No weekday subtraction or generic age limit supplies missing proof.
+HTML and DOCX declarations are parsed from bounded response bodies. For the named SZSE 2026 PDF, the exact reviewed body digest binds the separately qualified rule semantics. This is a version-specific verifier, not a general PDF parser: changed bytes fail closed and need an explicit source-version qualification. HTML/DOCX critical version, scope, weekday, auction and completion clauses must match the registered declaration. Provider bodies, headers and exception text are excluded from outcomes.
 
-The small calendar Interface expects already established source authority. A caller setting `authority: proved` does not authenticate a source. A future production owner must establish acquisition, applicable source/version/exception authority and full-day completion before supplying these values.
+The current production contract declares the normal version period **2026-07-06 through 2026-12-31**. Requests outside proved coverage fail closed. A context also needs a proved preceding completed date; the first covered morning cannot invent a previous session. This period records the source version actually qualified, rather than claiming arbitrary historical coverage. A new annual/rule version requires updating and reviewing the source contract and rerunning affected checks. Source-version/producer drift also prevents reuse of an old artifact under changed producer identity.
 
-## Regular auction and completed trading day
+## Calendar authority and time
 
-The phase labels are `pre_open`, `opening_auction`, `opening_intermission`, `continuous_auction`, `midday_break`, `closing_auction`, `post_close`, `weekend` and `holiday`. The model uses half-open intervals: the interval beginning at a boundary owns that instant. `opening_intermission` labels the gap between the declared opening-auction end and continuous-auction start; that name is a model convention, not a quoted exchange phase.
+A complete calendar proof names its exchange, calendar/rule/completion evidence IDs, document versions, locators, response digests, effective and covered ranges, actual retrieval time and registered publication evidence. Every date in the range is present. Monday–Friday classification comes from the proved rule; named annual closures and known rule exceptions are applied. No weekday subtraction supplies a missing previous date.
 
-A regular-auction end is distinct from the completion of all applicable A-share trading-day sessions. `trading_day_completion_time` and `completion_evidence_id` require independent authority. The synthetic tests use a 15:30 full-day completion with a 15:00 regular-auction end so that a post-close phase cannot silently advance `screen_date`.
+Publication dates have **day precision**. The labeled conservative availability bound is the following Asia/Shanghai midnight; it is never called an exact first-publication timestamp. Signature, URL date, HTTP Date and retrieval time cannot replace publication evidence. Retrieval can occur after the frozen research cutoff when the applicable document semantics were already published and version-bound before it.
 
-Current-session applicability and `freshness_basis` distinguish active auctions, the midday break and completed-session use. They impose no observation-age threshold. On resume, the original phase descriptor is marked `is_current_phase: false`; it cannot authorize a new current-session observation.
+Unknown/stale authority, missing exchanges or dates, conflicting states/schedules, impossible timestamps and unknown document revisions do not produce a proved current context. Coverage and known exceptions are explicit; the Module does not claim absence of every possible later emergency announcement or require a new real-time exchange-status API.
+
+## Auction and scheduled completion
+
+The phase labels are `pre_open`, `opening_auction`, `opening_intermission`, `continuous_auction`, `midday_break`, `closing_auction`, `post_close`, `weekend` and `holiday`. Intervals are half open: the interval beginning at a boundary owns that instant. `opening_intermission` names the gap between the declared opening-auction end and continuous-auction start; it is a model label, not a quoted official phase.
+
+Regular auction completion and scheduled full-day completion are separate. The registered normal full-day reference is 15:30. SSE/SZSE applicable after-hours fixed-price rules support it. For BSE, operative block-trade confirmation and daily-volume rules support it; the whole 3.7 after-hours chapter remains deferred. An overall effective date does not enable deferred clauses.
+
+The result exposes `latest_regular_auction_completed_session` separately from `latest_completed_session`, whose basis is `calendar_scheduled_completion`. `actual_trade_or_quote_completeness_proved` is false. The result never asserts that a quotation, daily total or report has actually become complete or public at 15:30.
+
+Active auctions use `freshness_basis: active_session`; the midday break uses `current_session_hold`. Other applicable completed-session uses remain distinguishable. No universal observation-age threshold is introduced.
 
 ## Frozen C and restore
 
-`ContextBindings` are internal request, producer, plan, operation-manifest and artifact identities. They are not additional ResearchTask inputs. Create freezes:
+`ContextBindings` are internal request, producer, plan, operation-manifest and artifact identities, not additional ResearchTask inputs. The original aware research clock is captured once for C. A separate actual evidence-check clock records acquisition/verification completion without moving the information boundary.
 
-- `requested_as_of` and the original aware Asia/Shanghai `research_now`;
-- current-date `information_cutoff` equal to that original clock, or historical-date 23:59:59;
-- the greatest proved three-exchange common completed `screen_date`;
-- full calendar evidence, its IDs/ranges/versions and the normalized context digest;
-- the supplied internal identity bindings.
+Create freezes `requested_as_of`, original `research_now`, `evidence_checked_at`, `information_cutoff`, common `screen_date`, its scheduled-completion basis, full source-bound calendar proofs, internal bindings and normalized context digest. Today's cutoff is the original research clock; a historical cutoff is that day's Asia/Shanghai 23:59:59. Future requests fail closed.
 
-Future dates fail closed. Historical screening `screen_date` is independent of the current descriptor's `latest_completed_session`.
+Historical C is independent of today's calendar coverage. Proved historical C may survive as an explicit partial outcome when the current descriptor cannot be established. It never guesses a current latest session from an old covered range.
 
-Resume receives the saved plain-JSON context and `expected_context_digest` from #108's already validated original commitment. #108 owns byte, request, plan, manifest, partition and ownership validation before this call; #117 adds calendar/time semantics. This Module creates no trust store and performs no source acquisition. It verifies the independently supplied digest, exact bindings, original clock/cutoff derivation, calendar authority and a full semantic reconstruction against the original calendar evidence. Updating a local file digest cannot authorize a changed cutoff, screen date or calendar reference.
+Resume receives saved plain JSON and the expected original context digest from #108's validated commitment. #108 owns request/producer/plan/manifest/partition/ownership validation; #117 owns calendar and time semantics. Restoration validates bindings, the original clock/cutoff, registered references, calendar dates/rules and full context reconstruction before any new-source path. It performs no document acquisition. Updating a local digest cannot authorize a changed cutoff, screen date, calendar reference or calendar day.
 
-New evidence retains its actual retrieval time. The restored C remains unchanged and provides the original cutoff to downstream evidence-adoption owners. #120/#69 remain responsible for checking financial/material availability and version lineage against that cutoff; completed partitions/ranking are controlled by #108/#69.
+The restored C and original document retrieval times remain fixed; the operation verification time is actual. The original phase descriptor is explicitly not a current phase on later restoration. #120/#69 consume the original cutoff and remain responsible for financial/material availability and version lineage; #108/#69 control write-once partitions and rankings.
 
-## Declared-document parser and unresolved production work
+## Validation and source evidence
 
-`ExchangeCalendarDocumentAdapter` parses bounded extracted SSE/SZSE yearly holiday declarations and the exact numbered regular-auction/effect clauses: SSE 2.4.2/11.9 and SZSE 2.3.2/10.9. Its inputs are extracted text, not an invented JSON provider response. It retains declared closure ranges, reopening dates, auction times, effect date and safe locators; it excludes raw document text from outcomes.
+The deterministic Adapter uses injected aware clocks and explicit calendar fixtures. Production-path offline tests use synthetic document layouts and explicitly supplied transport; synthetic PDF bytes have a test-only digest binding and never stand in for the real PDF. Outcomes reuse #116 recursive sealing and detached plain JSON. Clean copied-install loading and existing unified-result evidence-reference projection are verified through the same Interface.
 
-The adapter always reports these currently insufficient document facts as partial, retaining explicit proof gaps. It does not infer unlisted daily states, first availability, temporary exceptions, deferral applicability, full historical coverage or full-day completion. BSE is not substituted with SSE/SZSE rules. It is intentionally unregistered until those production obligations are proved.
-
-Frozen #121 A/B/C/D evidence permits this local work but leaves BSE authority, SSE's two incomplete deferral rows, SZSE's specific deferral context, exception coverage, source transport/extraction/permission contracts and whole-day completion unresolved. Closing them requires the owning source/authority decision and an approved concrete source-access budget. The complete original #117 three-exchange, public-proof, installed-copy, quality and independent-review obligations remain in force; this checkpoint is not Ready for Acceptance.
+Source contracts consume the independently verified #121 A–F facts and first-party publication metadata. Their normal schedule semantics are distinct from final live qualification. Live provider success, final operation closure and current-market completeness remain the final frozen-candidate #98 obligations. All ordinary tests use a process-level network denial inherited by child processes, a minimal environment and explicit transport fixtures.

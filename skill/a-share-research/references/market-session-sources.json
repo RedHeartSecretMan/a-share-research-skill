@@ -1,0 +1,274 @@
+{
+  "schema_version": "1.0",
+  "source_use_scope": "public_calendar_and_rule_documents_only",
+  "exact_first_availability": "unknown",
+  "supported_normal_rule_period": [
+    "2026-07-06",
+    "2026-12-31"
+  ],
+  "pdf_version_policy": "exact qualified body digest binds only this named version; any other body fails closed and requires reviewed source-version qualification",
+  "sources": [
+    {
+      "exchange": "SSE",
+      "calendar_uri": "https://www.sse.com.cn/disclosure/announcement/general/c/c_20251222_10802507.shtml",
+      "calendar_document_number": "上证公告〔2025〕45号",
+      "calendar_title": "关于上海证券交易所2026年部分节假日休市安排的通知",
+      "rule_uri": "https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/10816492/files/58bd5ce4dfc94b57a5391f60eb2719ab.docx",
+      "rule_format": "docx",
+      "rule_publication_uri": "https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml",
+      "weekday_section": "2.4.1",
+      "auction_section": "2.4.2",
+      "effect_section": "11.9",
+      "completion_kind": "after_hours_fixed_price",
+      "completion_sections": [
+        "3.7.1",
+        "3.7 time clause"
+      ],
+      "deferred_sections": [
+        "3.6.2 specified VWAP",
+        "3.6.3 specified16:00-17:00",
+        "3.6.4 specified second paragraph",
+        "3.6.9 specified VWAP",
+        "3.6.10 specified VWAP"
+      ],
+      "rule_pdf_sha256": null,
+      "year": 2026,
+      "version": "sse-a-share-calendar-rule-2026-v1",
+      "calendar_publication_date": "2025-12-22",
+      "rule_publication_date": "2026-04-24",
+      "effective_from": "2026-07-06",
+      "effective_to": "2026-12-31",
+      "auction_times": [
+        "09:15",
+        "09:25",
+        "09:30",
+        "11:30",
+        "13:00",
+        "14:57",
+        "15:00"
+      ],
+      "scheduled_day_completion": "15:30",
+      "holiday_ranges": [
+        [
+          "元旦",
+          "2026-01-01",
+          "2026-01-03",
+          "2026-01-05"
+        ],
+        [
+          "春节",
+          "2026-02-15",
+          "2026-02-23",
+          "2026-02-24"
+        ],
+        [
+          "清明节",
+          "2026-04-04",
+          "2026-04-06",
+          "2026-04-07"
+        ],
+        [
+          "劳动节",
+          "2026-05-01",
+          "2026-05-05",
+          "2026-05-06"
+        ],
+        [
+          "端午节",
+          "2026-06-19",
+          "2026-06-21",
+          "2026-06-22"
+        ],
+        [
+          "中秋节",
+          "2026-09-25",
+          "2026-09-27",
+          "2026-09-28"
+        ],
+        [
+          "国庆节",
+          "2026-10-01",
+          "2026-10-07",
+          "2026-10-08"
+        ]
+      ],
+      "asset_scope": "A_share_common_stock",
+      "availability_basis": "registered_explicit_publication_day_conservative_following_midnight",
+      "exception_scope": "declared_2026_annual_schedule_and_named_rule_notice_known_exceptions",
+      "synthetic": false,
+      "rule_document_number": null
+    },
+    {
+      "exchange": "SZSE",
+      "calendar_uri": "https://www.szse.cn/disclosure/notice/general/t20251222_618087.html",
+      "calendar_document_number": "深证会〔2025〕481号",
+      "calendar_title": "关于2026年部分节假日休市安排的通知",
+      "rule_uri": "https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf",
+      "rule_format": "pdf",
+      "rule_publication_uri": "https://www.szse.cn/www/lawrules/rule/stock/t20260424_620190.html",
+      "weekday_section": "2.3.1",
+      "auction_section": "2.3.2",
+      "effect_section": "10.9",
+      "completion_kind": "after_hours_fixed_price",
+      "completion_sections": [
+        "3.6.1",
+        "3.6.3"
+      ],
+      "deferred_sections": [],
+      "rule_pdf_sha256": "9b66f8b0db70f84a25ef1ccb4ee2351001724e408117552d75f6d8993483c586",
+      "year": 2026,
+      "version": "szse-a-share-calendar-rule-2026-v1",
+      "calendar_publication_date": "2025-12-22",
+      "rule_publication_date": "2026-04-24",
+      "effective_from": "2026-07-06",
+      "effective_to": "2026-12-31",
+      "auction_times": [
+        "09:15",
+        "09:25",
+        "09:30",
+        "11:30",
+        "13:00",
+        "14:57",
+        "15:00"
+      ],
+      "scheduled_day_completion": "15:30",
+      "holiday_ranges": [
+        [
+          "元旦",
+          "2026-01-01",
+          "2026-01-03",
+          "2026-01-05"
+        ],
+        [
+          "春节",
+          "2026-02-15",
+          "2026-02-23",
+          "2026-02-24"
+        ],
+        [
+          "清明节",
+          "2026-04-04",
+          "2026-04-06",
+          "2026-04-07"
+        ],
+        [
+          "劳动节",
+          "2026-05-01",
+          "2026-05-05",
+          "2026-05-06"
+        ],
+        [
+          "端午节",
+          "2026-06-19",
+          "2026-06-21",
+          "2026-06-22"
+        ],
+        [
+          "中秋节",
+          "2026-09-25",
+          "2026-09-27",
+          "2026-09-28"
+        ],
+        [
+          "国庆节",
+          "2026-10-01",
+          "2026-10-07",
+          "2026-10-08"
+        ]
+      ],
+      "asset_scope": "A_share_common_stock",
+      "availability_basis": "registered_explicit_publication_day_conservative_following_midnight",
+      "exception_scope": "declared_2026_annual_schedule_and_named_rule_notice_known_exceptions",
+      "synthetic": false,
+      "rule_document_number": null
+    },
+    {
+      "exchange": "BSE",
+      "calendar_uri": "https://www.bse.cn/important_news/200027428.html",
+      "calendar_document_number": "北证公告〔2025〕58号",
+      "calendar_title": "关于2026年部分节假日休市安排的公告",
+      "rule_uri": "https://www.bse.cn/jygl_list/200028217.html",
+      "rule_format": "html",
+      "rule_publication_uri": "https://www.bse.cn/jygl_list/200028217.html",
+      "weekday_section": "2.3.1",
+      "auction_section": "2.3.2",
+      "effect_section": "10.6",
+      "completion_kind": "block_trade_confirmation",
+      "completion_sections": [
+        "3.6.4",
+        "3.6.8"
+      ],
+      "deferred_sections": [
+        "3.6.5 paragraphs2-3",
+        "3.7.1-3.7.10",
+        "4.5.1-4.5.4"
+      ],
+      "rule_pdf_sha256": null,
+      "year": 2026,
+      "version": "bse-a-share-calendar-rule-2026-v1",
+      "calendar_publication_date": "2025-12-22",
+      "rule_publication_date": "2026-04-24",
+      "effective_from": "2026-07-06",
+      "effective_to": "2026-12-31",
+      "auction_times": [
+        "09:15",
+        "09:25",
+        "09:30",
+        "11:30",
+        "13:00",
+        "14:57",
+        "15:00"
+      ],
+      "scheduled_day_completion": "15:30",
+      "holiday_ranges": [
+        [
+          "元旦",
+          "2026-01-01",
+          "2026-01-03",
+          "2026-01-05"
+        ],
+        [
+          "春节",
+          "2026-02-15",
+          "2026-02-23",
+          "2026-02-24"
+        ],
+        [
+          "清明节",
+          "2026-04-04",
+          "2026-04-06",
+          "2026-04-07"
+        ],
+        [
+          "劳动节",
+          "2026-05-01",
+          "2026-05-05",
+          "2026-05-06"
+        ],
+        [
+          "端午节",
+          "2026-06-19",
+          "2026-06-21",
+          "2026-06-22"
+        ],
+        [
+          "中秋节",
+          "2026-09-25",
+          "2026-09-27",
+          "2026-09-28"
+        ],
+        [
+          "国庆节",
+          "2026-10-01",
+          "2026-10-07",
+          "2026-10-08"
+        ]
+      ],
+      "asset_scope": "A_share_common_stock",
+      "availability_basis": "registered_explicit_publication_day_conservative_following_midnight",
+      "exception_scope": "declared_2026_annual_schedule_and_named_rule_notice_known_exceptions",
+      "synthetic": false,
+      "rule_document_number": "北证公告〔2026〕17号"
+    }
+  ]
+}

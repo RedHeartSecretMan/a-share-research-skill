@@ -56,6 +56,7 @@ class CalendarEvidence:
     synthetic: bool = False
     trading_day_completion_time: str | None = None
     completion_evidence_id: str | None = None
+    source_metadata: Mapping[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         return cast(dict[str, object], asdict(self))
@@ -88,14 +89,21 @@ class DeterministicMarketSessionAdapter:
         calendars: Sequence[CalendarEvidence],
         *,
         clock: Callable[[], datetime],
+        execution_clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._calendars = tuple(
             replace(
-                item, days=tuple(item.days), auction_times=tuple(item.auction_times)
+                item,
+                days=tuple(item.days),
+                auction_times=tuple(item.auction_times),
+                source_metadata=None
+                if item.source_metadata is None
+                else json.loads(json.dumps(item.source_metadata)),
             )
             for item in calendars
         )
         self._clock = clock
+        self._execution_clock = execution_clock
 
     def execute(
         self, request: MarketSessionOperationRequest, timeout_seconds: float
@@ -108,6 +116,13 @@ class DeterministicMarketSessionAdapter:
             raise ValueError("session timeout must be finite and positive")
         try:
             now = _aware(self._clock())
+            checked_at = (
+                now
+                if self._execution_clock is None
+                else _aware(self._execution_clock())
+            )
+            if checked_at < now:
+                raise _ContextError("invalid_timestamp")
             requested = _date(request.requested_as_of)
             if requested > now.date():
                 raise _ContextError("future_requested_date")
@@ -122,45 +137,26 @@ class DeterministicMarketSessionAdapter:
                 if request.expected_context_digest is not None:
                     raise _ContextError("context_digest_mismatch")
                 original_now = now
-                ordered = _validate_calendars(self._calendars, cutoff, original_now)
+                ordered = _validate_calendars(self._calendars, cutoff, checked_at)
                 context = _create_context(
-                    request.requested_as_of, bindings, original_now, cutoff, ordered
+                    request.requested_as_of,
+                    bindings,
+                    original_now,
+                    cutoff,
+                    ordered,
+                    checked_at,
                 )
             else:
                 context, original_now, cutoff, ordered = self._restore(
-                    request, bindings, now
+                    request, bindings, checked_at
                 )
-            _validate_calendars(ordered, original_now, original_now)
-            phase = _phase(ordered[0], original_now)
+            session, current_error = _session_descriptor(
+                ordered, original_now, now, checked_at
+            )
             return _outcome(
-                {
-                    "session": {
-                        "scope": "regular_auction",
-                        "phase": phase,
-                        "phase_instant": original_now.isoformat(),
-                        "is_current_phase": original_now == now,
-                        "session_date": original_now.date().isoformat(),
-                        "exchanges": list(EXCHANGES),
-                        "current_session_applicable": original_now == now
-                        and phase
-                        in {
-                            "opening_auction",
-                            "continuous_auction",
-                            "midday_break",
-                            "closing_auction",
-                        },
-                        "freshness_basis": "active_session"
-                        if original_now == now
-                        and phase
-                        in {"opening_auction", "continuous_auction", "closing_auction"}
-                        else "completed_session",
-                        "latest_completed_session": _latest_completed(
-                            ordered, original_now
-                        ),
-                    },
-                    "context": context,
-                },
-                now,
+                {"session": session, "context": context},
+                checked_at,
+                partial_error=current_error,
             )
         except _ContextError as error:
             return _failure(error.code)
@@ -186,8 +182,10 @@ class DeterministicMarketSessionAdapter:
                 "schema_version",
                 "requested_as_of",
                 "research_now",
+                "evidence_checked_at",
                 "information_cutoff",
                 "screen_date",
+                "screen_date_basis",
                 "calendar_proofs",
                 "bindings",
                 "digest",
@@ -209,7 +207,8 @@ class DeterministicMarketSessionAdapter:
             ):
                 raise _ContextError("context_binding_mismatch")
             original_now = _aware(snapshot["research_now"])
-            if original_now > now:
+            original_checked = _aware(snapshot["evidence_checked_at"])
+            if original_now > original_checked or original_checked > now:
                 raise _ContextError("invalid_timestamp")
             requested = _date(request.requested_as_of)
             if requested > original_now.date():
@@ -219,9 +218,14 @@ class DeterministicMarketSessionAdapter:
                 if requested == original_now.date()
                 else datetime.combine(requested, time(23, 59, 59), ASIA_SHANGHAI)
             )
-            ordered = _validate_calendars(self._calendars, cutoff, original_now)
+            ordered = _validate_calendars(self._calendars, cutoff, original_checked)
             expected = _create_context(
-                request.requested_as_of, bindings, original_now, cutoff, ordered
+                request.requested_as_of,
+                bindings,
+                original_now,
+                cutoff,
+                ordered,
+                original_checked,
             )
             if snapshot != json.loads(json.dumps(expected)):
                 raise _ContextError("context_semantic_mismatch")
@@ -372,11 +376,18 @@ def _validate_calendars(
     return ordered
 
 
-def _latest_completed(calendars: tuple[CalendarEvidence, ...], cutoff: datetime) -> str:
+def _latest_completed(
+    calendars: tuple[CalendarEvidence, ...],
+    cutoff: datetime,
+    *,
+    regular_auction: bool = False,
+) -> str:
     completed_sets = []
     for calendar in calendars:
         completion_time = time.fromisoformat(
-            cast(str, calendar.trading_day_completion_time)
+            calendar.auction_times[-1]
+            if regular_auction
+            else cast(str, calendar.trading_day_completion_time)
         )
         completed_sets.append(
             {
@@ -395,19 +406,71 @@ def _latest_completed(calendars: tuple[CalendarEvidence, ...], cutoff: datetime)
     return max(completed)
 
 
+def _session_descriptor(
+    calendars: tuple[CalendarEvidence, ...],
+    original_now: datetime,
+    real_now: datetime,
+    checked_at: datetime,
+) -> tuple[dict[str, object], str | None]:
+    current_error = None
+    latest: str | None = None
+    latest_auction: str | None = None
+    phase = "unproved"
+    try:
+        _validate_calendars(calendars, original_now, checked_at)
+        phase = _phase(calendars[0], original_now)
+        latest = _latest_completed(calendars, original_now)
+        latest_auction = _latest_completed(
+            calendars, original_now, regular_auction=True
+        )
+    except _ContextError:
+        current_error = "current_calendar_context_unproved"
+    current = original_now == real_now and current_error is None
+    active = current and phase in {
+        "opening_auction",
+        "continuous_auction",
+        "closing_auction",
+    }
+    hold = current and phase == "midday_break"
+    return {
+        "scope": "regular_auction",
+        "phase": phase,
+        "phase_instant": original_now.isoformat(),
+        "checked_at": checked_at.isoformat(),
+        "is_current_phase": current,
+        "session_date": original_now.date().isoformat(),
+        "exchanges": list(EXCHANGES),
+        "current_session_applicable": active or hold,
+        "freshness_basis": "active_session"
+        if active
+        else "current_session_hold"
+        if hold
+        else "completed_session"
+        if current_error is None
+        else "unproved",
+        "latest_completed_session": latest,
+        "latest_completed_session_basis": "calendar_scheduled_completion",
+        "latest_regular_auction_completed_session": latest_auction,
+        "actual_trade_or_quote_completeness_proved": False,
+    }, current_error
+
+
 def _create_context(
     requested: str,
     bindings: Mapping[str, object],
     original_now: datetime,
     cutoff: datetime,
     calendars: tuple[CalendarEvidence, ...],
+    checked_at: datetime,
 ) -> dict[str, object]:
     context: dict[str, object] = {
         "schema_version": "1.0",
         "requested_as_of": requested,
         "research_now": original_now.isoformat(),
+        "evidence_checked_at": checked_at.isoformat(),
         "information_cutoff": cutoff.isoformat(),
         "screen_date": _latest_completed(calendars, cutoff),
+        "screen_date_basis": "calendar_scheduled_completion",
         "calendar_proofs": [item.to_dict() for item in calendars],
         "bindings": dict(bindings),
     }
@@ -475,11 +538,15 @@ def _digest(value: Mapping[str, object]) -> str:
     ).hexdigest()
 
 
-def _outcome(payload: Mapping[str, object], now: datetime) -> OperationOutcome:
+def _outcome(
+    payload: Mapping[str, object], now: datetime, *, partial_error: str | None = None
+) -> OperationOutcome:
     return OperationOutcome(
         CAPABILITY_ID,
         OPERATION_ID,
-        OperationExecution("succeeded", True),
+        OperationExecution("succeeded", True)
+        if partial_error is None
+        else OperationExecution("failed"),
         observations=(
             {
                 "source_operation": OPERATION_ID,
@@ -488,112 +555,19 @@ def _outcome(payload: Mapping[str, object], now: datetime) -> OperationOutcome:
                 "payload": payload,
             },
         ),
+        source_errors=()
+        if partial_error is None
+        else (
+            {
+                "source_operation": OPERATION_ID,
+                "code": partial_error,
+                "message": "Original requested context is proved; present-day session context is not proved.",
+            },
+        ),
         field_dispositions=(
             FieldDisposition("payload", "normalized", "observations[].payload"),
         ),
     )
-
-
-@dataclass(frozen=True)
-class ExchangeCalendarDocument:
-    """Bounded extracted document text, not a qualified provider wire shape."""
-
-    exchange: str
-    year: int
-    holiday_text: str
-    rule_text: str
-    holiday_locator: str
-    rule_locator: str
-    retrieved_at: str
-    synthetic: bool = False
-
-
-class ExchangeCalendarDocumentAdapter:
-    """Parse declared SSE/SZSE facts while retaining incomplete authority.
-
-    Text extraction, transport, licensing, exceptions and full-day completion
-    remain source-owner obligations. This Adapter does not acquire documents
-    and is not registered as a default production owner.
-    """
-
-    def __init__(
-        self,
-        documents: Sequence[ExchangeCalendarDocument],
-        *,
-        clock: Callable[[], datetime],
-    ) -> None:
-        self._documents = tuple(documents)
-        self._clock = clock
-
-    def execute(
-        self, request: MarketSessionOperationRequest, timeout_seconds: float
-    ) -> OperationOutcome:
-        if (
-            isinstance(timeout_seconds, bool)
-            or not math.isfinite(timeout_seconds)
-            or timeout_seconds <= 0
-        ):
-            raise ValueError("session timeout must be finite and positive")
-        try:
-            now = _aware(self._clock())
-            if _date(request.requested_as_of) > now.date():
-                raise _ContextError("future_requested_date")
-            _validate_bindings(asdict(request.bindings))
-            if request.frozen_context is not None:
-                # No parsed document subset may replace the original C.
-                raise _ContextError("calendar_authority_unproved")
-            if len(self._documents) > 3 or len(
-                {item.exchange for item in self._documents}
-            ) != len(self._documents):
-                raise _ContextError("calendar_session_conflict")
-        except _ContextError as error:
-            return _failure(error.code)
-        observations: list[Mapping[str, object]] = []
-        errors: list[Mapping[str, object]] = []
-        for document in self._documents:
-            try:
-                payload = _parse_document(document, now)
-                observations.append(
-                    {
-                        "source_operation": OPERATION_ID,
-                        "data_type": "declared_exchange_calendar",
-                        "retrieved_at": document.retrieved_at,
-                        "payload": payload,
-                    }
-                )
-            except _ContextError as error:
-                errors.append(
-                    {
-                        "source_operation": OPERATION_ID,
-                        "code": error.code,
-                        "message": "Declared exchange document facts could not be parsed.",
-                    }
-                )
-        errors.append(
-            {
-                "source_operation": OPERATION_ID,
-                "code": "calendar_authority_unproved",
-                "message": "Declared document facts do not prove complete calendar or trading-day authority.",
-            }
-        )
-        if {item.exchange for item in self._documents} != set(EXCHANGES):
-            errors.append(
-                {
-                    "source_operation": OPERATION_ID,
-                    "code": "calendar_exchange_gap",
-                    "message": "A required exchange calendar remains unproved.",
-                }
-            )
-        return OperationOutcome(
-            CAPABILITY_ID,
-            OPERATION_ID,
-            OperationExecution("failed"),
-            observations=tuple(observations),
-            source_errors=tuple(errors),
-            field_dispositions=(
-                FieldDisposition("payload", "normalized", "observations[].payload"),
-            ),
-        )
 
 
 def _safe_reference(value: str) -> None:
@@ -621,96 +595,3 @@ def _safe_reference(value: str) -> None:
         or parsed.fragment
     ):
         raise _ContextError("calendar_reference_unproved")
-
-
-def _parse_document(
-    document: ExchangeCalendarDocument, now: datetime
-) -> dict[str, object]:
-    if (
-        document.exchange not in {"SSE", "SZSE"}
-        or type(document.year) is not int
-        or not 1900 <= document.year <= 9999
-    ):
-        raise _ContextError("calendar_document_scope_unproved")
-    for text in (document.holiday_text, document.rule_text):
-        if not isinstance(text, str) or len(text.encode("utf-8")) > 65_536:
-            raise _ContextError("calendar_document_invalid")
-    _safe_reference(document.holiday_locator)
-    _safe_reference(document.rule_locator)
-    if _aware(document.retrieved_at) > now:
-        raise _ContextError("calendar_timestamp_unproved")
-    holiday_text = re.sub(r"\s+", "", document.holiday_text)
-    if f"{document.year}年" not in holiday_text:
-        raise _ContextError("calendar_document_scope_unproved")
-    closures: list[dict[str, str]] = []
-    for label in ("元旦", "春节", "清明节", "劳动节", "端午节", "中秋节", "国庆节"):
-        match = re.search(
-            rf"{label}[：:]([0-9]{{1,2}})月([0-9]{{1,2}})日[^。]*?至([0-9]{{1,2}})月([0-9]{{1,2}})日[^。]*?休市[^。]*?([0-9]{{1,2}})月([0-9]{{1,2}})日[^。]*?起照常开市",
-            holiday_text,
-        )
-        if match is None:
-            raise _ContextError("calendar_document_invalid")
-        try:
-            values = tuple(int(value) for value in match.groups())
-            start, end, reopen = (
-                date(document.year, values[index], values[index + 1])
-                for index in (0, 2, 4)
-            )
-            if not start <= end < reopen:
-                raise ValueError
-        except ValueError as error:
-            raise _ContextError("calendar_document_invalid") from error
-        closures.append(
-            {
-                "name": label,
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-                "declared_reopening_date": reopen.isoformat(),
-            }
-        )
-    rules = re.sub(r"\s+", "", document.rule_text)
-    phase_section, effect_section = (
-        ("2.4.2", "11.9") if document.exchange == "SSE" else ("2.3.2", "10.9")
-    )
-    phase_match = re.search(
-        rf"{re.escape(phase_section)}[^。]*?([0-9]{{1,2}}:[0-9]{{2}})至([0-9]{{1,2}}:[0-9]{{2}})为开盘集合竞价时间[^。]*?([0-9]{{1,2}}:[0-9]{{2}})至([0-9]{{1,2}}:[0-9]{{2}})、([0-9]{{1,2}}:[0-9]{{2}})至([0-9]{{1,2}}:[0-9]{{2}})为连续竞价时间[^。]*?([0-9]{{1,2}}:[0-9]{{2}})至([0-9]{{1,2}}:[0-9]{{2}})为收盘集合竞价时间",
-        rules,
-    )
-    effect_match = re.search(
-        rf"{re.escape(effect_section)}本规则自([0-9]{{4}})年([0-9]{{1,2}})月([0-9]{{1,2}})日起施行",
-        rules,
-    )
-    if phase_match is None or effect_match is None:
-        raise _ContextError("calendar_rule_unproved")
-    try:
-        raw_times = phase_match.groups()
-        times = tuple(
-            time.fromisoformat(value.zfill(5)).isoformat(timespec="minutes")
-            for value in raw_times
-        )
-        if times[5] != times[6] or tuple(sorted(set(times))) != times[:6] + times[7:]:
-            raise ValueError
-        effective = date(*(int(value) for value in effect_match.groups()))
-    except ValueError as error:
-        raise _ContextError("calendar_rule_unproved") from error
-    return {
-        "exchange": document.exchange,
-        "year": document.year,
-        "synthetic": document.synthetic,
-        "holiday_locator": document.holiday_locator,
-        "rule_locator": document.rule_locator,
-        "declared_holiday_closures": closures,
-        "declared_auction_times": list(times[:6] + times[7:]),
-        "declared_rule_effective_date": effective.isoformat(),
-        "phase_rule_section": phase_section,
-        "effect_rule_section": effect_section,
-        "source_authority": "unproved",
-        "available_at": None,
-        "proof_gaps": [
-            "first_availability_unproved",
-            "temporary_exceptions_unproved",
-            "rule_deferral_scope_unproved",
-            "complete_calendar_range_unproved",
-            "trading_day_completion_unproved",
-        ],
-    }

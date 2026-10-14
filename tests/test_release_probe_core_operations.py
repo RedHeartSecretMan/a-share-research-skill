@@ -3662,6 +3662,10 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                     ),
                 )
 
+            def post(self, url: str, headers: dict[str, str], body: bytes) -> object:
+                del body
+                return self.get(url, headers)
+
         def execute(
             command: list[str], **_: object
         ) -> subprocess.CompletedProcess[str]:
@@ -3670,19 +3674,30 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps(health), "")
             request = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
             sent_requests.append(deepcopy(request))
-            public = research(
-                request,
-                identity_transport=UnavailableTransport(),
-                research_now=datetime(
-                    2026,
-                    8,
-                    12,
-                    18,
-                    0,
-                    tzinfo=timezone(timedelta(hours=8)),
+            with patch(
+                "a_share_research.research_runtime.UrlLibTransport",
+                side_effect=AssertionError(
+                    "offline fixture attempted a default HTTP transport"
                 ),
-                available_optional_dependencies=(),
-            ).to_dict()
+            ):
+                public = research(
+                    request,
+                    identity_transport=UnavailableTransport(),
+                    content_transport=UnavailableTransport(),
+                    capital_transport=UnavailableTransport(),
+                    market_signal_transport=UnavailableTransport(),
+                    etf_option_transport=UnavailableTransport(),
+                    intraday_transport=UnavailableTransport(),
+                    research_now=datetime(
+                        2026,
+                        8,
+                        12,
+                        18,
+                        0,
+                        tzinfo=timezone(timedelta(hours=8)),
+                    ),
+                    available_optional_dependencies=(),
+                ).to_dict()
             # This deterministic executor is a fixed sanitized contract sample,
             # not live evidence.  Mark its plan-owned applications as failed so
             # orchestration aggregation exercises the attempted truth path; the

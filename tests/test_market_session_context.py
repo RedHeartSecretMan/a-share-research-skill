@@ -21,8 +21,6 @@ from a_share_research.market_session_context import (  # noqa: E402
     CalendarDay,
     CalendarEvidence,
     ContextBindings,
-    ExchangeCalendarDocument,
-    ExchangeCalendarDocumentAdapter,
     DeterministicMarketSessionAdapter,
     MarketSessionOperationRequest,
 )
@@ -262,52 +260,6 @@ class MarketSessionContextTests(unittest.TestCase):
                 self.assertEqual(outcome.coverage, "failed")
                 self.assertFalse(outcome.observations)
 
-    def test_document_parser_retains_declared_schedule_and_gaps_without_proving_C(
-        self,
-    ) -> None:
-        # Contract-derived synthetic text, not frozen research payload or wire.
-        holiday_text = "2026 年休市安排\n" + "\n".join(
-            f"{label}：{month}月1日至{month}月3日休市，{month}月4日起照常开市。"
-            for label, month in (
-                ("元旦", 1),
-                ("春节", 2),
-                ("清明节", 4),
-                ("劳动节", 5),
-                ("端午节", 6),
-                ("中秋节", 9),
-                ("国庆节", 10),
-            )
-        )
-        rule_text = "2.4.2 每个交易日9:15至9:25为开盘集合竞价时间，9:30至11:30、13:00至14:57为连续竞价时间，14:57至15:00为收盘集合竞价时间。11.9 本规则自2026年7月6日起施行。"
-        document = ExchangeCalendarDocument(
-            exchange="SSE",
-            year=2026,
-            holiday_text=holiday_text,
-            rule_text=rule_text,
-            holiday_locator="fixture:SSE:holiday",
-            rule_locator="fixture:SSE:rule",
-            retrieved_at="2026-10-14T10:00:00+08:00",
-            synthetic=True,
-        )
-        now = datetime(2026, 10, 14, 10, tzinfo=TZ)
-        outcome = ExchangeCalendarDocumentAdapter(
-            (document,), clock=lambda: now
-        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 1)
-        self.assertEqual(outcome.coverage, "partial")
-        payload = outcome.to_dict()["observations"][0]["payload"]
-        self.assertEqual(payload["exchange"], "SSE")
-        self.assertEqual(payload["declared_holiday_closures"][0]["start"], "2026-01-01")
-        self.assertEqual(
-            payload["declared_auction_times"],
-            ["09:15", "09:25", "09:30", "11:30", "13:00", "14:57", "15:00"],
-        )
-        self.assertEqual(payload["declared_rule_effective_date"], "2026-07-06")
-        self.assertIn("trading_day_completion_unproved", payload["proof_gaps"])
-        self.assertNotIn("context", payload)
-        self.assertIn(
-            "calendar_exchange_gap", [error["code"] for error in outcome.source_errors]
-        )
-
     def test_historical_cutoff_future_rejection_and_aware_clock(self) -> None:
         now = datetime(2026, 10, 14, 10, tzinfo=TZ)
         outcome = DeterministicMarketSessionAdapter(
@@ -527,6 +479,79 @@ print(json.dumps(outcome.to_dict(),sort_keys=True))
             )
             self.assertFalse((installed / ".runtime").exists())
             self.assertFalse((installed / ".state").exists())
+
+    def test_scheduled_completion_does_not_claim_actual_data_completion(self) -> None:
+        now = datetime(2026, 10, 14, 15, 30, tzinfo=TZ)
+        outcome = DeterministicMarketSessionAdapter(
+            calendars(), clock=lambda: now
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 1)
+        session = outcome.to_dict()["observations"][0]["payload"]["session"]
+        self.assertEqual(
+            session["latest_completed_session_basis"], "calendar_scheduled_completion"
+        )
+        self.assertFalse(session["actual_trade_or_quote_completeness_proved"])
+        self.assertEqual(
+            session["latest_regular_auction_completed_session"], "2026-10-14"
+        )
+
+    def test_midday_preserves_current_session_hold_without_an_age_threshold(
+        self,
+    ) -> None:
+        now = datetime(2026, 10, 14, 12, 0, tzinfo=TZ)
+        outcome = DeterministicMarketSessionAdapter(
+            calendars(), clock=lambda: now
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 1)
+        session = outcome.to_dict()["observations"][0]["payload"]["session"]
+        self.assertTrue(session["current_session_applicable"])
+        self.assertEqual(session["freshness_basis"], "current_session_hold")
+
+    def test_historical_C_survives_missing_present_day_calendar_as_explicit_partial(
+        self,
+    ) -> None:
+        now = datetime(2028, 10, 14, 10, tzinfo=TZ)
+        outcome = DeterministicMarketSessionAdapter(
+            calendars(), clock=lambda: now
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 1)
+        self.assertEqual(outcome.coverage, "partial")
+        payload = outcome.to_dict()["observations"][0]["payload"]
+        self.assertEqual(payload["context"]["screen_date"], "2026-10-14")
+        self.assertEqual(
+            payload["context"]["information_cutoff"], "2026-10-14T23:59:59+08:00"
+        )
+        self.assertEqual(payload["session"]["phase"], "unproved")
+        self.assertIsNone(payload["session"]["latest_completed_session"])
+        self.assertFalse(payload["session"]["current_session_applicable"])
+
+    def test_acquisition_after_frozen_clock_preserves_real_times_and_can_resume(
+        self,
+    ) -> None:
+        first = datetime(2026, 10, 14, 10, 0, tzinfo=TZ)
+        checked = datetime(2026, 10, 14, 10, 0, 3, tzinfo=TZ)
+        evidence = tuple(
+            replace(item, retrieved_at="2026-10-14T10:00:02+08:00")
+            for item in calendars()
+        )
+        outcome = DeterministicMarketSessionAdapter(
+            evidence, clock=lambda: first, execution_clock=lambda: checked
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 1)
+        self.assertEqual(outcome.coverage, "complete")
+        projection = outcome.to_dict()["observations"][0]
+        context = projection["payload"]["context"]
+        self.assertEqual(context["information_cutoff"], first.isoformat())
+        self.assertEqual(context["evidence_checked_at"], checked.isoformat())
+        self.assertEqual(projection["retrieved_at"], checked.isoformat())
+        later = datetime(2026, 10, 15, 10, 0, tzinfo=TZ)
+        resumed = DeterministicMarketSessionAdapter(
+            evidence, clock=lambda: later
+        ).execute(
+            MarketSessionOperationRequest(
+                "2026-10-14", BINDINGS, context, context["digest"]
+            ),
+            1,
+        )
+        self.assertEqual(
+            resumed.to_dict()["observations"][0]["payload"]["context"], context
+        )
 
 
 if __name__ == "__main__":
