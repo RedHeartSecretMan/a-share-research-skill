@@ -24,9 +24,15 @@ from a_share_research.provider_lane import (  # noqa: E402
     ProviderLanes,
 )
 from a_share_research.szse_universe_source import (  # noqa: E402
+    SzseCurrentIdentityAdapter,
     acquire_szse_current_list,
 )
-from a_share_research.universe_input import UniverseRequest  # noqa: E402
+from a_share_research.a_share_universe import build_as_of_a_share_universe  # noqa: E402
+from a_share_research.universe_input import (  # noqa: E402
+    ExchangeListOutcome,
+    ExchangeListRecord,
+    UniverseRequest,
+)
 
 NOW = datetime.fromisoformat("2026-10-14T10:00:00+08:00")
 REQUEST = UniverseRequest("2026-10-14", NOW.isoformat())
@@ -608,6 +614,74 @@ class SzseCurrentListTests(unittest.TestCase):
         self.assertFalse(acquisition.pages_complete)
         self.assertIn("list_date_label_drift", acquisition.limitation_codes)
         self.assertEqual(len(acquisition.lane_result.attempts), 2)
+
+    def test_current_batch_identity_reuses_real_parser_and_110_unproven_reconciliation(
+        self,
+    ) -> None:
+        class ProvenListFixture:
+            exchange = "SZSE"
+            operation_id = "fixture_szse_expected_list@1"
+
+            def acquire(
+                self, request: object, timeout_seconds: float
+            ) -> ExchangeListOutcome:
+                records = tuple(
+                    ExchangeListRecord(
+                        "SZSE",
+                        code,
+                        "合成股份",
+                        "A_SHARE",
+                        "2026-10-14",
+                        "2026-10-14T09:00:00+08:00",
+                        "2026-10-14T10:01:00+08:00",
+                        f"fixture-list:SZSE:{code}",
+                    )
+                    for code in ("123456", "654321")
+                )
+                return ExchangeListOutcome(
+                    self.operation_id,
+                    "SZSE",
+                    "2026-10-14",
+                    True,
+                    "complete",
+                    2,
+                    1,
+                    1,
+                    records,
+                )
+
+        transport = FixtureTransport(
+            {1: page(1, [row("123456")]), 2: page(2, [row("654321")])}
+        )
+        lanes = ProviderLanes()
+        adapter = SzseCurrentIdentityAdapter(
+            research_now=NOW,
+            transport=transport,
+            lanes=lanes,
+            policy=ProviderLanePolicy(2, 1.0),
+            max_pages=2,
+        )
+        universe = build_as_of_a_share_universe(
+            REQUEST,
+            research_now=NOW,
+            exchange_list_adapters=(ProvenListFixture(),),
+            identity_adapters=(adapter,),
+        )
+        szse = next(
+            partition
+            for partition in universe.partitions
+            if partition.exchange == "SZSE"
+        )
+        self.assertEqual((szse.expected, szse.resolved, szse.failed), (2, 2, 0))
+        self.assertFalse(szse.complete)
+        self.assertFalse(universe.full_a_share_universe)
+        self.assertIn("as_of_unproven", szse.securities[0].unranked_reasons)
+        self.assertIn("listing_state_unproven", szse.securities[0].unranked_reasons)
+        self.assertEqual(transport.calls, [1, 2])
+        assert adapter.last_acquisition is not None
+        self.assertTrue(lanes.is_authoritative(adapter.last_acquisition.lane_result))
+        self.assertEqual(len(adapter.last_acquisition.lane_result.attempts), 2)
+        self.assertFalse(adapter.last_acquisition.to_public_dict()["membership_proven"])
 
 
 if __name__ == "__main__":

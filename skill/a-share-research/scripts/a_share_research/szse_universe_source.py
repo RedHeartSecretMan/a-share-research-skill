@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from functools import partial
 from html.parser import HTMLParser
 from threading import Lock
-from typing import cast
+from typing import Protocol, cast
 from unicodedata import category
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -34,6 +34,8 @@ from .provider_lane import (
 )
 from .universe_input import (
     ASIA_SHANGHAI,
+    IdentityBatchOutcome,
+    UniverseIdentity,
     SourceResult,
     UniverseRequest,
     prepare_universe_request,
@@ -502,3 +504,117 @@ def acquire_szse_current_list(
         result,
         tuple(dict.fromkeys(item.list_date_label for item in observed)),
     )
+
+
+class _RequestView(Protocol):
+    screen_date: str
+    information_cutoff: str
+
+
+class _ListingView(Protocol):
+    exchange: str
+    code: str
+    name: str
+    security_category: str
+
+
+class SzseCurrentIdentityAdapter:
+    """Resolve prepared #110 identities from the real I-shaped batch source.
+
+    A complete identity query means all requested canonical code/name pairs were
+    observed. Unknown listing state, effective interval and availability remain
+    None, so the existing #110 Module keeps them unranked and incomplete.
+    """
+
+    exchange = "SZSE"
+    operation_id = "szse_current_identity@1"
+
+    def __init__(
+        self,
+        *,
+        research_now: datetime,
+        transport: HttpTransport | None,
+        lanes: ProviderLanes,
+        policy: ProviderLanePolicy,
+        max_pages: int,
+    ) -> None:
+        self._research_now = research_now
+        self._transport = transport
+        self._lanes = lanes
+        self._policy = policy
+        self._max_pages = max_pages
+        self._last_acquisition: CurrentListAcquisition | None = None
+
+    @property
+    def last_acquisition(self) -> CurrentListAcquisition | None:
+        """The detached source snapshot, including authoritative lane attempts."""
+        return self._last_acquisition
+
+    def resolve(
+        self, request: object, listings: tuple[object, ...], timeout_seconds: float
+    ) -> IdentityBatchOutcome:
+        expected: dict[str, str] = {}
+        for listing in listings:
+            view = cast(_ListingView, listing)
+            exchange, code, name, security_category = (
+                view.exchange,
+                view.code,
+                view.name,
+                view.security_category,
+            )
+            if exchange != "SZSE" or security_category != "A_SHARE" or code in expected:
+                raise ValueError(
+                    "The identity request must use unique prepared SZSE A-share records."
+                )
+            expected[code] = name
+        if not expected:
+            # I did not prove a zero-row SZSE response contract. No request is
+            # manufactured just to attest a caller's empty identity denominator.
+            self._last_acquisition = None
+            return IdentityBatchOutcome(
+                self.operation_id, "SZSE", False, "unavailable", 0, ()
+            )
+        request_view = cast(_RequestView, request)
+        detached_request = UniverseRequest(
+            request_view.screen_date, request_view.information_cutoff
+        )
+        acquisition = acquire_szse_current_list(
+            detached_request,
+            research_now=self._research_now,
+            transport=self._transport,
+            lanes=self._lanes,
+            policy=replace(
+                self._policy,
+                timeout_seconds=min(self._policy.timeout_seconds, timeout_seconds),
+            ),
+            max_pages=self._max_pages,
+        )
+        self._last_acquisition = acquisition
+        identities = tuple(
+            UniverseIdentity(
+                "SZSE",
+                row.code,
+                row.name,
+                "A_SHARE",
+                None,
+                None,
+                None,
+                row.retrieved_at,
+                None,
+                row.retrieved_at,
+                row.provenance_uri,
+            )
+            for row in acquisition.records
+            if expected.get(row.code) == row.name
+        )
+        # observed_at is the owner's actual observation of the retrieved response;
+        # it is neither metadata.subname nor source-publication or effective time.
+        attempted = bool(acquisition.lane_result.attempts)
+        result: SourceResult = "unavailable"
+        if identities:
+            result = "complete" if len(identities) == len(expected) else "partial"
+        elif acquisition.source_result == "credential_blocked":
+            result = "credential_blocked"
+        return IdentityBatchOutcome(
+            self.operation_id, "SZSE", attempted, result, len(expected), identities
+        )

@@ -26,6 +26,10 @@
 
 公共投影只含规范观察、固定原因、opaque 来源引用及 lane 签发的 attempt/quiescence 快照。它不保存 response body、URL 参数、headers、凭据、异常文本、绝对路径或板块等无关 payload。返回后的记录、页数与 lane 证据不会因超时 worker 后续退出而变化。
 
+## 已有 identity seam
+
+`SzseCurrentIdentityAdapter` 从同一当前名录批量采集核对 #110 已准备的 expected 代码和名称；不新增逐证券请求。匹配身份保留实际观察/获取时刻，上市状态、生效区间及公开时间继续为 `null`。当前名单的解析成功不能证明历史 membership，也不能用显示上市日期或 `metadata.subname` 补这些字段。expected 分母来自独立适用清单，局部名称不匹配或缺失仍进入 #110 的 failed/unranked 对账；BSE 缺失仍阻断 full-A-share。
+
 ## 尚未闭合的交付条件
 
 完整 #122 仍需第一方材料与合法 production 形状证明：SSE/BSE 清单和批量身份、三所历史名单或状态事件、历史查询范围、证券类别、退市及标识符变化、生效区间、首次公开/可用时刻、完整分页和数量证明、许可、共享 provider 的全量 workload。当前观察缺少 #110 的必需时间字段，不能通过填入获取时刻构造 `ExchangeListRecord`。
