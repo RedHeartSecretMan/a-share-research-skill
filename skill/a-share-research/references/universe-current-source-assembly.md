@@ -36,4 +36,6 @@ AH 的 BSE quotation query 与 H 的本名录是不同来源形状。AH 两页 4
 
 独立的 [Baostock 日期名册采集](baostock-dated-universe-source.md) 已实现给定日期查询与有限 SDK 分页。provider 名册含指数，当前仍不能为三所 canonical expected 分母补齐类别与公开时间证明，也不会作为未获资格的品牌 fallback。
 
-[SZSE 正式上市公告书事实采集](szse-formal-listing-material.md) 已支持真实 PDF decoder 和具名正式批准条款。当前仍缺同版本公开时间与可重复目录，事件事实保留为 partial，不给 canonical membership 补造字段。
+[SZSE 正式上市公告书事实采集](szse-formal-listing-material.md) 已支持真实 PDF decoder、具名正式批准条款和匹配版本的公开元数据；完整市场目录仍未闭合。
+
+后续 `annList` 补证已找到该 exact updated 文书的公开日期。`acquire_default_universe` 接收调用者提供的 `SzseListingEventTarget(source_code, document_url, max_metadata_pages)`，以有限真实 metadata/PDF acquisition 生成该证券正式上市日的一条正向 canonical partial；不会固化样例代码/UUID，调用者也不提供已证明名单。SSE/BSE 继续使用其现有真实 owners，历史日期不支持时保留 unavailable 和未知总量，BSE 缺失始终阻断 full。具体版本绑定、consumer conservative availability bound 与范围限制见上述文书说明。`acquire_default_current_universe` 保持当前来源模式，不自动把一个事件扩展成市场清单。

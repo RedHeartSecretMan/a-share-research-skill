@@ -25,6 +25,7 @@ from .bse_universe_source import (
     BsePostTransport,
     acquire_bse_current_list,
 )
+from .content_contract import ContentHttpTransport
 from .identity_sources import HttpTransport, UrlLibTransport
 from .provider_lane import ProviderLanePolicy, ProviderLanes
 from .sse_universe_source import (
@@ -36,6 +37,11 @@ from .szse_universe_source import (
     CurrentListAcquisition,
     SzseCurrentIdentityAdapter,
     acquire_szse_current_list,
+)
+from .szse_listing_material import (
+    SzseListingEventAdapter,
+    SzseListingEventTarget,
+    SzseListingMaterialAcquisition,
 )
 from .universe_input import (
     ExchangeListOutcome,
@@ -280,12 +286,14 @@ def acquire_default_current_sources(
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentUniverseAcquisition:
+class UniverseAcquisition:
     """The existing immutable #110 result and its safe source observations."""
 
     universe: AShareUniverse
     source_acquisitions: tuple[
-        SseListAcquisition, CurrentListAcquisition, BseCurrentListAcquisition
+        SseListAcquisition,
+        CurrentListAcquisition | SzseListingMaterialAcquisition,
+        BseCurrentListAcquisition,
     ]
 
     def to_public_dict(self) -> dict[str, object]:
@@ -304,7 +312,7 @@ def acquire_default_current_universe(
     lanes: ProviderLanes,
     policies: CurrentSourcePolicies,
     transports: CurrentSourceTransports | None = None,
-) -> CurrentUniverseAcquisition:
+) -> UniverseAcquisition:
     """Run the real current parsers and #110 without caller-filled membership.
 
     Current source rows do not yet prove membership effective/availability times.
@@ -312,6 +320,32 @@ def acquire_default_current_universe(
     counts remain unknown. Provider counts never become ordinary-A denominators.
     Historical requests preserve the current owners' explicit unsupported states.
     This partial path is not qualification of the unresolved membership fields.
+    """
+    return acquire_default_universe(
+        request,
+        research_now=research_now,
+        lanes=lanes,
+        policies=policies,
+        transports=transports,
+    )
+
+
+def acquire_default_universe(
+    request: UniverseRequest,
+    *,
+    research_now: datetime,
+    lanes: ProviderLanes,
+    policies: CurrentSourcePolicies,
+    transports: CurrentSourceTransports | None = None,
+    szse_listing_event: SzseListingEventTarget | None = None,
+    listing_transport: ContentHttpTransport | None = None,
+) -> UniverseAcquisition:
+    """Assemble real current owners and an optional exact official event.
+
+    The target only routes finite acquisition. Metadata and PDF must establish
+    every member field. No sample issuer is hardcoded and no caller-filled list
+    is accepted. An exact event supplies one useful partial on its formal day;
+    other exchange totals and unsupported dates remain unknown/unavailable.
     """
     prepared = prepare_universe_request(request, research_now=research_now)
     detached = UniverseRequest(prepared.screen_date, prepared.information_cutoff)
@@ -321,17 +355,39 @@ def acquire_default_current_universe(
         policies=policies,
         transports=transports,
     )
+    list_owners: tuple[_CurrentListAdapter | SzseListingEventAdapter, ...] = (
+        owners.exchange_list_adapters
+    )
+    if szse_listing_event is not None:
+        if type(szse_listing_event) is not SzseListingEventTarget:
+            raise TypeError("The listing event must use an exact source target.")
+        event_owner = SzseListingEventAdapter(
+            research_now=research_now,
+            source_code=szse_listing_event.source_code,
+            document_url=szse_listing_event.document_url,
+            max_metadata_pages=szse_listing_event.max_metadata_pages,
+            transport=listing_transport,
+            lanes=lanes,
+            policy=policies.szse,
+        )
+        list_owners = (list_owners[0], event_owner, list_owners[2])
+    elif listing_transport is not None:
+        raise TypeError("A listing transport requires its exact source target.")
     universe = build_as_of_a_share_universe(
         detached,
         research_now=research_now,
-        exchange_list_adapters=owners.exchange_list_adapters,
+        exchange_list_adapters=list_owners,
         identity_adapters=owners.identity_adapters,
     )
-    sources = tuple(owner.last_acquisition for owner in owners.exchange_list_adapters)
+    sources = tuple(owner.last_acquisition for owner in list_owners)
     if len(sources) != 3 or any(source is None for source in sources):
         raise RuntimeError("A current-source owner did not return its acquisition.")
     typed_sources = cast(
-        tuple[SseListAcquisition, CurrentListAcquisition, BseCurrentListAcquisition],
+        tuple[
+            SseListAcquisition,
+            CurrentListAcquisition | SzseListingMaterialAcquisition,
+            BseCurrentListAcquisition,
+        ],
         sources,
     )
-    return CurrentUniverseAcquisition(universe, typed_sources)
+    return UniverseAcquisition(universe, typed_sources)
