@@ -560,6 +560,125 @@ class ExchangeListInputTests(unittest.TestCase):
                     ),
                 )
 
+    def test_unknown_list_total_is_detached_once_with_valid_records(self) -> None:
+        class UnknownTotalOutcome(_StatefulListOutcome):
+            def __getattribute__(self, name: str) -> object:
+                value = super().__getattribute__(name)
+                if name == "expected_count" and value == 1:
+                    return None
+                if name == "pages_expected":
+                    reads = object.__getattribute__(self, "page_reads")
+                    object.__setattr__(self, "page_reads", reads + 1)
+                    return None if reads == 0 else 99
+                return value
+
+        records = [_list_record()]
+        outcome = UnknownTotalOutcome(records)
+        object.__setattr__(outcome, "source_result", "partial")
+        object.__setattr__(outcome, "page_reads", 0)
+
+        prepared = prepare_exchange_list_outcome(outcome)
+        records.clear()
+
+        self.assertEqual(outcome.expected_reads, 1)
+        self.assertIsNone(prepared.expected_count)
+        self.assertEqual(prepared.source_result, "partial")
+        self.assertEqual(outcome.page_reads, 1)
+        self.assertEqual((prepared.pages_expected, prepared.pages_received), (None, 1))
+        self.assertEqual(prepared.records[0].canonical_security_id, "SSE:600000")
+        with self.assertRaises(FrozenInstanceError):
+            prepared.expected_count = 0
+        with self.assertRaises(FrozenInstanceError):
+            prepared.records[0].name = "changed"
+
+    def test_unknown_list_total_preserves_source_state_and_page_guards(self) -> None:
+        base = ExchangeListOutcome(
+            "sse_stock_list@1", "SSE", "2026-08-20", True, "partial", None, 1, 1, []
+        )
+        valid = (
+            base,
+            replace(base, records=[_list_record()]),
+            replace(base, pages_received=0),
+            replace(base, pages_expected=2, records=[_list_record()]),
+            replace(
+                base, pages_expected=None, pages_received=2, records=[_list_record()]
+            ),
+            replace(
+                base, expected_count=2, pages_expected=None, records=[_list_record()]
+            ),
+            *(
+                replace(
+                    base,
+                    attempted=attempted,
+                    source_result=state,
+                    pages_expected=pages_expected,
+                    pages_received=0,
+                )
+                for attempted in (False, True)
+                for state in ("credential_blocked", "unavailable")
+                for pages_expected in (1, None)
+            ),
+        )
+        for outcome in valid:
+            with self.subTest(outcome=outcome):
+                prepared = prepare_exchange_list_outcome(outcome)
+                self.assertEqual(prepared.expected_count, outcome.expected_count)
+                self.assertEqual(prepared.pages_expected, outcome.pages_expected)
+                self.assertEqual(prepared.pages_received, outcome.pages_received)
+                self.assertEqual(prepared.source_result, outcome.source_result)
+                self.assertEqual(len(prepared.records), len(outcome.records))
+
+        invalid = (
+            (replace(base, source_result="complete"), "source_result_conflict"),
+            (replace(base, source_result="observed_empty"), "source_result_conflict"),
+            (replace(base, attempted=False), "source_result_conflict"),
+            (
+                replace(
+                    base,
+                    expected_count=1,
+                    pages_expected=None,
+                    source_result="complete",
+                    records=[_list_record()],
+                ),
+                "source_result_conflict",
+            ),
+            (
+                replace(
+                    base,
+                    expected_count=0,
+                    pages_expected=None,
+                    source_result="observed_empty",
+                ),
+                "source_result_conflict",
+            ),
+            (replace(base, pages_expected=0), "invalid_reconciliation"),
+            (replace(base, pages_received=2), "invalid_reconciliation"),
+            (
+                replace(base, pages_received=0, records=[_list_record()]),
+                "invalid_reconciliation",
+            ),
+            *(
+                (replace(base, expected_count=value), "invalid_reconciliation")
+                for value in (True, -1, 1.0, "1")
+            ),
+            *(
+                (replace(base, pages_expected=value), "invalid_reconciliation")
+                for value in (True, -1, 1.0, "1")
+            ),
+            *(
+                (
+                    replace(base, pages_expected=None, pages_received=value),
+                    "invalid_reconciliation",
+                )
+                for value in (None, True, -1, 1.0, "1")
+            ),
+        )
+        for outcome, code in invalid:
+            with self.subTest(outcome=outcome):
+                with self.assertRaises(UniverseInputError) as caught:
+                    prepare_exchange_list_outcome(outcome)
+                self.assertEqual(caught.exception.code, code)
+
     def test_partial_pagination_retains_detached_observed_records(self) -> None:
         prepared = prepare_exchange_list_outcome(
             ExchangeListOutcome(

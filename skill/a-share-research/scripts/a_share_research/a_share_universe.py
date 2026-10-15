@@ -125,7 +125,7 @@ class UniverseSourceOutcome:
     operation_id: str
     attempted: bool
     source_result: SourceResult
-    expected_count: int
+    expected_count: int | None
     observed_count: int
     pages_expected: int | None = None
     pages_received: int | None = None
@@ -138,7 +138,8 @@ class UniverseSourceOutcome:
             "expected_count": self.expected_count,
             "observed_count": self.observed_count,
         }
-        if self.pages_expected is not None:
+        # Identity outcomes omit pagination; list totals may themselves be unknown.
+        if self.pages_received is not None:
             value["pages_expected"] = self.pages_expected
             value["pages_received"] = self.pages_received
         return value
@@ -151,9 +152,9 @@ class UniversePartition:
     attempted: bool
     source_result: SourceResult
     operation_id: str | None
-    expected: int
+    expected: int | None
     resolved: int
-    failed: int
+    failed: int | None
     securities: tuple[UniverseSecurity, ...]
     limitation_codes: tuple[str, ...]
     list_outcome: UniverseSourceOutcome | None
@@ -610,7 +611,9 @@ def _source_identity_outcome(
 
 def _list_is_complete(outcome: _PreparedExchangeListOutcome) -> bool:
     return (
-        outcome.source_result in {"complete", "observed_empty"}
+        outcome.expected_count is not None
+        and outcome.source_result in {"complete", "observed_empty"}
+        and outcome.pages_expected is not None
         and outcome.pages_expected == outcome.pages_received
         and len(outcome.records) == outcome.expected_count
     )
@@ -619,12 +622,15 @@ def _list_is_complete(outcome: _PreparedExchangeListOutcome) -> bool:
 def _incomplete_list_partition(
     outcome: _PreparedExchangeListOutcome,
 ) -> UniversePartition:
-    limitation = (
-        "incomplete_pagination"
-        if outcome.pages_expected != outcome.pages_received
+    if outcome.expected_count is None:
+        limitation = "exchange_list_total_unknown"
+    elif (
+        outcome.pages_expected != outcome.pages_received
         or len(outcome.records) != outcome.expected_count
-        else "exchange_list_incomplete"
-    )
+    ):
+        limitation = "incomplete_pagination"
+    else:
+        limitation = "exchange_list_incomplete"
     return UniversePartition(
         exchange=outcome.exchange,
         complete=False,
@@ -651,9 +657,9 @@ def _missing_list_partition(exchange: str) -> UniversePartition:
         attempted=False,
         source_result="unavailable",
         operation_id=None,
-        expected=0,
+        expected=None,
         resolved=0,
-        failed=0,
+        failed=None,
         securities=(),
         limitation_codes=("missing_exchange_list_adapter",),
         list_outcome=None,
@@ -688,7 +694,10 @@ def _reconcile_partition(
     list_outcome: _PreparedExchangeListOutcome,
     identity_outcome: _PreparedIdentityBatchOutcome,
 ) -> UniversePartition:
-    if identity_outcome.expected_count != list_outcome.expected_count:
+    if (
+        list_outcome.expected_count is None
+        or identity_outcome.expected_count != list_outcome.expected_count
+    ):
         raise _error(
             "identity_denominator_mismatch",
             "An identity outcome does not reconcile to the exchange-list denominator.",

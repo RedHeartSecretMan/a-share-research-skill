@@ -23,6 +23,7 @@
 - [`specs/0008-amendment-b-delivery-plan.md`](specs/0008-amendment-b-delivery-plan.md)：补齐生产来源、冻结研究上下文、候选映射和恢复协议的已批准修订；B1–B3 已应用到 Tracker，新增任务为 #121–#123，完整定义由回读快照与索引绑定。
 - [`adr/`](adr/)：架构决策。文件按四位编号加短横线主题命名；带 frontmatter 的 ADR 必须把 frontmatter 放在文件第一行。
 - [`research/README.md`](research/README.md)：当前发布证据、命令占位符和历史资料索引。
+- [`../skill/a-share-research/references/as-of-universe.md`](../skill/a-share-research/references/as-of-universe.md)：v0.4.0 内部 Universe Module 的已知与未知总量、局部记录和不可变投影契约。
 - [`agents/`](agents/)：Issue tracker、triage 和领域文档规则。
 
 ## 版本规则

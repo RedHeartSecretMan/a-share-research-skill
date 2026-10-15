@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -515,6 +516,120 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
             ["SSE:000001", "SZSE:600000", "BSE:300001"],
         )
 
+    def test_unknown_exchange_total_retains_partial_records_and_null_counts(
+        self,
+    ) -> None:
+        row = _fixture_rows()["BSE"]
+        records = [row]
+        partial = replace(
+            _complete_list_outcome(row),
+            source_result="partial",
+            expected_count=None,
+            records=records,
+        )
+        identity_spy = _CountingIdentityAdapter(
+            "BSE", _complete_identity_outcome(_identity("BSE", row.code, row.name))
+        )
+
+        universe = _build_fixture_universe(
+            list_outcome_overrides={"BSE": partial},
+            identity_adapter_overrides={"BSE": identity_spy},
+        )
+        records.clear()
+        result = universe.to_public_dict()
+        partition = result["partitions"]["BSE"]
+
+        self.assertEqual(identity_spy.calls, 0)
+        self.assertEqual(
+            partition["reconciliation"],
+            {"expected": None, "resolved": 0, "failed": None},
+        )
+        self.assertFalse(partition["complete"])
+        self.assertFalse(result["full_a_share_universe"])
+        self.assertTrue(result["partitions"]["SSE"]["complete"])
+        self.assertTrue(result["partitions"]["SZSE"]["complete"])
+        self.assertEqual(partition["limitation_codes"], ["exchange_list_total_unknown"])
+        self.assertEqual(
+            partition["source_outcomes"]["exchange_list"],
+            {
+                "operation_id": "fixture_bse_list@1",
+                "attempted": True,
+                "source_result": "partial",
+                "expected_count": None,
+                "observed_count": 1,
+                "pages_expected": 1,
+                "pages_received": 1,
+            },
+        )
+        self.assertIsNone(partition["source_outcomes"]["identity"])
+        security = partition["securities"][0]
+        self.assertEqual(security["canonical_security_id"], "BSE:920000")
+        self.assertEqual(
+            security["unranked_reasons"],
+            ["listing_state_unproven", "as_of_unproven", "source_failed"],
+        )
+        self.assertEqual(
+            security["provenance"]["exchange_list"]["uri"], "fixture-list:BSE:920000"
+        )
+        partition["reconciliation"]["expected"] = 0
+        partition["securities"].clear()
+        fresh = universe.to_public_dict()["partitions"]["BSE"]
+        self.assertIsNone(fresh["reconciliation"]["expected"])
+        self.assertEqual(len(fresh["securities"]), 1)
+
+    def test_unknown_page_total_keeps_actual_pages_and_partial_records(self) -> None:
+        row = _fixture_rows()["BSE"]
+        for expected in (None, 1):
+            partial = replace(
+                _complete_list_outcome(row),
+                source_result="partial",
+                expected_count=expected,
+                pages_expected=None,
+            )
+            with self.subTest(expected=expected):
+                result = _build_fixture_universe(
+                    list_outcome_overrides={"BSE": partial}
+                ).to_public_dict()
+                partition = result["partitions"]["BSE"]
+                source = partition["source_outcomes"]["exchange_list"]
+                self.assertEqual(
+                    partition["reconciliation"],
+                    {"expected": expected, "resolved": 0, "failed": expected},
+                )
+                self.assertIn("pages_expected", source)
+                self.assertIsNone(source["pages_expected"])
+                self.assertEqual(source["pages_received"], 1)
+                self.assertEqual(source["observed_count"], 1)
+                self.assertEqual(partition["securities"][0]["code"], "920000")
+                self.assertFalse(partition["complete"])
+                self.assertFalse(result["full_a_share_universe"])
+
+    def test_unknown_total_preserves_canonical_record_order_in_each_exchange(
+        self,
+    ) -> None:
+        for exchange, row in _fixture_rows().items():
+            other = replace(row, code="000000", name="另一成员")
+            partial = replace(
+                _complete_list_outcome(row),
+                source_result="partial",
+                expected_count=None,
+                records=[row, other],
+            )
+            with self.subTest(exchange=exchange):
+                result = _build_fixture_universe(
+                    list_outcome_overrides={exchange: partial}
+                ).to_public_dict()
+                partition = result["partitions"][exchange]
+                self.assertEqual(
+                    [item["code"] for item in partition["securities"]],
+                    ["000000", row.code],
+                )
+                self.assertIsNone(partition["reconciliation"]["expected"])
+                self.assertEqual(
+                    partition["source_outcomes"]["exchange_list"]["observed_count"], 2
+                )
+                self.assertFalse(result["full_a_share_universe"])
+
     def test_partial_list_retains_observed_record_and_skips_identity(self) -> None:
         row = _fixture_rows()["SSE"]
         partial = ExchangeListOutcome(
@@ -612,7 +727,9 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
             partition["source_outcomes"]["identity"]["source_result"], "partial"
         )
 
-    def test_missing_owners_and_bse_fail_closed_with_exact_counts(self) -> None:
+    def test_missing_owners_preserve_unknown_list_and_known_identity_counts(
+        self,
+    ) -> None:
         missing_list = _build_fixture_universe(
             omit_list=frozenset({"BSE"})
         ).to_public_dict()
@@ -623,7 +740,7 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
         list_partition = missing_list["partitions"]["BSE"]
         self.assertEqual(
             list_partition["reconciliation"],
-            {"expected": 0, "resolved": 0, "failed": 0},
+            {"expected": None, "resolved": 0, "failed": None},
         )
         self.assertEqual(
             list_partition["limitation_codes"], ["missing_exchange_list_adapter"]
@@ -642,29 +759,34 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
     def test_blocked_and_unavailable_list_facts_are_preserved_exactly(self) -> None:
         for attempted in (False, True):
             for source_result in ("credential_blocked", "unavailable"):
-                with self.subTest(attempted=attempted, source_result=source_result):
-                    outcome = ExchangeListOutcome(
-                        "fixture_sse_list@1",
-                        "SSE",
-                        "2026-08-20",
-                        attempted,
-                        source_result,
-                        0,
-                        1,
-                        0,
-                        [],
-                    )
-                    result = _build_fixture_universe(
-                        list_outcome_overrides={"SSE": outcome}
-                    ).to_public_dict()
-                    partition = result["partitions"]["SSE"]
-                    self.assertEqual(partition["attempted"], attempted)
-                    self.assertEqual(partition["source_result"], source_result)
-                    self.assertEqual(
-                        partition["reconciliation"],
-                        {"expected": 0, "resolved": 0, "failed": 0},
-                    )
-                    self.assertFalse(partition["complete"])
+                for expected in (0, None):
+                    with self.subTest(
+                        attempted=attempted,
+                        source_result=source_result,
+                        expected=expected,
+                    ):
+                        outcome = ExchangeListOutcome(
+                            "fixture_sse_list@1",
+                            "SSE",
+                            "2026-08-20",
+                            attempted,
+                            source_result,
+                            expected,
+                            1,
+                            0,
+                            [],
+                        )
+                        result = _build_fixture_universe(
+                            list_outcome_overrides={"SSE": outcome}
+                        ).to_public_dict()
+                        partition = result["partitions"]["SSE"]
+                        self.assertEqual(partition["attempted"], attempted)
+                        self.assertEqual(partition["source_result"], source_result)
+                        self.assertEqual(
+                            partition["reconciliation"],
+                            {"expected": expected, "resolved": 0, "failed": expected},
+                        )
+                        self.assertFalse(partition["complete"])
 
     def test_observed_empty_exchange_partition_is_closed_not_missing(self) -> None:
         empty_list = ExchangeListOutcome(
@@ -1012,6 +1134,12 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
                 _complete_list_outcome(replace(row, effective_at="not-a-time")),
             ),
             (
+                "historical_list_as_of_unproven",
+                _complete_list_outcome(
+                    replace(row, available_at="2026-08-21T09:00:00+08:00")
+                ),
+            ),
+            (
                 "invalid_reconciliation",
                 replace(_complete_list_outcome(row), pages_received=2),
             ),
@@ -1035,13 +1163,23 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
             ),
         )
         for expected_code, outcome in cases:
-            with self.subTest(expected_code=expected_code):
-                with self.assertRaises(UniverseContractError) as caught:
-                    _build_fixture_universe(list_outcome_overrides={"SSE": outcome})
-                self.assertEqual(caught.exception.code, expected_code)
-                self.assertNotIn("/private/tmp", str(caught.exception))
-                self.assertIsNone(caught.exception.__cause__)
-                self.assertIsNone(caught.exception.__context__)
+            for unknown_total in (False, True):
+                candidate = (
+                    replace(outcome, expected_count=None, source_result="partial")
+                    if unknown_total
+                    else outcome
+                )
+                with self.subTest(
+                    expected_code=expected_code, unknown_total=unknown_total
+                ):
+                    with self.assertRaises(UniverseContractError) as caught:
+                        _build_fixture_universe(
+                            list_outcome_overrides={"SSE": candidate}
+                        )
+                    self.assertEqual(caught.exception.code, expected_code)
+                    self.assertNotIn("/private/tmp", str(caught.exception))
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertIsNone(caught.exception.__context__)
 
     def test_identity_blocked_and_unavailable_facts_preserve_known_denominator(
         self,
@@ -1209,6 +1347,72 @@ class AShareUniverseInterfaceTests(unittest.TestCase):
 
 
 class AShareUniverseInstalledCopyTests(unittest.TestCase):
+    def test_copied_skill_retains_unknown_total_as_null_in_public_json(self) -> None:
+        script = """
+import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from a_share_research.a_share_universe import build_as_of_a_share_universe
+from a_share_research.universe_input import ExchangeListOutcome, ExchangeListRecord, UniverseRequest
+
+class PartialList:
+    exchange = "BSE"
+    operation_id = "fixture_bse_list@1"
+
+    def acquire(self, request, timeout_seconds):
+        row = ExchangeListRecord(
+            "BSE", "920000", "北交样本", "A_SHARE", "2020-01-01",
+            "2026-08-20T16:00:00+08:00", "2026-08-21T10:00:00+08:00",
+            "fixture-list:BSE:920000",
+        )
+        return ExchangeListOutcome(
+            self.operation_id, "BSE", request.screen_date,
+            True, "partial", None, None, 1, [row],
+        )
+
+result = build_as_of_a_share_universe(
+    UniverseRequest("2026-08-20", "2026-08-20T23:59:59+08:00"),
+    research_now=datetime(2026, 8, 21, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+    exchange_list_adapters=(PartialList(),), identity_adapters=(),
+)
+print(json.dumps(result.to_public_dict()))
+"""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            installed = Path(temporary_directory) / "a-share-research"
+            shutil.copytree(SKILL_ROOT, installed)
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = str(installed / "scripts")
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=temporary_directory,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertFalse(result["full_a_share_universe"])
+        partition = result["partitions"]["BSE"]
+        self.assertEqual(
+            partition["reconciliation"],
+            {"expected": None, "resolved": 0, "failed": None},
+        )
+        self.assertIsNone(
+            partition["source_outcomes"]["exchange_list"]["expected_count"]
+        )
+        source = partition["source_outcomes"]["exchange_list"]
+        self.assertIn("pages_expected", source)
+        self.assertIsNone(source["pages_expected"])
+        self.assertEqual(source["pages_received"], 1)
+        self.assertEqual(
+            partition["source_outcomes"]["exchange_list"]["observed_count"], 1
+        )
+        self.assertEqual(
+            partition["securities"][0]["canonical_security_id"], "BSE:920000"
+        )
+
     def test_copied_skill_exports_the_universe_projection_interface(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             installed = Path(temporary_directory) / "a-share-research"
