@@ -684,6 +684,11 @@ def _current_row(
                 "time": str(material["time"]),
             }
             baseline = {"field": "prev_close", "array_index": 1}
+            quote_origin = {
+                "field": "last",
+                "array_index": 5,
+                "selection": "current_snapshot",
+            }
             version = "sse-index-097f290ec5c3fcad"
         elif canonical_id.startswith("SZSE:"):
             quote = material["data"]
@@ -701,6 +706,7 @@ def _current_row(
             day = instant.date().isoformat()
             clock_fields = {"marketTime": quote["marketTime"]}
             baseline = {"field": "close"}
+            quote_origin = {"field": "now", "selection": "current_snapshot"}
             version = "szse-k-246926d9c3d4e16e"
         else:
             first, quote = material[0], material[-1]
@@ -721,6 +727,11 @@ def _current_row(
             )
             clock_fields = {"JSRQ": quote["JSRQ"], "GXSJ": quote["GXSJ"]}
             baseline = {"field": "ZRSP", "row": 0}
+            quote_origin = {
+                "field": "SSZS",
+                "row": len(material) - 1,
+                "selection": "series_last_row",
+            }
             version = "bse-bz50-061f2bdabb5cdf20"
         return {
             "canonical_id": canonical_id,
@@ -730,6 +741,8 @@ def _current_row(
             "change_percent": pct,
             "unit": "index_point",
             "price_semantics": "current_value",
+            "observation_boundary": "latest_source_quote",
+            "quote_provenance": quote_origin,
             "baseline_semantics": "previous_session_close",
             "session_date": day,
             "observed_at": instant.isoformat(),

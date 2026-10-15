@@ -199,6 +199,8 @@ class DeterministicFixedIndexAdapter:
                         "source_clock_fields",
                         "baseline_provenance",
                         "derived_metrics",
+                        "observation_boundary",
+                        "quote_provenance",
                     }
                 ):
                     errors.append(
@@ -247,7 +249,7 @@ class DeterministicFixedIndexAdapter:
                                 current
                                 or row.get("observed_at") is not None
                                 or retrieved
-                                < _auction_end(context, canonical_id, target_date)
+                                < _auction_boundary(context, canonical_id, target_date)
                             ):
                                 raise ValueError
                             observed = None
@@ -258,7 +260,7 @@ class DeterministicFixedIndexAdapter:
                                 or observed > retrieved
                             ):
                                 raise ValueError
-                            if not current and observed < _auction_end(
+                            if not current and observed < _auction_boundary(
                                 context, canonical_id, target_date
                             ):
                                 raise ValueError
@@ -291,6 +293,31 @@ class DeterministicFixedIndexAdapter:
                                 "code": "index_price_semantics_mismatch",
                                 "message": "Index price semantics do not match the requested use."
                                 + " Index: "
+                                + canonical_id
+                                + ".",
+                            }
+                        )
+                        continue
+                    if (
+                        current
+                        and descriptor["freshness_basis"] == "current_session_hold"
+                        and (
+                            observed is None
+                            or row.get("observation_boundary") != "latest_source_quote"
+                            or not _auction_boundary(
+                                context, canonical_id, target_date, position=2
+                            )
+                            <= observed
+                            <= _auction_boundary(
+                                context, canonical_id, target_date, position=3
+                            )
+                        )
+                    ):
+                        errors.append(
+                            {
+                                "source_operation": OPERATION_ID,
+                                "code": "index_morning_observation_unproved",
+                                "message": "Midday index use requires the source's latest compatible morning quote. Index: "
                                 + canonical_id
                                 + ".",
                             }
@@ -584,8 +611,12 @@ def _reported_consistent(
     )
 
 
-def _auction_end(
-    context: Mapping[str, Any], canonical_id: str, session_date: str
+def _auction_boundary(
+    context: Mapping[str, Any],
+    canonical_id: str,
+    session_date: str,
+    *,
+    position: int = -1,
 ) -> datetime:
     # Use the owning #117 proof's declared auction boundary; do not infer
     # trading days, actual index completion or a source observation timestamp.
@@ -596,6 +627,6 @@ def _auction_end(
     )
     return datetime.combine(
         date.fromisoformat(session_date),
-        time.fromisoformat(proof["auction_times"][-1]),
+        time.fromisoformat(proof["auction_times"][position]),
         ASIA_SHANGHAI,
     )

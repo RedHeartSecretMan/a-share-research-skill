@@ -498,7 +498,9 @@ print(json.dumps({'coverage':outcome.coverage,'identities':[row['payload']['obse
         material = rows()
         for row in material:
             row.update(
-                observed_at="2026-10-14T11:30:00+08:00", retrieved_at=now.isoformat()
+                observed_at="2026-10-14T11:30:00+08:00",
+                retrieved_at=now.isoformat(),
+                observation_boundary="latest_source_quote",
             )
         outcome = DeterministicFixedIndexAdapter(
             material,
@@ -884,6 +886,64 @@ print(json.dumps({'coverage':outcome.coverage,'identities':[row['payload']['obse
                 for error in outcome.source_errors
             )
         )
+
+    def test_midday_cannot_accept_midnight_preopen_afternoon_or_missing_latest_boundary(
+        self,
+    ) -> None:
+        now = datetime(2026, 10, 14, 12, tzinfo=TZ)
+        for timestamp in (
+            "2026-10-14T00:00:00+08:00",
+            "2026-10-14T09:14:59+08:00",
+            "2026-10-14T09:25:00+08:00",
+            "2026-10-14T11:30:00+08:00",
+            "2026-10-14T12:00:00+08:00",
+            "2026-10-14T13:00:00+08:00",
+        ):
+            material = rows()
+            for row in material:
+                row.update(observed_at=timestamp, retrieved_at=now.isoformat())
+            outcome = DeterministicFixedIndexAdapter(
+                material,
+                session_adapter=DeterministicMarketSessionAdapter(
+                    calendars(), clock=lambda: now
+                ),
+                clock=lambda: now,
+            ).execute(request(), 1)
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(outcome.coverage, "failed")
+
+    def test_latest_quote_boundary_cannot_make_a_nonmorning_clock_compatible(
+        self,
+    ) -> None:
+        now = datetime(2026, 10, 14, 12, tzinfo=TZ)
+        for timestamp in (
+            "2026-10-14T00:00:00+08:00",
+            "2026-10-14T09:29:59+08:00",
+            "2026-10-14T11:30:01+08:00",
+            "2026-10-14T12:00:00+08:00",
+        ):
+            material = rows()
+            for row in material:
+                row.update(
+                    observed_at="2026-10-14T11:29:55+08:00",
+                    retrieved_at=now.isoformat(),
+                    observation_boundary="latest_source_quote",
+                )
+            material[0]["observed_at"] = timestamp
+            outcome = DeterministicFixedIndexAdapter(
+                material,
+                session_adapter=DeterministicMarketSessionAdapter(
+                    calendars(), clock=lambda: now
+                ),
+                clock=lambda: now,
+            ).execute(request(), 1)
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(outcome.coverage, "partial")
+                self.assertEqual(len(outcome.observations), 3)
+                self.assertEqual(
+                    outcome.source_errors[0]["code"],
+                    "index_morning_observation_unproved",
+                )
 
 
 if __name__ == "__main__":

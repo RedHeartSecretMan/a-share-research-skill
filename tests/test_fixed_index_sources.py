@@ -870,6 +870,88 @@ print(json.dumps({'coverage':outcome.coverage,'calls':transport.calls,'count':le
                     )
                 )
 
+    def test_midday_native_complete_clock_cannot_escape_morning_quote_qualification(
+        self,
+    ) -> None:
+        checked = datetime(2026, 10, 14, 12, tzinfo=TZ)
+
+        class Midnight(IndexTransport):
+            def get(self, url, headers):
+                response = super().get(url, headers)
+                if urlsplit(url).path == "/api/market/ssjjhq/getTimeData":
+                    material = json.loads(response.body)
+                    material["data"]["marketTime"] = "2026-10-14 00:00:00"
+                    response = replace(response, body=json.dumps(material).encode())
+                return replace(response, retrieved_at=checked)
+
+        outcome = ProductionFixedIndexAdapter(
+            Midnight(),
+            session_adapter=DeterministicMarketSessionAdapter(
+                calendars(), clock=lambda: checked
+            ),
+            clock=lambda: checked,
+        ).execute(
+            FixedIndexOperationRequest(
+                MarketSessionOperationRequest("2026-10-14", BINDINGS),
+                purpose="current_session",
+            ),
+            5,
+        )
+        self.assertEqual(outcome.coverage, "partial")
+        self.assertEqual(
+            [
+                row["payload"]["observation"]["canonical_id"]
+                for row in outcome.to_dict()["observations"]
+            ],
+            ["SSE:000001", "BSE:899050"],
+        )
+        self.assertTrue(
+            all(
+                error["code"] == "index_morning_observation_unproved"
+                for error in outcome.source_errors
+            )
+        )
+
+    def test_midday_latest_quote_role_retains_own_field_and_series_tail_provenance(
+        self,
+    ) -> None:
+        checked = datetime(2026, 10, 14, 12, tzinfo=TZ)
+
+        class Holding(IndexTransport):
+            def get(self, url, headers):
+                return replace(super().get(url, headers), retrieved_at=checked)
+
+        outcome = ProductionFixedIndexAdapter(
+            Holding(),
+            session_adapter=DeterministicMarketSessionAdapter(
+                calendars(), clock=lambda: checked
+            ),
+            clock=lambda: checked,
+        ).execute(
+            FixedIndexOperationRequest(
+                MarketSessionOperationRequest("2026-10-14", BINDINGS),
+                purpose="current_session",
+            ),
+            5,
+        )
+        self.assertEqual(outcome.coverage, "complete", outcome.source_errors)
+        values = [
+            row["payload"]["observation"] for row in outcome.to_dict()["observations"]
+        ]
+        self.assertEqual(
+            [row["quote_provenance"]["field"] for row in values],
+            ["last", "now", "now", "SSZS"],
+        )
+        self.assertEqual(values[0]["quote_provenance"]["array_index"], 5)
+        self.assertEqual(values[-1]["quote_provenance"]["row"], 1)
+        self.assertEqual(values[-1]["quote_provenance"]["selection"], "series_last_row")
+        self.assertTrue(
+            all(row["observation_boundary"] == "latest_source_quote" for row in values)
+        )
+        self.assertEqual(
+            [row["observed_at"] for row in values], ["2026-10-14T09:59:55+08:00"] * 4
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
