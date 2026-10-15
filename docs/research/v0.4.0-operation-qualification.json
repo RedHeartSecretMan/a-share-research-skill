@@ -12,7 +12,7 @@
         "request_boundary": "one_iso_trading_date_not_after_as_of_in_Asia_Shanghai"
       },
       "unit_semantics": {
-        "turnover_amount": "source_display_ten_thousand_CNY_scaled_exactly_to_CNY"
+        "turnover_amount": "raw_hqcjje_CNY_retained_exactly_as_CNY"
       },
       "failure_semantics": "missing_scope_date_unit_publication_or_complete_report_is_unavailable_or_partial_never_zero",
       "empty_result_semantics": "observed_empty_requires_complete_official_daily_report_explicitly_proving_zero_A_share_turnover",
@@ -21,7 +21,7 @@
       "rate_limit_policy": {
         "scope": "owner_operation",
         "qualification": "qualified_by_issue_114",
-        "request_bound": "at_most_one_index_and_one_daily_report_request"
+        "request_bound": "one_exact_HQJSRQ_daily_report_request_and_one_complete_array"
       },
       "offline_contract_selector": "tests/test_market_foundation_qualification.py#test_issue_114_bse_a_share_turnover_contract",
       "offline_contract_result": "passed",
@@ -30,7 +30,8 @@
         "skill/a-share-research/scripts/a_share_research/operation_release_matrix.py#load_market_foundation_qualification_fixtures",
         "skill/a-share-research/scripts/a_share_research/exact_normalization.py#exact_scaled_sum",
         "tests/test_market_foundation_qualification.py#test_issue_114_bse_a_share_turnover_contract",
-        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04"
+        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04",
+        "tests/test_market_foundation_qualification.py#test_reopened_114_bse_daily_raw_money_is_CNY"
       ],
       "gap_issues": [],
       "source_contract": {
@@ -51,28 +52,28 @@
           "excluded_proxies": "fund_ETF_bond_B_share_single_security_and_index_turnover"
         },
         "request_selector": {
-          "method": "GET",
-          "selector_kind": "official_stock_daily_report_index_then_exact_date_document",
-          "resource_url": "https://www.bse.cn/static/statisticdata.html",
-          "date_selector": "one_YYYY_MM_DD_daily_report_date",
-          "max_requests": 2,
+          "method": "POST",
+          "selector_kind": "official_daily_report_class_2_exact_date_query",
+          "resource_url": "https://www.bse.cn/marketStatController/dailyReport.do",
+          "date_selector": "HQJSRQ_equal_one_YYYYMMDD_without_latestDate_and_require_row_rq_match",
+          "max_requests": 1,
           "max_pages": 1
         },
         "response_shape": {
-          "shape": "official_daily_stock_report_project_and_value_table",
-          "required_fields": "report_date_publication_time_and_turnover_amount_ten_thousand_CNY",
+          "shape": "static_JSONP_complete_daily_report_row_array_select_exactly_one_xxzrlx_2_no_pagination",
+          "required_fields": "rq_xxzrlx_hqcjje_raw_CNY_and_publication_time_no_XJX_sum",
           "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_trading_date"
         },
         "field_destinations": {
-          "A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "observations.payload.observation.metrics.turnover_amount_CNY"
+          "A_SHARE_TURNOVER_CNY": "observations.payload.observation.metrics.turnover_amount_CNY"
         },
         "normalization": {
-          "asset_filter": "accept_only_the_official_BSE_stock_daily_report_total",
-          "scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
+          "asset_filter": "accept_only_the_official_BSE_stock_daily_report_class_2_total_never_add_XJX",
+          "scale": "raw_hqcjje_CNY_retained_as_exact_decimal_CNY",
           "date": "require_report_date_equal_requested_completed_trading_date"
         },
         "field_applicability": {
-          "applicable_fields": "A_SHARE_TURNOVER_TEN_THOUSAND_CNY",
+          "applicable_fields": "A_SHARE_TURNOVER_CNY",
           "not_applicable_fields": "none",
           "formal_rule": "all_required_A_share_turnover_fields_are_mandatory_and_not_applicable_is_forbidden"
         },
@@ -106,7 +107,7 @@
         "request_boundary": "one_iso_report_date_not_after_as_of_in_Asia_Shanghai"
       },
       "unit_semantics": {
-        "money": "ten_thousand_CNY_scaled_exactly_to_CNY",
+        "money": "Round_display_ten_thousand_CNY_scaled_exactly_to_CNY_preserve_display_precision_not_unrounded_raw",
         "quantity": "ten_thousand_shares_scaled_exactly_to_shares"
       },
       "failure_semantics": "missing_field_is_unavailable_unless_official_rule_explicitly_proves_field_level_not_applicable",
@@ -147,16 +148,16 @@
         },
         "request_selector": {
           "method": "GET",
-          "selector_kind": "official_margin_total_exact_date_table",
-          "resource_url": "https://www.bse.cn/disclosure/rzrq_trans_list.html",
-          "date_selector": "one_YYYY_MM_DD_report_date",
+          "selector_kind": "official_margin_summaryInfoResult_exact_date_page_0_query",
+          "resource_url": "https://www.bse.cn/rzrqjyyexxController/summaryInfoResult.do",
+          "date_selector": "transDate_equal_one_YYYY_MM_DD_report_date_and_page_0",
           "max_requests": 1,
           "max_pages": 1
         },
         "response_shape": {
-          "shape": "official_margin_total_single_date_row",
-          "required_fields": "report_date_publication_time_financing_and_lending_total_fields_with_display_units",
-          "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_report_date"
+          "shape": "static_JSONP_pair_summary_row_array_and_single_quoted_report_date",
+          "required_fields": "report_date_rzyeRound_rzmreRound_rqmclRound_rqylRound_rqyeRound_rzrqyeRound_display_units_and_publication_time",
+          "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_report_date_createTime_lastUpdateTime_or_sxrq_are_not_proved_publication"
         },
         "field_destinations": {
           "FINANCING_BUY_AMOUNT": "observations.payload.observation.metrics.financing_buy_amount_CNY",
@@ -1138,7 +1139,8 @@
         "skill/a-share-research/scripts/a_share_research/operation_release_matrix.py#load_market_foundation_qualification_fixtures",
         "skill/a-share-research/scripts/a_share_research/exact_normalization.py#exact_scaled_sum",
         "tests/test_market_foundation_qualification.py#test_issue_114_sse_a_share_turnover_contract",
-        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04"
+        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04",
+        "tests/test_market_foundation_qualification.py#test_reopened_114_SSE_binds_observed_GET_with_fixed_public_Referer"
       ],
       "gap_issues": [],
       "source_contract": {
@@ -1155,19 +1157,19 @@
         "scope": {
           "exchange": "SSE",
           "kind": "exchange_daily_A_share_stock_turnover",
-          "included_assets": "PRODUCT_CODE_01_main_board_A_plus_PRODUCT_CODE_03_STAR_market",
+          "included_assets": "PRODUCT_CODE_01_main_board_A_plus_PRODUCT_CODE_03_STAR_market_only_after_pure_A_CDR_exclusion_proof",
           "excluded_proxies": "PRODUCT_CODE_02_B_share_PRODUCT_CODE_11_buyback_PRODUCT_CODE_17_all_stock_and_fund_bond_single_security_index_turnover"
         },
         "request_selector": {
-          "method": "POST",
-          "selector_kind": "COMMON_SSE_SJ_GPSJ_CJGK_MRGK_C_exact_date_query",
-          "resource_url": "https://www.sse.com.cn/market/stockdata/overview/day/",
+          "method": "GET",
+          "selector_kind": "COMMON_SSE_SJ_GPSJ_CJGK_MRGK_C_exact_date_GET_with_fixed_official_origin_Referer_https://www.sse.com.cn/_chosen_evidenced_path_no_header_necessity_or_causality_claim",
+          "resource_url": "https://query.sse.com.cn/commonQuery.do",
           "date_selector": "SEARCH_DATE_equal_one_YYYY_MM_DD_and_PRODUCT_CODE_01_02_03_11_17",
           "max_requests": 1,
           "max_pages": 1
         },
         "response_shape": {
-          "shape": "result_rows_keyed_by_PRODUCT_CODE",
+          "shape": "static_JSONP_result_rows_keyed_by_PRODUCT_CODE_no_pagination",
           "required_fields": "TRADE_DATE_PRODUCT_CODE_and_TRADE_AMT_for_codes_01_and_03",
           "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_trade_date"
         },
@@ -1190,7 +1192,7 @@
           "observed_empty": "both_complete_A_share_rows_explicitly_report_zero_turnover",
           "partial": "one_required_A_share_row_or_query_completeness_is_explicitly_incomplete",
           "credential_blocked": "official_source_explicitly_rejects_for_permission_or_credential",
-          "unavailable": "transport_schema_scope_date_unit_or_publication_contract_not_proved",
+          "unavailable": "transport_schema_pure_A_CDR_exclusion_date_unit_or_publication_contract_not_proved_System_Error_is_not_observed_empty",
           "not_applicable": "forbidden_for_mandatory_turnover_partition"
         },
         "dependency_policy": {
@@ -1361,7 +1363,7 @@
       },
       "unit_semantics": {
         "money": "CNY_retained_exactly_as_CNY",
-        "quantity": "shares_retained_exactly_as_shares"
+        "quantity": "source_stock_shares_fund_or_CDR_units_bond_lots_canonical_shares_requires_independent_unit_and_scope_proof"
       },
       "failure_semantics": "missing_field_is_unavailable_unless_official_rule_explicitly_proves_field_level_not_applicable",
       "empty_result_semantics": "observed_empty_requires_complete_official_query_explicitly_proving_zero_rows_not_a_blank_page",
@@ -1379,7 +1381,8 @@
         "skill/a-share-research/scripts/a_share_research/operation_release_matrix.py#load_market_foundation_qualification_fixtures",
         "skill/a-share-research/scripts/a_share_research/exact_normalization.py#exact_scaled_sum",
         "tests/test_market_foundation_qualification.py#test_issue_114_sse_market_margin_contract",
-        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04"
+        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04",
+        "tests/test_market_foundation_qualification.py#test_reopened_114_SSE_binds_observed_GET_with_fixed_public_Referer"
       ],
       "gap_issues": [],
       "source_contract": {
@@ -1390,7 +1393,7 @@
           "id": "sse",
           "organization": "Shanghai Stock Exchange",
           "role": "first_party_exchange",
-          "documentation_url": "https://www.sse.com.cn/market/othersdata/margin/detail/index.shtml",
+          "documentation_url": "https://www.sse.com.cn/market/othersdata/margin/sum/",
           "terms_url": "https://www.sse.com.cn/home/legal/"
         },
         "scope": {
@@ -1401,16 +1404,16 @@
         },
         "request_selector": {
           "method": "GET",
-          "selector_kind": "official_margin_summary_equal_start_and_end_date",
-          "resource_url": "https://www.sse.com.cn/market/othersdata/margin/detail/index.shtml",
-          "date_selector": "one_YYYY_MM_DD_credit_trading_date",
+          "selector_kind": "RZRQ_HZ_INFO_summary_GET_with_fixed_official_origin_Referer_https://www.sse.com.cn/_chosen_evidenced_path_no_header_necessity_or_causality_claim",
+          "resource_url": "https://query.sse.com.cn/commonSoaQuery.do",
+          "date_selector": "beginDate_and_endDate_equal_one_YYYYMMDD_isPagination_true_pageHelp_pageSize_25_pageNo_beginPage_endPage_cacheSize_1_stockCode_empty",
           "max_requests": 1,
           "max_pages": 1
         },
         "response_shape": {
-          "shape": "official_margin_summary_single_date_row",
-          "required_fields": "credit_date_financing_balance_buy_amount_lending_quantity_balance_sell_quantity_total_balance_and_publication_time",
-          "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_credit_trading_date"
+          "shape": "static_JSONP_result_summary_rows_and_pageHelp_pageCount_total_pageNo_pageSize_completeness_required",
+          "required_fields": "opDate_rzye_rzmre_rqyl_rqylje_rqmcl_rzrqjyzl_and_publication_time",
+          "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_credit_trading_date_opDate_is_not_publication"
         },
         "field_destinations": {
           "FINANCING_BALANCE": "observations.payload.observation.metrics.financing_balance_CNY",
@@ -1435,7 +1438,7 @@
           "observed_empty": "complete_official_query_explicitly_reports_zero_rows",
           "partial": "official_query_or_required_field_inventory_is_explicitly_incomplete",
           "credential_blocked": "official_source_explicitly_rejects_for_permission_or_credential",
-          "unavailable": "transport_schema_scope_date_unit_or_publication_contract_not_proved",
+          "unavailable": "transport_schema_scope_quantity_unit_publication_or_pagination_completeness_not_proved",
           "not_applicable": "forbidden_for_all_six_required_fields_by_the_cited_official_summary_rule"
         },
         "dependency_policy": {
@@ -1497,7 +1500,7 @@
         "request_boundary": "one_dailySurvey_report_date_not_after_as_of_in_Asia_Shanghai"
       },
       "unit_semantics": {
-        "turnover_amount": "ten_thousand_CNY_scaled_exactly_to_CNY"
+        "turnover_amount": "source_display_hundred_million_CNY_scaled_exactly_to_CNY_after_pure_A_scope_proof"
       },
       "failure_semantics": "missing_A_share_scope_date_unit_publication_or_report_completeness_is_unavailable_or_partial_never_zero",
       "empty_result_semantics": "observed_empty_requires_complete_official_A_share_daily_report_explicitly_proving_zero",
@@ -1515,7 +1518,8 @@
         "skill/a-share-research/scripts/a_share_research/operation_release_matrix.py#load_market_foundation_qualification_fixtures",
         "skill/a-share-research/scripts/a_share_research/exact_normalization.py#exact_scaled_sum",
         "tests/test_market_foundation_qualification.py#test_issue_114_szse_a_share_turnover_contract",
-        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04"
+        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04",
+        "tests/test_market_foundation_qualification.py#test_reopened_114_szse_daily_money_uses_source_hundred_million_CNY"
       ],
       "gap_issues": [],
       "source_contract": {
@@ -1532,32 +1536,32 @@
         "scope": {
           "exchange": "SZSE",
           "kind": "exchange_daily_A_share_stock_turnover",
-          "included_assets": "A_share_total_in_official_stock_daily_report_catalog_scsj_gprdgk_after",
+          "included_assets": "only_proved_pure_A_share_amount_in_catalog_scsj_gprdgk_after_selected_default_gp_xz_cy_include_CDR_and_are_unavailable",
           "excluded_proxies": "fund_ETF_bond_B_share_preferred_share_CDR_single_security_and_index_turnover"
         },
         "request_selector": {
           "method": "GET",
-          "selector_kind": "official_report_catalog_scsj_gprdgk_after_exact_date",
-          "resource_url": "https://www.szse.cn/market/stock/situation/daily/index.html",
-          "date_selector": "one_YYYY_MM_DD_daily_report_date",
+          "selector_kind": "official_report_catalog_scsj_gprdgk_after_TABKEY_tab1_PAGENO_1_tab1PAGESIZE_20_SHOWTYPE_JSON",
+          "resource_url": "https://www.szse.cn/api/report/ShowReport/data",
+          "date_selector": "txtQueryDate_equal_one_YYYY_MM_DD_tjzqlb_D_bkbz_GP_XZ_CY_cjbz_cjl_cjje_cxzs_display_rows",
           "max_requests": 1,
           "max_pages": 1
         },
         "response_shape": {
-          "shape": "official_daily_stock_report_rows_with_named_asset_scope",
-          "required_fields": "report_date_A_share_scope_turnover_amount_ten_thousand_CNY_and_publication_time",
-          "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_report_date"
+          "shape": "report_object_array_select_catalog_scsj_gprdgk_after_tab1_data_zbmc_gp_xz_cy_unpaged_summary",
+          "required_fields": "independent_report_date_pure_A_scope_zbmc_turnover_amount_hundred_million_CNY_and_publication_time",
+          "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_report_date_not_control_echo_or_retrieval"
         },
         "field_destinations": {
-          "A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "observations.payload.observation.metrics.turnover_amount_CNY"
+          "A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": "observations.payload.observation.metrics.turnover_amount_CNY"
         },
         "normalization": {
-          "asset_filter": "accept_only_row_explicitly_labeled_A_share_total_and_reject_stock_or_index_proxy",
-          "scale": "multiply_ten_thousand_CNY_by_10000_using_exact_decimal",
+          "asset_filter": "accept_only_row_explicitly_proved_pure_A_share_total_reject_CDR_inclusive_gp_xz_cy_stock_or_index_proxy",
+          "scale": "multiply_hundred_million_CNY_by_100000000_using_exact_decimal",
           "date": "require_report_date_equal_requested_completed_trading_date"
         },
         "field_applicability": {
-          "applicable_fields": "A_SHARE_TURNOVER_TEN_THOUSAND_CNY",
+          "applicable_fields": "A_SHARE_TURNOVER_HUNDRED_MILLION_CNY",
           "not_applicable_fields": "none",
           "formal_rule": "required_A_share_turnover_total_is_mandatory_and_not_applicable_is_forbidden"
         },
@@ -1566,7 +1570,7 @@
           "observed_empty": "complete_official_A_share_total_explicitly_reports_zero_turnover",
           "partial": "required_A_share_row_or_report_completeness_is_explicitly_incomplete",
           "credential_blocked": "official_source_explicitly_rejects_for_permission_or_credential",
-          "unavailable": "transport_schema_scope_date_unit_or_publication_contract_not_proved",
+          "unavailable": "transport_schema_pure_A_scope_independent_date_unit_or_publication_contract_not_proved_CDR_total_never_complete",
           "not_applicable": "forbidden_for_mandatory_turnover_partition"
         },
         "dependency_policy": {
@@ -1663,8 +1667,8 @@
         "request_boundary": "one_catalog_1837_xxpl_report_date_not_after_as_of"
       },
       "unit_semantics": {
-        "money": "CNY_retained_exactly_as_CNY",
-        "quantity": "shares_retained_exactly_as_shares"
+        "money": "hundred_million_CNY_scaled_exactly_to_CNY",
+        "quantity": "source_hundred_million_shares_or_fund_units_canonical_shares_unproved_requires_independent_pure_share_unit_proof"
       },
       "failure_semantics": "missing_field_or_scale_is_unavailable_unless_official_rule_explicitly_proves_field_level_not_applicable",
       "empty_result_semantics": "observed_empty_requires_complete_official_query_explicitly_proving_zero_rows_not_a_blank_page",
@@ -1682,7 +1686,8 @@
         "skill/a-share-research/scripts/a_share_research/operation_release_matrix.py#load_market_foundation_qualification_fixtures",
         "skill/a-share-research/scripts/a_share_research/exact_normalization.py#exact_scaled_sum",
         "tests/test_market_foundation_qualification.py#test_issue_114_szse_market_margin_contract",
-        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04"
+        "docs/specs/0008-v0.4.0-market-foundation-and-screening.md#V4-04",
+        "tests/test_market_foundation_qualification.py#test_reopened_114_szse_margin_money_uses_source_hundred_million_CNY"
       ],
       "gap_issues": [],
       "source_contract": {
@@ -1704,16 +1709,16 @@
         },
         "request_selector": {
           "method": "GET",
-          "selector_kind": "official_report_catalog_1837_xxpl_exact_date",
-          "resource_url": "https://www.szse.cn/disclosure/margin/margin/index.html",
-          "date_selector": "one_YYYY_MM_DD_report_date",
+          "selector_kind": "official_report_catalog_1837_xxpl_SHOWTYPE_JSON_vertical_summary_no_request_TABKEY",
+          "resource_url": "https://www.szse.cn/api/report/ShowReport/data",
+          "date_selector": "txtDate_equal_one_YYYY_MM_DD_report_date",
           "max_requests": 1,
           "max_pages": 1
         },
         "response_shape": {
-          "shape": "official_margin_total_single_date_report_row",
-          "required_fields": "report_date_financing_and_lending_total_fields_explicit_display_units_and_publication_time",
-          "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_report_date"
+          "shape": "report_object_array_select_metadata_catalogid_1837_xxpl_tabkey_tab1_name_margin_total_data_unpaged_summary",
+          "required_fields": "independent_report_date_jrrzmr_jrrzye_jrrjmc_jrrjyl_jrrjye_jrrzrjye_source_units_and_publication_time",
+          "publication_time_rule": "source_explicit_timestamp_required_and_must_not_precede_report_date_no_control_echo_or_retrieval"
         },
         "field_destinations": {
           "FINANCING_BUY_AMOUNT": "observations.payload.observation.metrics.financing_buy_amount_CNY",
@@ -1724,7 +1729,7 @@
           "MARGIN_TOTAL_BALANCE": "observations.payload.observation.metrics.margin_total_balance_CNY"
         },
         "normalization": {
-          "money_scale": "official_CNY_values_retained_as_exact_decimal_CNY",
+          "money_scale": "multiply_each_hundred_million_CNY_value_by_100000000_using_exact_decimal",
           "quantity_scale": "official_share_values_retained_as_exact_decimal_shares",
           "field_absence": "map_required_field_absence_to_unavailable_never_not_applicable"
         },
@@ -1735,10 +1740,10 @@
         },
         "state_mapping": {
           "complete": "all_published_fields_date_units_publication_and_report_completeness_proved",
-          "observed_empty": "complete_official_query_explicitly_reports_zero_rows",
+          "observed_empty": "complete_official_query_with_independent_date_and_publication_proves_zero_rows_never_metadata_recordcount_0_or_blank_data_alone",
           "partial": "official_query_or_required_field_inventory_is_explicitly_incomplete",
           "credential_blocked": "official_source_explicitly_rejects_for_permission_or_credential",
-          "unavailable": "transport_schema_scope_date_unit_or_publication_contract_not_proved",
+          "unavailable": "transport_schema_scope_date_canonical_quantity_unit_or_publication_contract_not_proved",
           "not_applicable": "forbidden_for_all_six_required_fields_by_the_cited_official_summary_rule"
         },
         "dependency_policy": {
