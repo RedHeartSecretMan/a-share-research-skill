@@ -22,7 +22,7 @@
 
 默认 `ExchangeListAdapter → #110` 装配已接入下述诚实 partial 投影，仍不具备正向时点成员记录。当前已核验来源行的 `membership_effective_at/available_at` 仍未知，来源声明总数与普通 A 股时点分母也未必相同。不能为调用 #110 而填入 retrieval、当前 basic 名称、零或当前声明数量。
 
-后续正向投影需要被选定方法实际字段、日期与范围依据，使 production normalizer 可以从来源生成合法 `ExchangeListOutcome`；随后由同一默认路径证明公开对账、正向排除和 unproven→unranked。已核验的 Baostock given-day 声明是逐日名录方向的正面依据，但AG 已观察真实字段、分页/session 和特定日期的 provider 枚举；普通 A 股类别、名字版本与 BSE 范围仍未闭合。这里不要求全历史都先实测、泛化 PIT 保证书或提前完成 #98。
+后续正向投影需要被选定方法实际字段、日期与范围依据，使 production normalizer 可以从来源生成合法 `ExchangeListOutcome`；随后由同一默认路径证明公开对账、正向排除和 unproven→unranked。已核验的 Baostock given-day 声明是逐日名录方向的正面依据，但 AG 已观察真实字段、分页/session 和特定日期的 provider 枚举；普通 A 股类别、名字版本与 BSE 范围仍未闭合。这里不要求全历史都先实测、泛化 PIT 保证书或提前完成 #98。
 
 copied-installed 当前默认采集测试使用合成原始 wire responses，实际执行所有 parser，验证 `[2,1,1]` 条记录与 `[2,1,1]` 次真实 lane attempts，以及失败、预算和冻结日期行为。它不以 `Proven*ListFixture` 代替默认生产分母，也不冒充完整 #122 验收或最终 live proof。
 
