@@ -130,6 +130,16 @@ class UrlLibTransport:
         request = Request(url, headers=headers, data=body, method="POST")
         return self._open(request, timeout_seconds=20.0)
 
+    def post_with_timeout(
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: bytes,
+        timeout_seconds: float,
+    ) -> HttpResponse:
+        request = Request(url, headers=headers, data=body, method="POST")
+        return self._open(request, timeout_seconds=timeout_seconds)
+
     def _open(self, request: Request, *, timeout_seconds: float) -> HttpResponse:
         visited: dict[str, int] = {}
         scoped = _SCOPED_HTTP_INVOCATION.get()

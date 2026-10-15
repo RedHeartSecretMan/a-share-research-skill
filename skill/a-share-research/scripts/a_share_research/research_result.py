@@ -462,7 +462,9 @@ class OperationObligation:
             raise ValueError("operation obligation kind is unsupported")
         if not self.source_role.strip():
             raise ValueError("operation obligation source role must be non-empty")
-        if self.exchange not in {None, "SSE", "SZSE"}:
+        # Operation metadata describes whole-market owners too. Security request
+        # and source-specific scope validation remain in their owning plans.
+        if self.exchange not in {None, "SSE", "SZSE", "BSE"}:
             raise ValueError("operation obligation exchange scope is invalid")
         uses = [item.use for item in self.evidence_uses]
         if not uses or len(uses) != len(set(uses)):
@@ -2251,7 +2253,7 @@ class UnifiedResearchResult:
                 or operation_kind not in _OPERATION_KINDS
                 or not isinstance(obligation.get("source_role"), str)
                 or not isinstance(obligation.get("experimental"), bool)
-                or obligation.get("exchange") not in {None, "SSE", "SZSE"}
+                or obligation.get("exchange") not in {None, "SSE", "SZSE", "BSE"}
                 or not isinstance(policies, list)
                 or not policies
             ):
