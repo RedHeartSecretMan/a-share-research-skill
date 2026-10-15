@@ -67,15 +67,15 @@ class ExchangeListRecord:
 
 @dataclass(frozen=True, slots=True)
 class ExchangeListOutcome:
-    """One caller-owned exchange-list execution outcome."""
+    """Exchange-list facts; unproven member/page totals are None, never zero."""
 
     operation_id: str
     exchange: str
     screen_date: str
     attempted: bool
     source_result: SourceResult
-    expected_count: int
-    pages_expected: int
+    expected_count: int | None
+    pages_expected: int | None
     pages_received: int
     records: Sequence[ExchangeListRecord]
 
@@ -142,8 +142,8 @@ class _PreparedExchangeListOutcome(_PreparedValue):
     screen_date: str
     attempted: bool
     source_result: SourceResult
-    expected_count: int
-    pages_expected: int
+    expected_count: int | None
+    pages_expected: int | None
     pages_received: int
     records: tuple[_PreparedExchangeListRecord, ...]
 
@@ -348,8 +348,8 @@ def _validate_list_state(
     *,
     attempted: object,
     source_result: object,
-    expected_count: int,
-    pages_expected: int,
+    expected_count: int | None,
+    pages_expected: int | None,
     pages_received: int,
     record_count: int,
 ) -> tuple[bool, SourceResult]:
@@ -360,20 +360,21 @@ def _validate_list_state(
             "invalid_source_result", "Universe source-result state is invalid."
         )
     if (
-        pages_expected < 1
-        or pages_received > pages_expected
-        or record_count > expected_count
+        (pages_expected is not None and pages_expected < 1)
+        or (pages_expected is not None and pages_received > pages_expected)
+        or (expected_count is not None and record_count > expected_count)
         or (pages_received == 0 and record_count != 0)
     ):
         raise _error(
             "invalid_reconciliation",
             "Universe reconciliation counts are invalid.",
         )
-    complete_query = pages_received == pages_expected
+    complete_query = pages_expected is not None and pages_received == pages_expected
     valid = False
     if source_result == "complete":
         valid = (
             attempted
+            and expected_count is not None
             and expected_count > 0
             and record_count == expected_count
             and complete_query
@@ -383,10 +384,12 @@ def _validate_list_state(
             attempted and expected_count == 0 and record_count == 0 and complete_query
         )
     elif source_result == "partial":
-        valid = (
-            attempted
-            and expected_count > 0
-            and (record_count < expected_count or not complete_query)
+        valid = attempted and (
+            expected_count is None
+            or (
+                expected_count > 0
+                and (record_count < expected_count or not complete_query)
+            )
         )
     else:
         valid = record_count == 0 and pages_received == 0
@@ -626,8 +629,14 @@ def prepare_exchange_list_outcome(
             "historical_list_scope_mismatch",
             "Universe exchange-list scope is invalid.",
         )
-    expected_count = _exact_nonnegative_int(expected_value)
-    pages_expected = _exact_nonnegative_int(pages_expected_value)
+    expected_count = (
+        None if expected_value is None else _exact_nonnegative_int(expected_value)
+    )
+    pages_expected = (
+        None
+        if pages_expected_value is None
+        else _exact_nonnegative_int(pages_expected_value)
+    )
     pages_received = _exact_nonnegative_int(pages_received_value)
     detached_records = _snapshot_records(records_value)
     if len({id(record) for record in detached_records}) != len(detached_records):
