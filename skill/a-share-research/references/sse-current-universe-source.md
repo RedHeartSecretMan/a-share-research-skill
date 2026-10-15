@@ -69,3 +69,8 @@ S 的最终独立核验摘要为 `eac74cce06ff1c2f38648b1acc9ad04d18e5bafcb7f9ea
 后取到的历史材料可以定位历史事实；只有同一事实版本在 cutoff 前已经公开、事件覆盖与时间边界可证明时，才可采纳。适用官方日期与明确边界可以形成时间依据；不凭空要求或制造精确秒数。
 
 copied-installed 测试只替换 transport 并执行真实 parser，使用独立合成 expected-list 夹具验证 #110 对账和 #119 实际调用；这不是默认名录装配验收、live 来源成功或 #98 最终 release attestation。#122 完整交付仍需三所真实 list/identity 默认装配和全部原 AC。
+
+
+## 默认当前采集组合
+
+`acquire_sse_current_lists` 把当前主板与科创板放入一次共同的 `sse` lane execution，共享 initial/retry/redirect 的实际预算和有限页地址上限；一部分缺失不抹掉另一部分记录。三所固定装配及其尚未满足的 #110 输入见[当前名单默认采集](universe-current-source-assembly.md)。该装配不增加未核验的历史字段或供应商 fallback。

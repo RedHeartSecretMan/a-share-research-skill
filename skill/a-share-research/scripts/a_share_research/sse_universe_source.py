@@ -741,6 +741,7 @@ class _MainboardPages:
         self.partition = partition
         self.lock = Lock()
         self.pages: list[_MainboardPage] = []
+        self.scheduled_pages: list[int] = []
         self.failure: str | None = None
 
     def execute(self, invocation: ProviderInvocation) -> None:
@@ -787,6 +788,10 @@ class _MainboardPages:
                 + "/",
                 "User-Agent": "a-share-research-skill/1",
             }
+            # Logical page addresses have a separate ceiling; physical initial/
+            # retry/redirect attempts remain exclusively authoritative in #119.
+            with self.lock:
+                self.scheduled_pages.append(number)
             try:
                 response = transport.get(url, headers)
                 parsed = _parse_mainboard_page(
@@ -812,6 +817,10 @@ class _MainboardPages:
                 self.pages.append(parsed)
             total_pages = parsed.pages
             number += 1
+
+    def scheduled_page_count(self) -> int:
+        with self.lock:
+            return len(self.scheduled_pages)
 
     def snapshot(self) -> tuple[tuple[_MainboardPage, ...], str | None]:
         with self.lock:
@@ -902,6 +911,154 @@ def acquire_sse_list_partition(
         tuple(limitations),
         result,
         _SSE_LIST_PARTITIONS[partition][4],
+    )
+
+
+class _CurrentSseCollection:
+    def __init__(
+        self,
+        request: UniverseRequest,
+        *,
+        research_now: datetime,
+        transport: HttpTransport | None,
+        timeout_seconds: float,
+        max_pages: int,
+    ) -> None:
+        current_date = research_now.astimezone(ASIA_SHANGHAI).date().isoformat()
+        self.max_pages = max_pages
+        self.parts = tuple(
+            _MainboardPages(
+                membership_date=request.screen_date,
+                current_date=current_date,
+                transport=transport,
+                timeout_seconds=timeout_seconds,
+                max_pages=max_pages,
+                partition=partition,
+            )
+            for partition in ("active_mainboard", "active_star")
+        )
+
+    def execute(self, invocation: ProviderInvocation) -> None:
+        for part in self.parts:
+            remaining = self.max_pages - sum(
+                p.scheduled_page_count() for p in self.parts
+            )
+            if remaining <= 0:
+                with part.lock:
+                    part.failure = "page_budget_exhausted"
+                break
+            part.max_pages = remaining
+            try:
+                part.execute(invocation)
+            except _MainboardParseFailure:
+                # A schema/count failure in one declared partition does not erase
+                # another partition's observations. No endpoint fallback is used.
+                continue
+            except TransportError as error:
+                if error.code in {"source_access_blocked", "rate_limited"}:
+                    raise
+                continue
+
+
+def acquire_sse_current_lists(
+    request: UniverseRequest,
+    *,
+    research_now: datetime,
+    transport: HttpTransport | None,
+    lanes: ProviderLanes,
+    policy: ProviderLanePolicy,
+    max_pages: int,
+) -> SseListAcquisition:
+    """Collect both declared current SSE scopes under one shared actual budget.
+
+    Counts describe the source scopes, which include positively classified CDRs
+    and other non-A records. They are not a proved as-of ordinary-A denominator.
+    """
+    prepared = prepare_universe_request(request, research_now=research_now)
+    if type(max_pages) is not int or max_pages < 1:
+        raise ValueError("The current-list page budget must be a positive integer.")
+    if isinstance(transport, UrlLibTransport):
+        raise TypeError("The source must own the counted urllib transport.")
+    collection = _CurrentSseCollection(
+        UniverseRequest(prepared.screen_date, prepared.information_cutoff),
+        research_now=research_now,
+        transport=transport,
+        timeout_seconds=policy.call_timeout_seconds or policy.timeout_seconds,
+        max_pages=max_pages,
+    )
+    result = lanes.run(provider_group="sse", adapter=collection, policy=policy)
+    snapshots = tuple(part.snapshot() for part in collection.parts)
+    pages = tuple(page for observed, _ in snapshots for page in observed)
+    records = tuple(
+        sorted(
+            (row for page in pages for row in page.records),
+            key=lambda row: (row.code, row.provenance_uri),
+        )
+    )
+    metadata_known = all(bool(observed) for observed, _ in snapshots)
+    reported = (
+        sum(observed[0].count for observed, _ in snapshots) if metadata_known else None
+    )
+    expected_pages = (
+        sum(observed[0].pages for observed, _ in snapshots) if metadata_known else None
+    )
+    rejected = sum(page.rejected for page in pages)
+    unique = len({row.code for row in records}) == len(records)
+    complete = (
+        result.status == "succeeded"
+        and metadata_known
+        and all(len(observed) == observed[0].pages for observed, _ in snapshots)
+        and not rejected
+        and unique
+        and reported == len(records)
+    )
+    limitations = [
+        "membership_effective_time_unknown",
+        "availability_time_unknown",
+        "historical_range_unproved",
+        "source_status_semantics_unproved",
+    ]
+    for part, (observed, failure) in zip(collection.parts, snapshots):
+        if failure:
+            limitations.append(part.partition + ":" + failure)
+        if not observed:
+            limitations.append(part.partition + ":source_partition_unavailable")
+    if result.failure_code:
+        limitations.append(result.failure_code)
+    if any(row.security_category is None for row in records):
+        limitations.append("security_class_unproved")
+    if any(row.security_category not in {None, "A_SHARE"} for row in records):
+        limitations.append("positive_non_a_records_present")
+    if rejected:
+        limitations.append("invalid_current_list_row")
+    if not unique:
+        limitations.append("duplicate_current_list_identity")
+    if any(page.short for page in pages):
+        limitations.append("page_row_count_mismatch")
+    if (
+        sum(part.scheduled_page_count() for part in collection.parts) >= max_pages
+        and not complete
+    ):
+        limitations.append("page_budget_exhausted")
+    state: SourceResult = "partial" if pages else "unavailable"
+    if not pages and any(
+        failure == "source_access_blocked" for _, failure in snapshots
+    ):
+        state = "credential_blocked"
+    return SseListAcquisition(
+        prepared.screen_date,
+        prepared.information_cutoff,
+        research_now.isoformat(),
+        state,
+        reported,
+        expected_pages,
+        len(pages),
+        complete,
+        records,
+        rejected,
+        tuple(dict.fromkeys(limitations)),
+        result,
+        "SSE_CURRENT_MAINBOARD_AND_STAR",
     )
 
 

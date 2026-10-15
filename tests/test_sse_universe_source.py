@@ -26,6 +26,7 @@ from a_share_research.sse_universe_source import (  # noqa: E402
     SseMainboardCurrentIdentityAdapter,
     acquire_sse_mainboard_current_list,
     acquire_sse_list_partition,
+    acquire_sse_current_lists,
 )
 from a_share_research.universe_input import (  # noqa: E402
     ExchangeListOutcome,
@@ -1038,6 +1039,158 @@ class SseMainboardCurrentListTests(unittest.TestCase):
         assert adapter.last_acquisition is not None
         self.assertEqual(adapter.last_acquisition.records[0].security_category, "CDR")
         self.assertFalse(universe.full_a_share_universe)
+
+
+class SseCurrentCollectionTests(unittest.TestCase):
+    def test_current_mainboard_and_star_share_one_real_attempt_budget_and_keep_partial(
+        self,
+    ) -> None:
+        for budget, expected_calls, expected_count in (
+            (2, ["1", "8"], 2),
+            (1, ["1"], None),
+        ):
+            with self.subTest(budget=budget):
+
+                class Current:
+                    def __init__(self) -> None:
+                        self.calls: list[str] = []
+
+                    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                        params = parse_qs(urlparse(url).query)
+                        stock_type = params["STOCK_TYPE"][0]
+                        self.calls.append(stock_type)
+                        assert params["COMPANY_STATUS"] == ["2,4,5,7,8"]
+                        code = "120000" if stock_type == "1" else "340000"
+                        row = mainboard_row(code)
+                        row["STOCK_TYPE"] = stock_type
+                        return HttpResponse(
+                            200,
+                            "application/json",
+                            mainboard_page(1, [row], count=1),
+                            datetime.fromisoformat("2026-10-15T10:01:00+08:00"),
+                        )
+
+                transport = Current()
+                lanes = ProviderLanes()
+                source = acquire_sse_current_lists(
+                    UniverseRequest("2026-10-15", FROZEN.isoformat()),
+                    research_now=FROZEN,
+                    transport=transport,
+                    lanes=lanes,
+                    policy=ProviderLanePolicy(budget, 1),
+                    max_pages=2,
+                )
+                self.assertEqual(transport.calls, expected_calls)
+                self.assertTrue(lanes.is_authoritative(source.lane_result))
+                self.assertEqual(len(source.lane_result.attempts), len(expected_calls))
+                self.assertEqual(source.reported_count, expected_count)
+                self.assertEqual(len(source.records), len(expected_calls))
+                self.assertEqual(source.pages_complete, budget == 2)
+                self.assertEqual(source.source_result, "partial")
+                self.assertEqual(
+                    source.to_public_dict()["source_scope"],
+                    "SSE_CURRENT_MAINBOARD_AND_STAR",
+                )
+                self.assertFalse(source.to_public_dict()["membership_proven"])
+                self.assertTrue(all(r.available_at is None for r in source.records))
+                if budget == 1:
+                    self.assertIn(
+                        "actual_attempt_budget_exhausted", source.limitation_codes
+                    )
+                    self.assertIsNone(source.pages_expected)
+
+    def test_current_collection_page_ceiling_is_shared_across_both_partitions(
+        self,
+    ) -> None:
+        class Current:
+            calls: list[str] = []
+
+            def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                stock = parse_qs(urlparse(url).query)["STOCK_TYPE"][0]
+                self.calls.append(stock)
+                row = mainboard_row("120000")
+                return HttpResponse(
+                    200,
+                    "application/json",
+                    mainboard_page(1, [row], count=1),
+                    datetime.fromisoformat("2026-10-15T10:01:00+08:00"),
+                )
+
+        transport = Current()
+        source = acquire_sse_current_lists(
+            UniverseRequest("2026-10-15", FROZEN.isoformat()),
+            research_now=FROZEN,
+            transport=transport,
+            lanes=ProviderLanes(),
+            policy=ProviderLanePolicy(4, 1),
+            max_pages=1,
+        )
+        self.assertEqual(transport.calls, ["1"])
+        self.assertEqual(len(source.lane_result.attempts), 1)
+        self.assertEqual(len(source.records), 1)
+        self.assertIsNone(source.reported_count)
+        self.assertIn("page_budget_exhausted", source.limitation_codes)
+
+    def test_current_collection_retry_spends_shared_budget_before_star(self) -> None:
+        class Limited:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                stock = parse_qs(urlparse(url).query)["STOCK_TYPE"][0]
+                self.calls.append(stock)
+                body = mainboard_page(1, [mainboard_row("120000")], count=1)
+                return HttpResponse(
+                    429 if len(self.calls) == 1 else 200,
+                    "application/json",
+                    body,
+                    datetime.fromisoformat("2026-10-15T10:01:00+08:00"),
+                )
+
+        transport = Limited()
+        source = acquire_sse_current_lists(
+            UniverseRequest("2026-10-15", FROZEN.isoformat()),
+            research_now=FROZEN,
+            transport=transport,
+            lanes=ProviderLanes(),
+            policy=ProviderLanePolicy(2, 1, rate_limit_backoffs=(0.0,)),
+            max_pages=2,
+        )
+        self.assertEqual(transport.calls, ["1", "1"])
+        self.assertEqual(
+            [a.state for a in source.lane_result.attempts], ["failed", "succeeded"]
+        )
+        self.assertEqual(len(source.records), 1)
+        self.assertIsNone(source.reported_count)
+        self.assertIn("actual_attempt_budget_exhausted", source.limitation_codes)
+
+    def test_bad_mainboard_partition_does_not_erase_star_observation(self) -> None:
+        class OneBad:
+            def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                stock = parse_qs(urlparse(url).query)["STOCK_TYPE"][0]
+                row = mainboard_row("340000")
+                row["STOCK_TYPE"] = "8"
+                body = b"{}" if stock == "1" else mainboard_page(1, [row], count=1)
+                return HttpResponse(
+                    200,
+                    "application/json",
+                    body,
+                    datetime.fromisoformat("2026-10-15T10:01:00+08:00"),
+                )
+
+        source = acquire_sse_current_lists(
+            UniverseRequest("2026-10-15", FROZEN.isoformat()),
+            research_now=FROZEN,
+            transport=OneBad(),
+            lanes=ProviderLanes(),
+            policy=ProviderLanePolicy(2, 1),
+            max_pages=2,
+        )
+        self.assertEqual([r.code for r in source.records], ["340000"])
+        self.assertEqual(len(source.lane_result.attempts), 2)
+        self.assertIsNone(source.reported_count)
+        self.assertFalse(source.pages_complete)
+        self.assertEqual(source.source_result, "partial")
 
 
 if __name__ == "__main__":
