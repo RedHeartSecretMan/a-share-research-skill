@@ -16,7 +16,13 @@ from typing import Literal, Protocol, cast
 from unicodedata import category
 from urllib.parse import urlencode
 
-from .identity_sources import MAX_RESPONSE_BYTES, HttpResponse, UrlLibTransport
+from ._universe_http import is_permission_denied
+from .identity_sources import (
+    MAX_RESPONSE_BYTES,
+    HttpResponse,
+    TransportError,
+    UrlLibTransport,
+)
 from .provider_lane import (
     ProductionInvocationAdapter,
     ProviderInvocation,
@@ -411,17 +417,26 @@ class _BsePages:
                 "User-Agent": "a-share-research-skill/1",
             }
             body = query.encoded_body()
-            response = (
-                cast(UrlLibTransport, transport).post_with_timeout(
-                    query.endpoint, headers, body, self.timeout_seconds
-                )
-                if owned_transport
-                else invocation.call(
-                    ProductionInvocationAdapter(
-                        partial(transport.post, query.endpoint, headers, body)
+            try:
+                response = (
+                    cast(UrlLibTransport, transport).post_with_timeout(
+                        query.endpoint, headers, body, self.timeout_seconds
+                    )
+                    if owned_transport
+                    else invocation.call(
+                        ProductionInvocationAdapter(
+                            partial(transport.post, query.endpoint, headers, body)
+                        )
                     )
                 )
-            )
+            except TransportError as error:
+                with self.lock:
+                    self.failure = (
+                        "source_access_blocked"
+                        if is_permission_denied(error)
+                        else "current_list_unavailable"
+                    )
+                raise
             try:
                 parsed = _parse_bse_page(
                     response, page=number, membership_date=self.membership_date

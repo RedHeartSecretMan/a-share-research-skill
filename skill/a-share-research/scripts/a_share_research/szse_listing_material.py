@@ -19,11 +19,11 @@ from threading import Lock
 from time import monotonic
 from typing import Protocol, cast
 from unicodedata import category
-from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from .content_contract import ContentHttpTransport
+from ._universe_http import is_permission_denied
 from .disclosure_sources import SzseAnnouncementOperation
 from .identity_sources import (
     MAX_RESPONSE_BYTES,
@@ -370,8 +370,7 @@ class _ListingMaterial:
         except TransportError as error:
             code = (
                 "source_access_blocked"
-                if isinstance(error.__cause__, HTTPError)
-                and error.__cause__.code in {401, 403}
+                if is_permission_denied(error)
                 else "listing_material_unavailable"
             )
             with self.lock:
@@ -644,8 +643,7 @@ class _PublishedListing:
             with self.lock:
                 self.failure = (
                     "source_access_blocked"
-                    if isinstance(error.__cause__, HTTPError)
-                    and error.__cause__.code in {401, 403}
+                    if is_permission_denied(error)
                     else "listing_index_unavailable"
                 )
             raise

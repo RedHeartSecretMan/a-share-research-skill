@@ -4,6 +4,12 @@
 
 调用者传入已冻结的 `UniverseRequest`、aware `research_now`、同一 `ProviderLanes` 和三个显式有限的 `ProviderLanePolicy`。每组的 page ceiling 取其 actual-attempt ceiling；retry 和 redirect 继续消耗 #119 的同一预算，没有附加的隐式配额。返回值是已有 SSE/SZSE/BSE acquisition 类型的固定顺序 tuple，没有第二个 Universe 或公共研究结果模型。
 
+## 候选版本的安装闭包
+
+本分支的 `baostock==0.9.4` 与 `pypdf==6.10.2` 是已获准的 v0.4.0 核心候选依赖，用于该目标版本的默认 copied-installed production adapter 验证；只有随被接受的 v0.4.0 候选进入相应版本包，不改变已发布 v0.3.0 包、main 或旧正式 operation 分母。ADR-0018 对已发布版本运行闭包的规则继续适用；这里不为其他候选或实验 operation 提供默认安装入口，也不新增 public operation 或提前授予发布资格。
+
+安装保持精确、唯一的最低实际闭包：复用已有 `pandas==3.0.5`，SDK 仅使用已核验的 `next/get_row_data` 路径，不为未使用的 `get_data/append` 降级依赖；pypdf 在 Python 3.12 无必需新增传递依赖。installation health 继续检查原有 mootdx 闭包及旧 operation 加载，并检查这两项候选软件的文件、版本和 module 加载。health 仅证明本地安装状态，不声明来源可访问、数据资格、BSE 覆盖或 #122 已验收。
+
 `CurrentSourceTransports` 是外部传输 seam。测试为三个来源全部注入同步单次 fake；`None` 选择对应来源拥有并绑定 invocation 的 urllib。传输配置和请求在任何采集前统一验证，不能先执行前两个来源，再因第三个 unowned urllib 被拒而留下配置错误的部分操作。
 
 ## SSE 同组预算

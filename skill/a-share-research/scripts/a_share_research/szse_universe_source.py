@@ -18,11 +18,14 @@ from typing import Protocol, cast
 from unicodedata import category
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from ._universe_http import is_permission_denied
+
 from .identity_sources import (
     MAX_RESPONSE_BYTES,
     HttpResponse,
     HttpTransport,
     SzseStockListOperation,
+    TransportError,
     UrlLibTransport,
 )
 from .provider_lane import (
@@ -388,13 +391,24 @@ class _Pages:
             }
             # Injected transports promise one synchronous call, without retry or
             # redirect. The owned urllib transport counts each actual leaf itself.
-            response = (
-                transport.get(url, headers)
-                if owned_transport
-                else invocation.call(
-                    ProductionInvocationAdapter(partial(transport.get, url, headers))
+            try:
+                response = (
+                    transport.get(url, headers)
+                    if owned_transport
+                    else invocation.call(
+                        ProductionInvocationAdapter(
+                            partial(transport.get, url, headers)
+                        )
+                    )
                 )
-            )
+            except TransportError as error:
+                with self.lock:
+                    self.failure = (
+                        "source_access_blocked"
+                        if is_permission_denied(error)
+                        else "current_list_unavailable"
+                    )
+                raise
             try:
                 parsed = _parse(
                     response, page=number, membership_date=self.membership_date

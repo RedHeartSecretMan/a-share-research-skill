@@ -19,6 +19,8 @@ from unicodedata import category
 from urllib.parse import urlencode
 from typing import Protocol, cast
 
+from ._universe_http import is_permission_denied
+
 from .identity_sources import (
     MAX_RESPONSE_BYTES,
     HttpResponse,
@@ -113,17 +115,24 @@ class _PointTransport:
         # The accepted urllib transport counts each physical request/redirect.
         # Injected transports promise one leaf call without hidden retries.
         transport = self.transport
-        response = (
-            UrlLibTransport(provider_invocation=self.invocation).get_with_timeout(
-                url, headers, self.timeout_seconds
-            )
-            if transport is None
-            else self.invocation.call(
-                ProductionInvocationAdapter(
-                    partial(self._get_one, transport, url, headers)
+        try:
+            response = (
+                UrlLibTransport(provider_invocation=self.invocation).get_with_timeout(
+                    url, headers, self.timeout_seconds
+                )
+                if transport is None
+                else self.invocation.call(
+                    ProductionInvocationAdapter(
+                        partial(self._get_one, transport, url, headers)
+                    )
                 )
             )
-        )
+        except TransportError as error:
+            if is_permission_denied(error):
+                raise TransportError(
+                    "source_access_blocked", "Source access is blocked."
+                ) from error
+            raise
         if response.status in {401, 403}:
             raise TransportError("source_access_blocked", "Source access is blocked.")
         if len(response.body) > MAX_RESPONSE_BYTES:

@@ -9,7 +9,6 @@ from functools import partial
 from html.parser import HTMLParser
 from threading import Lock
 from typing import Protocol, cast
-from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 from .identity_sources import (
@@ -18,6 +17,7 @@ from .identity_sources import (
     TransportError,
     UrlLibTransport,
 )
+from ._universe_http import is_permission_denied
 from .provider_lane import (
     ProductionInvocationAdapter,
     ProviderInvocation,
@@ -247,8 +247,7 @@ class _Notice:
             with self.lock:
                 self.failure = (
                     "source_access_blocked"
-                    if isinstance(error.__cause__, HTTPError)
-                    and error.__cause__.code in {401, 403}
+                    if is_permission_denied(error)
                     else "listing_notice_unavailable"
                 )
             raise

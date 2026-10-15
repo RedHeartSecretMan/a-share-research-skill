@@ -73,6 +73,26 @@ class CurrentSourceTransports:
     bse: BsePostTransport | None = None
 
 
+def _checked_source_transports(
+    policies: CurrentSourcePolicies,
+    transports: CurrentSourceTransports | None,
+) -> CurrentSourceTransports:
+    if type(policies) is not CurrentSourcePolicies or any(
+        type(policy) is not ProviderLanePolicy
+        for policy in (policies.sse, policies.szse, policies.bse)
+    ):
+        raise TypeError("The source policies must use finite provider lane policies.")
+    if transports is not None and type(transports) is not CurrentSourceTransports:
+        raise TypeError("The source transports must use the fixed source seam.")
+    selected = transports if transports is not None else CurrentSourceTransports()
+    if any(
+        isinstance(transport, UrlLibTransport)
+        for transport in (selected.sse, selected.szse, selected.bse)
+    ):
+        raise TypeError("Each source must own its counted urllib transport.")
+    return selected
+
+
 _Acquisition = SseListAcquisition | CurrentListAcquisition | BseCurrentListAcquisition
 
 
@@ -178,19 +198,7 @@ def create_default_current_universe_adapters(
     is invented when #110 rejects an incomplete list. Current rows' unknown
     effective/availability versions remain unqualified, even on today's request.
     """
-    if type(policies) is not CurrentSourcePolicies or any(
-        type(policy) is not ProviderLanePolicy
-        for policy in (policies.sse, policies.szse, policies.bse)
-    ):
-        raise TypeError("The source policies must use finite provider lane policies.")
-    if transports is not None and type(transports) is not CurrentSourceTransports:
-        raise TypeError("The source transports must use the fixed source seam.")
-    selected = transports if transports is not None else CurrentSourceTransports()
-    if any(
-        isinstance(transport, UrlLibTransport)
-        for transport in (selected.sse, selected.szse, selected.bse)
-    ):
-        raise TypeError("Each source must own its counted urllib transport.")
+    selected = _checked_source_transports(policies, transports)
     lists = tuple(
         _CurrentListAdapter(
             exchange,
@@ -247,22 +255,8 @@ def acquire_default_current_sources(
     remain source counts; None stays unknown and does not become expected zero.
     """
     prepared = prepare_universe_request(request, research_now=research_now)
-    if type(policies) is not CurrentSourcePolicies or any(
-        type(policy) is not ProviderLanePolicy
-        for policy in (policies.sse, policies.szse, policies.bse)
-    ):
-        raise TypeError(
-            "The current-source policies must use finite provider lane policies."
-        )
-    if transports is not None and type(transports) is not CurrentSourceTransports:
-        raise TypeError("The current-source transports must use the fixed source seam.")
     detached = UniverseRequest(prepared.screen_date, prepared.information_cutoff)
-    selected = transports if transports is not None else CurrentSourceTransports()
-    if any(
-        isinstance(transport, UrlLibTransport)
-        for transport in (selected.sse, selected.szse, selected.bse)
-    ):
-        raise TypeError("Each source must own its counted urllib transport.")
+    selected = _checked_source_transports(policies, transports)
     sse = acquire_sse_current_lists(
         detached,
         research_now=research_now,

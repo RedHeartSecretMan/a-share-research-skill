@@ -11,6 +11,8 @@ from pathlib import Path
 from textwrap import dedent
 from threading import Event
 from time import monotonic, sleep
+from unittest.mock import patch
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 
 from tests.skill_imports import add_skill_scripts_to_path
@@ -146,6 +148,151 @@ class BseRawFixture:
 
 
 class CurrentSourceAssemblyTests(unittest.TestCase):
+    def test_identity_and_mapping_neighbors_preserve_default_permission_state(
+        self,
+    ) -> None:
+        from a_share_research.bse_code_mapping_source import acquire_bse_code_mapping
+        from a_share_research.universe_input import ExchangeListRecord
+        from a_share_research.universe_sources import (
+            create_default_current_universe_adapters,
+        )
+
+        calls = []
+
+        class Opener:
+            def open(self, request, *, timeout):
+                assert urlparse(request.full_url).netloc in {
+                    "query.sse.com.cn",
+                    "www.szse.cn",
+                    "www.bse.cn",
+                }
+                calls.append(request.full_url)
+                raise HTTPError(
+                    request.full_url, 403, "private-neighbor-detail", {}, None
+                )
+
+        lanes = ProviderLanes()
+        request = UniverseRequest("2026-10-15", FROZEN.isoformat())
+        owners = create_default_current_universe_adapters(
+            research_now=FROZEN,
+            lanes=lanes,
+            policies=CurrentSourcePolicies(
+                ProviderLanePolicy(1, 1),
+                ProviderLanePolicy(1, 1),
+                ProviderLanePolicy(1, 1),
+            ),
+        )
+        with patch(
+            "a_share_research.identity_sources.build_opener", return_value=Opener()
+        ):
+            identities = []
+            for owner in owners.identity_adapters:
+                listing = ExchangeListRecord(
+                    owner.exchange,
+                    "120000",
+                    "合成身份",
+                    "A_SHARE",
+                    "2026-10-15",
+                    "2026-10-15T09:00:00+08:00",
+                    FROZEN.isoformat(),
+                    "fixture-list:expected",
+                )
+                identities.append(owner.resolve(request, (listing,), 1))
+            mapping = acquire_bse_code_mapping(
+                request,
+                research_now=FROZEN,
+                transport=None,
+                lanes=lanes,
+                policy=ProviderLanePolicy(1, 1),
+            )
+        self.assertEqual(
+            [outcome.source_result for outcome in identities],
+            ["credential_blocked"] * 3,
+        )
+        self.assertEqual(mapping.source_result, "credential_blocked")
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(mapping.lane_result.attempts), 1)
+        self.assertNotIn(
+            "private-neighbor-detail", json.dumps(mapping.to_public_dict())
+        )
+
+    def test_default_urllib_permission_errors_keep_all_source_states_and_attempts(
+        self,
+    ) -> None:
+        from a_share_research.universe_sources import acquire_default_current_universe
+
+        for status in (401, 403, 503):
+            with self.subTest(status=status):
+                calls = []
+
+                class Opener:
+                    def open(self, request, *, timeout):
+                        domain = urlparse(request.full_url).netloc
+                        assert domain in {
+                            "query.sse.com.cn",
+                            "www.szse.cn",
+                            "www.bse.cn",
+                        }
+                        calls.append(domain)
+                        raise HTTPError(
+                            request.full_url,
+                            status,
+                            "private-provider-detail",
+                            {},
+                            None,
+                        )
+
+                lanes = ProviderLanes()
+                # Atomic external urllib seam, not an HttpResponse shortcut:
+                # execute each owned production transport's exception route.
+                with patch(
+                    "a_share_research.identity_sources.build_opener",
+                    return_value=Opener(),
+                ):
+                    result = acquire_default_current_universe(
+                        UniverseRequest("2026-10-15", FROZEN.isoformat()),
+                        research_now=FROZEN,
+                        lanes=lanes,
+                        policies=CurrentSourcePolicies(
+                            ProviderLanePolicy(2, 1),
+                            ProviderLanePolicy(1, 1),
+                            ProviderLanePolicy(1, 1),
+                        ),
+                    )
+                expected = (
+                    "credential_blocked" if status in (401, 403) else "unavailable"
+                )
+                self.assertEqual(
+                    [source.source_result for source in result.source_acquisitions],
+                    [expected] * 3,
+                )
+                self.assertTrue(
+                    all(
+                        lanes.is_authoritative(source.lane_result)
+                        for source in result.source_acquisitions
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        source.lane_result.attempts
+                        for source in result.source_acquisitions
+                    )
+                )
+                self.assertEqual(
+                    len(calls),
+                    sum(
+                        len(source.lane_result.attempts)
+                        for source in result.source_acquisitions
+                    ),
+                )
+                self.assertTrue(
+                    all(part.expected is None for part in result.universe.partitions)
+                )
+                self.assertFalse(result.universe.full_a_share_universe)
+                self.assertNotIn(
+                    "private-provider-detail", json.dumps(result.to_public_dict())
+                )
+
     def test_default_assembly_runs_three_real_parsers_without_prefilled_universe(
         self,
     ) -> None:

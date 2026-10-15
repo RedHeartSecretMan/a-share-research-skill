@@ -22,6 +22,7 @@ from .identity_sources import (
     TransportError,
     UrlLibTransport,
 )
+from ._universe_http import is_permission_denied
 from .provider_lane import (
     ProductionInvocationAdapter,
     ProviderInvocation,
@@ -336,6 +337,8 @@ class _MappingDocument:
                 self.failure = (
                     error.code
                     if isinstance(error, _MappingFailure)
+                    else "source_access_blocked"
+                    if is_permission_denied(error)
                     else "mapping_transport_unavailable"
                 )
             raise
