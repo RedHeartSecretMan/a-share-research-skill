@@ -33,6 +33,11 @@ from .sse_universe_source import (
     SseListAcquisition,
     acquire_sse_current_lists,
 )
+from .sse_listing_notice import (
+    SseListingNoticeAcquisition,
+    SseListingNoticeAdapter,
+    SseListingNoticeTarget,
+)
 from .szse_universe_source import (
     CurrentListAcquisition,
     SzseCurrentIdentityAdapter,
@@ -291,7 +296,7 @@ class UniverseAcquisition:
 
     universe: AShareUniverse
     source_acquisitions: tuple[
-        SseListAcquisition,
+        SseListAcquisition | SseListingNoticeAcquisition,
         CurrentListAcquisition | SzseListingMaterialAcquisition,
         BseCurrentListAcquisition,
     ]
@@ -337,6 +342,8 @@ def acquire_default_universe(
     lanes: ProviderLanes,
     policies: CurrentSourcePolicies,
     transports: CurrentSourceTransports | None = None,
+    sse_listing_event: SseListingNoticeTarget | None = None,
+    sse_listing_transport: HttpTransport | None = None,
     szse_listing_event: SzseListingEventTarget | None = None,
     listing_transport: ContentHttpTransport | None = None,
 ) -> UniverseAcquisition:
@@ -355,9 +362,20 @@ def acquire_default_universe(
         policies=policies,
         transports=transports,
     )
-    list_owners: tuple[_CurrentListAdapter | SzseListingEventAdapter, ...] = (
-        owners.exchange_list_adapters
-    )
+    list_owners: tuple[
+        _CurrentListAdapter | SzseListingEventAdapter | SseListingNoticeAdapter, ...
+    ] = owners.exchange_list_adapters
+    if sse_listing_event is not None:
+        sse_event_owner = SseListingNoticeAdapter(
+            target=sse_listing_event,
+            research_now=research_now,
+            transport=sse_listing_transport,
+            lanes=lanes,
+            policy=policies.sse,
+        )
+        list_owners = (sse_event_owner, list_owners[1], list_owners[2])
+    elif sse_listing_transport is not None:
+        raise TypeError("An SSE listing transport requires its exact source target.")
     if szse_listing_event is not None:
         if type(szse_listing_event) is not SzseListingEventTarget:
             raise TypeError("The listing event must use an exact source target.")
@@ -384,7 +402,7 @@ def acquire_default_universe(
         raise RuntimeError("A current-source owner did not return its acquisition.")
     typed_sources = cast(
         tuple[
-            SseListAcquisition,
+            SseListAcquisition | SseListingNoticeAcquisition,
             CurrentListAcquisition | SzseListingMaterialAcquisition,
             BseCurrentListAcquisition,
         ],
