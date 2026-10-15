@@ -360,7 +360,7 @@ def _json_response(response: HttpResponse, *, bse: bool = False) -> Any:
     try:
         text = response.body.decode("utf-8-sig")
         decoder = json.JSONDecoder(
-            parse_float=Decimal,
+            parse_float=_decimal,
             parse_constant=_reject_constant,
             object_pairs_hook=_pairs,
         )

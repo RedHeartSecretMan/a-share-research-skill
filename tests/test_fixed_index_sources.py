@@ -8,6 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 from dataclasses import asdict
+from decimal import InvalidOperation, localcontext
 from email.message import Message
 from unittest.mock import patch
 from urllib.response import addinfourl
@@ -951,6 +952,100 @@ print(json.dumps({'coverage':outcome.coverage,'calls':transport.calls,'count':le
         self.assertEqual(
             [row["observed_at"] for row in values], ["2026-10-14T09:59:55+08:00"] * 4
         )
+
+    def test_unrepresentable_json_decimal_keeps_other_indices_with_bounded_error(
+        self,
+    ) -> None:
+        identities = ("SSE:000001", "SZSE:399001", "SZSE:399006", "BSE:899050")
+        for target in ("SSE:000001", "SZSE:399001", "BSE:899050"):
+            for literal in (
+                b"1e999999999999999999999999",
+                b"1e-999999999999999999999999",
+                b"1." + b"2" * 200,
+                b"9" * 5000,
+            ):
+                for trapped in (True, False):
+
+                    class HugeDecimal(IndexTransport):
+                        def get(
+                            self, url: str, headers: dict[str, str]
+                        ) -> HttpResponse:
+                            response = super().get(url, headers)
+                            parsed = urlsplit(url)
+                            if (
+                                target == "SSE:000001"
+                                and parsed.path == "/v1/sh1/snap/000001"
+                            ):
+                                response = replace(
+                                    response,
+                                    body=response.body.replace(b"101.25", literal),
+                                )
+                            elif (
+                                target == "SZSE:399001"
+                                and parsed.path == "/api/market/ssjjhq/getTimeData"
+                                and parse_qs(parsed.query)["code"] == ["399001"]
+                            ):
+                                response = replace(
+                                    response,
+                                    body=response.body.replace(
+                                        b'"amount": 100000.0', b'"amount": ' + literal
+                                    ),
+                                )
+                            elif (
+                                target == "BSE:899050"
+                                and parsed.path == "/neeqRealController/getRealBZ50.do"
+                            ):
+                                response = replace(
+                                    response,
+                                    body=response.body.replace(
+                                        b'"SSZS": 101.25', b'"SSZS": ' + literal
+                                    ),
+                                )
+                            return response
+
+                    with (
+                        self.subTest(
+                            target=target, literal=literal[:30], trapped=trapped
+                        ),
+                        localcontext() as numeric_context,
+                    ):
+                        numeric_context.traps[InvalidOperation] = trapped
+                        outcome = ProductionFixedIndexAdapter(
+                            HugeDecimal(),
+                            session_adapter=DeterministicMarketSessionAdapter(
+                                calendars(), clock=lambda: NOW
+                            ),
+                            clock=lambda: NOW,
+                        ).execute(
+                            FixedIndexOperationRequest(
+                                MarketSessionOperationRequest("2026-10-14", BINDINGS),
+                                purpose="current_session",
+                            ),
+                            5,
+                        )
+                        self.assertEqual(outcome.coverage, "partial")
+                        self.assertEqual(
+                            [
+                                row["payload"]["observation"]["canonical_id"]
+                                for row in outcome.to_dict()["observations"]
+                            ],
+                            [identity for identity in identities if identity != target],
+                        )
+                        self.assertEqual(outcome.diagnostics["index_requests"], 4)
+                        projected = json.dumps(outcome.to_dict())
+                        self.assertNotIn(literal.decode(), projected)
+                        self.assertNotIn("InvalidOperation", projected)
+                        self.assertTrue(
+                            all(
+                                error["code"]
+                                in (
+                                    "index_identity_missing",
+                                    "index_source_payload_invalid",
+                                    "index_source_value_invalid",
+                                )
+                                for error in outcome.source_errors
+                            )
+                        )
 
 
 if __name__ == "__main__":
