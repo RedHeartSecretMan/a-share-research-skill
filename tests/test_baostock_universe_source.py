@@ -3,6 +3,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from textwrap import dedent
 import unittest
 from threading import Event
 from time import monotonic, sleep
@@ -188,20 +194,56 @@ class BaostockDatedRosterFailureTests(unittest.TestCase):
 
 class DefaultSdkHealthTests(unittest.TestCase):
     def test_missing_bundled_sdk_is_unavailable_without_any_source_invocation(self):
-        lanes = ProviderLanes()
-        result = acquire_baostock_dated_roster(
-            UniverseRequest("2026-10-14", "2026-10-14T23:59:59+08:00"),
-            research_now=FROZEN,
-            lanes=lanes,
-            policy=ProviderLanePolicy(3, 1),
-            max_pages=1,
-        )
-        self.assertFalse(result.pages_complete)
-        self.assertEqual(result.records, ())
-        self.assertEqual(result.lane_result.attempts, ())
-        self.assertEqual(result.source_result, "unavailable")
-        self.assertIn("sdk_runtime_unavailable", result.limitation_codes)
-        self.assertTrue(lanes.is_authoritative(result.lane_result))
+        # Deliberately declare an unavailable runtime in an independent artifact.
+        # Installing the repository's normal runtime must never turn this test
+        # into a live default SDK request.
+        root = Path(__file__).resolve().parents[1] / "skill/a-share-research"
+        script = dedent("""
+            import json,sys
+            from datetime import datetime
+            sys.path.insert(0,sys.argv[1])
+            from a_share_research.baostock_universe_source import acquire_baostock_dated_roster
+            from a_share_research.provider_lane import ProviderLanePolicy,ProviderLanes
+            from a_share_research.universe_input import UniverseRequest
+            lanes=ProviderLanes()
+            result=acquire_baostock_dated_roster(UniverseRequest('2026-10-14','2026-10-14T23:59:59+08:00'),research_now=datetime.fromisoformat('2026-10-15T10:00:00+08:00'),lanes=lanes,policy=ProviderLanePolicy(3,1),max_pages=1)
+            assert not result.pages_complete and result.records==()
+            assert result.lane_result.attempts==()
+            assert result.source_result=='unavailable'
+            assert 'sdk_runtime_unavailable' in result.limitation_codes
+            assert lanes.is_authoritative(result.lane_result)
+            print(json.dumps({'source_result':result.source_result,'attempts':0}))
+        """)
+        with tempfile.TemporaryDirectory(prefix="asr-122-missing-sdk-") as temporary:
+            installed = Path(temporary) / "a-share-research"
+            shutil.copytree(
+                root,
+                installed,
+                ignore=shutil.ignore_patterns(
+                    ".runtime", ".state", "__pycache__", "*.pyc"
+                ),
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", script, str(installed / "scripts")],
+                cwd=temporary,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+                close_fds=True,
+                env={
+                    "PATH": "/usr/bin:/bin",
+                    "LANG": "en_US.UTF-8",
+                    "PYTHONUTF8": "1",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "TMPDIR": temporary,
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(result.stdout),
+                {"source_result": "unavailable", "attempts": 0},
+            )
 
 
 class BaostockFrozenSourceTests(unittest.TestCase):
