@@ -102,7 +102,12 @@ class BaostockSdkTransport:
             return
         try:
             if process.poll() is None:
-                process.kill()
+                try:
+                    process.kill()
+                except OSError:
+                    # A failed termination request proves no process exit. Keep
+                    # the owning worker/lane occupied until wait observes exit.
+                    pass
             # Only observed process exit releases the owning lane. A failed kill
             # cannot be treated as quiescence; the outer lane retains its poison.
             process.wait()

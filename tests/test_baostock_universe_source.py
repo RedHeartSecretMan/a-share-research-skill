@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
+import os
 import unittest
 from threading import Event
 from time import monotonic, sleep
+from unittest.mock import patch
 from datetime import datetime
 
 from tests.skill_imports import add_skill_scripts_to_path
@@ -314,6 +317,64 @@ class OwnedSdkTransportTests(unittest.TestCase):
                 transport=transport,
             )
         self.assertIsNone(transport.process)
+
+
+class SdkWorkerExitTests(unittest.TestCase):
+    def test_failed_worker_kill_cannot_attest_quiescence_before_observed_exit(
+        self,
+    ) -> None:
+        release = Event()
+        reader, writer = os.pipe()
+        os.write(writer, b'{"kind":"ready"}\n')
+        os.close(writer)
+
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+                self.stdout = os.fdopen(reader, "rb", buffering=0)
+                self.waited = False
+
+            def poll(self):
+                return 0 if release.is_set() else None
+
+            def kill(self):
+                raise OSError("synthetic worker termination failure")
+
+            def wait(self):
+                release.wait(2)
+                self.waited = release.is_set()
+                return 0
+
+        process = FakeProcess()
+        lanes = ProviderLanes()
+        try:
+            with patch(
+                "a_share_research.baostock_sdk_transport.subprocess.Popen",
+                return_value=process,
+            ):
+                result = acquire_baostock_dated_roster(
+                    UniverseRequest("2026-10-14", "2026-10-14T23:59:59+08:00"),
+                    research_now=FROZEN,
+                    lanes=lanes,
+                    policy=ProviderLanePolicy(3, 0.03, cancellation_grace_seconds=0),
+                    max_pages=1,
+                )
+                self.assertEqual(result.lane_result.status, "timed_out")
+                self.assertEqual(result.lane_result.quiescence.state, "poisoned")
+                self.assertFalse(process.waited)
+                self.assertFalse(process.stdout.closed)
+        finally:
+            release.set()
+            deadline = monotonic() + 1
+            while (
+                lanes.quiescence("baostock").state != "quiescent"
+                and monotonic() < deadline
+            ):
+                sleep(0.001)
+            if not process.stdout.closed:
+                process.stdout.close()
+        self.assertEqual(lanes.quiescence("baostock").state, "quiescent")
+        self.assertTrue(process.waited)
 
 
 if __name__ == "__main__":
