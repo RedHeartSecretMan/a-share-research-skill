@@ -280,7 +280,7 @@ class CurrentSourceAssemblyTests(unittest.TestCase):
             from a_share_research.identity_sources import HttpResponse
             from a_share_research.provider_lane import ProviderLanePolicy,ProviderLanes
             from a_share_research.universe_input import UniverseRequest
-            from a_share_research.universe_sources import CurrentSourcePolicies,CurrentSourceTransports,acquire_default_current_sources,acquire_default_current_universe
+            from a_share_research.universe_sources import CurrentSourcePolicies,CurrentSourceTransports,acquire_default_current_universe,create_default_current_universe_adapters
             frozen=datetime.fromisoformat('2026-10-15T10:00:00+08:00')
             retrieved=datetime.fromisoformat('2026-10-15T10:01:00+08:00')
             class SSE:
@@ -300,6 +300,10 @@ class CurrentSourceAssemblyTests(unittest.TestCase):
                     value={'content':[row],'number':0,'numberOfElements':1,'size':20,'sort':None,'totalPages':1,'totalElements':1,'firstPage':True,'lastPage':True}
                     return HttpResponse(200,'application/javascript',('fixture_callback('+json.dumps([value])+');').encode(),retrieved)
             lanes=ProviderLanes()
+            owners=create_default_current_universe_adapters(research_now=frozen,lanes=lanes,policies=CurrentSourcePolicies(ProviderLanePolicy(2,1),ProviderLanePolicy(1,1),ProviderLanePolicy(1,1)),transports=CurrentSourceTransports(SSE(),SZSE(),BSE()))
+            assert [owner.exchange for owner in owners.identity_adapters]==['SSE','SZSE','BSE']
+            empty=[owner.resolve(UniverseRequest('2026-10-15',frozen.isoformat()),(),1) for owner in owners.identity_adapters]
+            assert all(not outcome.attempted and outcome.source_result=='unavailable' for outcome in empty)
             acquisition=acquire_default_current_universe(UniverseRequest('2026-10-15',frozen.isoformat()),research_now=frozen,lanes=lanes,policies=CurrentSourcePolicies(ProviderLanePolicy(2,1),ProviderLanePolicy(1,1),ProviderLanePolicy(1,1)),transports=CurrentSourceTransports(SSE(),SZSE(),BSE()))
             outcomes=acquisition.source_acquisitions
             assert not acquisition.universe.full_a_share_universe
@@ -374,6 +378,109 @@ class CurrentSourceAssemblyTests(unittest.TestCase):
 
 
 class DefaultCurrentUniverseProjectionTests(unittest.TestCase):
+    def test_default_identity_owners_execute_real_parsers_with_bounded_expected_input(
+        self,
+    ) -> None:
+        from tests.test_sse_universe_source import SseFixtureTransport, identity_row
+        from a_share_research.universe_input import ExchangeListRecord
+        from a_share_research.universe_sources import (
+            create_default_current_universe_adapters,
+        )
+
+        # Identity seam only: these synthetic expected identities do not supply
+        # a complete Universe or qualify the current production list's dates.
+        sse = SseFixtureTransport({"120000": [identity_row("120000", "合成沪股")]})
+        szse, bse = SzseRawFixture(), BseRawFixture()
+        lanes = ProviderLanes()
+        owners = create_default_current_universe_adapters(
+            research_now=FROZEN,
+            lanes=lanes,
+            policies=CurrentSourcePolicies(
+                ProviderLanePolicy(2, 1),
+                ProviderLanePolicy(1, 1),
+                ProviderLanePolicy(1, 1),
+            ),
+            transports=CurrentSourceTransports(sse, szse, bse),
+        )
+        outcomes = []
+        for owner, code, name in zip(
+            owners.identity_adapters,
+            ("120000", "560000", "780000"),
+            ("合成沪股", "合成深股", "合成北股"),
+            strict=True,
+        ):
+            listing = ExchangeListRecord(
+                owner.exchange,
+                code,
+                name,
+                "A_SHARE",
+                "2026-10-15",
+                "2026-10-15T09:00:00+08:00",
+                RETRIEVED.isoformat(),
+                f"fixture-list:{owner.exchange}:{code}",
+            )
+            outcome = owner.resolve(
+                UniverseRequest("2026-10-15", FROZEN.isoformat()),
+                (listing,),
+                1,
+            )
+            outcomes.append(outcome)
+            source = owner.last_acquisition
+            self.assertTrue(lanes.is_authoritative(source.lane_result))
+            self.assertEqual(len(source.lane_result.attempts), 1)
+        self.assertEqual([outcome.expected_count for outcome in outcomes], [1, 1, 1])
+        self.assertEqual([len(outcome.records) for outcome in outcomes], [1, 1, 1])
+        self.assertTrue(all(outcome.attempted for outcome in outcomes))
+        self.assertTrue(
+            all(
+                row.available_at is None
+                for outcome in outcomes
+                for row in outcome.records
+            )
+        )
+        self.assertEqual((sse.calls, szse.calls, bse.calls), (["120000"], 1, 1))
+
+    def test_default_owners_are_driven_by_public_universe_module(self) -> None:
+        from a_share_research.a_share_universe import build_as_of_a_share_universe
+        from a_share_research.universe_sources import (
+            create_default_current_universe_adapters,
+        )
+
+        sse, szse, bse = SseRawFixture(), SzseRawFixture(), BseRawFixture()
+        lanes = ProviderLanes()
+        owners = create_default_current_universe_adapters(
+            research_now=FROZEN,
+            lanes=lanes,
+            policies=CurrentSourcePolicies(
+                ProviderLanePolicy(2, 1),
+                ProviderLanePolicy(1, 1),
+                ProviderLanePolicy(1, 1),
+            ),
+            transports=CurrentSourceTransports(sse, szse, bse),
+        )
+        self.assertEqual((sse.calls, szse.calls, bse.calls), ([], 0, 0))
+        self.assertEqual(
+            [owner.exchange for owner in owners.identity_adapters],
+            ["SSE", "SZSE", "BSE"],
+        )
+        universe = build_as_of_a_share_universe(
+            UniverseRequest("2026-10-15", FROZEN.isoformat()),
+            research_now=FROZEN,
+            exchange_list_adapters=owners.exchange_list_adapters,
+            identity_adapters=owners.identity_adapters,
+        )
+        self.assertEqual((sse.calls, szse.calls, bse.calls), (["1", "8"], 1, 1))
+        self.assertFalse(universe.full_a_share_universe)
+        self.assertTrue(all(p.expected is None for p in universe.partitions))
+        self.assertTrue(all(p.identity_outcome is None for p in universe.partitions))
+        sources = tuple(
+            owner.last_acquisition for owner in owners.exchange_list_adapters
+        )
+        self.assertEqual([len(source.records) for source in sources], [2, 1, 1])
+        self.assertTrue(
+            all(lanes.is_authoritative(source.lane_result) for source in sources)
+        )
+
     def test_real_source_counts_do_not_fill_unproved_ordinary_a_denominators(
         self,
     ) -> None:

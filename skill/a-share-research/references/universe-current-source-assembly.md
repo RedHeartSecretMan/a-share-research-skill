@@ -20,7 +20,7 @@
 
 ## #110 仍缺的输入
 
-这是默认**来源采集**装配，已接入下述诚实 partial 投影，仍不是具备正向时点成员记录的默认 `ExchangeListAdapter → #110` 装配。当前已核验来源行的 `membership_effective_at/available_at` 仍未知，来源声明总数与普通 A 股时点分母也未必相同。不能为调用 #110 而填入 retrieval、当前 basic 名称、零或当前声明数量。
+默认 `ExchangeListAdapter → #110` 装配已接入下述诚实 partial 投影，仍不具备正向时点成员记录。当前已核验来源行的 `membership_effective_at/available_at` 仍未知，来源声明总数与普通 A 股时点分母也未必相同。不能为调用 #110 而填入 retrieval、当前 basic 名称、零或当前声明数量。
 
 后续正向投影需要被选定方法实际字段、日期与范围依据，使 production normalizer 可以从来源生成合法 `ExchangeListOutcome`；随后由同一默认路径证明公开对账、正向排除和 unproven→unranked。已核验的 Baostock given-day 声明是逐日名录方向的正面依据，但AG 已观察真实字段、分页/session 和特定日期的 provider 枚举；普通 A 股类别、名字版本与 BSE 范围仍未闭合。这里不要求全历史都先实测、泛化 PIT 保证书或提前完成 #98。
 
@@ -28,7 +28,11 @@ copied-installed 当前默认采集测试使用合成原始 wire responses，实
 
 ## 诚实投影到 #110
 
-`acquire_default_current_universe` 在同一冻结请求下执行上述三个真实 parser，并把实际 attempted、source-result 和页数交给 #110 公共 Module。当前来源还未证明 membership effective/available 时点，因此 canonical list 不填造记录，expected 与 failed 通过 #110 的未知总量契约保留 `null`；source-reported count 和原有安全观察仍保留在 `source_acquisitions` 中。该路径验证真实默认装配和缺口投影，不宣称 #122 的有用时点化名单已完成。历史请求仍保留这三个当前来源的明确不支持状态。
+`create_default_current_universe_adapters` 不执行 I/O，返回固定三所 list 和 identity owners。#110 通过其公共 `ExchangeListAdapter.acquire` seam 驱动上述三个真实 parser，接收真实 attempted、source-result 和页数。已有 SSE 点身份、SZSE 和 BSE 批量身份 Adapters 同时装配；每个 list/identity execution 使用显式有限的 #119 policy，共享同一 provider group 的串行与 quiescence 规则。若将两个 execution 均运行，每组最多消耗两倍其 policy actual-attempt ceiling；不把 list 和 identity 的独立预算说成一次共同预算。
+
+`acquire_default_current_universe` 使用这些 owners 调用 #110，并返回不可变 Universe 和原有安全 `source_acquisitions`。当前来源还未证明 membership effective/available 时点，因此 canonical list 不填造记录，expected 与 failed 通过 #110 的未知总量契约保留 `null`。#110 对未闭合 list 不启动 identity，不制造无依据的身份请求。source-reported count 和安全观察继续保留；该路径不宣称 #122 的有用时点化名单已完成。历史请求仍保留这三个当前来源的明确不支持状态。
+
+AH 的 BSE quotation query 与 H 的本名录是不同来源形状。AH 两页 40 行、声明总量 350/18 页及 `hqjsrq/hqgxsj` 不能覆盖 H 的字段或数量；其已证明的第一行“数据更新时间”展示也不能赋予 membership effective/available 或普通 A 股类别。指定 `effective_date=today` 仍不能补齐这些字段。
 
 独立的 [Baostock 日期名册采集](baostock-dated-universe-source.md) 已实现给定日期查询与有限 SDK 分页。provider 名册含指数，当前仍不能为三所 canonical expected 分母补齐类别与公开时间证明，也不会作为未获资格的品牌 fallback。
 

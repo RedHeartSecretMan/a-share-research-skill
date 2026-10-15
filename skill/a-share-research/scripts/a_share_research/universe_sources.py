@@ -10,19 +10,33 @@ observations separately; it cannot promote an unqualified row into a member.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Protocol, cast
 
-from .a_share_universe import AShareUniverse, build_as_of_a_share_universe
+from .a_share_universe import (
+    AShareUniverse,
+    IdentityAdapter,
+    build_as_of_a_share_universe,
+)
 from .bse_universe_source import (
+    BseCurrentIdentityAdapter,
     BseCurrentListAcquisition,
     BsePostTransport,
     acquire_bse_current_list,
 )
 from .identity_sources import HttpTransport, UrlLibTransport
 from .provider_lane import ProviderLanePolicy, ProviderLanes
-from .sse_universe_source import SseListAcquisition, acquire_sse_current_lists
-from .szse_universe_source import CurrentListAcquisition, acquire_szse_current_list
+from .sse_universe_source import (
+    SseCurrentIdentityAdapter,
+    SseListAcquisition,
+    acquire_sse_current_lists,
+)
+from .szse_universe_source import (
+    CurrentListAcquisition,
+    SzseCurrentIdentityAdapter,
+    acquire_szse_current_list,
+)
 from .universe_input import (
     ExchangeListOutcome,
     UniverseRequest,
@@ -46,6 +60,164 @@ class CurrentSourceTransports:
     sse: HttpTransport | None = None
     szse: HttpTransport | None = None
     bse: BsePostTransport | None = None
+
+
+_Acquisition = SseListAcquisition | CurrentListAcquisition | BseCurrentListAcquisition
+
+
+class _RequestView(Protocol):
+    screen_date: str
+    information_cutoff: str
+
+
+class _CurrentListAdapter:
+    """One fixed exchange owner; raw acquisition remains separately auditable."""
+
+    def __init__(
+        self,
+        exchange: str,
+        *,
+        research_now: datetime,
+        lanes: ProviderLanes,
+        policy: ProviderLanePolicy,
+        transport: HttpTransport | BsePostTransport | None,
+    ) -> None:
+        self.exchange = exchange
+        self.operation_id = f"{exchange.lower()}_current_universe_list@1"
+        self._research_now = research_now
+        self._lanes = lanes
+        self._policy = policy
+        self._transport = transport
+        self._last_acquisition: _Acquisition | None = None
+
+    @property
+    def last_acquisition(self) -> _Acquisition | None:
+        return self._last_acquisition
+
+    def acquire(self, request: object, timeout_seconds: float) -> ExchangeListOutcome:
+        view = cast(_RequestView, request)
+        detached = UniverseRequest(view.screen_date, view.information_cutoff)
+        policy = replace(
+            self._policy,
+            timeout_seconds=min(self._policy.timeout_seconds, timeout_seconds),
+        )
+        source: _Acquisition
+        if self.exchange == "SSE":
+            source = acquire_sse_current_lists(
+                detached,
+                research_now=self._research_now,
+                lanes=self._lanes,
+                policy=policy,
+                max_pages=policy.actual_attempt_budget,
+                transport=cast(HttpTransport | None, self._transport),
+            )
+        elif self.exchange == "SZSE":
+            source = acquire_szse_current_list(
+                detached,
+                research_now=self._research_now,
+                lanes=self._lanes,
+                policy=policy,
+                max_pages=policy.actual_attempt_budget,
+                transport=cast(HttpTransport | None, self._transport),
+            )
+        else:
+            source = acquire_bse_current_list(
+                detached,
+                research_now=self._research_now,
+                lanes=self._lanes,
+                policy=policy,
+                max_pages=policy.actual_attempt_budget,
+                transport=cast(BsePostTransport | None, self._transport),
+            )
+        self._last_acquisition = source
+        # None of the current owners proves this factual version's membership
+        # effective/availability fields. Preserve its real rows and #119 evidence
+        # above; no source total can be promoted into an ordinary-A denominator.
+        return ExchangeListOutcome(
+            self.operation_id,
+            self.exchange,
+            source.membership_effective_date,
+            bool(source.lane_result.attempts),
+            source.source_result,
+            None,
+            source.pages_expected,
+            source.pages_received,
+            (),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentUniverseAdapters:
+    """Fixed source owners for #110; construction performs no source calls."""
+
+    exchange_list_adapters: tuple[_CurrentListAdapter, ...]
+    identity_adapters: tuple[IdentityAdapter, ...]
+
+
+def create_default_current_universe_adapters(
+    *,
+    research_now: datetime,
+    lanes: ProviderLanes,
+    policies: CurrentSourcePolicies,
+    transports: CurrentSourceTransports | None = None,
+) -> CurrentUniverseAdapters:
+    """Load three real list and identity owners, with explicit finite budgets.
+
+    Each list/identity execution uses its declared #119 budget. No identity call
+    is invented when #110 rejects an incomplete list. Current rows' unknown
+    effective/availability versions remain unqualified, even on today's request.
+    """
+    if type(policies) is not CurrentSourcePolicies or any(
+        type(policy) is not ProviderLanePolicy
+        for policy in (policies.sse, policies.szse, policies.bse)
+    ):
+        raise TypeError("The source policies must use finite provider lane policies.")
+    if transports is not None and type(transports) is not CurrentSourceTransports:
+        raise TypeError("The source transports must use the fixed source seam.")
+    selected = transports if transports is not None else CurrentSourceTransports()
+    if any(
+        isinstance(transport, UrlLibTransport)
+        for transport in (selected.sse, selected.szse, selected.bse)
+    ):
+        raise TypeError("Each source must own its counted urllib transport.")
+    lists = tuple(
+        _CurrentListAdapter(
+            exchange,
+            research_now=research_now,
+            lanes=lanes,
+            policy=policy,
+            transport=transport,
+        )
+        for exchange, policy, transport in (
+            ("SSE", policies.sse, selected.sse),
+            ("SZSE", policies.szse, selected.szse),
+            ("BSE", policies.bse, selected.bse),
+        )
+    )
+    identities: tuple[IdentityAdapter, ...] = (
+        SseCurrentIdentityAdapter(
+            research_now=research_now,
+            lanes=lanes,
+            policy=policies.sse,
+            transport=selected.sse,
+            max_securities=policies.sse.actual_attempt_budget,
+        ),
+        SzseCurrentIdentityAdapter(
+            research_now=research_now,
+            lanes=lanes,
+            policy=policies.szse,
+            transport=selected.szse,
+            max_pages=policies.szse.actual_attempt_budget,
+        ),
+        BseCurrentIdentityAdapter(
+            research_now=research_now,
+            lanes=lanes,
+            policy=policies.bse,
+            transport=selected.bse,
+            max_pages=policies.bse.actual_attempt_budget,
+        ),
+    )
+    return CurrentUniverseAdapters(lists, identities)
 
 
 def acquire_default_current_sources(
@@ -125,16 +297,6 @@ class CurrentUniverseAcquisition:
         }
 
 
-class _ListSnapshotAdapter:
-    def __init__(self, outcome: ExchangeListOutcome) -> None:
-        self.outcome = outcome
-        self.exchange = outcome.exchange
-        self.operation_id = outcome.operation_id
-
-    def acquire(self, request: object, timeout_seconds: float) -> ExchangeListOutcome:
-        return self.outcome
-
-
 def acquire_default_current_universe(
     request: UniverseRequest,
     *,
@@ -153,38 +315,23 @@ def acquire_default_current_universe(
     """
     prepared = prepare_universe_request(request, research_now=research_now)
     detached = UniverseRequest(prepared.screen_date, prepared.information_cutoff)
-    sources = acquire_default_current_sources(
-        detached,
+    owners = create_default_current_universe_adapters(
         research_now=research_now,
         lanes=lanes,
         policies=policies,
         transports=transports,
     )
-    typed_sources: tuple[
-        SseListAcquisition | CurrentListAcquisition | BseCurrentListAcquisition, ...
-    ] = sources
-    owners = []
-    for exchange, source in zip(("SSE", "SZSE", "BSE"), typed_sources, strict=True):
-        attempted = bool(source.lane_result.attempts)
-        source_result = source.source_result
-        # Every observed current row lacks a proved as-of version. Retain these
-        # source observations, but do not supply invented canonical list fields.
-        outcome = ExchangeListOutcome(
-            f"{exchange.lower()}_current_universe_list@1",
-            exchange,
-            prepared.screen_date,
-            attempted,
-            source_result,
-            None,
-            source.pages_expected,
-            source.pages_received,
-            (),
-        )
-        owners.append(_ListSnapshotAdapter(outcome))
     universe = build_as_of_a_share_universe(
         detached,
         research_now=research_now,
-        exchange_list_adapters=tuple(owners),
-        identity_adapters=(),
+        exchange_list_adapters=owners.exchange_list_adapters,
+        identity_adapters=owners.identity_adapters,
     )
-    return CurrentUniverseAcquisition(universe, sources)
+    sources = tuple(owner.last_acquisition for owner in owners.exchange_list_adapters)
+    if len(sources) != 3 or any(source is None for source in sources):
+        raise RuntimeError("A current-source owner did not return its acquisition.")
+    typed_sources = cast(
+        tuple[SseListAcquisition, CurrentListAcquisition, BseCurrentListAcquisition],
+        sources,
+    )
+    return CurrentUniverseAcquisition(universe, typed_sources)
