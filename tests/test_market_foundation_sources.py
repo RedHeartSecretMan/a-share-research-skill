@@ -296,9 +296,9 @@ class MarketFoundationSourceTests(unittest.TestCase):
                 [
                     {
                         "zbmc": "成交金额（亿元）",
-                        "gp": "7,527.37",
-                        "xz": "3,905.00",
-                        "cy": "3,622.37",
+                        "gp": "4,567.89",
+                        "xz": "1,234.56",
+                        "cy": "3,333.33",
                     }
                 ],
             ),
@@ -478,12 +478,12 @@ print(json.dumps({"result":result,"calls":calls,"outcomes":[outcome.to_dict() fo
 
     def test_szse_cdr_inclusive_turnover_and_echo_date_never_become_a_share_total(self):
         rows = [
-            {"zbmc": "成交量（亿）", "gp": "489.95", "xz": "335.26", "cy": "154.69"},
+            {"zbmc": "成交量（亿）", "gp": "4.25", "xz": "1.75", "cy": "2.50"},
             {
                 "zbmc": "成交金额（亿元）",
-                "gp": "7,527.37",
-                "xz": "3,905.00",
-                "cy": "3,622.37",
+                "gp": "4,567.89",
+                "xz": "1,234.56",
+                "cy": "3,333.33",
             },
         ]
         http = FixtureHttp(szse_report("scsj_gprdgk_after", "日度概况", rows))

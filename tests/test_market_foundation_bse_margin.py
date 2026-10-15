@@ -29,7 +29,10 @@ CHINA = timezone(timedelta(hours=8))
 
 
 def synthetic_summary(date: str = "2026-10-13") -> bytes:
-    # Production-shaped field/frame names from frozen H/I; all values synthetic.
+    # H/I define field/frame names and the aggregate identity. Monetary and
+    # quantity values are independent worked examples; clocks are synthetic.
+    created = int(datetime(2026, 10, 14, 9, 0, 4, tzinfo=CHINA).timestamp() * 1000)
+    effective = int(datetime(2026, 10, 13, 0, 30, 6, tzinfo=CHINA).timestamp() * 1000)
     row = {
         "rzmre": 102523,
         "rzye": 1205006,
@@ -46,9 +49,9 @@ def synthetic_summary(date: str = "2026-10-13") -> bytes:
         "zqdm": "999999",
         "zqjc": "",
         "status": 0,
-        "createTime": {"time": 1791936002000, "timezoneOffset": -480},
-        "lastUpdateTime": {"time": 1791936002000, "timezoneOffset": -480},
-        "sxrq": {"time": 1791820800000, "timezoneOffset": -480},
+        "createTime": {"time": created, "timezoneOffset": -480},
+        "lastUpdateTime": {"time": created, "timezoneOffset": -480},
+        "sxrq": {"time": effective, "timezoneOffset": -480},
     }
     return ("null([" + json.dumps([row]) + ", '" + date + "']);").encode()
 
@@ -282,7 +285,7 @@ print(json.dumps({'outcome':outcome.to_dict(),'fold':result}))
         self.assertEqual(proof["value_basis"], "reported_display")
         self.assertEqual(proof["source_publication"], "unknown")
         self.assertEqual(
-            proof["source_time_candidates"]["createTime"], "2026-10-14T08:00:02+08:00"
+            proof["source_time_candidates"]["createTime"], "2026-10-14T09:00:04+08:00"
         )
         self.assertNotIn("published_at", proof)
         result = fold_market_foundation((outcome,), request, operations=operations)
