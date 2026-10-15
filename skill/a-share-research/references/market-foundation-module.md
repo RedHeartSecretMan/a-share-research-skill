@@ -49,7 +49,7 @@ SSE、SZSE、BSE 成交额分区都是必需分母。只有三所分区日期、
 六条已接受 owner 合同对全部字段禁止 `not_applicable`，因此缺失或调用者文字不能排除交易所。
 空两融结果不会被填成六个零值。
 
-`market_foundation_sources.py` 的路径消费已核验 H/I/L/N 来源形状：
+`market_foundation_sources.py` 的路径消费已核验 H/I/L/N/Q 来源形状：
 
 | owner | 默认获取与解析 | 明确保留的来源缺口 |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ SSE、SZSE、BSE 成交额分区都是必需分母。只有三所分区日期、
 | SZSE 成交额 | GET `ShowReport/data`，已绑定 catalog、controls 与 tab；识别亿元指标及千分位字符串 | gp/xz/cy 明确包含 CDR，不映射为纯 A 股字段；控制日期回显不是独立业务日期；发布时间未知 |
 | BSE 成交额 | POST `dailyReport.do`，精确 `HQJSRQ`；静态 JSONP 只选 `xxzrlx=2`，逐行核对 `rq`，按已接受合同保留原始 CNY | 发布时间未知；不添加 XJX 或其他类别金额 |
 | SSE 两融 | GET `commonSoaQuery.do`，固定官方 origin Referer、`RZRQ_HZ_INFO`、精确同日 begin/end、完整 pageHelp 检查；`opDate` 独立核对日期 | 金额字段为元；股／份／手数量不具备 canonical shares 资格；发布时间未知 |
-| SZSE 两融 | GET `ShowReport/data`，`1837_xxpl`、精确 `txtDate`；只选 tab1 交易总量、校验六个单位标签和 unpaged metadata | H/I 仅证明空 summary 的 data 形状；未见正行暂明确失败关闭；control 日期、混合数量及发布时间未证明 |
+| SZSE 两融 | GET `ShowReport/data`，`1837_xxpl`、精确 `txtDate`；只选 tab1 交易总量、校验六个单位标签和 unpaged metadata | Q 正行六字段为字符串，subname 绑定报告日，四金额为亿元；control echo 不能代替 subname，亿股／亿份不转换为股，发布时间未知 |
 | BSE 两融 | GET `summaryInfoResult.do`，精确 `transDate`、`page=0`；静态 `null([rows, date])` 允许已观察的单引号日期；六个 Round 字符串与显示精度保留 | JavaDate 创建／更新与 sxrq 只作为候选时点；不由其推导公开时间，不以 13 日替代 14 日 |
 
 所有 JSONP 都只解析静态 JSON，不执行 JavaScript。JSON 对象重复字段、非有限数值、异常 frame、

@@ -1,4 +1,4 @@
-"""Bounded H/I/L/N market report parsers with explicit source eligibility gaps."""
+"""Bounded H/I/L/N/Q market report parsers with explicit source eligibility gaps."""
 
 from __future__ import annotations
 
@@ -564,7 +564,7 @@ def _szse_summary(
 
 
 class SzseMarketMarginReportTransport:
-    """H/I unpaged summary; control dates and mixed quantities are unqualified."""
+    """H/I/Q summary; dated subname is report date, never publication."""
 
     def __init__(self, transport: HttpTransport | None = None) -> None:
         self._transport = transport
@@ -607,25 +607,48 @@ class SzseMarketMarginReportTransport:
         }
         if metadata.get("cols") != expected_cols:
             raise _source_error(owner, "source_schema_unproved")
-        # H/I provide only the empty summary data shape. Do not claim an unseen
-        # positive-row decoder or adopt control dates as independent business dates.
-        if rows:
+        if len(rows) > 1:
             raise _source_error(owner, "source_schema_unproved")
+        subname = metadata.get("subname")
+        if not isinstance(subname, str):
+            raise _source_error(owner, "source_schema_unproved")
+        if subname and subname != request.report_date:
+            raise _source_error(owner, "source_report_date_mismatch")
+        fields: dict[str, str] = {}
+        if rows:
+            row = rows[0]
+            if not isinstance(row, dict):
+                raise _source_error(owner, "source_schema_unproved")
+            mapping = {
+                "jrrzye": "FINANCING_BALANCE",
+                "jrrzmr": "FINANCING_BUY_AMOUNT",
+                "jrrjye": "SECURITIES_LENDING_BALANCE",
+                "jrrzrjye": "MARGIN_TOTAL_BALANCE",
+            }
+            fields = {
+                logical: _display_numeric(row.get(raw), owner, commas=True)
+                for raw, logical in mapping.items()
+            }
+            for raw in ("jrrjmc", "jrrjyl"):
+                _display_numeric(row.get(raw), owner, commas=True)
         return {
             "exchange": "SZSE",
             "asset_scope": "exchange_wide_official_margin_trading_total",
             "report_date": request.report_date,
             "published_at": None,
             "retrieved_at": _retrieval(response, owner),
-            "source_fields": {},
-            "source_units": {},
+            "source_fields": fields,
+            "source_units": {field: "hundred_million_CNY" for field in fields},
             "query_complete": False,
-            "row_count": 0,
+            "row_count": len(rows),
+            "complete_fields": list(fields),
             "unproved_fields": {
                 "SECURITIES_LENDING_QUANTITY": "mixed_quantity_unit",
                 "SECURITIES_LENDING_SELL_QUANTITY": "mixed_quantity_unit",
             },
-            "source_date_qualification": "date_control_only",
+            "source_date_qualification": "response_date_matches_request"
+            if subname and rows
+            else "date_control_only",
         }
 
 

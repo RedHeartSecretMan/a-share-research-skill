@@ -64,7 +64,11 @@ def run_owner(owner: str, transport: object, request: OperationRequest = REQUEST
 
 
 def szse_report(
-    catalog: str, name: str, rows: list[object], date: str = "2026-10-14"
+    catalog: str,
+    name: str,
+    rows: list[object],
+    date: str = "2026-10-14",
+    subname: str = "",
 ) -> bytes:
     cols = (
         {
@@ -86,7 +90,7 @@ def szse_report(
         "pageno": 0,
         "pagesize": -1,
         "recordcount": 0,
-        "subname": "",
+        "subname": subname,
         "cols": cols,
         "conditions": [
             {
@@ -298,7 +302,22 @@ class MarketFoundationSourceTests(unittest.TestCase):
                     }
                 ],
             ),
-            "szse_market_margin@1": szse_report("1837_xxpl", "融资融券交易总量", []),
+            "szse_market_margin@1": szse_report(
+                "1837_xxpl",
+                "融资融券交易总量",
+                [
+                    {
+                        "jrrzye": "120.50",
+                        "jrrzmr": "10.25",
+                        "jrrjye": "30.75",
+                        "jrrzrjye": "151.25",
+                        "jrrjmc": "2.00",
+                        "jrrjyl": "8.00",
+                    }
+                ],
+                "2026-10-14",
+                "2026-10-14",
+            ),
         }
         script = """
 import json,sys
@@ -376,6 +395,86 @@ print(json.dumps({"result":result,"calls":calls,"outcomes":[outcome.to_dict() fo
         )
         self.assertEqual([row["observations"] for row in output["outcomes"]], [[]] * 6)
         self.assertIsNone(output["result"]["turnover"]["total"])
+
+    def test_szse_positive_summary_control_echo_or_wrong_subname_never_proves_date(
+        self,
+    ):
+        row = {
+            "jrrzye": "120.50",
+            "jrrzmr": "10.25",
+            "jrrjye": "30.75",
+            "jrrzrjye": "151.25",
+            "jrrjmc": "2.00",
+            "jrrjyl": "8.00",
+        }
+        request = OperationRequest("2026-10-13", REQUEST.information_cutoff)
+        for subname, code in (
+            ("", "source_report_date_unproved"),
+            ("2026-10-12", "source_report_date_mismatch"),
+        ):
+            with self.subTest(subname=subname):
+                http = FixtureHttp(
+                    szse_report(
+                        "1837_xxpl", "融资融券交易总量", [row], "2026-10-13", subname
+                    )
+                )
+                outcome, result = run_owner(
+                    "szse_market_margin@1",
+                    sources.SzseMarketMarginReportTransport(http),
+                    request,
+                )
+                self.assertEqual(outcome["source_errors"][0]["code"], code)
+                self.assertEqual(outcome["observations"], [])
+                self.assertEqual(result["operations"][4]["attempts"], 1)
+
+    def test_szse_positive_summary_subname_binds_date_and_money_without_shares(self):
+        # Q W1 proves one row with these six string fields and a dated subname;
+        # every numeric value here is synthetic, not a retained provider value.
+        row = {
+            "jrrzye": "120.50",
+            "jrrzmr": "10.25",
+            "jrrjye": "30.75",
+            "jrrzrjye": "151.25",
+            "jrrjmc": "2.00",
+            "jrrjyl": "8.00",
+        }
+        http = FixtureHttp(
+            szse_report(
+                "1837_xxpl", "融资融券交易总量", [row], "2026-10-13", "2026-10-13"
+            )
+        )
+        request = OperationRequest("2026-10-13", REQUEST.information_cutoff)
+        outcome, result = run_owner(
+            "szse_market_margin@1",
+            sources.SzseMarketMarginReportTransport(http),
+            request,
+        )
+        proof = outcome["diagnostics"]["unadopted_report"]
+        self.assertEqual(
+            proof["metrics"],
+            {
+                "financing_balance_CNY": "12050000000",
+                "financing_buy_amount_CNY": "1025000000",
+                "securities_lending_balance_CNY": "3075000000",
+                "margin_total_balance_CNY": "15125000000",
+            },
+        )
+        self.assertEqual(
+            proof["source_date_qualification"], "response_date_matches_request"
+        )
+        self.assertEqual(proof["row_count"], 1)
+        self.assertEqual(
+            proof["unproved_fields"],
+            {
+                "SECURITIES_LENDING_QUANTITY": "mixed_quantity_unit",
+                "SECURITIES_LENDING_SELL_QUANTITY": "mixed_quantity_unit",
+            },
+        )
+        self.assertEqual(
+            outcome["source_errors"][0]["code"], "source_publication_unproved"
+        )
+        self.assertEqual(outcome["observations"], [])
+        self.assertEqual(result["operations"][4]["attempts"], 1)
 
     def test_szse_cdr_inclusive_turnover_and_echo_date_never_become_a_share_total(self):
         rows = [
