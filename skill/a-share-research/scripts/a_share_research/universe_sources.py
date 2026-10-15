@@ -3,7 +3,9 @@
 This Module assembles existing real source parsers and the caller's shared lanes.
 It returns their existing acquisition values, never a second Universe model or
 an expected denominator made from unproved dates/counts. Historical provider
-selection and qualified #110 list projection are separate, still-unclosed work.
+selection and qualified records still depend on source-specific field proof.
+The default projection preserves unknown denominators and the original source
+observations separately; it cannot promote an unqualified row into a member.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from .a_share_universe import AShareUniverse, build_as_of_a_share_universe
 from .bse_universe_source import (
     BseCurrentListAcquisition,
     BsePostTransport,
@@ -20,7 +23,11 @@ from .identity_sources import HttpTransport, UrlLibTransport
 from .provider_lane import ProviderLanePolicy, ProviderLanes
 from .sse_universe_source import SseListAcquisition, acquire_sse_current_lists
 from .szse_universe_source import CurrentListAcquisition, acquire_szse_current_list
-from .universe_input import UniverseRequest, prepare_universe_request
+from .universe_input import (
+    ExchangeListOutcome,
+    UniverseRequest,
+    prepare_universe_request,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,3 +105,86 @@ def acquire_default_current_sources(
         max_pages=policies.bse.actual_attempt_budget,
     )
     return sse, szse, bse
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentUniverseAcquisition:
+    """The existing immutable #110 result and its safe source observations."""
+
+    universe: AShareUniverse
+    source_acquisitions: tuple[
+        SseListAcquisition, CurrentListAcquisition, BseCurrentListAcquisition
+    ]
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "universe": self.universe.to_public_dict(),
+            "source_acquisitions": [
+                source.to_public_dict() for source in self.source_acquisitions
+            ],
+        }
+
+
+class _ListSnapshotAdapter:
+    def __init__(self, outcome: ExchangeListOutcome) -> None:
+        self.outcome = outcome
+        self.exchange = outcome.exchange
+        self.operation_id = outcome.operation_id
+
+    def acquire(self, request: object, timeout_seconds: float) -> ExchangeListOutcome:
+        return self.outcome
+
+
+def acquire_default_current_universe(
+    request: UniverseRequest,
+    *,
+    research_now: datetime,
+    lanes: ProviderLanes,
+    policies: CurrentSourcePolicies,
+    transports: CurrentSourceTransports | None = None,
+) -> CurrentUniverseAcquisition:
+    """Run the real current parsers and #110 without caller-filled membership.
+
+    Current source rows do not yet prove membership effective/availability times.
+    Their safe observations remain available for audit, while canonical expected
+    counts remain unknown. Provider counts never become ordinary-A denominators.
+    Historical requests preserve the current owners' explicit unsupported states.
+    This partial path is not qualification of the unresolved membership fields.
+    """
+    prepared = prepare_universe_request(request, research_now=research_now)
+    detached = UniverseRequest(prepared.screen_date, prepared.information_cutoff)
+    sources = acquire_default_current_sources(
+        detached,
+        research_now=research_now,
+        lanes=lanes,
+        policies=policies,
+        transports=transports,
+    )
+    typed_sources: tuple[
+        SseListAcquisition | CurrentListAcquisition | BseCurrentListAcquisition, ...
+    ] = sources
+    owners = []
+    for exchange, source in zip(("SSE", "SZSE", "BSE"), typed_sources, strict=True):
+        attempted = bool(source.lane_result.attempts)
+        source_result = source.source_result
+        # Every observed current row lacks a proved as-of version. Retain these
+        # source observations, but do not supply invented canonical list fields.
+        outcome = ExchangeListOutcome(
+            f"{exchange.lower()}_current_universe_list@1",
+            exchange,
+            prepared.screen_date,
+            attempted,
+            source_result,
+            None,
+            source.pages_expected,
+            source.pages_received,
+            (),
+        )
+        owners.append(_ListSnapshotAdapter(outcome))
+    universe = build_as_of_a_share_universe(
+        detached,
+        research_now=research_now,
+        exchange_list_adapters=tuple(owners),
+        identity_adapters=(),
+    )
+    return CurrentUniverseAcquisition(universe, sources)

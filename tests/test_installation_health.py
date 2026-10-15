@@ -77,6 +77,26 @@ class InstallationHealthTests(unittest.TestCase):
             {"complete"},
         )
 
+    def test_dated_roster_sdk_is_locked_loaded_and_attributed_without_source_probe(
+        self,
+    ) -> None:
+        loaded: list[str] = []
+        health = check_installation(
+            version=self.locked_versions().__getitem__,
+            load_module=lambda module: loaded.append(module),
+        )
+        facts = health["dependencies"]
+        baostock = next(
+            (fact for fact in facts if fact["distribution"] == "baostock"), None
+        )  # type: ignore[union-attr]
+        self.assertIsNotNone(baostock)
+        self.assertEqual(baostock["required_version"], "0.9.4")  # type: ignore[index]
+        self.assertEqual(
+            baostock["operation_ids"], ["baostock_dated_roster_acquisition@1"]
+        )  # type: ignore[index]
+        self.assertIn("baostock", loaded)
+        self.assertEqual(health["source_policy"]["source_accessibility"], "not_checked")  # type: ignore[index]
+
     def test_version_mismatch_is_incomplete_without_loading_candidate_code(
         self,
     ) -> None:

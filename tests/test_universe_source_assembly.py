@@ -268,7 +268,7 @@ class CurrentSourceAssemblyTests(unittest.TestCase):
         self.assertEqual(lanes.quiescence("sse").state, "quiescent")
         self.assertEqual(outcomes[0].records, ())
 
-    def test_copied_installed_default_collection_executes_all_real_parsers(
+    def test_copied_installed_default_current_universe_runs_real_parsers_and_110(
         self,
     ) -> None:
         root = Path(__file__).resolve().parents[1] / "skill" / "a-share-research"
@@ -280,7 +280,7 @@ class CurrentSourceAssemblyTests(unittest.TestCase):
             from a_share_research.identity_sources import HttpResponse
             from a_share_research.provider_lane import ProviderLanePolicy,ProviderLanes
             from a_share_research.universe_input import UniverseRequest
-            from a_share_research.universe_sources import CurrentSourcePolicies,CurrentSourceTransports,acquire_default_current_sources
+            from a_share_research.universe_sources import CurrentSourcePolicies,CurrentSourceTransports,acquire_default_current_sources,acquire_default_current_universe
             frozen=datetime.fromisoformat('2026-10-15T10:00:00+08:00')
             retrieved=datetime.fromisoformat('2026-10-15T10:01:00+08:00')
             class SSE:
@@ -300,7 +300,11 @@ class CurrentSourceAssemblyTests(unittest.TestCase):
                     value={'content':[row],'number':0,'numberOfElements':1,'size':20,'sort':None,'totalPages':1,'totalElements':1,'firstPage':True,'lastPage':True}
                     return HttpResponse(200,'application/javascript',('fixture_callback('+json.dumps([value])+');').encode(),retrieved)
             lanes=ProviderLanes()
-            outcomes=acquire_default_current_sources(UniverseRequest('2026-10-15',frozen.isoformat()),research_now=frozen,lanes=lanes,policies=CurrentSourcePolicies(ProviderLanePolicy(2,1),ProviderLanePolicy(1,1),ProviderLanePolicy(1,1)),transports=CurrentSourceTransports(SSE(),SZSE(),BSE()))
+            acquisition=acquire_default_current_universe(UniverseRequest('2026-10-15',frozen.isoformat()),research_now=frozen,lanes=lanes,policies=CurrentSourcePolicies(ProviderLanePolicy(2,1),ProviderLanePolicy(1,1),ProviderLanePolicy(1,1)),transports=CurrentSourceTransports(SSE(),SZSE(),BSE()))
+            outcomes=acquisition.source_acquisitions
+            assert not acquisition.universe.full_a_share_universe
+            assert all(p.expected is None and p.failed is None for p in acquisition.universe.partitions)
+            assert all(p.source_result=='partial' for p in acquisition.universe.partitions)
             assert all(lanes.is_authoritative(o.lane_result) for o in outcomes)
             assert all(not o.to_public_dict()['membership_proven'] for o in outcomes)
             print(json.dumps({'records':[len(o.records) for o in outcomes],'attempts':[len(o.lane_result.attempts) for o in outcomes],'states':[o.source_result for o in outcomes]}))
@@ -367,6 +371,50 @@ class CurrentSourceAssemblyTests(unittest.TestCase):
                 transports=CurrentSourceTransports(sse, szse, Unowned()),
             )
         self.assertEqual((sse.calls, szse.calls), ([], 0))
+
+
+class DefaultCurrentUniverseProjectionTests(unittest.TestCase):
+    def test_real_source_counts_do_not_fill_unproved_ordinary_a_denominators(
+        self,
+    ) -> None:
+        from a_share_research.universe_sources import acquire_default_current_universe
+
+        lanes = ProviderLanes()
+        result = acquire_default_current_universe(
+            UniverseRequest("2026-10-15", FROZEN.isoformat()),
+            research_now=FROZEN,
+            lanes=lanes,
+            policies=CurrentSourcePolicies(
+                ProviderLanePolicy(2, 1),
+                ProviderLanePolicy(1, 1),
+                ProviderLanePolicy(1, 1),
+            ),
+            transports=CurrentSourceTransports(
+                SseRawFixture(), SzseRawFixture(), BseRawFixture()
+            ),
+        )
+        self.assertFalse(result.universe.full_a_share_universe)
+        self.assertEqual(
+            [p.expected for p in result.universe.partitions], [None, None, None]
+        )
+        self.assertEqual(
+            [p.failed for p in result.universe.partitions], [None, None, None]
+        )
+        self.assertEqual(
+            [p.list_outcome.pages_received for p in result.universe.partitions],
+            [2, 1, 1],
+        )
+        self.assertTrue(
+            all(p.source_result == "partial" for p in result.universe.partitions)
+        )
+        self.assertEqual(
+            [len(s.records) for s in result.source_acquisitions], [2, 1, 1]
+        )
+        public = result.to_public_dict()
+        self.assertEqual(
+            public["universe"]["partitions"]["BSE"]["reconciliation"]["expected"], None
+        )
+        self.assertEqual(public["source_acquisitions"][2]["reported_count"], 1)
 
 
 if __name__ == "__main__":

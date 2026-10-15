@@ -20,8 +20,14 @@
 
 ## #110 仍缺的输入
 
-这是默认**来源采集**装配，尚不是已闭合的默认 `ExchangeListAdapter → #110` 装配。当前已核验来源行的 `membership_effective_at/available_at` 仍未知，来源声明总数与普通 A 股时点分母也未必相同。不能为调用 #110 而填入 retrieval、当前 basic 名称、零或当前声明数量。
+这是默认**来源采集**装配，已接入下述诚实 partial 投影，仍不是具备正向时点成员记录的默认 `ExchangeListAdapter → #110` 装配。当前已核验来源行的 `membership_effective_at/available_at` 仍未知，来源声明总数与普通 A 股时点分母也未必相同。不能为调用 #110 而填入 retrieval、当前 basic 名称、零或当前声明数量。
 
-后续正向投影需要被选定方法实际字段、日期与范围依据，使 production normalizer 可以从来源生成合法 `ExchangeListOutcome`；随后由同一默认路径证明公开对账、正向排除和 unproven→unranked。已核验的 Baostock given-day 声明是逐日名录方向的正面依据，但实际字段、分页/session 和市场范围尚待 #121 的有界验证。这里不要求全历史都先实测、泛化 PIT 保证书或提前完成 #98。
+后续正向投影需要被选定方法实际字段、日期与范围依据，使 production normalizer 可以从来源生成合法 `ExchangeListOutcome`；随后由同一默认路径证明公开对账、正向排除和 unproven→unranked。已核验的 Baostock given-day 声明是逐日名录方向的正面依据，但AG 已观察真实字段、分页/session 和特定日期的 provider 枚举；普通 A 股类别、名字版本与 BSE 范围仍未闭合。这里不要求全历史都先实测、泛化 PIT 保证书或提前完成 #98。
 
 copied-installed 当前默认采集测试使用合成原始 wire responses，实际执行所有 parser，验证 `[2,1,1]` 条记录与 `[2,1,1]` 次真实 lane attempts，以及失败、预算和冻结日期行为。它不以 `Proven*ListFixture` 代替默认生产分母，也不冒充完整 #122 验收或最终 live proof。
+
+## 诚实投影到 #110
+
+`acquire_default_current_universe` 在同一冻结请求下执行上述三个真实 parser，并把实际 attempted、source-result 和页数交给 #110 公共 Module。当前来源还未证明 membership effective/available 时点，因此 canonical list 不填造记录，expected 与 failed 通过 #110 的未知总量契约保留 `null`；source-reported count 和原有安全观察仍保留在 `source_acquisitions` 中。该路径验证真实默认装配和缺口投影，不宣称 #122 的有用时点化名单已完成。历史请求仍保留这三个当前来源的明确不支持状态。
+
+独立的 [Baostock 日期名册采集](baostock-dated-universe-source.md) 已实现给定日期查询与有限 SDK 分页。provider 名册含指数，当前仍不能为三所 canonical expected 分母补齐类别与公开时间证明，也不会作为未获资格的品牌 fallback。

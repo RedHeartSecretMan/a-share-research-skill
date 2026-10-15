@@ -1,5 +1,6 @@
-# Exact Python 3.12 closure loaded by the released mootdx operations.
+# Exact Python 3.12 closure for core mootdx and dated-universe SDK operations.
 anyio==4.14.2
+baostock==0.9.4
 certifi==2026.7.22
 click==8.4.2
 colorama==0.4.6 ; sys_platform == "win32"

@@ -36,6 +36,12 @@ MOOTDX_RUNTIME_DEPENDENCY = RuntimeDependency(
         "tongdaxin_intraday_snapshot@1",
     ),
 )
+BAOSTOCK_RUNTIME_DEPENDENCY = RuntimeDependency(
+    distribution="baostock",
+    required_version="0.9.4",
+    modules=("baostock",),
+    operation_ids=("baostock_dated_roster_acquisition@1",),
+)
 _CORE_OPERATION_LOADS = {
     "mootdx_f10@1": (
         "a_share_research.communication_sources",
@@ -305,11 +311,15 @@ def _locked_runtime_dependencies() -> tuple[RuntimeDependency, ...]:
                 modules=(
                     MOOTDX_RUNTIME_DEPENDENCY.modules
                     if distribution == MOOTDX_RUNTIME_DEPENDENCY.distribution
+                    else BAOSTOCK_RUNTIME_DEPENDENCY.modules
+                    if distribution == BAOSTOCK_RUNTIME_DEPENDENCY.distribution
                     else ()
                 ),
                 operation_ids=(
                     MOOTDX_RUNTIME_DEPENDENCY.operation_ids
                     if distribution == MOOTDX_RUNTIME_DEPENDENCY.distribution
+                    else BAOSTOCK_RUNTIME_DEPENDENCY.operation_ids
+                    if distribution == BAOSTOCK_RUNTIME_DEPENDENCY.distribution
                     else ()
                 ),
             )
