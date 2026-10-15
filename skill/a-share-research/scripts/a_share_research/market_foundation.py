@@ -194,6 +194,26 @@ def build_default_market_foundation_operations(
         from .market_foundation_sources import BseMarketMarginReportTransport
 
         supplied["bse_market_margin@1"] = BseMarketMarginReportTransport()
+    if "bse_a_share_turnover@1" not in supplied:
+        from .market_foundation_sources import BseMarketTurnoverReportTransport
+
+        supplied["bse_a_share_turnover@1"] = BseMarketTurnoverReportTransport()
+    if "sse_market_margin@1" not in supplied:
+        from .market_foundation_sources import SseMarketMarginReportTransport
+
+        supplied["sse_market_margin@1"] = SseMarketMarginReportTransport()
+    if "sse_a_share_turnover@1" not in supplied:
+        from .market_foundation_sources import SseMarketTurnoverReportTransport
+
+        supplied["sse_a_share_turnover@1"] = SseMarketTurnoverReportTransport()
+    if "szse_market_margin@1" not in supplied:
+        from .market_foundation_sources import SzseMarketMarginReportTransport
+
+        supplied["szse_market_margin@1"] = SzseMarketMarginReportTransport()
+    if "szse_a_share_turnover@1" not in supplied:
+        from .market_foundation_sources import SzseMarketTurnoverReportTransport
+
+        supplied["szse_a_share_turnover@1"] = SzseMarketTurnoverReportTransport()
     contracts = _load_contracts()
     shared_lanes = lanes or ProviderLanes()
     return tuple(
@@ -266,24 +286,25 @@ def _number(value: Decimal) -> str:
     return text
 
 
-def _source_units(contract: Mapping[str, object]) -> tuple[int, str, str]:
+def _source_unit(contract: Mapping[str, object], *, quantity: bool) -> tuple[int, str]:
     normalization = _mapping(contract["normalization"])
-    if "scale" in normalization:
-        hundred_million = (
-            normalization["scale"]
-            == "multiply_each_hundred_million_CNY_value_by_100000000_then_exact_sum"
-        )
+    if quantity:
         return (
-            (8, "hundred_million_CNY", "hundred_million_CNY")
-            if hundred_million
-            else (4, "ten_thousand_CNY", "ten_thousand_shares")
+            (4, "ten_thousand_shares")
+            if normalization["quantity_scale"]
+            == "multiply_ten_thousand_shares_by_10000_using_exact_decimal"
+            else (0, "shares")
         )
-    if (
-        normalization["money_scale"]
-        == "multiply_ten_thousand_CNY_by_10000_using_exact_decimal"
-    ):
-        return 4, "ten_thousand_CNY", "ten_thousand_shares"
-    return 0, "CNY", "shares"
+    rule = normalization.get("scale", normalization.get("money_scale"))
+    if rule in {
+        "multiply_each_hundred_million_CNY_value_by_100000000_then_exact_sum",
+        "multiply_hundred_million_CNY_by_100000000_using_exact_decimal",
+        "multiply_each_hundred_million_CNY_value_by_100000000_using_exact_decimal",
+    }:
+        return 8, "hundred_million_CNY"
+    if rule == "multiply_ten_thousand_CNY_by_10000_using_exact_decimal":
+        return 4, "ten_thousand_CNY"
+    return 0, "CNY"
 
 
 def _unavailable(
@@ -300,6 +321,8 @@ def _unavailable(
         "source_response_unavailable": "The source response is unavailable.",
         "source_report_date_mismatch": "The source report date does not match the request.",
         "source_publication_unproved": "The source publication time is unproved.",
+        "source_scope_unproved": "The source asset scope is unproved.",
+        "source_report_date_unproved": "The independent source report date is unproved.",
         "source_report_empty_unqualified": "An empty source response does not prove zero business.",
     }
     if error_code not in messages:
@@ -337,8 +360,16 @@ def _normalize_report(
         extra = set(report) - _REPORT_KEYS
         if (
             not _REPORT_KEYS <= set(report)
-            or extra - {"display_precision", "source_time_candidates"}
             or extra
+            - {
+                "display_precision",
+                "source_time_candidates",
+                "unproved_fields",
+                "complete_fields",
+                "source_date_qualification",
+                "source_scope_qualification",
+            }
+            or extra & {"display_precision", "source_time_candidates"}
             and snapshot.operation_id != "bse_market_margin@1"
         ):
             raise ValueError("market source report fields are invalid")
@@ -352,7 +383,6 @@ def _normalize_report(
         publication = (
             None
             if report["published_at"] is None
-            and snapshot.operation_id == "bse_market_margin@1"
             else _timestamp(report["published_at"])
         )
         retrieval = _timestamp(report["retrieved_at"])
@@ -372,6 +402,29 @@ def _normalize_report(
         fields = _mapping(report["source_fields"])
         source_units = _mapping(report["source_units"])
         destinations = _mapping(contract["field_destinations"])
+        unproved = _mapping(report.get("unproved_fields", {}))
+        if (
+            not set(unproved) <= set(destinations)
+            or set(unproved) & set(fields)
+            or any(value != "mixed_quantity_unit" for value in unproved.values())
+            or any(
+                not str(destinations[field]).endswith("_shares") for field in unproved
+            )
+        ):
+            raise ValueError("market source field eligibility is invalid")
+        date_qualification = report.get(
+            "source_date_qualification", "response_date_matches_request"
+        )
+        scope_qualification = report.get("source_scope_qualification", "qualified")
+        if date_qualification not in {
+            "response_date_matches_request",
+            "date_control_only",
+        } or scope_qualification not in {
+            "qualified",
+            "pure_A_CDR_exclusion_unproved",
+            "CDR_inclusive",
+        }:
+            raise ValueError("market source qualification is invalid")
         margin = contract["capability_id"] == "whole_market_margin"
         empty = margin and report["query_complete"] is True and report["row_count"] == 0
         complete = report["query_complete"]
@@ -391,15 +444,26 @@ def _normalize_report(
         )
         if not inventory_valid or set(source_units) != set(fields):
             raise ValueError("market required source field inventory is invalid")
-        scale, money_unit, quantity_unit = _source_units(contract)
+        complete_fields = report.get(
+            "complete_fields", tuple(fields) if complete else ()
+        )
+        if (
+            not isinstance(complete_fields, (tuple, list))
+            or any(not isinstance(field, str) for field in complete_fields)
+            or len(complete_fields) != len(set(complete_fields))
+            or not set(complete_fields) <= set(fields)
+        ):
+            raise ValueError("market source field completeness is invalid")
+        complete_metrics = sorted(
+            {str(destinations[field]).rsplit(".", 1)[1] for field in complete_fields}
+        )
         terms: dict[str, list[ExactDecimalTerm]] = {}
         units: dict[str, str] = {}
         for source_field, value in fields.items():
             destination = str(destinations[source_field]).rsplit(".", 1)[1]
             quantity = destination.endswith("_shares")
-            if source_units[source_field] != (
-                quantity_unit if quantity else money_unit
-            ):
+            scale, expected_unit = _source_unit(contract, quantity=quantity)
+            if source_units[source_field] != expected_unit:
                 raise ValueError("market source unit is invalid")
             terms.setdefault(destination, []).append(
                 ExactDecimalTerm(_decimal(value), scale)
@@ -408,11 +472,19 @@ def _normalize_report(
         metrics = {
             field: _number(exact_scaled_sum(values)) for field, values in terms.items()
         }
-        if publication is None:
+        if (
+            publication is None
+            or scope_qualification != "qualified"
+            or date_qualification != "response_date_matches_request"
+        ):
             precision = _mapping(report.get("display_precision", {}))
-            if set(precision) != set(fields) or any(
-                type(value) is not int or not 0 <= value <= 32
-                for value in precision.values()
+            if (
+                precision
+                and set(precision) != set(fields)
+                or any(
+                    type(value) is not int or not 0 <= value <= 32
+                    for value in precision.values()
+                )
             ):
                 raise ValueError("source display precision is invalid")
             candidates = _mapping(report.get("source_time_candidates", {}))
@@ -431,18 +503,25 @@ def _normalize_report(
                 "metrics": metrics,
                 "units": units,
                 "row_count": row_count,
-                "value_basis": "reported_display",
+                "value_basis": "reported_display" if precision else "reported_source",
                 "display_precision": dict(precision),
-                "source_publication": "unknown",
+                "source_publication": "unknown" if publication is None else "proved",
+                "source_scope_qualification": scope_qualification,
+                "unproved_fields": dict(unproved),
+                "complete_fields": complete_metrics,
                 "source_time_candidates": dict(candidates),
                 "source_time_qualification": "unqualified_source_record_times",
-                "source_date_qualification": "response_date_matches_request"
+                "source_date_qualification": date_qualification
                 if row_count
                 else "date_control_only",
             }
             return _unavailable(
                 contract,
-                error_code="source_publication_unproved"
+                error_code="source_scope_unproved"
+                if scope_qualification != "qualified"
+                else "source_report_date_unproved"
+                if row_count and date_qualification != "response_date_matches_request"
+                else "source_publication_unproved"
                 if row_count
                 else "source_report_empty_unqualified",
                 diagnostics={"unadopted_report": proof},
@@ -467,6 +546,10 @@ def _normalize_report(
             snapshot.operation_id,
             OperationExecution("succeeded", query_complete=complete),
             observations=(payload,),
+            diagnostics={
+                "complete_fields": complete_metrics,
+                "unproved_fields": dict(unproved),
+            },
             field_dispositions=tuple(
                 FieldDisposition(field, "normalized", str(destination))
                 for field, destination in destinations.items()
@@ -553,6 +636,16 @@ def fold_market_foundation(
                 "source_result": result,
                 "observation": material,
                 "lineage": lineage,
+                "complete_fields": outcome.to_dict()["diagnostics"].get(
+                    "complete_fields", []
+                )
+                if trusted and outcome is not None and material is not None
+                else [],
+                "unproved_fields": outcome.to_dict()["diagnostics"].get(
+                    "unproved_fields", {}
+                )
+                if trusted and outcome is not None and material is not None
+                else {},
             }
         )
     return {
@@ -590,16 +683,22 @@ def _report_source_result(outcome: OperationOutcome) -> str:
 
 
 def _total(
-    partitions: Sequence[Mapping[str, object]], field: str
+    partitions: Sequence[Mapping[str, object]],
+    field: str,
+    *,
+    allow_complete_field: bool = False,
 ) -> dict[str, object] | None:
     values: list[ExactDecimalTerm] = []
     evidence: list[str] = []
     for partition in partitions:
         observation = partition["observation"]
-        if partition["source_result"] not in {
-            "complete",
-            "observed_empty",
-        } or not isinstance(observation, Mapping):
+        usable = (
+            partition["source_result"] in {"complete", "observed_empty"}
+            or allow_complete_field
+            and partition["source_result"] == "partial"
+            and field in cast(Sequence[str], partition.get("complete_fields", ()))
+        )
+        if not usable or not isinstance(observation, Mapping):
             return None
         metrics = _mapping(observation["metrics"])
         units = _mapping(observation["units"])
@@ -629,4 +728,6 @@ def _margin_totals(partitions: Sequence[Mapping[str, object]]) -> dict[str, obje
     )
     # The exact accepted six-owner authority forbids not_applicable for every
     # field. Absence cannot shrink any field's exchange denominator.
-    return {field: _total(partitions, field) for field in fields}
+    return {
+        field: _total(partitions, field, allow_complete_field=True) for field in fields
+    }

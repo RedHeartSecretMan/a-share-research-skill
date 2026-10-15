@@ -41,7 +41,7 @@ class ReportTransport:
 
 
 def turnover_report(exchange: str, fields: dict[str, str]) -> dict[str, object]:
-    unit = "hundred_million_CNY" if exchange == "SSE" else "ten_thousand_CNY"
+    unit = "CNY" if exchange == "BSE" else "hundred_million_CNY"
     return {
         "exchange": exchange,
         "asset_scope": "exchange_daily_A_share_stock_turnover",
@@ -69,6 +69,15 @@ def margin_report(exchange: str) -> dict[str, object]:
         fields = dict(
             zip(fields, ("120.50", "10.25", "2.00", "8.00", "30.75", "151.25"))
         )
+    if exchange == "SZSE":
+        for field in fields:
+            if field not in quantities:
+                fields[field] = {
+                    "FINANCING_BALANCE": "0.01205",
+                    "FINANCING_BUY_AMOUNT": "0.001025",
+                    "SECURITIES_LENDING_BALANCE": "0.003075",
+                    "MARGIN_TOTAL_BALANCE": "0.015125",
+                }[field]
     scope = {
         "SSE": "exchange_wide_official_margin_trading_summary",
         "SZSE": "exchange_wide_official_margin_trading_total",
@@ -83,7 +92,13 @@ def margin_report(exchange: str) -> dict[str, object]:
         "source_fields": fields,
         "source_units": {
             field: ("ten_thousand_" if exchange == "BSE" else "")
-            + ("shares" if field in quantities else "CNY")
+            + (
+                "shares"
+                if field in quantities
+                else "hundred_million_CNY"
+                if exchange == "SZSE"
+                else "CNY"
+            )
             for field in fields
         },
         "query_complete": True,
@@ -137,19 +152,31 @@ class MarketFoundationTests(unittest.TestCase):
         self.assertEqual(result["operations"][0]["attempts"], 1)
         self.assertEqual(result["operations"][0]["source_result"], "unavailable")
 
-    def test_missing_real_transport_stays_an_explicit_unclosed_source_contract(self):
-        from a_share_research.market_foundation import UnprovedMarketFoundationSource
+    def test_explicit_missing_transport_remains_a_construction_gap(self):
+        from a_share_research.market_foundation import (
+            MarketFoundationOperationAdapter,
+            UnprovedMarketFoundationSource,
+        )
+        from a_share_research.provider_lane import ProviderLanes
 
-        operations = build_default_market_foundation_operations()
+        root = Path(__file__).resolve().parents[1]
+        rows = json.loads(
+            (
+                root
+                / "skill/a-share-research/references/market-foundation-owner-qualification.json"
+            ).read_text()
+        )["operations"]
         request = OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00")
-        for operation in operations:
-            if operation.operation_id == "bse_market_margin@1":
-                # Its H/I-backed default HTTP path is tested with an owned fake
-                # in test_market_foundation_bse_margin; do not invoke it here.
-                continue
-            with self.subTest(owner=operation.operation_id):
-                with self.assertRaises(UnprovedMarketFoundationSource):
-                    operation.execute(request, 1)
+        for row in rows:
+            owner = row["producer_operation_id"]
+            operation = MarketFoundationOperationAdapter(
+                owner, row["source_contract"], None, ProviderLanes()
+            )
+            with (
+                self.subTest(owner=owner),
+                self.assertRaises(UnprovedMarketFoundationSource),
+            ):
+                operation.execute(request, 1)
 
     def test_qualified_field_destination_is_present_in_the_owned_projection(self):
         operations = build_default_market_foundation_operations(
@@ -170,6 +197,50 @@ class MarketFoundationTests(unittest.TestCase):
             {item.destination for item in outcome.field_dispositions},
             {"observations.payload.observation.metrics.turnover_amount_CNY"},
         )
+
+    def test_complete_margin_money_fields_survive_other_unproved_quantity_fields(self):
+        reports = {
+            exchange: margin_report(exchange) for exchange in ("SSE", "SZSE", "BSE")
+        }
+        report = reports["SSE"]
+        quantities = {"SECURITIES_LENDING_SELL_QUANTITY", "SECURITIES_LENDING_QUANTITY"}
+        for field in quantities:
+            del report["source_fields"][field]
+            del report["source_units"][field]
+        report["query_complete"] = False
+        report["unproved_fields"] = {
+            field: "mixed_quantity_unit" for field in quantities
+        }
+        report["complete_fields"] = list(report["source_fields"])
+        operations = build_default_market_foundation_operations(
+            transports={
+                f"{exchange.lower()}_market_margin@1": ReportTransport(value)
+                for exchange, value in reports.items()
+            }
+        )
+        request = OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00")
+        outcomes = tuple(operation.execute(request, 1) for operation in operations[3:])
+        result = fold_market_foundation(outcomes, request, operations=operations)
+        self.assertEqual(result["margin"]["partitions"][0]["source_result"], "partial")
+        self.assertEqual(
+            result["margin"]["totals"]["financing_balance_CNY"]["value"], "3615000"
+        )
+        self.assertEqual(
+            result["margin"]["totals"]["financing_balance_CNY"]["operands"],
+            ["sse_market_margin@1", "szse_market_margin@1", "bse_market_margin@1"],
+        )
+        self.assertIsNone(
+            result["margin"]["totals"]["securities_lending_quantity_shares"]
+        )
+        self.assertEqual(
+            result["margin"]["partitions"][0]["unproved_fields"],
+            report["unproved_fields"],
+        )
+        # Removing explicit field-completeness proof never shrinks the denominator.
+        del report["complete_fields"]
+        outcomes = (operations[3].execute(request, 1), *outcomes[1:])
+        uncertain = fold_market_foundation(outcomes, request, operations=operations)
+        self.assertIsNone(uncertain["margin"]["totals"]["financing_balance_CNY"])
 
     def test_margin_field_denominators_cannot_be_shrunk_by_caller_text(self):
         transports = {
@@ -282,10 +353,10 @@ class MarketFoundationTests(unittest.TestCase):
                     "SSE", {"TRADE_AMT_01": "30", "TRADE_AMT_03": "5"}
                 ),
                 "szse_a_share_turnover@1": turnover_report(
-                    "SZSE", {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "225000.75"}
+                    "SZSE", {"A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": "22.500075"}
                 ),
                 "bse_a_share_turnover@1": turnover_report(
-                    "BSE", {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "125000.50"}
+                    "BSE", {"A_SHARE_TURNOVER_CNY": "1250005000"}
                 ),
             }
         )
@@ -324,6 +395,7 @@ print(json.dumps(fold_market_foundation(outcomes, request, operations=operations
                 capture_output=True,
                 cwd=directory,
                 env=env,
+                close_fds=True,
                 check=True,
             )
         result = json.loads(completed.stdout)
@@ -368,9 +440,7 @@ print(json.dumps(fold_market_foundation(outcomes, request, operations=operations
         partial["query_complete"] = False
         partial["row_count"] = 0
         empty = turnover_report("SSE", {"TRADE_AMT_01": "0", "TRADE_AMT_03": "0"})
-        unavailable = turnover_report(
-            "BSE", {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "10"}
-        )
+        unavailable = turnover_report("BSE", {"A_SHARE_TURNOVER_CNY": "10"})
         unavailable["report_date"] = "2026-09-29"
         transports = {
             "sse_a_share_turnover@1": ReportTransport(empty),
@@ -433,13 +503,11 @@ print(json.dumps(fold_market_foundation(outcomes, request, operations=operations
             ),
             "szse_a_share_turnover@1": ReportTransport(
                 turnover_report(
-                    "SZSE", {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "225000.75"}
+                    "SZSE", {"A_SHARE_TURNOVER_HUNDRED_MILLION_CNY": "22.500075"}
                 )
             ),
             "bse_a_share_turnover@1": ReportTransport(
-                turnover_report(
-                    "BSE", {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "125000.50"}
-                )
+                turnover_report("BSE", {"A_SHARE_TURNOVER_CNY": "1250005000"})
             ),
         }
         operations = build_default_market_foundation_operations(transports=transports)
