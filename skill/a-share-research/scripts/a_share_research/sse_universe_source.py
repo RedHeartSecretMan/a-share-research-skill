@@ -369,6 +369,7 @@ class SseListRecord:
     displayed_delisting_date: str | None = None
     a_stock_code: str | None = None
     b_stock_code: str | None = None
+    security_category: str | None = None
     membership_effective_at: None = None
     available_at: None = None
 
@@ -383,7 +384,18 @@ class SseListRecord:
             "b_stock_code": self.b_stock_code,
             "component_absence_proven": False,
             "source_date_semantics": "display_listing_date_only",
-            "security_class_proven": False,
+            "security_category": self.security_category,
+            "security_class_proven": self.security_category is not None,
+            "classification_as_of_proven": False,
+            "classification_basis": "official_B_share_component"
+            if self.security_category == "B_SHARE"
+            else "official_scope_and_C20_inference"
+            if self.security_category
+            else "unproved",
+            "classification_rule_versions": [
+                "SSE_product_status_3.540",
+                "SSE_special_markers_2025_07",
+            ],
             "listing_state_proven": False,
             "membership_effective_at": self.membership_effective_at,
             "available_at": self.available_at,
@@ -528,6 +540,51 @@ def _mainboard_integer(value: object, *, minimum: int) -> int:
     return value
 
 
+# U: formal field29 is C20; undefined positions are spaces. Website-to-field
+# association is an inference from its name, same fifth slot and guide article3.
+_C20_SLOTS = (
+    " N",
+    " D",
+    " R",
+    " DSPTU",
+    " Y",
+    " LM",
+    " FS",
+    " U",
+    " W",
+    " YN",
+    " Y",
+    *([" "] * 9),
+)
+
+
+def _current_security_category(
+    row: dict[str, str], *, a_code: str | None, b_code: str | None
+) -> str | None:
+    # A positive B component never removes an A component in the same row.
+    if row["STOCK_TYPE"] == "2" and a_code is None and b_code is not None:
+        return "B_SHARE"
+    flags = row.get("PRODUCT_STATUS")
+    if (
+        flags is None
+        or len(flags) != 20
+        or any(value not in allowed for value, allowed in zip(flags, _C20_SLOTS))
+        or row["STOCK_TYPE"] not in {"1", "8"}
+        or a_code is None
+    ):
+        return None
+    if flags[4] == "Y":
+        return "CDR"
+    if flags[3] == "U":
+        return "PREFERRED_SHARE"
+    if flags[5] in {"L", "M"}:
+        return "BOND"
+    # Missing domestic stock state is unknown, not proof from an absent D suffix.
+    if flags[3] not in {"D", "S", "P", "T"}:
+        return None
+    return "A_SHARE"
+
+
 def _mainboard_record(
     value: object, *, page: int, retrieved_at: str, partition: str
 ) -> SseListRecord:
@@ -597,6 +654,7 @@ def _mainboard_record(
         displayed_delisting_date=delisted,
         a_stock_code=a_code,
         b_stock_code=b_code,
+        security_category=_current_security_category(row, a_code=a_code, b_code=b_code),
     )
 
 
@@ -803,9 +861,12 @@ def acquire_sse_list_partition(
         "availability_time_unknown",
         "historical_range_unproved",
         "source_partition_not_complete_sse_universe",
-        "security_class_unproved",
         "source_status_semantics_unproved",
     ]
+    if any(row.security_category is None for row in records):
+        limitations.append("security_class_unproved")
+    if any(row.security_category not in {None, "A_SHARE"} for row in records):
+        limitations.append("positive_non_a_records_present")
     if failure:
         limitations.append(failure)
     if result.failure_code:
@@ -953,6 +1014,7 @@ class SseMainboardCurrentIdentityAdapter:
             )
             for row in acquisition.records
             if expected.get(row.code) == row.name
+            and row.security_category in {None, "A_SHARE"}
         )
         # observed_at is the owner's actual observation of the retrieved response;
         # it is neither LIST_DATE nor source-publication or effective time.

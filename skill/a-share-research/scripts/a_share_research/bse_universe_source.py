@@ -380,11 +380,13 @@ class _BsePages:
         membership_date: str,
         current_date: str,
         max_pages: int,
+        timeout_seconds: float,
     ) -> None:
         self.transport = transport
         self.membership_date = membership_date
         self.current_date = current_date
         self.max_pages = max_pages
+        self.timeout_seconds = timeout_seconds
         self.lock = Lock()
         self.pages: list[_BsePage] = []
         self.failure: str | None = None
@@ -410,7 +412,9 @@ class _BsePages:
             }
             body = query.encoded_body()
             response = (
-                transport.post(query.endpoint, headers, body)
+                cast(UrlLibTransport, transport).post_with_timeout(
+                    query.endpoint, headers, body, self.timeout_seconds
+                )
                 if owned_transport
                 else invocation.call(
                     ProductionInvocationAdapter(
@@ -467,6 +471,7 @@ def acquire_bse_current_list(
         prepared.screen_date,
         research_now.astimezone(ASIA_SHANGHAI).date().isoformat(),
         max_pages,
+        policy.call_timeout_seconds or policy.timeout_seconds,
     )
     result = lanes.run(provider_group="bse", adapter=pages, policy=policy)
     observed, failure = pages.snapshot()

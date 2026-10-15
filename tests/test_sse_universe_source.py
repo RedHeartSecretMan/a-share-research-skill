@@ -931,7 +931,8 @@ class SseMainboardCurrentListTests(unittest.TestCase):
                     record.a_stock_code, None if source_type == "2" else "120000"
                 )
                 self.assertFalse(source.to_public_dict()["membership_proven"])
-                self.assertFalse(record.to_public_dict()["security_class_proven"])
+                self.assertTrue(record.to_public_dict()["security_class_proven"])
+                self.assertFalse(record.to_public_dict()["classification_as_of_proven"])
                 self.assertIsNone(record.membership_effective_at)
                 self.assertIsNone(record.available_at)
 
@@ -971,6 +972,72 @@ class SseMainboardCurrentListTests(unittest.TestCase):
         self.assertIsNone(source.records[0].membership_effective_at)
         self.assertEqual(source.information_cutoff, "2026-10-14T23:59:59+08:00")
         self.assertFalse(source.to_public_dict()["membership_proven"])
+
+    def test_u_complete_c20_combines_scope_and_other_class_constraints_for_positive_classification(
+        self,
+    ) -> None:
+        status = "   D  F  N          "
+        self.assertEqual(len(status), 20)
+        cases = (
+            (status, "A_SHARE"),
+            (status[:4] + "Y" + status[5:], "CDR"),
+            (status[:3] + "U" + status[4:], "PREFERRED_SHARE"),
+            (status[:5] + "L" + status[6:], "BOND"),
+            ("-", None),
+            (status[:-1], None),
+            (status[:4] + "?" + status[5:], None),
+            (" " * 20, None),
+        )
+        for flags, expected in cases:
+            with self.subTest(flags=flags):
+                row = mainboard_row("120000")
+                row["PRODUCT_STATUS"] = flags
+                source = acquire_sse_mainboard_current_list(
+                    UniverseRequest("2026-10-15", FROZEN.isoformat()),
+                    research_now=FROZEN,
+                    transport=MainboardFixtureTransport(
+                        {1: mainboard_page(1, [row], count=1)}
+                    ),
+                    lanes=ProviderLanes(),
+                    policy=ProviderLanePolicy(1, 1),
+                    max_pages=1,
+                )
+                self.assertEqual(len(source.records), 1)
+                record = source.records[0].to_public_dict()
+                self.assertEqual(record["security_category"], expected)
+                self.assertEqual(record["security_class_proven"], expected is not None)
+                self.assertFalse(record["classification_as_of_proven"])
+                self.assertIsNone(record["available_at"])
+                self.assertEqual(
+                    record["classification_basis"],
+                    "official_scope_and_C20_inference" if expected else "unproved",
+                )
+                self.assertNotIn("PRODUCT_STATUS", record)
+
+    def test_positive_cdr_fact_cannot_be_relabelled_a_share_by_expected_identity(
+        self,
+    ) -> None:
+        row = mainboard_row("120000")
+        row.update(SEC_NAME_CN="合成公司", PRODUCT_STATUS="   DY F  N          ")
+        adapter = SseMainboardCurrentIdentityAdapter(
+            research_now=FROZEN,
+            transport=MainboardFixtureTransport({1: mainboard_page(1, [row], count=1)}),
+            lanes=ProviderLanes(),
+            policy=ProviderLanePolicy(1, 1),
+            max_pages=1,
+        )
+        universe = build_as_of_a_share_universe(
+            UniverseRequest("2026-10-15", FROZEN.isoformat()),
+            research_now=FROZEN,
+            exchange_list_adapters=(ProvenSseListFixture(("120000",)),),
+            identity_adapters=(adapter,),
+        )
+        sse = next(p for p in universe.partitions if p.exchange == "SSE")
+        self.assertEqual((sse.expected, sse.resolved, sse.failed), (1, 0, 1))
+        self.assertIn("source_failed", sse.securities[0].unranked_reasons)
+        assert adapter.last_acquisition is not None
+        self.assertEqual(adapter.last_acquisition.records[0].security_category, "CDR")
+        self.assertFalse(universe.full_a_share_universe)
 
 
 if __name__ == "__main__":

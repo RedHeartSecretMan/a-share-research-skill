@@ -26,7 +26,7 @@ P 的 `pageHelp.total=0` 与实际非空 `result` 并存，不能用此数值声
 
 R 的第一批真实主板响应实际有 25 行，声明 1702 条、69 页；保留 20 条身份元数据不表示只有 20 行或全量已取得。生产 parser 仅解析固定 callback 包裹的静态 JSON，不执行 JavaScript；验证页号、每页容量、总页数和数量一致，并拒绝 executable tail、异常 schema、未知字段、错误 `STOCK_TYPE` 与不安全名称。重复记录、短页、后页失败、计数漂移和预算耗尽保留先前成立记录及原声明数量，阻断 `pages_complete`。
 
-官方 caller 将 `LIST_DATE` 显示为上市日期。Parser 将八位日期标签规范为 `displayed_listing_date`，仍不据此建立完整历史生效区间或首次公开时间。`STATE_CODE`、`PRODUCT_STATUS`、B 股组件与缺失/占位 CDR 字段保持语义未证明，不进入公开规范记录或类别推断。source scope 明示 `SSE_MAINBOARD_A_SELECTOR`，`membership_proven=false`；即使本次分页闭合仍为 `partial`。R 的暂停上市默认控件 `COMPANY_STATUS=5` 有单独零行证据；它不表示 `COMPANY_STATUS=3` 终止上市或主板默认名单为空，此主板 parser 不复用该 observed-empty 结论。
+官方 caller 将 `LIST_DATE` 显示为上市日期。Parser 将八位日期标签规范为 `displayed_listing_date`，仍不据此建立完整历史生效区间或首次公开时间。`STATE_CODE` 的历史生效语义仍未证明；`PRODUCT_STATUS` 在 U 核验后按下面的完整 C20 规则进行当前类别推导。正向 A/B 组件保留，空或占位字段不被用来证明类别缺席。source scope 明示 `SSE_MAINBOARD_A_SELECTOR`，`membership_proven=false`；即使本次分页闭合仍为 `partial`。R 的暂停上市默认控件 `COMPANY_STATUS=5` 有单独零行证据；它不表示 `COMPANY_STATUS=3` 终止上市或主板默认名单为空，此主板 parser 不复用该 observed-empty 结论。
 
 `SseMainboardCurrentIdentityAdapter` 使用该批量路径核对 #110 已准备的 expected 代码/名称，不退化为逐证券点查询。A 股范围仍须由适用 expected 清单证明，匹配身份的状态、生效和公开时间继续为 `null`；#110 对账与 unranked 语义不变。科创板、完整 SSE 证券类别、历史名单/状态事件及 source version 仍待证明，当前路径不能独自闭合完整 SSE 分母。
 
@@ -38,11 +38,21 @@ R 的可消费 W1–W3 记录由独立核验 `f48abd3da22d1b6623b76b6c967e95e9ab
 
 S 的实际当前科创板查询使用 `STOCK_TYPE=8`，声明 618 条、25 页；终止上市主板查询使用 `STOCK_TYPE=1,2`、`COMPANY_STATUS=3` 及 `/commonQuery.do`，声明 156 条、7 页；终止科创板查询使用 `STOCK_TYPE=8`、`COMPANY_STATUS=3`，声明 3 条、1 页。前三批实际取得 25、25、3 行，留存的 5、10、3 条身份材料不等于全量收集。科创板不是纯 A 股类别的自动证明，主板 `1,2` 分区包含 B 股。
 
-Parser 按各分区允许的真实 `STOCK_TYPE` 检查行形状；规范保留正向 A/B 代码组件和显示上市/终止日期，不以 B 组件出现为由删除同一行 A 组件。空或占位组件仍不证明类别缺席。`PRODUCT_STATUS` 的 D 字母没有已核验的 CDR 定义；公司详情中 `SEC_TYPE` 的“科创 A”“科创 CDR”区别尚无与列表字段的合格映射。source scope 与 `security_class_proven=false` 保留此缺口，B 股组件不被改写为规范 A 股身份。
+Parser 按各分区允许的真实 `STOCK_TYPE` 检查行形状；规范保留正向 A/B 代码组件和显示上市/终止日期，不以 B 组件出现为由删除同一行 A 组件。空或占位组件仍不证明类别缺席。U 已核验正式 C20 定义与官网显示规则，补足了同一第五位置 Y 的存托凭证含义；具体判定见下节。raw D 字母仍不可任意搜索，B 股组件不被改写为规范 A 股身份，历史类别版本继续单独裁决。
 
 终止上市目录可以作为后来取得的历史事实载体，因此历史请求可解析这些日期事实，并保留真实晚于 cutoff 的 `retrieved_at`。这并不证明在旧 cutoff 前已经公开了同一事实版本：`available_at` 和 membership 生效时点继续未知，结果为 `partial`，不进入 as-of expected 分母。当前 active 分区继续拒绝历史 membership 请求。日期的实际生效日/含排边界可由适用官方定义证明，无须索要精确秒数；若官方公布日期与同一版本对应充分，也可按已证明的保守日界裁决可用时间。
 
 S 的最终独立核验摘要为 `eac74cce06ff1c2f38648b1acc9ad04d18e5bafcb7f9ea33b433571c2c4d2c5b`。固定源 selector 和形状允许继续真实 parser 实现；普通 A 股/CDR 分类、完整请求日期名录与变更事件、同一版本在 cutoff 前公开的证明仍需补齐。
+
+## U 核验后的完整 C20 类别推导
+
+实际《竞价撮合平台市场数据文件》3.540 的字段 29 明定“产品状态标志”为完整 C20：未定义位置填空格，第五位 Y 表示存托凭证；第四位 D/S/P/T/U 分别具有国内正常、风险警示、退市整理、退市转让、优先股含义；第六位 L/M 属于债券适当性标志。parser 校验所有 20 位及已定义取值，缺失、短字段、占位或非法位置继续为未知。它不把任意一个 D 或缺少展示后缀当作类别判断。
+
+官网真实 caller 的 `PRODUCT_STATUS` 经 `substring(4,5)==Y` 显示 D；2025 年 7 月《证券特殊标识指南》第八条定义存托凭证加 D，第三条明确产品信息文件和官网之间的展示关系。将官网字段与正式 C20 结合，是由字段名、同一位置和官方展示规则支持的推导，记录为 `official_scope_and_C20_inference`，不伪装为新查询的证券级事实。
+
+普通 A 股当前判定要求适用 `STOCK_TYPE=1/8` 来源范围、正向 A 代码组件、完整有效 C20、相应国内股票状态，以及没有第五位 Y、第四位 U 或第六位 L/M 等其他类别约束。正向 Y、优先股或债券标志分别保留明确非 A 类别；仅 B 组件与主板 B 股范围形成正向 B 股事实，不删除同行 A 组件。Mainboard identity Adapter 不把正向非 A 事实重新标成调用者 expected A 身份；已有分母记录进入 failed/unranked 并保留来源审计。
+
+类别的当前语义推导与历史可采纳分开：`classification_as_of_proven=false`，记录的 `available_at` 与 membership 时间仍未知。3.540 的“2026 年 6 月”版本标签不被当成具体公开日；2025 年 7 月指南的 `2025-07-14T00:00:00+08:00` 保守界只属于同名规则版本，不分配给 roster 行。离线正向 CDR 合成例由这些实际定义支持，不额外要求一个未批准的 CDR 定点 live 样本。
 
 ## 资格缺口
 
@@ -50,7 +60,7 @@ S 的最终独立核验摘要为 `eac74cce06ff1c2f38648b1acc9ad04d18e5bafcb7f9ea
 | --- | --- |
 | 当前点身份 selector | P 有界真实样本和已有 parser；不代表 bulk |
 | 完整 current/historical 名录 | R/S 证明当前主板、科创板与终止分区 caller/首批形状；完整分页和历史版本仍 unknown |
-| A 股普通股票与 CDR 等类别 | 当前点字段不足；由合格 expected 清单承担，不猜分类 |
+| A 股普通股票与 CDR 等类别 | U 支持完整 C20 + scope 的当前推导；缺失/非法字段与历史类别版本仍不猜测 |
 | 上市、退市、代码/名称变化 | 历史事件与生效区间 unknown |
 | 事实版本与 cutoff | 首次公开及版本对应 unknown；实际 retrieval 不倒填 |
 | 空结果语义 | 非空点样本及失败 bulk 候选不证明完整成功空集 |

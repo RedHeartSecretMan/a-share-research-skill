@@ -29,3 +29,8 @@ identity outcome 的 `complete` 只表示本批请求的全部 code/name 均已�
 另一个 [新旧代码对照表](https://www.bse.cn/code_mapping/200025792.html)有 248 行连续序号与 `2025-09-12` 文档日期。文档日期不表示代码切换生效日，表格也不证明当前证券池或全部历史。禁止以对照表替代名录或从代码前缀造身份。
 
 三所历史名单/状态事件、生效和首次可用时间、完整 source scope、source permission、稳定 terminal/count 与共享 provider 的全量 workload 仍需真实契约证据。当前增量不修改 #110/#119 或资格 authority，不注册公共 workflow；默认三所生产装配、完整 #122 验收和 #98 live attestation 均尚未完成。
+
+
+## T 的日期版本补充
+
+[日期版本代码切换事实](bse-code-mapping-source.md) 提供独立的 248-company cohort parser。它的日期文章可用时间和代码切换日期不自动赋给当前 POST 名单行；原精选层上市日期限定继续有效。当前默认 urllib POST 复用已接受的 `post_with_timeout`，把已有 policy 的 call/operation timeout 传入实际 HTTP leaf，所有计数与 quiescence 仍由 #119 拥有。
