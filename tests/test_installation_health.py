@@ -5,6 +5,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from tests.skill_imports import add_skill_scripts_to_path
 
@@ -96,6 +97,35 @@ class InstallationHealthTests(unittest.TestCase):
         )  # type: ignore[index]
         self.assertIn("baostock", loaded)
         self.assertEqual(health["source_policy"]["source_accessibility"], "not_checked")  # type: ignore[index]
+
+    def test_missing_or_duplicate_dated_roster_lock_entry_is_incomplete(self) -> None:
+        lock = (
+            Path(__file__).resolve().parents[1]
+            / "skill/a-share-research/requirements.lock"
+        )
+        original = lock.read_text(encoding="utf-8")
+        versions = self.locked_versions()
+        loaded = SimpleNamespace(
+            MootdxF10Operation=SimpleNamespace(operation_id="mootdx_f10@1"),
+            MootdxIntradayReplayOperation=SimpleNamespace(
+                operation_id="mootdx_intraday_replay@1"
+            ),
+            TongdaxinIntradayOperation=SimpleNamespace(
+                operation_id="tongdaxin_intraday_snapshot@1"
+            ),
+        )
+        for replacement in ("", "baostock==0.9.4\nbaostock==0.9.4\n"):
+            with (
+                self.subTest(replacement=replacement),
+                patch(
+                    "pathlib.Path.read_text",
+                    return_value=original.replace("baostock==0.9.4\n", replacement),
+                ),
+            ):
+                health = check_installation(
+                    version=versions.__getitem__, load_module=lambda _: loaded
+                )
+                self.assertEqual(health["status"], "installation_incomplete")
 
     def test_version_mismatch_is_incomplete_without_loading_candidate_code(
         self,

@@ -326,12 +326,10 @@ def _locked_runtime_dependencies() -> tuple[RuntimeDependency, ...]:
         )
     if not requirements:
         raise ValueError("runtime lock is empty")
-    if (
-        sum(
-            item.distribution == MOOTDX_RUNTIME_DEPENDENCY.distribution
-            for item in requirements
-        )
-        != 1
-    ):
-        raise ValueError("runtime lock must contain the formal mootdx dependency once")
+    for dependency in (MOOTDX_RUNTIME_DEPENDENCY, BAOSTOCK_RUNTIME_DEPENDENCY):
+        if (
+            sum(item.distribution == dependency.distribution for item in requirements)
+            != 1
+        ):
+            raise ValueError("runtime lock must contain each core SDK dependency once")
     return tuple(requirements)
