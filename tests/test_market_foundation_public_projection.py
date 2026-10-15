@@ -30,6 +30,224 @@ from tests.test_market_foundation import (  # noqa: E402
 
 
 class MarketFoundationPublicProjectionTests(unittest.TestCase):
+    def assert_unattempted_projection(self, outcome, operations, request):
+        from a_share_research.market_foundation import fold_market_foundation
+
+        folded = fold_market_foundation((outcome,), request, operations=operations)
+        self.assertEqual(folded["operations"][0]["attempts"], 0)
+        self.assertFalse(folded["operations"][0]["attempted"])
+        plan = DirectTaskPlan(
+            task_type="market_foundation_qualification",
+            as_of=request.report_date,
+            obligations=(
+                OperationObligation(
+                    outcome.capability_id,
+                    outcome.operation_id,
+                    "market_observation",
+                    False,
+                    "SSE",
+                    (EvidenceUsePolicy(outcome.capability_id, "supporting"),),
+                ),
+            ),
+            dependencies=(
+                ResearchDependency(
+                    outcome.capability_id, outcome.capability_id, 1, True
+                ),
+            ),
+        )
+        public = fold_direct_task_research_result(
+            plan, (outcome,), summary="Offline unstarted source proof."
+        ).to_dict()
+        _, probes = sanitize_public_result(
+            request_profile="market-foundation-unstarted",
+            request_as_of=request.report_date,
+            result=public,
+            verified_at="2026-10-01T10:00:00+08:00",
+        )
+        self.assertFalse(probes[0]["attempted"])
+        self.assertEqual(outcome.execution.state, "skipped_policy")
+        self.assertEqual(probes[0]["source_result"], "unavailable")
+
+    def test_poisoned_group_never_becomes_an_attempted_public_source(self):
+        from threading import Event
+        from a_share_research.provider_lane import (
+            ProviderLanes,
+            ProviderLanePolicy,
+            ProductionInvocationAdapter,
+        )
+
+        release = Event()
+
+        class Blocker:
+            def execute(self, invocation):
+                return invocation.call(
+                    ProductionInvocationAdapter(lambda: release.wait(2))
+                )
+
+        lanes = ProviderLanes()
+        seed = lanes.run(
+            provider_group="sse",
+            adapter=Blocker(),
+            policy=ProviderLanePolicy(
+                actual_attempt_budget=1,
+                timeout_seconds=0.02,
+                cancellation_grace_seconds=0,
+            ),
+        )
+        self.assertEqual(seed.quiescence.state, "poisoned")
+        transport = ReportTransport(
+            turnover_report("SSE", {"TRADE_AMT_01": "1", "TRADE_AMT_03": "1"})
+        )
+        try:
+            operations = build_default_market_foundation_operations(
+                transports={"sse_a_share_turnover@1": transport}, lanes=lanes
+            )
+            request = OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00")
+            outcome = operations[0].execute(request, 0.02)
+            self.assertEqual(transport.calls, 0)
+            self.assert_unattempted_projection(outcome, operations, request)
+        finally:
+            release.set()
+
+    def test_busy_group_never_becomes_an_attempted_public_source(self):
+        from threading import Event, Thread
+        from a_share_research.provider_lane import (
+            ProviderLanes,
+            ProviderLanePolicy,
+            ProductionInvocationAdapter,
+        )
+
+        release, started = Event(), Event()
+
+        class Blocker:
+            def execute(self, invocation):
+                def hold():
+                    started.set()
+                    return release.wait(2)
+
+                return invocation.call(ProductionInvocationAdapter(hold))
+
+        lanes = ProviderLanes()
+        seed = Thread(
+            target=lambda: lanes.run(
+                provider_group="sse",
+                adapter=Blocker(),
+                policy=ProviderLanePolicy(actual_attempt_budget=1, timeout_seconds=2),
+            )
+        )
+        seed.start()
+        transport = ReportTransport(
+            turnover_report("SSE", {"TRADE_AMT_01": "1", "TRADE_AMT_03": "1"})
+        )
+        try:
+            self.assertTrue(started.wait(1))
+            operations = build_default_market_foundation_operations(
+                transports={"sse_a_share_turnover@1": transport}, lanes=lanes
+            )
+            request = OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00")
+            outcome = operations[0].execute(request, 0.02)
+            self.assertEqual(transport.calls, 0)
+            self.assert_unattempted_projection(outcome, operations, request)
+        finally:
+            release.set()
+            seed.join(2)
+        self.assertFalse(seed.is_alive())
+
+    def test_deadline_before_first_leaf_never_becomes_public_attempted(self):
+        from threading import Event
+        from a_share_research.provider_lane import ProductionInvocationAdapter
+
+        release, finished = Event(), Event()
+        calls = []
+
+        class DelayedTransport:
+            def acquire(self, selector, request, timeout, invocation):
+                try:
+                    release.wait(2)
+                    return invocation.call(
+                        ProductionInvocationAdapter(lambda: calls.append("leaf"))
+                    )
+                finally:
+                    finished.set()
+
+        operations = build_default_market_foundation_operations(
+            transports={"sse_a_share_turnover@1": DelayedTransport()}
+        )
+        request = OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00")
+        try:
+            outcome = operations[0].execute(request, 0.02)
+            self.assertEqual(calls, [])
+            self.assert_unattempted_projection(outcome, operations, request)
+        finally:
+            release.set()
+            self.assertTrue(finished.wait(1))
+        self.assertEqual(calls, [])
+
+    def test_report_without_any_leaf_cannot_create_public_attempted_proof(self):
+        class NoLeafTransport:
+            def acquire(self, selector, request, timeout, invocation):
+                return turnover_report(
+                    "SSE", {"TRADE_AMT_01": "1", "TRADE_AMT_03": "1"}
+                )
+
+        operations = build_default_market_foundation_operations(
+            transports={"sse_a_share_turnover@1": NoLeafTransport()}
+        )
+        request = OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00")
+        outcome = operations[0].execute(request, 1)
+        self.assert_unattempted_projection(outcome, operations, request)
+
+    def test_actual_leaf_failure_remains_attempted_through_public_projection(self):
+        from a_share_research.market_foundation import fold_market_foundation
+        from a_share_research.provider_lane import ProductionInvocationAdapter
+
+        class FailedTransport:
+            def acquire(self, selector, request, timeout, invocation):
+                def unavailable():
+                    raise RuntimeError("synthetic offline failure")
+
+                return invocation.call(ProductionInvocationAdapter(unavailable))
+
+        operations = build_default_market_foundation_operations(
+            transports={"sse_a_share_turnover@1": FailedTransport()}
+        )
+        request = OperationRequest("2026-09-30", "2026-09-30T19:00:00+08:00")
+        outcome = operations[0].execute(request, 1)
+        folded = fold_market_foundation((outcome,), request, operations=operations)
+        self.assertEqual(outcome.execution.state, "failed")
+        self.assertEqual(folded["operations"][0]["attempts"], 1)
+        self.assertTrue(folded["operations"][0]["attempted"])
+        plan = DirectTaskPlan(
+            task_type="market_foundation_qualification",
+            as_of=request.report_date,
+            obligations=(
+                OperationObligation(
+                    outcome.capability_id,
+                    outcome.operation_id,
+                    "market_observation",
+                    False,
+                    "SSE",
+                    (EvidenceUsePolicy(outcome.capability_id, "supporting"),),
+                ),
+            ),
+            dependencies=(
+                ResearchDependency(
+                    outcome.capability_id, outcome.capability_id, 1, True
+                ),
+            ),
+        )
+        public = fold_direct_task_research_result(
+            plan, (outcome,), summary="Offline attempted source failure."
+        ).to_dict()
+        _, probes = sanitize_public_result(
+            request_profile="market-foundation-failed",
+            request_as_of=request.report_date,
+            result=public,
+            verified_at="2026-10-01T10:00:00+08:00",
+        )
+        self.assertTrue(probes[0]["attempted"])
+        self.assertEqual(probes[0]["source_result"], "unavailable")
+
     def test_identity_request_scope_and_unknown_exchange_metadata_stay_rejected(self):
         obligation = OperationObligation(
             "whole_market_turnover",

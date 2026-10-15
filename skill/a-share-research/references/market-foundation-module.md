@@ -34,7 +34,9 @@ shares 时才能进入规范化，SSE 的股／份／手和 SZSE 的亿股／亿
 owner 输出直接由 #116 的 `OperationOutcome` 脱离调用者后递归封存，投影使用其 `to_dict()`。
 fold 只接收当前装配的 owner 实际签发的对象。公共结果只包含规范化字段、固定安全错误状态、
 资格中的来源定位以及由执行获得的调用次数；调用者提供的 locator、异常文本、原始响应、
-诊断或 attempts 不成为权威。
+诊断或 attempts 不成为权威。零次 leaf invocation 的 owner 保留 `skipped_policy`，
+内部 fold 与公共／发布投影均不计入 attempted；poisoned、busy 或调用前截止不能产生
+虚假的失败 attempt。有实际调用的来源失败继续保留 `failed` 与真实次数。
 
 来源状态调用已有发布 Module 的 canonical helper，保持 `complete`、`observed_empty`、
 `partial`、`credential_blocked` 和 `unavailable` 与执行事实分离。报告事实由规范化 observation

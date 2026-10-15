@@ -165,7 +165,9 @@ class MarketFoundationOperationAdapter:
             ),
         )
         attempts = len(result.attempts)
-        if result.status == "succeeded" and result.value is not None and attempts:
+        if not attempts:
+            outcome = _unavailable(contract, invoked=False)
+        elif result.status == "succeeded" and result.value is not None:
             outcome = result.value
         else:
             outcome = _unavailable(contract)
@@ -313,6 +315,7 @@ def _unavailable(
     source_result: str = "unavailable",
     error_code: str = "market_source_unavailable",
     diagnostics: Mapping[str, object] | None = None,
+    invoked: bool = True,
 ) -> OperationOutcome:
     owner = str(contract["producer_operation_id"])
     messages = {
@@ -330,7 +333,7 @@ def _unavailable(
     return OperationOutcome(
         str(contract["capability_id"]),
         owner,
-        OperationExecution("failed"),
+        OperationExecution("failed" if invoked else "skipped_policy"),
         source_errors=(
             {
                 "source_operation": owner,
@@ -341,7 +344,9 @@ def _unavailable(
                 if source_result == "credential_blocked"
                 else messages[error_code],
             },
-        ),
+        )
+        if invoked
+        else (),
         field_dispositions=tuple(
             FieldDisposition(field, "normalized", str(destination))
             for field, destination in _mapping(contract["field_destinations"]).items()
