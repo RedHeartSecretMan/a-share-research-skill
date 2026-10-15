@@ -25,6 +25,12 @@ from .bse_universe_source import (
     BsePostTransport,
     acquire_bse_current_list,
 )
+from .bse_membership_event import (
+    BseMembershipEventAcquisition,
+    BseMembershipEventAdapter,
+    BseMembershipEventTarget,
+    BseMembershipIdentityAdapter,
+)
 from .content_contract import ContentHttpTransport
 from .identity_sources import HttpTransport, UrlLibTransport
 from .provider_lane import ProviderLanePolicy, ProviderLanes
@@ -57,7 +63,7 @@ from .universe_input import (
 
 @dataclass(frozen=True, slots=True)
 class CurrentSourcePolicies:
-    """Explicit finite policies for the fixed three provider groups."""
+    """Finite owner budgets, all using the caller's shared provider lanes."""
 
     sse: ProviderLanePolicy
     szse: ProviderLanePolicy
@@ -181,7 +187,13 @@ class _CurrentListAdapter:
 class CurrentUniverseAdapters:
     """Fixed source owners for #110; construction performs no source calls."""
 
-    exchange_list_adapters: tuple[_CurrentListAdapter, ...]
+    exchange_list_adapters: tuple[
+        _CurrentListAdapter
+        | SseListingNoticeAdapter
+        | SzseListingEventAdapter
+        | BseMembershipEventAdapter,
+        ...,
+    ]
     identity_adapters: tuple[IdentityAdapter, ...]
 
 
@@ -292,7 +304,7 @@ class UniverseAcquisition:
     source_acquisitions: tuple[
         SseListAcquisition | SseListingNoticeAcquisition,
         CurrentListAcquisition | SzseListingMaterialAcquisition,
-        BseCurrentListAcquisition,
+        BseCurrentListAcquisition | BseMembershipEventAcquisition,
     ]
 
     def to_public_dict(self) -> dict[str, object]:
@@ -329,8 +341,7 @@ def acquire_default_current_universe(
     )
 
 
-def acquire_default_universe(
-    request: UniverseRequest,
+def create_default_universe_adapters(
     *,
     research_now: datetime,
     lanes: ProviderLanes,
@@ -340,25 +351,19 @@ def acquire_default_universe(
     sse_listing_transport: HttpTransport | None = None,
     szse_listing_event: SzseListingEventTarget | None = None,
     listing_transport: ContentHttpTransport | None = None,
-) -> UniverseAcquisition:
-    """Assemble real current owners and an optional exact official event.
-
-    The target only routes finite acquisition. Metadata and PDF must establish
-    every member field. No sample issuer is hardcoded and no caller-filled list
-    is accepted. An exact event supplies one useful partial on its formal day;
-    other exchange totals and unsupported dates remain unknown/unavailable.
-    """
-    prepared = prepare_universe_request(request, research_now=research_now)
-    detached = UniverseRequest(prepared.screen_date, prepared.information_cutoff)
+    bse_membership_event: BseMembershipEventTarget | None = None,
+    bse_material_transport: HttpTransport | None = None,
+    bse_mapping_transport: HttpTransport | None = None,
+) -> CurrentUniverseAdapters:
+    """Select paired real source owners without performing source calls."""
     owners = create_default_current_universe_adapters(
         research_now=research_now,
         lanes=lanes,
         policies=policies,
         transports=transports,
     )
-    list_owners: tuple[
-        _CurrentListAdapter | SzseListingEventAdapter | SseListingNoticeAdapter, ...
-    ] = owners.exchange_list_adapters
+    list_owners = owners.exchange_list_adapters
+    identity_owners = owners.identity_adapters
     if sse_listing_event is not None:
         sse_event_owner = SseListingNoticeAdapter(
             target=sse_listing_event,
@@ -385,6 +390,64 @@ def acquire_default_universe(
         list_owners = (list_owners[0], event_owner, list_owners[2])
     elif listing_transport is not None:
         raise TypeError("A listing transport requires its exact source target.")
+    if bse_membership_event is not None:
+        bse_event_owner = BseMembershipEventAdapter(
+            target=bse_membership_event,
+            research_now=research_now,
+            lanes=lanes,
+            policy=policies.bse,
+            material_transport=bse_material_transport,
+            mapping_transport=bse_mapping_transport,
+        )
+        list_owners = (list_owners[0], list_owners[1], bse_event_owner)
+        identity_owners = (
+            identity_owners[0],
+            identity_owners[1],
+            BseMembershipIdentityAdapter(bse_event_owner),
+        )
+    elif bse_material_transport is not None or bse_mapping_transport is not None:
+        raise TypeError("BSE event transports require their exact source target.")
+    return CurrentUniverseAdapters(list_owners, identity_owners)
+
+
+def acquire_default_universe(
+    request: UniverseRequest,
+    *,
+    research_now: datetime,
+    lanes: ProviderLanes,
+    policies: CurrentSourcePolicies,
+    transports: CurrentSourceTransports | None = None,
+    sse_listing_event: SseListingNoticeTarget | None = None,
+    sse_listing_transport: HttpTransport | None = None,
+    szse_listing_event: SzseListingEventTarget | None = None,
+    listing_transport: ContentHttpTransport | None = None,
+    bse_membership_event: BseMembershipEventTarget | None = None,
+    bse_material_transport: HttpTransport | None = None,
+    bse_mapping_transport: HttpTransport | None = None,
+) -> UniverseAcquisition:
+    """Assemble real current owners and an optional exact official event.
+
+    The target only routes finite acquisition. Metadata and PDF must establish
+    every member field. No sample issuer is hardcoded and no caller-filled list
+    is accepted. An exact event supplies one useful partial on its formal day;
+    other exchange totals and unsupported dates remain unknown/unavailable.
+    """
+    prepared = prepare_universe_request(request, research_now=research_now)
+    detached = UniverseRequest(prepared.screen_date, prepared.information_cutoff)
+    owners = create_default_universe_adapters(
+        research_now=research_now,
+        lanes=lanes,
+        policies=policies,
+        transports=transports,
+        sse_listing_event=sse_listing_event,
+        sse_listing_transport=sse_listing_transport,
+        szse_listing_event=szse_listing_event,
+        listing_transport=listing_transport,
+        bse_membership_event=bse_membership_event,
+        bse_material_transport=bse_material_transport,
+        bse_mapping_transport=bse_mapping_transport,
+    )
+    list_owners = owners.exchange_list_adapters
     universe = build_as_of_a_share_universe(
         detached,
         research_now=research_now,
@@ -398,7 +461,7 @@ def acquire_default_universe(
         tuple[
             SseListAcquisition | SseListingNoticeAcquisition,
             CurrentListAcquisition | SzseListingMaterialAcquisition,
-            BseCurrentListAcquisition,
+            BseCurrentListAcquisition | BseMembershipEventAcquisition,
         ],
         sources,
     )

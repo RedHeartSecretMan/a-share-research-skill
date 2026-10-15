@@ -24,9 +24,9 @@
 
 当前方法明确只采集 current source scopes。历史请求不能通过重用这些当前目录变成历史名单，未知数量保持 `null`。它没有把 Baostock basic 或任何其他未实测字段接入历史路径。
 
-## #110 仍缺的输入
+## 当前名录仍缺的输入
 
-默认 `ExchangeListAdapter → #110` 装配已接入下述诚实 partial 投影，仍不具备正向时点成员记录。当前已核验来源行的 `membership_effective_at/available_at` 仍未知，来源声明总数与普通 A 股时点分母也未必相同。不能为调用 #110 而填入 retrieval、当前 basic 名称、零或当前声明数量。
+当前名录模式的 `ExchangeListAdapter → #110` 装配已接入下述诚实 partial 投影，原始当前行仍不具备正向时点成员记录。当前已核验来源行的 `membership_effective_at/available_at` 仍未知，来源声明总数与普通 A 股时点分母也未必相同。不能为调用 #110 而填入 retrieval、当前 basic 名称、零或当前声明数量。
 
 后续正向投影需要被选定方法实际字段、日期与范围依据，使 production normalizer 可以从来源生成合法 `ExchangeListOutcome`；随后由同一默认路径证明公开对账、正向排除和 unproven→unranked。已核验的 Baostock given-day 声明是逐日名录方向的正面依据，但 AG 已观察真实字段、分页/session 和特定日期的 provider 枚举；普通 A 股类别、名字版本与 BSE 范围仍未闭合。这里不要求全历史都先实测、泛化 PIT 保证书或提前完成 #98。
 
@@ -44,6 +44,9 @@ AH 的 BSE quotation query 与 H 的本名录是不同来源形状。AH 两页 4
 
 [SZSE 正式上市公告书事实采集](szse-formal-listing-material.md) 已支持真实 PDF decoder、具名正式批准条款和匹配版本的公开元数据；完整市场目录仍未闭合。
 
-后续 `annList` 补证已找到该 exact updated 文书的公开日期。`acquire_default_universe` 接收调用者提供的 `SzseListingEventTarget(source_code, document_url, max_metadata_pages)`，以有限真实 metadata/PDF acquisition 生成该证券正式上市日的一条正向 canonical partial；不会固化样例代码/UUID，调用者也不提供已证明名单。SSE/BSE 继续使用其现有真实 owners，历史日期不支持时保留 unavailable 和未知总量，BSE 缺失始终阻断 full。具体版本绑定、consumer conservative availability bound 与范围限制见上述文书说明。`acquire_default_current_universe` 保持当前来源模式，不自动把一个事件扩展成市场清单。
+后续 `annList` 补证已找到该 exact updated 文书的公开日期。`acquire_default_universe` 接收调用者提供的 `SzseListingEventTarget(source_code, document_url, max_metadata_pages)`，以有限真实 metadata/PDF acquisition 生成该证券正式上市日的一条正向 canonical partial；不会固化样例代码/UUID，调用者也不提供已证明名单。其他未指定事件的交易所继续使用其现有真实 owners，历史日期不支持时保留 unavailable 和未知总量，BSE 缺失始终阻断 full。具体版本绑定、consumer conservative availability bound 与范围限制见上述文书说明。`acquire_default_current_universe` 保持当前来源模式，不自动把一个事件扩展成市场清单。
 
 同一泛化装配也接收 `SseListingNoticeTarget(document_url)` 与 `sse_listing_transport`，执行[具名 SSE 科创板上市公告](sse-formal-listing-notice.md)的真实 HTML parser。该 owner 仅为文书正式上市日生成正向 partial，article header day 的 consumer conservative bound 不迁移到 SSE 当前名录。SSE/SZSE 两类有限事件均不能替代尚未闭合的市场目录；没有 target 时不会自动使用研究样例。
+
+
+`create_default_universe_adapters` 是上述 target-driven 默认选择的共同 factory，构造时不执行 I/O；`acquire_default_universe` 使用完全相同的 owner pairs。其可选 `bse_membership_event` 通过 [BSE 代码切换日成员证据](bse-code-cutover-membership.md)绑定 dated mapping、旧新同股普通 A 类别与真正 BSE 上市时间。BSE list 和 identity 复用同一事实获取 owner；caller 不填 canonical 名单、上市状态或 availability。每次 list/identity 调用各自执行有限真实 source leaves，identity 的已知批次分母不能替代全 BSE 未知总量。当前名录专用 factory 与 `acquire_default_current_universe` 保持原当前模式，不自动采用任何研究样例。
