@@ -31,3 +31,5 @@ copied-installed 当前默认采集测试使用合成原始 wire responses，实
 `acquire_default_current_universe` 在同一冻结请求下执行上述三个真实 parser，并把实际 attempted、source-result 和页数交给 #110 公共 Module。当前来源还未证明 membership effective/available 时点，因此 canonical list 不填造记录，expected 与 failed 通过 #110 的未知总量契约保留 `null`；source-reported count 和原有安全观察仍保留在 `source_acquisitions` 中。该路径验证真实默认装配和缺口投影，不宣称 #122 的有用时点化名单已完成。历史请求仍保留这三个当前来源的明确不支持状态。
 
 独立的 [Baostock 日期名册采集](baostock-dated-universe-source.md) 已实现给定日期查询与有限 SDK 分页。provider 名册含指数，当前仍不能为三所 canonical expected 分母补齐类别与公开时间证明，也不会作为未获资格的品牌 fallback。
+
+[SZSE 正式上市公告书事实采集](szse-formal-listing-material.md) 已支持真实 PDF decoder 和具名正式批准条款。当前仍缺同版本公开时间与可重复目录，事件事实保留为 partial，不给 canonical membership 补造字段。

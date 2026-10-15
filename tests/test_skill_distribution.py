@@ -666,7 +666,7 @@ class SkillDistributionTests(unittest.TestCase):
             lock,
         )
         self.assertIn('"--no-deps"', installer)
-        self.assertEqual(len(_applicable_locked_requirements(SKILL_ROOT)), 18)
+        self.assertEqual(len(_applicable_locked_requirements(SKILL_ROOT)), 19)
         self.assertEqual(
             len(
                 _applicable_locked_requirements(
@@ -674,7 +674,7 @@ class SkillDistributionTests(unittest.TestCase):
                     platform="win32",
                 )
             ),
-            20,
+            21,
         )
         locked_facts: list[tuple[str, str | None]] = []
         for raw_line in lock.splitlines():

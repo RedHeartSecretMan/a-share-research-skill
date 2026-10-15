@@ -42,6 +42,17 @@ BAOSTOCK_RUNTIME_DEPENDENCY = RuntimeDependency(
     modules=("baostock",),
     operation_ids=("baostock_dated_roster_acquisition@1",),
 )
+PYPDF_RUNTIME_DEPENDENCY = RuntimeDependency(
+    distribution="pypdf",
+    required_version="6.10.2",
+    modules=("pypdf",),
+    operation_ids=("szse_formal_listing_material@1",),
+)
+_CORE_RUNTIME_DEPENDENCIES = (
+    MOOTDX_RUNTIME_DEPENDENCY,
+    BAOSTOCK_RUNTIME_DEPENDENCY,
+    PYPDF_RUNTIME_DEPENDENCY,
+)
 _CORE_OPERATION_LOADS = {
     "mootdx_f10@1": (
         "a_share_research.communication_sources",
@@ -304,29 +315,27 @@ def _locked_runtime_dependencies() -> tuple[RuntimeDependency, ...]:
             raise ValueError("runtime lock contains an unsupported platform marker")
         if required_platform is not None and required_platform != sys.platform:
             continue
+        dependency = next(
+            (
+                item
+                for item in _CORE_RUNTIME_DEPENDENCIES
+                if item.distribution == distribution
+            ),
+            None,
+        )
         requirements.append(
             RuntimeDependency(
                 distribution=distribution,
                 required_version=required_version,
-                modules=(
-                    MOOTDX_RUNTIME_DEPENDENCY.modules
-                    if distribution == MOOTDX_RUNTIME_DEPENDENCY.distribution
-                    else BAOSTOCK_RUNTIME_DEPENDENCY.modules
-                    if distribution == BAOSTOCK_RUNTIME_DEPENDENCY.distribution
-                    else ()
-                ),
-                operation_ids=(
-                    MOOTDX_RUNTIME_DEPENDENCY.operation_ids
-                    if distribution == MOOTDX_RUNTIME_DEPENDENCY.distribution
-                    else BAOSTOCK_RUNTIME_DEPENDENCY.operation_ids
-                    if distribution == BAOSTOCK_RUNTIME_DEPENDENCY.distribution
-                    else ()
-                ),
+                modules=dependency.modules if dependency is not None else (),
+                operation_ids=dependency.operation_ids
+                if dependency is not None
+                else (),
             )
         )
     if not requirements:
         raise ValueError("runtime lock is empty")
-    for dependency in (MOOTDX_RUNTIME_DEPENDENCY, BAOSTOCK_RUNTIME_DEPENDENCY):
+    for dependency in _CORE_RUNTIME_DEPENDENCIES:
         if (
             sum(item.distribution == dependency.distribution for item in requirements)
             != 1

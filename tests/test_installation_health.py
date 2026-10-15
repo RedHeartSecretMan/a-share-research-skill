@@ -98,7 +98,24 @@ class InstallationHealthTests(unittest.TestCase):
         self.assertIn("baostock", loaded)
         self.assertEqual(health["source_policy"]["source_accessibility"], "not_checked")  # type: ignore[index]
 
-    def test_missing_or_duplicate_dated_roster_lock_entry_is_incomplete(self) -> None:
+    def test_listing_pdf_decoder_is_exactly_locked_and_loaded_without_source_access(
+        self,
+    ) -> None:
+        loaded: list[str] = []
+        health = check_installation(
+            version=self.locked_versions().__getitem__,
+            load_module=lambda module: loaded.append(module),
+        )
+        facts = health["dependencies"]
+        decoder = next(
+            (fact for fact in facts if fact["distribution"] == "pypdf"), None
+        )  # type: ignore[union-attr]
+        self.assertIsNotNone(decoder)
+        self.assertEqual(decoder["required_version"], "6.10.2")  # type: ignore[index]
+        self.assertEqual(decoder["operation_ids"], ["szse_formal_listing_material@1"])  # type: ignore[index]
+        self.assertIn("pypdf", loaded)
+
+    def test_missing_or_duplicate_required_sdk_lock_entry_is_incomplete(self) -> None:
         lock = (
             Path(__file__).resolve().parents[1]
             / "skill/a-share-research/requirements.lock"
@@ -114,18 +131,21 @@ class InstallationHealthTests(unittest.TestCase):
                 operation_id="tongdaxin_intraday_snapshot@1"
             ),
         )
-        for replacement in ("", "baostock==0.9.4\nbaostock==0.9.4\n"):
-            with (
-                self.subTest(replacement=replacement),
-                patch(
-                    "pathlib.Path.read_text",
-                    return_value=original.replace("baostock==0.9.4\n", replacement),
-                ),
-            ):
-                health = check_installation(
-                    version=versions.__getitem__, load_module=lambda _: loaded
-                )
-                self.assertEqual(health["status"], "installation_incomplete")
+        for distribution in ("mootdx", "baostock", "pypdf"):
+            line = f"{distribution}=={versions[distribution]}\n"
+            for replacement in ("", line + line):
+                with (
+                    self.subTest(distribution=distribution, replacement=replacement),
+                    patch(
+                        "pathlib.Path.read_text",
+                        return_value=original.replace(line, replacement),
+                    ),
+                ):
+                    health = check_installation(
+                        version=versions.__getitem__,
+                        load_module=lambda _: loaded,
+                    )
+                    self.assertEqual(health["status"], "installation_incomplete")
 
     def test_version_mismatch_is_incomplete_without_loading_candidate_code(
         self,
