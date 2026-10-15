@@ -62,9 +62,7 @@ class MarketFoundationPublicProjectionTests(unittest.TestCase):
     ):
         transports = {
             "bse_a_share_turnover@1": ReportTransport(
-                turnover_report(
-                    "BSE", {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "125000.50"}
-                )
+                turnover_report("BSE", {"A_SHARE_TURNOVER_CNY": "1250005000"})
             ),
             "bse_market_margin@1": ReportTransport(margin_report("BSE")),
         }

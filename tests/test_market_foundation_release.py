@@ -148,7 +148,11 @@ class MarketFoundationReleaseTests(unittest.TestCase):
             fields = (
                 {"TRADE_AMT_01": "0", "TRADE_AMT_03": "0"}
                 if exchange == "SSE"
-                else {"A_SHARE_TURNOVER_TEN_THOUSAND_CNY": "0"}
+                else {
+                    "A_SHARE_TURNOVER_HUNDRED_MILLION_CNY"
+                    if exchange == "SZSE"
+                    else "A_SHARE_TURNOVER_CNY": "0"
+                }
             )
             transports[f"{exchange.lower()}_a_share_turnover@1"] = ReportTransport(
                 turnover_report(exchange, fields)
