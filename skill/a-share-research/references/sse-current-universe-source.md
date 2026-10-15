@@ -32,12 +32,24 @@ R 的第一批真实主板响应实际有 25 行，声明 1702 条、69 页；�
 
 R 的可消费 W1–W3 记录由独立核验 `f48abd3da22d1b6623b76b6c967e95e9abc9358011f933f53eba48d52d7bd274` 绑定，真实 source body 摘要为 `bfcd8652d96935dcac30aaf5805487686f3d2b47a22d8fc63f640de411b3e0f1`；这不是最终来源资格或 release attestation。测试使用 expressly synthetic 证券、日期和计数，仅重现已证明形状。
 
+## S 核验后的固定来源分区
+
+`acquire_sse_list_partition` 使用同一 parser 处理已核验的四个固定 UI 来源范围：`active_mainboard`、`active_star`、`terminated_mainboard`、`terminated_star`。当前主板路径仍由 `acquire_sse_mainboard_current_list` 及其 identity Adapter 使用；新分区没有形成新的公共 workflow、registry 或历史证券池产品。
+
+S 的实际当前科创板查询使用 `STOCK_TYPE=8`，声明 618 条、25 页；终止上市主板查询使用 `STOCK_TYPE=1,2`、`COMPANY_STATUS=3` 及 `/commonQuery.do`，声明 156 条、7 页；终止科创板查询使用 `STOCK_TYPE=8`、`COMPANY_STATUS=3`，声明 3 条、1 页。前三批实际取得 25、25、3 行，留存的 5、10、3 条身份材料不等于全量收集。科创板不是纯 A 股类别的自动证明，主板 `1,2` 分区包含 B 股。
+
+Parser 按各分区允许的真实 `STOCK_TYPE` 检查行形状；规范保留正向 A/B 代码组件和显示上市/终止日期，不以 B 组件出现为由删除同一行 A 组件。空或占位组件仍不证明类别缺席。`PRODUCT_STATUS` 的 D 字母没有已核验的 CDR 定义；公司详情中 `SEC_TYPE` 的“科创 A”“科创 CDR”区别尚无与列表字段的合格映射。source scope 与 `security_class_proven=false` 保留此缺口，B 股组件不被改写为规范 A 股身份。
+
+终止上市目录可以作为后来取得的历史事实载体，因此历史请求可解析这些日期事实，并保留真实晚于 cutoff 的 `retrieved_at`。这并不证明在旧 cutoff 前已经公开了同一事实版本：`available_at` 和 membership 生效时点继续未知，结果为 `partial`，不进入 as-of expected 分母。当前 active 分区继续拒绝历史 membership 请求。日期的实际生效日/含排边界可由适用官方定义证明，无须索要精确秒数；若官方公布日期与同一版本对应充分，也可按已证明的保守日界裁决可用时间。
+
+S 的最终独立核验摘要为 `eac74cce06ff1c2f38648b1acc9ad04d18e5bafcb7f9ea33b433571c2c4d2c5b`。固定源 selector 和形状允许继续真实 parser 实现；普通 A 股/CDR 分类、完整请求日期名录与变更事件、同一版本在 cutoff 前公开的证明仍需补齐。
+
 ## 资格缺口
 
 | 事项 | 当前证明边界 |
 | --- | --- |
 | 当前点身份 selector | P 有界真实样本和已有 parser；不代表 bulk |
-| 完整 current/historical 名录 | R 证明主板 A 股 caller/首批形状；科创板、全量分页与历史仍 unknown |
+| 完整 current/historical 名录 | R/S 证明当前主板、科创板与终止分区 caller/首批形状；完整分页和历史版本仍 unknown |
 | A 股普通股票与 CDR 等类别 | 当前点字段不足；由合格 expected 清单承担，不猜分类 |
 | 上市、退市、代码/名称变化 | 历史事件与生效区间 unknown |
 | 事实版本与 cutoff | 首次公开及版本对应 unknown；实际 retrieval 不倒填 |

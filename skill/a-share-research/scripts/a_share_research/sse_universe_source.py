@@ -102,7 +102,7 @@ class _PointTransport:
         transport: HttpTransport | None,
         invocation: ProviderInvocation,
         timeout_seconds: float,
-        membership_date: str,
+        membership_date: str | None,
     ) -> None:
         self.transport = transport
         self.invocation = invocation
@@ -132,8 +132,11 @@ class _PointTransport:
         if (
             retrieved.tzinfo is None
             or retrieved.utcoffset() is None
-            or retrieved.astimezone(ASIA_SHANGHAI).date().isoformat()
-            != self.membership_date
+            or (
+                self.membership_date is not None
+                and retrieved.astimezone(ASIA_SHANGHAI).date().isoformat()
+                != self.membership_date
+            )
         ):
             raise TransportError(
                 "current_identity_date_mismatch", "Source retrieval date is invalid."
@@ -357,12 +360,15 @@ class SseCurrentIdentityAdapter:
 
 
 @dataclass(frozen=True, slots=True)
-class SseMainboardListRecord:
+class SseListRecord:
     code: str
     name: str
     displayed_listing_date: str
     retrieved_at: str
     provenance_uri: str
+    displayed_delisting_date: str | None = None
+    a_stock_code: str | None = None
+    b_stock_code: str | None = None
     membership_effective_at: None = None
     available_at: None = None
 
@@ -372,6 +378,10 @@ class SseMainboardListRecord:
             "code": self.code,
             "name": self.name,
             "displayed_listing_date": self.displayed_listing_date,
+            "displayed_delisting_date": self.displayed_delisting_date,
+            "a_stock_code": self.a_stock_code,
+            "b_stock_code": self.b_stock_code,
+            "component_absence_proven": False,
             "source_date_semantics": "display_listing_date_only",
             "security_class_proven": False,
             "listing_state_proven": False,
@@ -387,13 +397,13 @@ class _MainboardPage:
     number: int
     count: int
     pages: int
-    records: tuple[SseMainboardListRecord, ...]
+    records: tuple[SseListRecord, ...]
     rejected: int
     short: bool
 
 
 @dataclass(frozen=True, slots=True)
-class SseMainboardListAcquisition:
+class SseListAcquisition:
     membership_effective_date: str
     information_cutoff: str
     research_now: str
@@ -402,16 +412,18 @@ class SseMainboardListAcquisition:
     pages_expected: int | None
     pages_received: int
     pages_complete: bool
-    records: tuple[SseMainboardListRecord, ...]
+    records: tuple[SseListRecord, ...]
     rejected_rows: int
     limitation_codes: tuple[str, ...]
     lane_result: ProviderLaneResult[None]
 
+    source_scope: str = "SSE_MAINBOARD_A_SELECTOR"
+
     def to_public_dict(self) -> dict[str, object]:
         return {
-            "operation_id": "sse_mainboard_current_list_acquisition@1",
+            "operation_id": "sse_list_partition_acquisition@1",
             "exchange": "SSE",
-            "source_scope": "SSE_MAINBOARD_A_SELECTOR",
+            "source_scope": self.source_scope,
             "membership_effective_date": self.membership_effective_date,
             "information_cutoff": self.information_cutoff,
             "research_now": self.research_now,
@@ -472,6 +484,44 @@ _SSE_MAINBOARD_FIELDS = frozenset(
 )
 
 
+# Only these UI callers and actual schemas are retained in verified R/S records.
+# The profiles remain source acquisition scopes, not declared pure-A Universe owners.
+_SSE_LIST_PARTITIONS: dict[str, tuple[str, str, str, str, str, tuple[str, ...]]] = {
+    "active_mainboard": (
+        "1",
+        "2,4,5,7,8",
+        "/sseQuery/commonQuery.do",
+        "share",
+        "SSE_MAINBOARD_A_SELECTOR",
+        ("1",),
+    ),
+    "active_star": (
+        "8",
+        "2,4,5,7,8",
+        "/sseQuery/commonQuery.do",
+        "share",
+        "SSE_ACTIVE_STAR_SELECTOR",
+        ("8",),
+    ),
+    "terminated_mainboard": (
+        "1,2",
+        "3",
+        "/commonQuery.do",
+        "delisting",
+        "SSE_TERMINATED_MAINBOARD_AB_SELECTOR",
+        ("1", "2"),
+    ),
+    "terminated_star": (
+        "8",
+        "3",
+        "/commonQuery.do",
+        "delisting",
+        "SSE_TERMINATED_STAR_SELECTOR",
+        ("8",),
+    ),
+}
+
+
 def _mainboard_integer(value: object, *, minimum: int) -> int:
     if type(value) is not int or value < minimum:
         raise _MainboardParseFailure("invalid_mainboard_pagination")
@@ -479,11 +529,13 @@ def _mainboard_integer(value: object, *, minimum: int) -> int:
 
 
 def _mainboard_record(
-    value: object, *, page: int, retrieved_at: str
-) -> SseMainboardListRecord:
+    value: object, *, page: int, retrieved_at: str, partition: str
+) -> SseListRecord:
     if not isinstance(value, dict):
         raise _MainboardParseFailure("invalid_mainboard_row")
     required = {"A_STOCK_CODE", "SEC_NAME_CN", "LIST_DATE", "STOCK_TYPE"}
+    if partition.startswith("terminated_"):
+        required.add("DELIST_DATE")
     if not required <= set(value) <= _SSE_MAINBOARD_FIELDS or any(
         type(v) is not str for v in value.values()
     ):
@@ -494,8 +546,21 @@ def _mainboard_record(
         row["SEC_NAME_CN"].strip(),
         row["LIST_DATE"],
     )
+
+    def component(raw: str) -> str | None:
+        if raw in {"", "-"}:
+            return None
+        if re.fullmatch(r"[0-9]{6}", raw) is None:
+            raise _MainboardParseFailure("invalid_mainboard_row")
+        return raw
+
+    a_code = component(row["A_STOCK_CODE"])
+    b_code = component(row.get("B_STOCK_CODE", ""))
+    if a_code is None and partition != "terminated_mainboard":
+        raise _MainboardParseFailure("invalid_mainboard_row")
+    code = a_code or b_code or ""
     if (
-        row["STOCK_TYPE"] != "1"
+        row["STOCK_TYPE"] not in _SSE_LIST_PARTITIONS[partition][5]
         or re.fullmatch(r"[0-9]{6}", code) is None
         or not name
         or len(name) > 256
@@ -510,18 +575,34 @@ def _mainboard_record(
         ).isoformat()
     except ValueError:
         raise _MainboardParseFailure("invalid_mainboard_row") from None
+    delisted: str | None = None
+    if partition.startswith("terminated_"):
+        raw = row["DELIST_DATE"]
+        if re.fullmatch(r"[0-9]{8}", raw) is None:
+            raise _MainboardParseFailure("invalid_mainboard_row")
+        try:
+            delisted = date.fromisoformat(f"{raw[:4]}-{raw[4:6]}-{raw[6:]}").isoformat()
+            if delisted < displayed:
+                raise ValueError
+        except ValueError:
+            raise _MainboardParseFailure("invalid_mainboard_row") from None
     # LIST_DATE has an official display label, not a proved effective interval.
-    # PRODUCT_STATUS / STATE_CODE / B_STOCK_CODE remain excluded opaque tokens.
-    return SseMainboardListRecord(
+    # PRODUCT_STATUS / STATE_CODE remain opaque; positive A/B components are retained.
+    return SseListRecord(
         code,
         name,
         displayed,
         retrieved_at,
-        f"exchange-list:SSE:mainboard:page:{page}:security:{code}",
+        f"exchange-list:SSE:{partition}:page:{page}:security:{code}",
+        displayed_delisting_date=delisted,
+        a_stock_code=a_code,
+        b_stock_code=b_code,
     )
 
 
-def _parse_mainboard_page(response: HttpResponse, *, page: int) -> _MainboardPage:
+def _parse_mainboard_page(
+    response: HttpResponse, *, page: int, partition: str
+) -> _MainboardPage:
     if response.status != 200:
         raise _MainboardParseFailure("upstream_http_error")
     if response.content_type.split(";", 1)[0].strip().lower() not in {
@@ -566,12 +647,16 @@ def _parse_mainboard_page(response: HttpResponse, *, page: int) -> _MainboardPag
     expected_rows = min(25, count - (page - 1) * 25)
     if len(rows) > expected_rows:
         raise _MainboardParseFailure("page_row_count_mismatch")
-    records: list[SseMainboardListRecord] = []
+    records: list[SseListRecord] = []
     rejected = 0
     retrieved = response.retrieved_at.astimezone(ASIA_SHANGHAI).isoformat()
     for row in rows:
         try:
-            records.append(_mainboard_record(row, page=page, retrieved_at=retrieved))
+            records.append(
+                _mainboard_record(
+                    row, page=page, retrieved_at=retrieved, partition=partition
+                )
+            )
         except _MainboardParseFailure:
             rejected += 1
     return _MainboardPage(
@@ -588,35 +673,44 @@ class _MainboardPages:
         transport: HttpTransport | None,
         timeout_seconds: float,
         max_pages: int,
+        partition: str,
     ) -> None:
         self.membership_date = membership_date
         self.current_date = current_date
         self.transport = transport
         self.timeout_seconds = timeout_seconds
         self.max_pages = max_pages
+        self.partition = partition
         self.lock = Lock()
         self.pages: list[_MainboardPage] = []
         self.failure: str | None = None
 
     def execute(self, invocation: ProviderInvocation) -> None:
-        if self.membership_date != self.current_date:
+        historical_carrier = self.partition.startswith("terminated_")
+        if not historical_carrier and self.membership_date != self.current_date:
             with self.lock:
                 self.failure = "current_list_cannot_prove_historical_membership"
             return
+        # Current event catalogs can carry historical facts retrieved after cutoff.
+        # They still have no proved available/effective version and cannot be adopted.
         transport = _PointTransport(
-            self.transport, invocation, self.timeout_seconds, self.membership_date
+            self.transport,
+            invocation,
+            self.timeout_seconds,
+            None if historical_carrier else self.membership_date,
         )
         # Actual cache-busting time is transport metadata, not the frozen research clock.
         cache_token = time_ns() // 1_000_000
+        profile = _SSE_LIST_PARTITIONS[self.partition]
         number, total_pages = 1, 1
         while number <= min(total_pages, self.max_pages):
             params = {
-                "STOCK_TYPE": "1",
+                "STOCK_TYPE": profile[0],
                 "REG_PROVINCE": "",
                 "CSRC_CODE": "",
                 "STOCK_CODE": "",
                 "sqlId": "COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L",
-                "COMPANY_STATUS": "2,4,5,7,8",
+                "COMPANY_STATUS": profile[1],
                 "type": "inParams",
                 "isPagination": "true",
                 "pageHelp.cacheSize": 1,
@@ -627,17 +721,19 @@ class _MainboardPages:
                 "jsonCallBack": "jsonpCallback0",
                 "_": cache_token,
             }
-            url = "https://query.sse.com.cn/sseQuery/commonQuery.do?" + urlencode(
-                params
-            )
+            url = "https://query.sse.com.cn" + profile[2] + "?" + urlencode(params)
             headers = {
                 "Accept": "application/json,text/javascript,*/*;q=0.1",
-                "Referer": "https://www.sse.com.cn/assortment/stock/list/share/",
+                "Referer": "https://www.sse.com.cn/assortment/stock/list/"
+                + profile[3]
+                + "/",
                 "User-Agent": "a-share-research-skill/1",
             }
             try:
                 response = transport.get(url, headers)
-                parsed = _parse_mainboard_page(response, page=number)
+                parsed = _parse_mainboard_page(
+                    response, page=number, partition=self.partition
+                )
             except (_MainboardParseFailure, TransportError) as error:
                 with self.lock:
                     self.failure = (
@@ -664,7 +760,7 @@ class _MainboardPages:
             return tuple(self.pages), self.failure
 
 
-def acquire_sse_mainboard_current_list(
+def acquire_sse_list_partition(
     request: UniverseRequest,
     *,
     research_now: datetime,
@@ -672,8 +768,11 @@ def acquire_sse_mainboard_current_list(
     lanes: ProviderLanes,
     policy: ProviderLanePolicy,
     max_pages: int,
-) -> SseMainboardListAcquisition:
-    """Parse the R-verified mainboard selector; no all-SSE or historical claim."""
+    partition: str = "active_mainboard",
+) -> SseListAcquisition:
+    """Parse one R/S-verified scope without claiming complete as-of membership."""
+    if type(partition) is not str or partition not in _SSE_LIST_PARTITIONS:
+        raise ValueError("The SSE source partition is not a verified caller.")
     prepared = prepare_universe_request(request, research_now=research_now)
     if type(max_pages) is not int or max_pages < 1:
         raise ValueError("The current-list page budget must be a positive integer.")
@@ -685,6 +784,7 @@ def acquire_sse_mainboard_current_list(
         transport=transport,
         timeout_seconds=policy.call_timeout_seconds or policy.timeout_seconds,
         max_pages=max_pages,
+        partition=partition,
     )
     result = lanes.run(provider_group="sse", adapter=pages, policy=policy)
     observed, failure = pages.snapshot()
@@ -702,7 +802,7 @@ def acquire_sse_mainboard_current_list(
         "membership_effective_time_unknown",
         "availability_time_unknown",
         "historical_range_unproved",
-        "mainboard_selector_not_all_sse",
+        "source_partition_not_complete_sse_universe",
         "security_class_unproved",
         "source_status_semantics_unproved",
     ]
@@ -727,7 +827,7 @@ def acquire_sse_mainboard_current_list(
     source_result: SourceResult = "partial" if observed else "unavailable"
     if failure == "source_access_blocked" and not observed:
         source_result = "credential_blocked"
-    return SseMainboardListAcquisition(
+    return SseListAcquisition(
         prepared.screen_date,
         prepared.information_cutoff,
         research_now.isoformat(),
@@ -740,6 +840,28 @@ def acquire_sse_mainboard_current_list(
         rejected,
         tuple(limitations),
         result,
+        _SSE_LIST_PARTITIONS[partition][4],
+    )
+
+
+def acquire_sse_mainboard_current_list(
+    request: UniverseRequest,
+    *,
+    research_now: datetime,
+    transport: HttpTransport | None,
+    lanes: ProviderLanes,
+    policy: ProviderLanePolicy,
+    max_pages: int,
+) -> SseListAcquisition:
+    """The mainboard current path also used by its #110 identity Adapter."""
+    return acquire_sse_list_partition(
+        request,
+        research_now=research_now,
+        transport=transport,
+        lanes=lanes,
+        policy=policy,
+        max_pages=max_pages,
+        partition="active_mainboard",
     )
 
 
@@ -768,10 +890,10 @@ class SseMainboardCurrentIdentityAdapter:
         self._lanes = lanes
         self._policy = policy
         self._max_pages = max_pages
-        self._last_acquisition: SseMainboardListAcquisition | None = None
+        self._last_acquisition: SseListAcquisition | None = None
 
     @property
-    def last_acquisition(self) -> SseMainboardListAcquisition | None:
+    def last_acquisition(self) -> SseListAcquisition | None:
         """The detached source snapshot, including authoritative lane attempts."""
         return self._last_acquisition
 

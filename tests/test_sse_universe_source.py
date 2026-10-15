@@ -25,6 +25,7 @@ from a_share_research.sse_universe_source import (  # noqa: E402
     SseCurrentIdentityAdapter,
     SseMainboardCurrentIdentityAdapter,
     acquire_sse_mainboard_current_list,
+    acquire_sse_list_partition,
 )
 from a_share_research.universe_input import (  # noqa: E402
     ExchangeListOutcome,
@@ -850,6 +851,126 @@ class SseMainboardCurrentListTests(unittest.TestCase):
         assert adapter.last_acquisition is not None
         self.assertEqual(adapter.last_acquisition.reported_count, 1)
         self.assertFalse(adapter.last_acquisition.to_public_dict()["membership_proven"])
+
+    def test_s_actual_star_and_termination_selectors_share_parser_without_class_guessing(
+        self,
+    ) -> None:
+        for partition, stock_type, status, path, scope, source_type in (
+            (
+                "active_star",
+                "8",
+                "2,4,5,7,8",
+                "/sseQuery/commonQuery.do",
+                "SSE_ACTIVE_STAR_SELECTOR",
+                "8",
+            ),
+            (
+                "terminated_mainboard",
+                "1,2",
+                "3",
+                "/commonQuery.do",
+                "SSE_TERMINATED_MAINBOARD_AB_SELECTOR",
+                "2",
+            ),
+            (
+                "terminated_star",
+                "8",
+                "3",
+                "/commonQuery.do",
+                "SSE_TERMINATED_STAR_SELECTOR",
+                "8",
+            ),
+        ):
+            with self.subTest(partition=partition):
+
+                class Source:
+                    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                        parsed = urlparse(url)
+                        params = parse_qs(parsed.query, keep_blank_values=True)
+                        assert parsed.path == path
+                        assert params["STOCK_TYPE"] == [stock_type]
+                        assert params["COMPANY_STATUS"] == [status]
+                        row = mainboard_row("120000")
+                        row.update(
+                            STOCK_TYPE=source_type,
+                            PRODUCT_STATUS="   D  F  N          ",
+                        )
+                        if status == "3":
+                            row["DELIST_DATE"] = "20251014"
+                        if source_type == "2":
+                            row.update(A_STOCK_CODE="-", B_STOCK_CODE="340000")
+                        return HttpResponse(
+                            200,
+                            "application/json",
+                            mainboard_page(1, [row], count=1),
+                            datetime.fromisoformat("2026-10-15T10:01:00+08:00"),
+                        )
+
+                source = acquire_sse_list_partition(
+                    UniverseRequest("2026-10-15", FROZEN.isoformat()),
+                    research_now=FROZEN,
+                    partition=partition,
+                    transport=Source(),
+                    lanes=ProviderLanes(),
+                    policy=ProviderLanePolicy(1, 1),
+                    max_pages=1,
+                )
+                self.assertEqual(source.to_public_dict()["source_scope"], scope)
+                self.assertTrue(source.pages_complete)
+                self.assertEqual(source.reported_count, 1)
+                self.assertEqual(len(source.records), 1)
+                record = source.records[0]
+                self.assertEqual(
+                    record.displayed_delisting_date,
+                    "2025-10-14" if status == "3" else None,
+                )
+                self.assertEqual(
+                    record.b_stock_code, "340000" if source_type == "2" else None
+                )
+                self.assertEqual(
+                    record.a_stock_code, None if source_type == "2" else "120000"
+                )
+                self.assertFalse(source.to_public_dict()["membership_proven"])
+                self.assertFalse(record.to_public_dict()["security_class_proven"])
+                self.assertIsNone(record.membership_effective_at)
+                self.assertIsNone(record.available_at)
+
+    def test_terminated_historical_carrier_can_be_retrieved_later_without_as_of_adoption(
+        self,
+    ) -> None:
+        class HistoricalCarrier:
+            def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+                params = parse_qs(urlparse(url).query)
+                assert params["COMPANY_STATUS"] == ["3"] and params["STOCK_TYPE"] == [
+                    "8"
+                ]
+                row = mainboard_row("120000")
+                row.update(STOCK_TYPE="8", DELIST_DATE="20251014")
+                return HttpResponse(
+                    200,
+                    "application/json",
+                    mainboard_page(1, [row], count=1),
+                    datetime.fromisoformat("2026-10-16T10:01:00+08:00"),
+                )
+
+        source = acquire_sse_list_partition(
+            UniverseRequest("2026-10-14", "2026-10-14T23:59:59+08:00"),
+            research_now=FROZEN,
+            partition="terminated_star",
+            transport=HistoricalCarrier(),
+            lanes=ProviderLanes(),
+            policy=ProviderLanePolicy(1, 1),
+            max_pages=1,
+        )
+        self.assertEqual(source.reported_count, 1)
+        self.assertEqual(source.source_result, "partial")
+        self.assertEqual(len(source.lane_result.attempts), 1)
+        self.assertEqual(source.records[0].displayed_delisting_date, "2025-10-14")
+        self.assertEqual(source.records[0].retrieved_at, "2026-10-16T10:01:00+08:00")
+        self.assertIsNone(source.records[0].available_at)
+        self.assertIsNone(source.records[0].membership_effective_at)
+        self.assertEqual(source.information_cutoff, "2026-10-14T23:59:59+08:00")
+        self.assertFalse(source.to_public_dict()["membership_proven"])
 
 
 if __name__ == "__main__":
