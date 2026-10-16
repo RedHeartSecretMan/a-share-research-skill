@@ -17,6 +17,10 @@ from .exact_normalization import (
     ExactNormalizationError,
     exact_scaled_sum,
 )
+from .installation_health import (
+    BAOSTOCK_RUNTIME_DEPENDENCY,
+    PYPDF_RUNTIME_DEPENDENCY,
+)
 from .research_result import (
     validate_field_disposition_destination_contract,
     validate_plan_operation_producer_authority,
@@ -1270,6 +1274,28 @@ def build_operation_release_matrix(
         for item in installation_loads
         if item.origin == "installation_health"
     }
+    internal_dependency_facts: list[dict[str, object]] = []
+    internal_operation_ids: set[str] = set()
+    internal_dependencies = {
+        item.distribution: item
+        for item in (BAOSTOCK_RUNTIME_DEPENDENCY, PYPDF_RUNTIME_DEPENDENCY)
+    }
+    for fact in dependencies:
+        attributed_ids = set(cast(Sequence[str], fact["operation_ids"]))
+        if not attributed_ids - health_operation_ids:
+            continue
+        expected = internal_dependencies.get(cast(str, fact["distribution"]))
+        if (
+            expected is None
+            or attributed_ids != set(expected.operation_ids)
+            or attributed_ids & (set(producers) | internal_operation_ids)
+            or fact["required_version"] != expected.required_version
+            or fact["installed_version"] != expected.required_version
+            or set(cast(Sequence[str], fact["modules"])) != set(expected.modules)
+        ):
+            raise ValueError("internal installation dependency attribution is invalid")
+        internal_operation_ids.update(attributed_ids)
+        internal_dependency_facts.append(deepcopy(dict(fact)))
     dependency_operation_ids = {
         _text(operation_id, "dependency operation id")
         for item in dependencies
@@ -1278,7 +1304,7 @@ def build_operation_release_matrix(
     if (
         installation_health.get("status") != "complete"
         or health_operation_ids != declared_health_ids
-        or dependency_operation_ids != health_operation_ids
+        or dependency_operation_ids != health_operation_ids | internal_operation_ids
     ):
         raise ValueError(
             "installation health evidence does not exactly join its owners"
@@ -1516,6 +1542,11 @@ def build_operation_release_matrix(
             **(
                 {"release_evidence": release_evidence}
                 if release_evidence is not None
+                else {}
+            ),
+            **(
+                {"internal_dependency_attributions": internal_dependency_facts}
+                if internal_dependency_facts
                 else {}
             ),
             "denominator": {

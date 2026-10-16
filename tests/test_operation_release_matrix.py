@@ -1696,6 +1696,52 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             "live_probes": probes,
         }
 
+    def test_internal_dependency_attributions_do_not_enter_the_public_denominator(self) -> None:
+        inputs = self._stable_matrix_inputs()
+        internal_facts = [
+            {
+                "distribution": "baostock",
+                "required_version": "0.9.4",
+                "installed_version": "0.9.4",
+                "status": "complete",
+                "modules": ["baostock"],
+                "operation_ids": ["baostock_dated_roster_acquisition@1"],
+            },
+            {
+                "distribution": "pypdf",
+                "required_version": "6.10.2",
+                "installed_version": "6.10.2",
+                "status": "complete",
+                "modules": ["pypdf"],
+                "operation_ids": ["szse_formal_listing_material@1"],
+            },
+        ]
+        inputs["installation_health"]["dependencies"].extend(internal_facts)
+        original = deepcopy(inputs["installation_health"])
+
+        matrix = build_operation_release_matrix(**inputs).to_dict()
+
+        self.assertEqual(matrix["denominator"]["operation_count"], 2)
+        self.assertEqual(
+            matrix["internal_dependency_attributions"], internal_facts
+        )
+        self.assertEqual(inputs["installation_health"], original)
+        for key, value in (
+            ("distribution", "unknown"),
+            ("required_version", "0.9.5"),
+            ("installed_version", "0.9.5"),
+            ("modules", ["unknown"]),
+            ("operation_ids", ["unknown_internal@1"]),
+        ):
+            changed = deepcopy(inputs)
+            changed["installation_health"]["dependencies"][1][key] = value
+            with self.subTest(drift=key), self.assertRaises(ValueError):
+                build_operation_release_matrix(**changed)
+        duplicate = deepcopy(inputs)
+        duplicate["installation_health"]["dependencies"].append(internal_facts[0])
+        with self.assertRaises(ValueError):
+            build_operation_release_matrix(**duplicate)
+
     def test_normal_builder_rejects_empty_qualification_application_authority(
         self,
     ) -> None:

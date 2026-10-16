@@ -104,6 +104,50 @@ class CoreOperationMatrixGeneratorTests(unittest.TestCase):
             sum(item.source_contract is not None for item in qualification), 6
         )
 
+    def test_current_52_owner_evidence_uses_accepted_normalization_fixtures(self) -> None:
+        from tests.test_release_probe_core_operations import (
+            _reviewed_application_attempt,
+            release_probe,
+        )
+
+        qualification_path = (
+            REPOSITORY_ROOT
+            / "docs/research/v0.4.0-overview-v2-operation-qualification.json"
+        )
+        manifest = json.loads(qualification_path.read_text(encoding="utf-8"))
+        producers = {item["producer_operation_id"] for item in manifest["operations"]}
+        attempt = _reviewed_application_attempt(
+            candidate_sha="a" * 40,
+            verified_at="2026-10-16T14:00:00+08:00",
+            attempted_producers=producers,
+        )
+        report = release_probe.assemble_release_probe_evidence(
+            (attempt,),
+            candidate_sha="a" * 40,
+            assembled_at="2026-10-16T14:00:00+08:00",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence_path = Path(temporary) / "final-evidence.json"
+            evidence_path.write_text(json.dumps(report), encoding="utf-8")
+            matrix = json.loads(
+                generator.render_matrix_bytes(
+                    qualification_path=qualification_path,
+                    release_evidence_path=evidence_path,
+                )
+            )
+
+        self.assertEqual(matrix["denominator"]["operation_count"], 52)
+        self.assertEqual(
+            {item["producer_operation_id"] for item in matrix["operations"]},
+            producers,
+        )
+        self.assertTrue(
+            all(
+                item["live_probe"]["source_result"] == "unavailable"
+                for item in matrix["operations"]
+            )
+        )
+
     def test_v030_legacy_adapter_preserves_input_and_adds_exact_codes(self) -> None:
         payload = _v030_payload()
         original = deepcopy(payload)

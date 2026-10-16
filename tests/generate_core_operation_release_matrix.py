@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate or byte-check the v0.3.0 operation release matrix."""
+"""Regenerate or byte-check a plan-derived operation release matrix."""
 
 from __future__ import annotations
 
@@ -470,6 +470,14 @@ def render_matrix_bytes(
         installation_loads=installation_loads,
         installation_health=installation_health,
         live_probes=live_probes,
+        qualification_fixtures=_json_object(
+            SCRIPTS_ROOT.parent
+            / "references"
+            / "market-foundation-qualification-fixtures.json",
+            "market foundation qualification fixtures",
+        )
+        if any(item.source_contract is not None for item in qualification)
+        else None,
     ).to_json_bytes()
 
 
