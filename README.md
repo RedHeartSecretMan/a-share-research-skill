@@ -15,7 +15,7 @@
 
 `a-share-research-skill` 是项目仓库名，可安装的 Skill 名为 `$a-share-research`。它把自然语言问题路由到确定性 Python CLI，以版本化 JSON 返回证券身份、研究时点、来源观测、计算谱系、冲突、覆盖和限制，再由 Agent 形成可核验的中文研究材料。
 
-本分支交付 **v0.4.0 候选**，提供 12 类窄 ResearchTask、6 个固定研究方案和唯一公共入口 `run --request`；安装副本的版本见 [`VERSION`](skill/a-share-research/VERSION)。市场总览升级为 `market_overview_research@2.0`。候选仍待 #98 的同候选匿名 live attestation，离线测试不证明来源可用。当前稳定发布、GitHub Release 与标签仍为 v0.3.0。
+本分支交付 **v0.4.0 候选**，提供 12 类窄 ResearchTask、6 个固定研究方案和唯一公共入口 `run --request`；安装副本的版本见 [`VERSION`](skill/a-share-research/VERSION)。市场总览升级为 `market_overview_research@2.0`。本候选的适用匿名来源证明见 [#98 候选审计](docs/research/v0.4.0-release-audit-2026-10-17.md)；来源失败和本次未实时验证的盘中应用仍明确保留。当前稳定发布、GitHub Release 与标签仍为 v0.3.0。
 
 ## 快速开始
 

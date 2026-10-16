@@ -1,6 +1,6 @@
 # 研究与发布资料
 
-本目录以 v0.3.0 为当前已发布版本；其发布证据采用 `v0.3.0-<主题>.<扩展名>` 命名，只有需要时间锚点的审计文件追加 `-YYYY-MM-DD`。v0.4.0 DAG 开发期的静态资格权威也保留在本目录，但不构成 v0.4.0 发布或联网验证证明。带日期的历史现场记录采用 `v<版本>-<主题>-YYYY-MM-DD.md`，并集中放在 [`history/`](history/) 中。仓库级阅读顺序见 [`../README.md`](../README.md)。
+本目录以 v0.3.0 为当前已发布版本；其发布证据采用 `v0.3.0-<主题>.<扩展名>` 命名，只有需要时间锚点的审计文件追加 `-YYYY-MM-DD`。v0.4.0 候选的静态资格与最终适用联网证明也保留在本目录；它们不构成正式版本发布。带日期的历史现场记录采用 `v<版本>-<主题>-YYYY-MM-DD.md`，并集中放在 [`history/`](history/) 中。仓库级阅读顺序见 [`../README.md`](../README.md)。
 
 ## v0.3.0 当前资料
 
@@ -12,14 +12,18 @@
 | [`v0.3.0-operation-release-matrix.json`](v0.3.0-operation-release-matrix.json) | 由资格清单和联网证据派生的发布矩阵 | 只由生成器写入 |
 | [`v0.3.0-operation-release-matrix.md`](v0.3.0-operation-release-matrix.md) | 证据口径、解释边界和维护者复验命令 | 人工维护 |
 
-## v0.4.0 候选资料（待 #98 live attestation）
+## v0.4.0 候选资料
 
 | 文件 | 用途 | 修改方式 |
 | --- | --- | --- |
 | [`v0.4.0-operation-qualification.json`](v0.4.0-operation-qualification.json) | #114 的历史资格快照，保留六项待集成报告 owner 的原始契约 | 保留历史身份，不回写为当前发布证明 |
 | [`v0.4.0-overview-v2-operation-qualification.json`](v0.4.0-overview-v2-operation-qualification.json) | 市场总览 v2 当前公开计划派生的 46-owner 静态资格：原有 44 项加会话和四指数；六项日报 owner 仅保留内部契约 | 只随对应集成与资格审查更新 |
+| [`v0.4.0-release-probe-evidence.json`](v0.4.0-release-probe-evidence.json) | 同一冻结候选的最终脱敏来源证据及 E 离线／安装记录 | 只由维护者工具派生 |
+| [`v0.4.0-operation-release-matrix.json`](v0.4.0-operation-release-matrix.json) | 完整 46-owner／61 应用与适用联网 44-owner／59 应用的确定性矩阵 | 只由生成器写入 |
+| [`v0.4.0-operation-release-matrix.md`](v0.4.0-operation-release-matrix.md) | 证据口径、未实时验证项和离线复验命令 | 人工维护 |
+| [`v0.4.0-release-audit-2026-10-17.md`](v0.4.0-release-audit-2026-10-17.md) | 实际来源身份、三所／四指数 E2E 与最终证明适用边界 | 人工维护，结论须有证据 |
 
-市场总览 v2 文件用于让维护者探测按实际公开计划义务闭合资格集合；这两份静态记录都不是 v0.4.0 发布矩阵、Release、冻结候选或联网验证证明。
+市场总览 v2 静态资格用于从实际公开计划闭合资格集合，本身不构成来源证明；最终证据和矩阵保留真实来源状态，也不代表 GitHub Release 已发布。
 
 `v0.3.0-*` JSON 证据是版本化发布产物；`v0.4.0-operation-qualification.json` 是开发期静态审阅权威，不是发布产物。两者都不是使用案例，也不得手工调整字段、计数或摘要。运行普通研究请求请从 [`examples/README.md`](../../examples/README.md) 选择请求文件。
 
@@ -64,4 +68,4 @@ v0.0.1、v0.1.0、v0.1.1 和 v0.2.0 均已有对应标签与 GitHub Release。�
 | v0.1.1 | [发布审计](history/v0.1.1-release-audit-2026-08-03.md) |
 | v0.2.0 | [发布审计](history/v0.2.0-release-audit-2026-08-03.md) |
 
-历史文件中的测试数量、提交 SHA、来源状态和研究日期均属于其记录时点。阅读当前能力时，以根目录 README、安装产物中的 `SKILL.md` / `references/`、Spec 0008 Amendment D/E 与当前静态资格为准；v0.3.0 发布事实仍以 Spec 0007 Amendment A 和本目录的 v0.3.0 资料为准。
+历史文件中的测试数量、提交 SHA、来源状态和研究日期均属于其记录时点。阅读当前能力时，以根目录 README、安装产物中的 `SKILL.md` / `references/`、Spec 0008 Amendment D/E/F、当前静态资格及本版候选审计为准；v0.3.0 发布事实仍以 Spec 0007 Amendment A 和本目录的 v0.3.0 资料为准。
