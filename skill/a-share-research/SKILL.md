@@ -19,7 +19,7 @@ Route the user's question to the narrowest supported ResearchTask, run the bundl
    ```
 
    Add `--output <file>` only when the caller explicitly requests persistence. Exact installation, invocation, process, credential, and JSON semantics are in [cli-contract.md](references/cli-contract.md).
-5. Confirm the returned `task_type` and request scope answer the question. If the result is narrower, present only what it formed. No absent result field or wider capability may be inferred.
+5. Confirm the returned `plan.task_type` and request scope answer the question. If the result is narrower, present only what it formed. No absent result field or wider capability may be inferred.
 6. Lead with the direct answer and overall status. Name the canonical subject and research date; keep units and periods attached to values; place evidence locators near material claims; separate source facts, project calculations, attributed opinions, market signals, and Agent inference.
 
 Completion means: no `REPLACE_*` value remains; one valid JSON result was parsed from `stdout` or a nonzero protocol failure was reported separately; every requested supported field was addressed; every conflict, source error, limitation, blocked step, and unsupported capability that could change the answer remains visible; and no undocumented fact, metric, status, source success, or investment action was invented.
@@ -44,7 +44,7 @@ Completion means: no `REPLACE_*` value remains; one valid JSON result was parsed
 | Fixed valuation, comparison, report, or new-security plan | `research_workflow` | [workflow-contracts.md](references/workflow-contracts.md) |
 | Explicit cross-request evidence reuse | supported task plus `source_policy.evidence_store` | [persistence-contract.md](references/persistence-contract.md) |
 
-Use a documented narrow task for an explicit valuation, announcement, material class, capital event, or signal. A workflow never accepts caller-defined steps, a DAG, or a nested workflow. `single_security_research` adds no five-level order-book or tick endpoint. For `market_overview_research`, completion additionally requires empty subjects, a valid `standard` or `fast` mode, an exact 15-entry inventory, all requested applicable capabilities addressed, and unsupported `market_wide_intraday` preserved without proxying it. Existing single-security intraday tasks remain separate. The artifact version is in `VERSION`; distinguish candidate from published status and bound runtime/source availability claims to applicable frozen release evidence.
+Use a documented narrow task for an explicit valuation, announcement, material class, capital event, or signal. A workflow never accepts caller-defined steps, a DAG, or a nested workflow. `single_security_research` adds no five-level order-book or tick endpoint. For `market_overview_research`, completion additionally requires empty subjects, a valid `standard` or `fast` mode, an exact 15-entry inventory, 12 capabilities executable by tier and applicability (4 core and 8 standard), all requested applicable capabilities addressed, and unsupported `whole_market_turnover`, `whole_market_margin`, and `market_wide_intraday` preserved without proxying them. Existing single-security intraday tasks remain separate. The artifact version is in `VERSION`; bind publication status and runtime/source availability claims to applicable frozen release evidence, including applicable same-candidate source evidence. Installation health and offline tests do not establish source usability.
 
 ## Guardrails
 

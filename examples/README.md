@@ -54,7 +54,7 @@
 | 工业富联新标的八步研究 | [`workflow-industrial-fulian-new-security.json`](requests/workflow-industrial-fulian-new-security.json) |
 | 综合市场研究 | [`workflow-market-overview-research.json`](requests/workflow-market-overview-research.json) |
 
-综合单标的方案的 `standard` 模式尝试身份、20 个完整交易日走势和全部标准增强；`fast` 只执行身份与走势。综合市场方案 `market_overview_research@2.0` 固定声明 15 项能力，其中 14 项按层级和适用性执行，`market_wide_intraday` 明确为 unsupported。`fast` 只执行 5 项 core，`standard` 加入 9 项 standard；显式 deep 盘中请求仍为 unsupported。候选待 #98 最终匿名 live attestation。调用者不能提交自定义步骤或依赖图。
+综合单标的方案的 `standard` 模式尝试身份、20 个完整交易日走势和全部标准增强；`fast` 只执行身份与走势。综合市场方案 `market_overview_research@2.0` 固定声明 15 项能力，其中 12 项按层级和适用性执行；全市场成交额、全市场两融和全市场盘中三个槽位明确为 unsupported。`fast` 只执行 4 项 core，`standard` 加入原有 8 项 standard；显式 deep 全市场盘中请求仍为 unsupported。原有单证券成交额、融资融券材料、盘中和复盘保持原边界。候选待 #98 最终匿名 live attestation。调用者不能提交自定义步骤或依赖图。
 
 ## 身份、行情与估值窄任务（5）
 

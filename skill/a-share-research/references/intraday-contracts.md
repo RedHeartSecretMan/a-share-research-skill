@@ -8,6 +8,8 @@ Use exactly one canonical SSE/SZSE A-share subject, the current China Standard T
 
 The released operation uses default-installed `mootdx==0.11.7` and a Tencent cross-check. Preserve trading session, price type, each source observation time, latest/open/high/low, previous-close semantics, cumulative volume and amount, units, field lineage, conflicts, and limitations. A source or installation failure does not trigger a fallback. A valid `limited` or `blocked` result still exits zero.
 
+For v0.4.0, `tencent_intraday_snapshot@1` and `tongdaxin_intraday_snapshot@1` retain their interfaces, installation/load checks, offline behavior, and failure boundaries. This delivery does not perform real-time intraday verification. Do not treat an installation, synthetic regression, or historical probe as current-candidate live success, and do not interpret missing real-time verification as withdrawn functionality.
+
 Template: [`../assets/requests/intraday-market-signal.json`](../assets/requests/intraday-market-signal.json).
 
 ## `intraday_replay`

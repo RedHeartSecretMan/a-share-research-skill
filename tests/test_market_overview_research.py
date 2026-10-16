@@ -232,20 +232,20 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 self.assertIn("market_overview_research", document)
         for token in (
             "15 项固定能力",
-            "5 项 core",
-            "9 项 standard",
+            "4 项 core",
+            "8 项 standard",
             "market_wide_intraday",
         ):
             self.assertIn(token, chinese)
         for token in (
             "15 fixed capabilities",
-            "5 core",
-            "9 standard",
+            "4 core",
+            "8 standard",
             "market_wide_intraday",
         ):
             self.assertIn(token, english)
         self.assertIn("completion additionally requires empty subjects", skill)
-        self.assertIn("Completion for this branch", contract)
+        self.assertIn("Completion requires", contract)
         self.assertIn("requests/workflow-market-overview-research.json", examples_index)
         for capability_id in (
             "industry_board_breadth",
@@ -315,8 +315,6 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 ("market_flash", "research_content", "standard_enrichment"),
                 ("market_trading_session", "overview_session", "core"),
                 ("major_broad_indices", "overview_indices", "core"),
-                ("whole_market_turnover", "overview_turnover", "core"),
-                ("whole_market_margin", "overview_margin", "standard_enrichment"),
             ],
         )
         inventory = result["capability_registry"]["workflow"]["capability_inventory"]
@@ -398,14 +396,18 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 {
                     "capability_id": "whole_market_turnover",
                     "tier": "core",
-                    "state": "supported",
-                    "step_ids": ["whole_market_turnover"],
+                    "state": "unsupported",
+                    "step_ids": [],
+                    "reason_code": "free_anonymous_turnover_unproved",
+                    "gap_route": "future_scope",
                 },
                 {
                     "capability_id": "whole_market_margin",
                     "tier": "standard",
-                    "state": "supported",
-                    "step_ids": ["whole_market_margin"],
+                    "state": "unsupported",
+                    "step_ids": [],
+                    "reason_code": "free_anonymous_margin_unproved",
+                    "gap_route": "future_scope",
                 },
                 {
                     "capability_id": "market_wide_intraday",
@@ -1151,8 +1153,6 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 "market_flash",
                 "market_trading_session",
                 "major_broad_indices",
-                "whole_market_turnover",
-                "whole_market_margin",
             ],
         )
         inventory = result["capability_registry"]["workflow"]["capability_inventory"]
@@ -1281,8 +1281,6 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 "market_flash": "limited",
                 "market_trading_session": "supported",
                 "major_broad_indices": "supported",
-                "whole_market_turnover": "supported",
-                "whole_market_margin": "supported",
             },
         )
         owner_steps = {
@@ -1339,8 +1337,6 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 in {
                     "market_trading_session",
                     "major_broad_indices",
-                    "whole_market_turnover",
-                    "whole_market_margin",
                 }
             },
         )
@@ -1477,8 +1473,6 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 "market_flash",
                 "market_trading_session",
                 "major_broad_indices",
-                "whole_market_turnover",
-                "whole_market_margin",
             ],
         )
         aggregate_bytes = _canonical_stdout_bytes(overview.stdout)

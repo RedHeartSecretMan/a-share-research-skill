@@ -102,8 +102,6 @@ def _mark_external_fixture_applications_failed(result: dict[str, object]) -> Non
             if obligation["capability_id"] in {
                 "market_trading_session",
                 "major_broad_indices",
-                "whole_market_turnover",
-                "whole_market_margin",
             }:
                 continue
             operation = coverage[obligation["capability_id"]]["operations"][
@@ -1154,7 +1152,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 sorted((prior["attempt_digest"], current["attempt_digest"])),
             )
             self.assertEqual(len(final["plan_snapshots"]), 2)
-            self.assertEqual(len(final["live_probes"]), 52)
+            self.assertEqual(len(final["live_probes"]), len(producers))
             live_by_owner = {
                 item["producer_operation_id"]: item for item in final["live_probes"]
             }
@@ -3136,7 +3134,10 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 failure_report["denominator_source"],
                 "reviewed_qualification_manifest",
             )
-            self.assertEqual(len(failure_report["external_producer_operation_ids"]), 52)
+            self.assertEqual(
+                set(failure_report["external_producer_operation_ids"]),
+                set(release_probe._reviewed_producer_operation_ids()),
+            )
             self.assertEqual(
                 failure_report["observed_external_producer_operation_ids"],
                 list(_IDENTITY_PRODUCERS),
@@ -3564,12 +3565,6 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         }
 
         target_applications = {
-            ("whole_market_turnover", "sse_a_share_turnover@1"),
-            ("whole_market_turnover", "szse_a_share_turnover@1"),
-            ("whole_market_turnover", "bse_a_share_turnover@1"),
-            ("whole_market_margin", "sse_market_margin@1"),
-            ("whole_market_margin", "szse_market_margin@1"),
-            ("whole_market_margin", "bse_market_margin@1"),
             ("market_trading_session", "market_session_context@1"),
             ("major_broad_indices", "fixed_four_indices@1"),
         }
@@ -3768,8 +3763,8 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             candidate_sha=_RC_CANDIDATE_SHA,
             assembled_at="2026-08-12T09:30:00+08:00",
         )
-        # This synthetic current run reaches 61 applications. It must not
-        # finalize against the reviewed 67-application authority.
+        # These synthetic plans omit some reviewed applications. They must not
+        # finalize against the complete plan-derived application authority.
         with self.assertRaisesRegex(
             ValueError, "qualification application authority does not close the plan"
         ):
@@ -3862,12 +3857,6 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             *(item.operation_id for item in replay_daily_operations),
             "market_session_context@1",
             "fixed_four_indices@1",
-            "sse_a_share_turnover@1",
-            "szse_a_share_turnover@1",
-            "bse_a_share_turnover@1",
-            "sse_market_margin@1",
-            "szse_market_margin@1",
-            "bse_market_margin@1",
         }
         snapshots = tuple(
             ReleasePlanSnapshot(

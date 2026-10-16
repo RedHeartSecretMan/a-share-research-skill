@@ -71,13 +71,13 @@ CLI 不接受自然语言，也不调用模型。`stdout` 只输出一个版本�
 | 方案 ID | 用途 | 关键边界 |
 | --- | --- | --- |
 | `single_security_research` | 综合单标的研究 | `standard` 执行核心与增强；`fast` 只保证身份和走势；仅支持 `long_history`、`large_materials` 深化 |
-| `market_overview_research` | 无标的综合市场研究 | 15 项固定能力：5 项 core、9 项 standard 可按适用性执行，`market_wide_intraday` 为 unsupported；保留三所分区与四个固定指数 |
+| `market_overview_research` | 无标的综合市场研究 | 15 项固定能力：4 项 core、8 项 standard 可按适用性执行，全市场成交额、全市场两融与全市场盘中为 unsupported；保留三所分区与四个固定指数 |
 | `single_security_valuation` | 单票估值 | 复用 `security_valuation` |
 | `valuation_comparison` | 多票同口径比较 | 复用 `valuation_compare`，不丢弃受阻标的 |
 | `theme_report_research` | 主题研报检索 | 复用 `research_content` |
 | `new_security_research` | 新标的系统研究 | 身份是唯一门禁，其他局部失败不停止独立同级步骤 |
 
-`single_security_research` 的 `completeness_mode` 默认为 `standard`；`deep_extensions` 只接受 `long_history` 和 `large_materials`。`market_overview_research@2.0` 的 `fast` 仅执行 core，`standard` 执行 core 与 standard。新增交易会话、四指数、完成日三所成交额与两融；缺失或不适用分区保留各自证据，不形成完整全市场合计。显式 deep 请求 `market_wide_intraday` 仍返回 `free_anonymous_intraday_unproved`，不产生来源义务或 coverage。
+`single_security_research` 的 `completeness_mode` 默认为 `standard`；`deep_extensions` 只接受 `long_history` 和 `large_materials`。`market_overview_research@2.0` 的 `fast` 仅执行 core，`standard` 执行 core 与 standard。新增三所交易会话与四个固定指数；缺失分区保留局部证据。`whole_market_turnover`、`whole_market_margin`、`market_wide_intraday` 三个槽位明确 unsupported，不产生来源义务、观测、主张、计算或 coverage；deep 仍须显式请求。单证券成交额、融资融券材料、盘中快照和分时复盘保持原有边界。
 
 ## 如何读取结果
 
@@ -87,7 +87,7 @@ CLI 不接受自然语言，也不调用模型。`stdout` 只输出一个版本�
 - `limited`：核心问题仍可回答，但非关键缺口、冲突或来源限制必须披露。
 - `blocked`：身份或关键证据不足，不能形成实质结论。
 
-请同时查看 `plan`、`records`、`coverage`、`source_errors`、`conflicts`、`limitations`、`claims`、`calculations` 和 `briefs`，不要只读顶层状态。来源状态中的 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable` 含义不同；来源失败不能改写为零或“没有记录”。
+请同时查看 `plan`、`observations`、`coverage`、`source_errors`、`conflicts`、`limitations`、`claims`、`calculations` 和 `briefs`，不要只读顶层状态。来源状态中的 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable` 含义不同；来源失败不能改写为零或“没有记录”。
 
 CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻断且问题确实需要解释时给出明确标注的研究判断、风险、失效条件和条件触发位；身份查询等直接证据问题不附加无关观点。详细边界见安装产物中的 [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md)。
 
@@ -101,7 +101,7 @@ CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻�
 
 > 使用 `$a-share-research`，以 `single_security_research@1.0` 的 `standard` 模式完成工业富联综合研究；一个材料来源失败时继续不依赖它的步骤。
 
-> 使用 `$a-share-research`，以 `market_overview_research@2.0` 研究市场，保留三所会话、四指数、完成日成交额与两融、既有市场信号的局部状态，并明确全市场盘中尚不支持。
+> 使用 `$a-share-research`，以 `market_overview_research@2.0` 研究市场，保留三所会话、四指数与既有市场信号的局部状态，并明确全市场成交额、全市场两融与全市场盘中不支持。
 
 真实运行案例、中文请求模板与边界说明见 [`examples/README.md`](examples/README.md)。其中 `real-runs/` 保存带日期的实际公共 CLI 结果；`requests/` 是可编辑请求，不是实时行情或当前研究结论。
 
@@ -109,11 +109,11 @@ CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻�
 
 - 单标的身份与行情任务的网络路径仍只覆盖 SSE/SZSE；市场基础使用 SSE/SZSE/BSE 各自分区，BSE 缺失不会回退到其他市场。
 - 估值必须证明证券类别范围；A/H、A/B 或其他多类别范围不明时阻断发行主体级估值。
-- 当前盘中快照不是交易级行情、分钟流、五档盘口或逐笔数据；`intraday_replay` 只复盘已完成交易日。
+- 当前盘中快照不是交易级行情、分钟流、五档盘口或逐笔数据；`intraday_replay` 只复盘已完成交易日。本次 v0.4.0 交付保留单证券盘中功能、安装与离线回归，未进行盘中实时验证；安装成功或离线通过不证明实时来源可用。
 - ETF 期权没有权威完整合约总数、完整合约单位定义、调整条款或合格独立 fallback，必须保留 coverage 和限制。
 - 研报、新闻、F10、资金流、题材和热度中的外部归因保持署名观点或市场信号角色，不自动升级为公司事实。
 - 当前不支持开放式选股、持续行情、自动交易、仓位/杠杆建议、项目评级或目标价。
-- 全市场盘中 `market_wide_intraday` 不支持；既有单证券 `intraday_market_signal` 和 `intraday_replay` 保持原版本与边界。
+- 全市场成交额 `whole_market_turnover`、全市场两融 `whole_market_margin` 和全市场盘中 `market_wide_intraday` 不支持；既有单证券 `intraday_market_signal` 和 `intraday_replay` 保持原版本与边界。
 - 本版退出全市场筛选、排名、候选深研及其公共结果包工作流；`market_screen_research` 在任何来源调用或 artifact 写入前拒绝。内部 Universe、provider lane 与 Result Artifact 模块不构成公共筛选产品。
 
 ## 文档与案例
@@ -123,7 +123,8 @@ CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻�
 - [`skill/a-share-research/SKILL.md`](skill/a-share-research/SKILL.md)：安装后 Agent 使用的简洁路由。
 - [`skill/a-share-research/references/`](skill/a-share-research/references/)：按任务域拆分的精确契约。
 - [`CONTEXT.md`](CONTEXT.md)：领域术语与产品边界。
-- [`Spec 0008 Amendment C`](docs/specs/0008-amendment-c-free-anonymous-scope.md)：v0.4.0 候选的免费匿名范围与最终验收。
+- [`Spec 0008 Amendment D`](docs/specs/0008-amendment-d-qualified-public-scope.md)：v0.4.0 候选的免费匿名范围。
+- [`Spec 0008 Amendment E`](docs/specs/0008-amendment-e-no-intraday-live-gate.md)：本次交付的实时验证适用范围。
 - [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md)：v0.3.0 历史实施与验收权威。
 
 ## 版本与发布证据

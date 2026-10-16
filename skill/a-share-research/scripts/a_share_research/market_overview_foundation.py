@@ -331,6 +331,8 @@ def _validate_market_overview_foundation_facts(result: Mapping[str, Any]) -> Non
             raise ValueError("overview session proof contradicts the frozen request")
         frozen = _FrozenSession(session_request, restored)
     for task_type, capability in TASK_CAPABILITIES.items():
+        if capability not in registry:
+            continue
         step = registry[capability]
         plan = step["leaf_plan"]
         if plan is None:
