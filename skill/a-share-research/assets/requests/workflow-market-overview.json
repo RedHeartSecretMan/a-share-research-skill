@@ -5,7 +5,7 @@
   "as_of": "REPLACE_YYYY-MM-DD",
   "window": null,
   "parameters": {
-    "workflow": {"id": "market_overview_research", "version": "1.0"},
+    "workflow": {"id": "market_overview_research", "version": "2.0"},
     "inputs": {"completeness_mode": "REPLACE_standard_OR_fast"}
   },
   "source_policy": {

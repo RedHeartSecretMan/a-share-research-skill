@@ -407,7 +407,7 @@ def _fixed_registry(
 
 _REGISTERED_WORKFLOW_CONTRACTS = _fixed_registry(
     (
-        _MARKET_OVERVIEW_V1,
+        _MARKET_OVERVIEW_V2,
         _SINGLE_SECURITY_RESEARCH_V1,
         _SINGLE_SECURITY_VALUATION_V1,
         _VALUATION_COMPARISON_V1,

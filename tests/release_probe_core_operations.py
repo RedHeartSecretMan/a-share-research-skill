@@ -59,7 +59,10 @@ from tests.release_probe_attempts import (  # noqa: E402
 PROBE_ID = "tests/release_probe_core_operations.py"
 _COPIED_INSTALL_TIMEOUT_SECONDS = 1200
 DEFAULT_QUALIFICATION = (
-    REPOSITORY_ROOT / "docs" / "research" / "v0.4.0-operation-qualification.json"
+    REPOSITORY_ROOT
+    / "docs"
+    / "research"
+    / "v0.4.0-overview-v2-operation-qualification.json"
 )
 _SAFE_PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SOURCE_RESULT_PRECEDENCE = (
@@ -506,7 +509,7 @@ def build_release_request_profiles(
             parameters={
                 "workflow": {
                     "id": "market_overview_research",
-                    "version": "1.0",
+                    "version": "2.0",
                 },
                 "inputs": {"completeness_mode": "standard"},
             },
@@ -1666,6 +1669,15 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
         installation_loads=installation_loads,
         installation_health=installation_health,
         live_probes=live_probes,
+        qualification_fixtures=json.loads(
+            (
+                SCRIPTS_ROOT.parent
+                / "references"
+                / "market-foundation-qualification-fixtures.json"
+            ).read_text(encoding="utf-8")
+        )
+        if any(item.source_contract is not None for item in qualification)
+        else None,
     )
 
 

@@ -1073,6 +1073,7 @@ class SkillDistributionTests(unittest.TestCase):
                 "v0.3.0-release-audit-2026-08-18.md",
                 "v0.3.0-release-probe-evidence.json",
                 "v0.4.0-operation-qualification.json",
+                "v0.4.0-overview-v2-operation-qualification.json",
             },
         )
 
@@ -1626,7 +1627,7 @@ class SkillDistributionTests(unittest.TestCase):
             result["limitations"][0]["code"], "source_policy_not_satisfied"
         )
 
-    def test_installed_copy_keeps_workflow_cutover_contracts_unregistered(
+    def test_installed_copy_switches_overview_and_keeps_screen_unregistered(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1645,7 +1646,7 @@ class SkillDistributionTests(unittest.TestCase):
                     "parameters": {
                         "workflow": {
                             "id": "market_overview_research",
-                            "version": "1.0",
+                            "version": "2.0",
                         },
                         "inputs": {"completeness_mode": "fast"},
                     },
@@ -1664,7 +1665,7 @@ class SkillDistributionTests(unittest.TestCase):
                     "parameters": {
                         "workflow": {
                             "id": "market_overview_research",
-                            "version": "2.0",
+                            "version": "1.0",
                         },
                         "inputs": {"completeness_mode": "fast"},
                     },
@@ -1759,9 +1760,9 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertEqual(current.returncode, 0, current.stderr)
         self.assertEqual(current.stderr, "")
         current_result = json.loads(current.stdout)
-        self.assertEqual(current_result["plan"]["version"], "1.0")
+        self.assertEqual(current_result["plan"]["version"], "2.0")
         self.assertEqual(
-            current_result["capability_registry"]["workflow"]["version"], "1.0"
+            current_result["capability_registry"]["workflow"]["version"], "2.0"
         )
         for name in (
             "future_overview",

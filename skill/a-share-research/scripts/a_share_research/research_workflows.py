@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, cast
 
 from .research_result import (
@@ -106,32 +106,28 @@ _MARKET_OVERVIEW_CAPABILITY_AUTHORITY = (
     _WorkflowCapabilityAuthority(
         "market_trading_session",
         "core",
-        reason_code="qualified_market_wide_owner_absent",
-        gap_route="v0.4.0_spec",
+        ("market_trading_session",),
     ),
     _WorkflowCapabilityAuthority(
         "major_broad_indices",
         "core",
-        reason_code="qualified_market_wide_owner_absent",
-        gap_route="v0.4.0_spec",
+        ("major_broad_indices",),
     ),
     _WorkflowCapabilityAuthority(
         "whole_market_turnover",
         "core",
-        reason_code="qualified_market_wide_owner_absent",
-        gap_route="v0.4.0_spec",
+        ("whole_market_turnover",),
     ),
     _WorkflowCapabilityAuthority(
         "whole_market_margin",
         "standard",
-        reason_code="qualified_market_wide_owner_absent",
-        gap_route="v0.4.0_spec",
+        ("whole_market_margin",),
     ),
     _WorkflowCapabilityAuthority(
         "market_wide_intraday",
         "deep",
-        reason_code="qualified_market_wide_owner_absent",
-        gap_route="v0.4.0_spec",
+        reason_code="free_anonymous_intraday_unproved",
+        gap_route="future_scope",
     ),
 )
 
@@ -149,6 +145,9 @@ def _market_overview_capability_inventory(
 def _validate_market_overview_unsupported_facts(
     result: Mapping[str, object],
 ) -> None:
+    from .market_overview_foundation import validate_market_overview_foundation_facts
+
+    validate_market_overview_foundation_facts(result)
     unsupported_ids = {
         item.capability_id
         for item in _MARKET_OVERVIEW_CAPABILITY_AUTHORITY
@@ -170,14 +169,14 @@ def _validate_market_overview_unsupported_facts(
             return any(carries_unsupported_capability_id(item) for item in value)
         return False
 
-    for field in ("claims", "calculations"):
+    for field in ("observations", "claims", "calculations"):
         values = result.get(field)
         if not isinstance(values, list):
             continue
         for record in values:
             if not isinstance(record, Mapping):
                 continue
-            kind = record.get("kind")
+            kind = record.get("kind", record.get("capability_id"))
             if not isinstance(kind, str):
                 raise ValueError("workflow formal fact kind must be a string")
             if kind in unsupported_ids or carries_unsupported_capability_id(
@@ -191,6 +190,8 @@ def _validate_market_overview_unsupported_facts(
 def build_research_workflow_result(
     request: dict[str, Any],
     run_leaf_task: LeafTaskRunner,
+    *,
+    research_now: datetime | None = None,
 ) -> UnifiedResearchResult:
     """Compile and execute one approved workflow through leaf ResearchTasks."""
 
@@ -252,6 +253,7 @@ def build_research_workflow_result(
             inputs,
             plan,
             run_leaf_task,
+            research_now,
         )
     elif workflow_id == "new_security_research":
         plan = _new_security_plan()
@@ -277,7 +279,11 @@ def _run_market_overview_workflow(
     inputs: dict[str, Any],
     plan: list[dict[str, Any]],
     run_leaf_task: LeafTaskRunner,
+    research_now: datetime | None,
 ) -> list[dict[str, Any]]:
+    from .market_overview_foundation import MarketOverviewFoundation, TASK_CAPABILITIES
+
+    foundation = MarketOverviewFoundation(request, research_now)
     completeness_mode = cast(str, inputs.get("completeness_mode", "standard"))
     specs_by_id = {item[0]: item for item in _market_overview_child_specs(request)}
     steps: list[dict[str, Any]] = []
@@ -287,6 +293,20 @@ def _run_market_overview_workflow(
             and plan_step["criticality"] == "standard_enrichment"
         ):
             steps.append(_not_requested_step(plan_step))
+            continue
+        blocked_dependency = next(
+            (
+                dependency
+                for dependency in plan_step["depends_on"]
+                if any(
+                    step["step_id"] == dependency and step["state"] == "blocked"
+                    for step in steps
+                )
+            ),
+            None,
+        )
+        if blocked_dependency is not None:
+            steps.append(_skipped_step(plan_step, blocked_dependency))
             continue
         step_id, task_type, window, parameters, subjects = specs_by_id[
             plan_step["step_id"]
@@ -298,7 +318,13 @@ def _run_market_overview_workflow(
             window=window,
             parameters=parameters,
         )
-        steps.append(_execute_step(plan_step, child_request, run_leaf_task))
+        steps.append(
+            _execute_step(
+                plan_step,
+                child_request,
+                foundation if task_type in TASK_CAPABILITIES else run_leaf_task,
+            )
+        )
     return steps
 
 
@@ -358,6 +384,10 @@ def _market_overview_child_specs(
             },
             [],
         ),
+        ("market_trading_session", "overview_session", None, {}, []),
+        ("major_broad_indices", "overview_indices", None, {}, []),
+        ("whole_market_turnover", "overview_turnover", None, {}, []),
+        ("whole_market_margin", "overview_margin", None, {}, []),
     ]
 
 
@@ -1336,6 +1366,25 @@ def _market_overview_plan() -> list[dict[str, Any]]:
             "research_content",
             criticality="standard_enrichment",
         ),
+        _plan_step("market_trading_session", "overview_session", criticality="core"),
+        _plan_step(
+            "major_broad_indices",
+            "overview_indices",
+            criticality="core",
+            depends_on=["market_trading_session"],
+        ),
+        _plan_step(
+            "whole_market_turnover",
+            "overview_turnover",
+            criticality="core",
+            depends_on=["market_trading_session"],
+        ),
+        _plan_step(
+            "whole_market_margin",
+            "overview_margin",
+            criticality="standard_enrichment",
+            depends_on=["market_trading_session"],
+        ),
     ]
 
 
@@ -1420,7 +1469,7 @@ def _skipped_step(plan_step: dict[str, Any], dependency: str) -> dict[str, Any]:
         "state": "skipped_research_dependency",
         "result": None,
         "request_scope": None,
-        "workflow_limitation": _dependency_skip_limitation(),
+        "workflow_limitation": _dependency_skip_limitation(dependency),
     }
 
 
@@ -1500,10 +1549,10 @@ def _identity_workflow_limitation() -> dict[str, object]:
     )
 
 
-def _dependency_skip_limitation() -> dict[str, object]:
+def _dependency_skip_limitation(dependency: str = "identity") -> dict[str, object]:
     return _workflow_limitation(
         "workflow_step_skipped_research_dependency",
-        "The workflow step has a research gap because its identity dependency was "
+        f"The workflow step has a research gap because its {dependency} dependency was "
         "blocked.",
         (),
     )
@@ -2032,7 +2081,9 @@ def validate_workflow_research_result(result: Mapping[str, object]) -> None:
             "not_requested",
         }:
             not_requested = step_ref.get("state") == "not_requested"
-            expected_limitation = _dependency_skip_limitation()
+            expected_limitation = _dependency_skip_limitation(
+                next(iter(contract["depends_on"]), "identity")
+            )
             if (
                 (not_requested and completeness_mode != "fast")
                 or (not_requested and contract["criticality"] != "standard_enrichment")

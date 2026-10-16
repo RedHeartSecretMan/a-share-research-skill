@@ -25,7 +25,13 @@ from .operation_release_matrix import (
     market_foundation_report_facts,
 )
 from .provider_lane import ProviderInvocation, ProviderLanePolicy, ProviderLanes
-from .research_result import FieldDisposition, OperationExecution, OperationOutcome
+from .research_result import (
+    EvidenceUsePolicy,
+    FieldDisposition,
+    OperationExecution,
+    OperationObligation,
+    OperationOutcome,
+)
 
 EXCHANGES = ("SSE", "SZSE", "BSE")
 OWNER_IDS = tuple(
@@ -110,6 +116,27 @@ class MarketFoundationOperationAdapter:
         self._transport = transport
         self._lanes = lanes
         self._issued: list[tuple[OperationOutcome, int]] = []
+
+    @property
+    def obligation(self) -> OperationObligation:
+        contract = json.loads(self._contract_json)
+        capability = contract["capability_id"]
+        return OperationObligation(
+            capability,
+            self.operation_id,
+            "market_observation",
+            False,
+            contract["scope"]["exchange"],
+            (EvidenceUsePolicy(capability, "supporting"),),
+        )
+
+    @property
+    def field_dispositions(self) -> tuple[FieldDisposition, ...]:
+        contract = json.loads(self._contract_json)
+        return tuple(
+            FieldDisposition(field, "normalized", destination)
+            for field, destination in contract["field_destinations"].items()
+        )
 
     def execute(self, request: OperationRequest, timeout: float) -> OperationOutcome:
         """Run a bounded supplied acquisition without claiming a missing parser."""
@@ -736,3 +763,228 @@ def _margin_totals(partitions: Sequence[Mapping[str, object]]) -> dict[str, obje
     return {
         field: _total(partitions, field, allow_complete_field=True) for field in fields
     }
+
+
+def _public_report_dispositions(
+    fields: Sequence[FieldDisposition],
+    observations: Sequence[Mapping[str, object]],
+    *,
+    complete: bool,
+) -> tuple[FieldDisposition, ...]:
+    if not observations:
+        return tuple(fields)
+    report = _mapping(observations[0]["observation"])
+    metrics = _mapping(report["metrics"])
+    return tuple(
+        field
+        if field.destination is not None
+        and field.destination.rsplit(".", 1)[-1] in metrics
+        else FieldDisposition(
+            field.field,
+            "excluded",
+            None,
+            "source_explicitly_empty_report"
+            if complete and report["row_count"] == 0
+            else "source_field_not_available",
+        )
+        for field in fields
+    )
+
+
+def project_market_foundation_outcome(outcome: OperationOutcome) -> OperationOutcome:
+    """Retain normalized field eligibility for public fold, after the owner fold.
+
+    Empty and partial reports keep their real proof and exclude absent fields;
+    their missing metrics never become zero. Use the original issued outcome
+    for fold_market_foundation's operation authority before this projection.
+    """
+    projection = outcome.to_dict()
+    observations = tuple(
+        {**row, "complete_fields": projection["diagnostics"].get("complete_fields", [])}
+        for row in projection["observations"]
+    )
+    return OperationOutcome(
+        outcome.capability_id,
+        outcome.operation_id,
+        outcome.execution,
+        observations=observations,
+        source_errors=outcome.source_errors,
+        field_dispositions=_public_report_dispositions(
+            outcome.field_dispositions,
+            observations,
+            complete=outcome.execution.query_complete is True,
+        ),
+        diagnostics=outcome.diagnostics,
+    )
+
+
+def validate_market_foundation_research_result(result: Mapping[str, object]) -> None:
+    try:
+        _validate_market_foundation_research_result(result)
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
+        raise ValueError(
+            "market foundation facts contradict their owner contract"
+        ) from error
+
+
+def _validate_market_foundation_research_result(result: Mapping[str, object]) -> None:
+    """Recheck retained report scope, field eligibility and exact total lineage.
+
+    The overview retains only normalized owner proof. Hashes identify records;
+    they do not replace the three-exchange scope and arithmetic checks here.
+    """
+    plan = _mapping(result["plan"])
+    capability = (
+        "whole_market_turnover"
+        if plan["task_type"] == "overview_turnover"
+        else "whole_market_margin"
+    )
+    contracts = {
+        owner: contract
+        for owner, contract in _load_contracts().items()
+        if contract["capability_id"] == capability
+    }
+    obligations = plan["operation_obligations"]
+    expected = [
+        OperationObligation(
+            capability,
+            owner,
+            "market_observation",
+            False,
+            str(_mapping(contracts[owner]["scope"])["exchange"]),
+            (EvidenceUsePolicy(capability, "supporting"),),
+        ).to_dict()
+        for owner in OWNER_IDS
+        if owner in contracts
+    ]
+    if obligations != expected:
+        raise ValueError("market foundation owner authority is invalid")
+    coverage = _mapping(_mapping(result["coverage"])[capability])
+    operations = _mapping(coverage["operations"])
+    observations = result["observations"]
+    partitions = []
+    references: dict[str, str] = {}
+    report_dates: set[str] = set()
+    for owner, contract in contracts.items():
+        rows = [
+            row
+            for row in cast(Sequence[Mapping[str, object]], observations)
+            if row["operation_id"] == owner
+        ]
+        if len(rows) > 1:
+            raise ValueError("market report partition is duplicated")
+        operation = _mapping(operations[owner])
+        if operation["execution_state"] == "succeeded" and not rows:
+            raise ValueError("market report success requires normalized report proof")
+        expected_fields = [
+            item.to_dict()
+            for item in _public_report_dispositions(
+                MarketFoundationOperationAdapter(
+                    owner, contract, None, ProviderLanes()
+                ).field_dispositions,
+                tuple(_mapping(row["payload"]) for row in rows),
+                complete=operation["query_complete"] is True,
+            )
+        ]
+        if operation["field_dispositions"] != expected_fields:
+            raise ValueError("market report field authority is invalid")
+        material = None
+        complete_fields: Sequence[str] = ()
+        if rows:
+            row = rows[0]
+            payload = _mapping(row["payload"])
+            material = _mapping(payload["observation"])
+            scope = _mapping(contract["scope"])
+            report_date = _date(material["report_date"])
+            publication = _timestamp(material["published_at"])
+            retrieval = _timestamp(payload["retrieved_at"])
+            if (
+                payload["source_operation"] != owner
+                or payload["source_locator"]
+                != _mapping(contract["request_selector"])["resource_url"]
+                or material["exchange"] != scope["exchange"]
+                or material["asset_scope"] != scope["kind"]
+                or report_date > _date(_mapping(result["research_anchor"])["as_of"])
+                or publication.date() < report_date
+                or publication > retrieval
+            ):
+                raise ValueError("market report scope or time is invalid")
+            metrics, units = _mapping(material["metrics"]), _mapping(material["units"])
+            allowed = {
+                str(value).rsplit(".", 1)[1]
+                for value in _mapping(contract["field_destinations"]).values()
+            }
+            complete_fields = cast(Sequence[str], payload.get("complete_fields", ()))
+            if (
+                set(metrics) - allowed
+                or set(units) != set(metrics)
+                or not isinstance(complete_fields, list)
+                or len(complete_fields) != len(set(complete_fields))
+                or not set(complete_fields) <= set(metrics)
+            ):
+                raise ValueError("market report metric inventory is invalid")
+            for field, value in metrics.items():
+                _decimal(value)
+                if units[field] != ("shares" if field.endswith("_shares") else "CNY"):
+                    raise ValueError("market report unit is invalid")
+            row_count = material["row_count"]
+            expected_rows = 2 if owner == "sse_a_share_turnover@1" else 1
+            if type(row_count) is not int or not 0 <= row_count <= expected_rows:
+                raise ValueError("market report row count is invalid")
+            if operation["state"] == "complete":
+                empty_margin = capability == "whole_market_margin" and row_count == 0
+                required = set() if empty_margin else allowed
+                if (
+                    set(metrics) != required
+                    or set(complete_fields) != required
+                    or (not empty_margin and row_count != expected_rows)
+                ):
+                    raise ValueError("complete market report omits required fields")
+            references[owner] = str(row["id"])
+            report_dates.add(str(material["report_date"]))
+        partitions.append(
+            {
+                "operation_id": owner,
+                "source_result": operation["state"],
+                "observation": material,
+                "complete_fields": complete_fields,
+            }
+        )
+    if len(report_dates) > 1:
+        raise ValueError("market report partitions have incompatible dates")
+    by_owner = {str(partition["operation_id"]): partition for partition in partitions}
+    partitions = [by_owner[owner] for owner in OWNER_IDS if owner in contracts]
+    totals = (
+        {"turnover_amount_CNY": _total(partitions, "turnover_amount_CNY")}
+        if capability == "whole_market_turnover"
+        else _margin_totals(partitions)
+    )
+    expected_calculations = []
+    for field, total in totals.items():
+        if total is None:
+            continue
+        typed_total = _mapping(total)
+        evidence_ids = [
+            references[str(owner)]
+            for owner in cast(Sequence[str], typed_total["operands"])
+        ]
+        expected_calculations.append(
+            {
+                "kind": capability,
+                "evidence_use": capability,
+                "input_ids": evidence_ids,
+                "payload": {
+                    "report_date": next(iter(report_dates)),
+                    "metric": field,
+                    "value": typed_total["value"],
+                    "unit": typed_total["unit"],
+                    "operand_evidence_ids": evidence_ids,
+                },
+            }
+        )
+    calculations = [
+        {key: value for key, value in calculation.items() if key != "id"}
+        for calculation in cast(Sequence[Mapping[str, object]], result["calculations"])
+    ]
+    if calculations != expected_calculations:
+        raise ValueError("market report total contradicts its three-exchange operands")

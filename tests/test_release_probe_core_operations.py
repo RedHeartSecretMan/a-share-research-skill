@@ -97,6 +97,15 @@ def _mark_external_fixture_applications_failed(result: dict[str, object]) -> Non
         for obligation in plan["operation_obligations"]:
             if obligation["operation_kind"] != "external_source":
                 continue
+            # #96's copied-installed deterministic owners already attempted
+            # their accepted normalization paths; retain those real outcomes.
+            if obligation["capability_id"] in {
+                "market_trading_session",
+                "major_broad_indices",
+                "whole_market_turnover",
+                "whole_market_margin",
+            }:
+                continue
             operation = coverage[obligation["capability_id"]]["operations"][
                 obligation["operation_id"]
             ]
@@ -221,10 +230,11 @@ def _synthetic_attempt(
     verified_at: str,
     attempted_producers: set[str],
     capabilities_by_producer: dict[str, tuple[str, ...]] | None = None,
+    producers: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     """Build one bounded attempt fixture from the reviewed literal denominator."""
 
-    producers = _reviewed_qualification_producers()
+    producers = _reviewed_qualification_producers() if producers is None else producers
     if capabilities_by_producer is None:
         capabilities_by_producer = {
             producer: ("synthetic_release_contract",) for producer in producers
@@ -354,7 +364,7 @@ def _reviewed_application_attempt(
     payload = json.loads(
         release_probe.DEFAULT_QUALIFICATION.read_text(encoding="utf-8")
     )
-    active_producers = set(_reviewed_qualification_producers())
+    active_producers = set(release_probe._reviewed_producer_operation_ids())
     capabilities_by_producer = {
         item["producer_operation_id"]: tuple(item["capability_ids"])
         for item in payload["operations"]
@@ -365,6 +375,7 @@ def _reviewed_application_attempt(
         verified_at=verified_at,
         attempted_producers=attempted_producers,
         capabilities_by_producer=capabilities_by_producer,
+        producers=tuple(sorted(active_producers)),
     )
 
 
@@ -1000,7 +1011,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         attempt = _reviewed_application_attempt(
             candidate_sha=_RC_CANDIDATE_SHA,
             verified_at=_RC_VERIFIED_AT,
-            attempted_producers=set(_reviewed_qualification_producers()),
+            attempted_producers=set(release_probe._reviewed_producer_operation_ids()),
         )
         report = release_probe.assemble_release_probe_evidence(
             (attempt,),
@@ -1063,7 +1074,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
     def test_main_combines_complementary_same_candidate_attempts_before_final(
         self,
     ) -> None:
-        producers = _reviewed_qualification_producers()
+        producers = release_probe._reviewed_producer_operation_ids()
         prior_attempted = set(producers[:22])
         current_attempted = set(producers[22:])
         prior = _reviewed_application_attempt(
@@ -1126,7 +1137,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 sorted((prior["attempt_digest"], current["attempt_digest"])),
             )
             self.assertEqual(len(final["plan_snapshots"]), 2)
-            self.assertEqual(len(final["live_probes"]), 44)
+            self.assertEqual(len(final["live_probes"]), 52)
             live_by_owner = {
                 item["producer_operation_id"]: item for item in final["live_probes"]
             }
@@ -3108,7 +3119,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 failure_report["denominator_source"],
                 "reviewed_qualification_manifest",
             )
-            self.assertEqual(len(failure_report["external_producer_operation_ids"]), 44)
+            self.assertEqual(len(failure_report["external_producer_operation_ids"]), 52)
             self.assertEqual(
                 failure_report["observed_external_producer_operation_ids"],
                 list(_IDENTITY_PRODUCERS),
@@ -3492,7 +3503,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             REPOSITORY_ROOT
             / "docs"
             / "research"
-            / "v0.4.0-operation-qualification.json"
+            / "v0.4.0-overview-v2-operation-qualification.json"
         )
         self.assertEqual(release_probe.DEFAULT_QUALIFICATION, expected)
         payload = json.loads(expected.read_text(encoding="utf-8"))
@@ -3542,6 +3553,8 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             ("whole_market_margin", "sse_market_margin@1"),
             ("whole_market_margin", "szse_market_margin@1"),
             ("whole_market_margin", "bse_market_margin@1"),
+            ("market_trading_session", "market_session_context@1"),
+            ("major_broad_indices", "fixed_four_indices@1"),
         }
         self.assertEqual(reviewed_authority - plan_authority, target_applications)
         self.assertFalse(plan_authority - reviewed_authority)
@@ -3549,7 +3562,8 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         historical_manifest["operations"] = [
             operation
             for operation in historical_manifest["operations"]
-            if operation["disposition"] != "pending_dependency"
+            if operation["producer_operation_id"]
+            in set(formal_producer_operation_ids(snapshots))
         ]
         qualification = load_operation_qualification_manifest(
             historical_manifest,
@@ -3674,6 +3688,26 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps(health), "")
             request = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
             sent_requests.append(deepcopy(request))
+            if (
+                request.get("parameters", {}).get("workflow", {}).get("id")
+                == "market_overview_research"
+            ):
+                from tests.test_market_overview_research import (
+                    invoke_copied_installed,
+                )
+
+                completed = invoke_copied_installed(
+                    request,
+                    environment_overrides={
+                        "ASR96_NOW": "2026-08-12T18:00:00+08:00",
+                        "ASR96_LEGACY_SOURCES_UNAVAILABLE": "1",
+                    },
+                )
+                if completed.returncode != 0:
+                    raise AssertionError(completed.stderr)
+                public = json.loads(completed.stdout)
+                _mark_external_fixture_applications_failed(public)
+                return subprocess.CompletedProcess(command, 0, json.dumps(public), "")
             with patch(
                 "a_share_research.research_runtime.UrlLibTransport",
                 side_effect=AssertionError(
@@ -3717,8 +3751,8 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             candidate_sha=_RC_CANDIDATE_SHA,
             assembled_at="2026-08-12T09:30:00+08:00",
         )
-        # This synthetic current run reaches only 53 applications.  It must not
-        # finalize against the reviewed 59-application historical authority.
+        # This synthetic current run reaches 61 applications. It must not
+        # finalize against the reviewed 67-application authority.
         with self.assertRaisesRegex(
             ValueError, "qualification application authority does not close the plan"
         ):
@@ -3809,6 +3843,14 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             TencentIntradayOperation.operation_id,
             *(item.operation_id for item in replay_operations),
             *(item.operation_id for item in replay_daily_operations),
+            "market_session_context@1",
+            "fixed_four_indices@1",
+            "sse_a_share_turnover@1",
+            "szse_a_share_turnover@1",
+            "bse_a_share_turnover@1",
+            "sse_market_margin@1",
+            "szse_market_margin@1",
+            "bse_market_margin@1",
         }
         snapshots = tuple(
             ReleasePlanSnapshot(
@@ -3831,13 +3873,10 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
         qualification_payload = json.loads(
             release_probe.DEFAULT_QUALIFICATION.read_text(encoding="utf-8")
         )
-        with self.assertRaisesRegex(
-            ValueError, "qualification evidence does not close the denominator"
-        ):
-            load_operation_qualification_manifest(
-                qualification_payload,
-                expected_producer_operation_ids=tuple(plan_derived_producers),
-            )
+        load_operation_qualification_manifest(
+            qualification_payload,
+            expected_producer_operation_ids=tuple(plan_derived_producers),
+        )
         active_qualification_payload = deepcopy(qualification_payload)
         active_qualification_payload["operations"] = [
             operation
@@ -4043,7 +4082,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 "parameters": {
                     "workflow": {
                         "id": "market_overview_research",
-                        "version": "1.0",
+                        "version": "2.0",
                     },
                     "inputs": {"completeness_mode": "standard"},
                 },

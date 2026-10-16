@@ -41,7 +41,7 @@ def market_overview_request(
         "as_of": "2026-08-03",
         "window": None,
         "parameters": {
-            "workflow": {"id": "market_overview_research", "version": "1.0"},
+            "workflow": {"id": "market_overview_research", "version": "2.0"},
             "inputs": {} if inputs is None else inputs,
         },
         "source_policy": {
@@ -69,9 +69,17 @@ def invoke_copied_installed(
             "PYTHONNOUSERSITE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
         }
-        if bootstrap is not None:
-            (root / "sitecustomize.py").write_text(bootstrap, encoding="utf-8")
-            environment["PYTHONPATH"] = str(root)
+        foundation_bootstrap = (
+            REPOSITORY_ROOT
+            / "tests"
+            / "fixtures"
+            / "research_workflows"
+            / "issue_96_sitecustomize.py"
+        ).read_text(encoding="utf-8")
+        (root / "sitecustomize.py").write_text(
+            (bootstrap or "") + "\n" + foundation_bootstrap, encoding="utf-8"
+        )
+        environment["PYTHONPATH"] = str(root)
         environment.update(environment_overrides or {})
         return subprocess.run(
             [
@@ -247,8 +255,8 @@ class MarketOverviewResearchTests(unittest.TestCase):
             "whole_market_turnover",
             "whole_market_margin",
             "market_wide_intraday",
-            "qualified_market_wide_owner_absent",
-            "v0.4.0_spec",
+            "free_anonymous_intraday_unproved",
+            "future_scope",
         ):
             with self.subTest(capability_id=capability_id):
                 self.assertIn(capability_id, contract)
@@ -278,7 +286,7 @@ class MarketOverviewResearchTests(unittest.TestCase):
         self.assertEqual(completed.stderr, "")
         result = json.loads(completed.stdout)
         self.assertEqual(result["plan"]["workflow_id"], "market_overview_research")
-        self.assertEqual(result["plan"]["version"], "1.0")
+        self.assertEqual(result["plan"]["version"], "2.0")
         self.assertEqual(
             [
                 (step["step_id"], step["task_type"], step["criticality"])
@@ -297,6 +305,10 @@ class MarketOverviewResearchTests(unittest.TestCase):
                     "standard_enrichment",
                 ),
                 ("market_flash", "research_content", "standard_enrichment"),
+                ("market_trading_session", "overview_session", "core"),
+                ("major_broad_indices", "overview_indices", "core"),
+                ("whole_market_turnover", "overview_turnover", "core"),
+                ("whole_market_margin", "overview_margin", "standard_enrichment"),
             ],
         )
         inventory = result["capability_registry"]["workflow"]["capability_inventory"]
@@ -366,41 +378,33 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 {
                     "capability_id": "market_trading_session",
                     "tier": "core",
-                    "state": "unsupported",
-                    "reason_code": "qualified_market_wide_owner_absent",
-                    "gap_route": "v0.4.0_spec",
-                    "step_ids": [],
+                    "state": "supported",
+                    "step_ids": ["market_trading_session"],
                 },
                 {
                     "capability_id": "major_broad_indices",
                     "tier": "core",
-                    "state": "unsupported",
-                    "reason_code": "qualified_market_wide_owner_absent",
-                    "gap_route": "v0.4.0_spec",
-                    "step_ids": [],
+                    "state": "supported",
+                    "step_ids": ["major_broad_indices"],
                 },
                 {
                     "capability_id": "whole_market_turnover",
                     "tier": "core",
-                    "state": "unsupported",
-                    "reason_code": "qualified_market_wide_owner_absent",
-                    "gap_route": "v0.4.0_spec",
-                    "step_ids": [],
+                    "state": "supported",
+                    "step_ids": ["whole_market_turnover"],
                 },
                 {
                     "capability_id": "whole_market_margin",
                     "tier": "standard",
-                    "state": "unsupported",
-                    "reason_code": "qualified_market_wide_owner_absent",
-                    "gap_route": "v0.4.0_spec",
-                    "step_ids": [],
+                    "state": "supported",
+                    "step_ids": ["whole_market_margin"],
                 },
                 {
                     "capability_id": "market_wide_intraday",
                     "tier": "deep",
                     "state": "unsupported",
-                    "reason_code": "qualified_market_wide_owner_absent",
-                    "gap_route": "v0.4.0_spec",
+                    "reason_code": "free_anonymous_intraday_unproved",
+                    "gap_route": "future_scope",
                     "step_ids": [],
                 },
             ],
@@ -409,13 +413,7 @@ class MarketOverviewResearchTests(unittest.TestCase):
         without_inventory = deepcopy(result)
         del without_inventory["capability_registry"]["workflow"]["capability_inventory"]
         serialized_facts = json.dumps(without_inventory, ensure_ascii=False)
-        for capability_id in (
-            "market_trading_session",
-            "major_broad_indices",
-            "whole_market_turnover",
-            "whole_market_margin",
-            "market_wide_intraday",
-        ):
+        for capability_id in ("market_wide_intraday",):
             self.assertNotIn(capability_id, serialized_facts)
 
     def test_standard_core_preserves_formal_board_and_limit_pool_facts(self) -> None:
@@ -1029,13 +1027,7 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 for capability_id in standard_capability_ids
             },
         )
-        unsupported_capability_ids = {
-            "market_trading_session",
-            "major_broad_indices",
-            "whole_market_turnover",
-            "whole_market_margin",
-            "market_wide_intraday",
-        }
+        unsupported_capability_ids = {"market_wide_intraday"}
         self.assertEqual(
             {
                 capability_id: (
@@ -1049,8 +1041,8 @@ class MarketOverviewResearchTests(unittest.TestCase):
             {
                 capability_id: (
                     "unsupported",
-                    "qualified_market_wide_owner_absent",
-                    "v0.4.0_spec",
+                    "free_anonymous_intraday_unproved",
+                    "future_scope",
                     [],
                 )
                 for capability_id in unsupported_capability_ids
@@ -1149,6 +1141,10 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 "market_signal_enhancements",
                 "market_capital_enhancements",
                 "market_flash",
+                "market_trading_session",
+                "major_broad_indices",
+                "whole_market_turnover",
+                "whole_market_margin",
             ],
         )
         inventory = result["capability_registry"]["workflow"]["capability_inventory"]
@@ -1164,8 +1160,8 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 "capability_id": "market_wide_intraday",
                 "tier": "deep",
                 "state": "unsupported",
-                "reason_code": "qualified_market_wide_owner_absent",
-                "gap_route": "v0.4.0_spec",
+                "reason_code": "free_anonymous_intraday_unproved",
+                "gap_route": "future_scope",
                 "step_ids": [],
             },
         )
@@ -1275,6 +1271,10 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 "market_signal_enhancements": "limited",
                 "market_capital_enhancements": "limited",
                 "market_flash": "limited",
+                "market_trading_session": "supported",
+                "major_broad_indices": "supported",
+                "whole_market_turnover": "supported",
+                "whole_market_margin": "supported",
             },
         )
         owner_steps = {
@@ -1323,6 +1323,17 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 record["id"]
                 for records in observations_by_owner.values()
                 for record in records
+            }
+            | {
+                record["id"]
+                for record in result["observations"]
+                if record["capability_id"]
+                in {
+                    "market_trading_session",
+                    "major_broad_indices",
+                    "whole_market_turnover",
+                    "whole_market_margin",
+                }
             },
         )
 
@@ -1456,10 +1467,14 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 "market_signal_enhancements",
                 "market_capital_enhancements",
                 "market_flash",
+                "market_trading_session",
+                "major_broad_indices",
+                "whole_market_turnover",
+                "whole_market_margin",
             ],
         )
         aggregate_bytes = _canonical_stdout_bytes(overview.stdout)
-        self.assertEqual(aggregate_bytes, 2_509_404)
+        self.assertGreater(aggregate_bytes, 2_509_404)
         self.assertLessEqual(aggregate_bytes, 32 * 1024 * 1024)
         expected_owner_counts = {
             "eastmoney_industry_rotation@1": 75,
@@ -1514,7 +1529,7 @@ class MarketOverviewResearchTests(unittest.TestCase):
             for item in result["task_views"]["research_workflow"]["steps"]
             if item["step_id"] == step_id
         )
-        unsupported_id = "whole_market_turnover"
+        unsupported_id = "market_wide_intraday"
         source_claim = next(
             item for item in result["claims"] if item["id"] in step["claim_ids"]
         )

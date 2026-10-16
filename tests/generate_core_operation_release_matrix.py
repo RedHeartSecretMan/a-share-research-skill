@@ -324,7 +324,25 @@ def _owner_operation_symbol(item: OperationQualificationEvidence) -> str:
             path.relative_to(source_root)
         except ValueError:
             continue
-        if separator and path.suffix == ".py" and anchor.endswith("Operation"):
+        declared_adapters = {
+            "market_session_context@1": (
+                "market_session_sources.py",
+                "ProductionMarketSessionAdapter",
+            ),
+            "fixed_four_indices@1": (
+                "fixed_index_sources.py",
+                "ProductionFixedIndexAdapter",
+            ),
+        }
+        if (
+            separator
+            and path.suffix == ".py"
+            and (
+                anchor.endswith("Operation")
+                or (path.name, anchor)
+                == declared_adapters.get(item.producer_operation_id)
+            )
+        ):
             candidates.add(anchor)
     if len(candidates) != 1:
         raise ValueError("qualification owner operation reference is invalid")

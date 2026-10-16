@@ -179,7 +179,9 @@ class ResearchRuntime:
             _require_no_evidence_store(evidence_store, task_type)
             if not allow_workflow:
                 raise ValueError("nested research_workflow tasks are not allowed")
-            result = build_research_workflow_result(request, self._run_leaf_task)
+            result = build_research_workflow_result(
+                request, self._run_leaf_task, research_now=self._research_now
+            )
         elif task_type == "market_trend":
             result = build_market_trend_result(
                 request,

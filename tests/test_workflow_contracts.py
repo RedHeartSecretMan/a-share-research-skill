@@ -1175,7 +1175,7 @@ print(json.dumps(outcomes, sort_keys=True))
         self.assertEqual(
             dict(REGISTERED_WORKFLOW_VERSIONS),
             {
-                "market_overview_research": "1.0",
+                "market_overview_research": "2.0",
                 "new_security_research": "1.0",
                 "single_security_research": "1.0",
                 "single_security_valuation": "1.0",
@@ -1208,7 +1208,7 @@ print(json.dumps(outcomes, sort_keys=True))
         for future_request in (
             workflow_request(
                 "market_overview_research",
-                "2.0",
+                "1.0",
                 inputs={"completeness_mode": "standard"},
             ),
             workflow_request(
@@ -1241,7 +1241,7 @@ print(json.dumps(outcomes, sort_keys=True))
                     "2.0",
                     inputs={"completeness_mode": "deep"},
                 ),
-                "research_workflow version is not supported",
+                "market_overview_research completeness_mode must be standard or fast",
             ),
             (
                 workflow_request(

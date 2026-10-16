@@ -16,9 +16,10 @@
 
 | 文件 | 用途 | 修改方式 |
 | --- | --- | --- |
-| [`v0.4.0-operation-qualification.json`](v0.4.0-operation-qualification.json) | 按 capability 与 producer application 绑定的静态资格权威 | 只随 v0.4.0 DAG 的资格审查更新 |
+| [`v0.4.0-operation-qualification.json`](v0.4.0-operation-qualification.json) | #114 的历史资格快照，保留六项待集成报告 owner 的原始契约 | 保留历史身份，不回写为当前发布证明 |
+| [`v0.4.0-overview-v2-operation-qualification.json`](v0.4.0-overview-v2-operation-qualification.json) | 市场总览 v2 的当前 52-owner 静态资格：原有 44 项加六项完成日报告、会话和四指数 | 只随对应集成与资格审查更新 |
 
-该文件用于让维护者探测按实际公开计划义务闭合资格集合；它不是 v0.4.0 发布矩阵、Release、冻结候选或联网验证证明。
+市场总览 v2 文件用于让维护者探测按实际公开计划义务闭合资格集合；这两份静态记录都不是 v0.4.0 发布矩阵、Release、冻结候选或联网验证证明。
 
 `v0.3.0-*` JSON 证据是版本化发布产物；`v0.4.0-operation-qualification.json` 是开发期静态审阅权威，不是发布产物。两者都不是使用案例，也不得手工调整字段、计数或摘要。运行普通研究请求请从 [`examples/README.md`](../../examples/README.md) 选择请求文件。
 

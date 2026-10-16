@@ -2934,7 +2934,11 @@ def validate_plan_operation_producer_authority(
 
 
 def _validate_direct_domain_facts(result: Mapping[str, object], task_type: str) -> None:
-    if task_type == "market_trend":
+    if task_type in {"overview_turnover", "overview_margin"}:
+        from .market_foundation import validate_market_foundation_research_result
+
+        validate_market_foundation_research_result(result)
+    elif task_type == "market_trend":
         _validate_market_domain_facts(result)
     elif task_type == "etf_market":
         _validate_etf_domain_facts(result)

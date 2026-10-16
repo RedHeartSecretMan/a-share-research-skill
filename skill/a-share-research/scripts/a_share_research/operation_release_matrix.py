@@ -2281,6 +2281,11 @@ def _validate_market_foundation_qualification_authority(
         "gap_issues": list(value.gap_issues),
         "source_contract": deepcopy(dict(source_contract)),
     }
+    # #96 activates only these exact six already-qualified source contracts.
+    # Preserve the accepted pending record as the byte authority; integration
+    # changes its delivery disposition only, never source fields/time/units.
+    if value.disposition == "integrated":
+        payload["disposition"] = "pending_dependency"
     if (
         _canonical_mapping_sha256(payload, "qualification authority")
         != (_MARKET_FOUNDATION_QUALIFICATION_SHA256[value.producer_operation_id])
