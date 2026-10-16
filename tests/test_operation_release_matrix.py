@@ -1696,7 +1696,9 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             "live_probes": probes,
         }
 
-    def test_internal_dependency_attributions_do_not_enter_the_public_denominator(self) -> None:
+    def test_internal_dependency_attributions_do_not_enter_the_public_denominator(
+        self,
+    ) -> None:
         inputs = self._stable_matrix_inputs()
         internal_facts = [
             {
@@ -1722,9 +1724,7 @@ class OperationReleaseMatrixTests(unittest.TestCase):
         matrix = build_operation_release_matrix(**inputs).to_dict()
 
         self.assertEqual(matrix["denominator"]["operation_count"], 2)
-        self.assertEqual(
-            matrix["internal_dependency_attributions"], internal_facts
-        )
+        self.assertEqual(matrix["internal_dependency_attributions"], internal_facts)
         self.assertEqual(inputs["installation_health"], original)
         for key, value in (
             ("distribution", "unknown"),

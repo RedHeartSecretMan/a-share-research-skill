@@ -1274,6 +1274,8 @@ def build_operation_release_matrix(
         for item in installation_loads
         if item.origin == "installation_health"
     }
+    # Retained internal modules remain installed, but are not public plan owners.
+    # Admit only their exact declared dependency facts and keep them auditable.
     internal_dependency_facts: list[dict[str, object]] = []
     internal_operation_ids: set[str] = set()
     internal_dependencies = {
@@ -1545,7 +1547,12 @@ def build_operation_release_matrix(
                 else {}
             ),
             **(
-                {"internal_dependency_attributions": internal_dependency_facts}
+                {
+                    "internal_dependency_attributions": sorted(
+                        internal_dependency_facts,
+                        key=lambda fact: cast(str, fact["distribution"]),
+                    )
+                }
                 if internal_dependency_facts
                 else {}
             ),

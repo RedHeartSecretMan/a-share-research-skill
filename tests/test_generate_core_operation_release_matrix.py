@@ -104,7 +104,9 @@ class CoreOperationMatrixGeneratorTests(unittest.TestCase):
             sum(item.source_contract is not None for item in qualification), 6
         )
 
-    def test_current_52_owner_evidence_uses_accepted_normalization_fixtures(self) -> None:
+    def test_current_52_owner_evidence_uses_accepted_normalization_fixtures(
+        self,
+    ) -> None:
         from tests.test_release_probe_core_operations import (
             _reviewed_application_attempt,
             release_probe,
