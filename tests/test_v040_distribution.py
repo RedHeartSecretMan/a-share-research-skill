@@ -177,7 +177,15 @@ class V040DistributionTests(unittest.TestCase):
 
     def test_installable_tree_excludes_runtime_state_and_machine_paths(self) -> None:
         forbidden_parts = {"tests", ".state", ".runtime", "__pycache__", ".git"}
-        for path in SKILL.rglob("*"):
+        delivered = (
+            subprocess.check_output(
+                ["git", "ls-files", "-z", "--", "skill/a-share-research"], cwd=ROOT
+            )
+            .decode()
+            .split("\0")
+        )
+        for name in filter(None, delivered):
+            path = ROOT / name
             relative = path.relative_to(SKILL)
             with self.subTest(path=str(relative)):
                 self.assertTrue(forbidden_parts.isdisjoint(relative.parts))
