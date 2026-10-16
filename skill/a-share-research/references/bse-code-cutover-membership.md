@@ -40,4 +40,4 @@ source acquisition 分别保留真实 BSE admission、mapping 中带限定的 di
 
 每份 PDF 最多 4 MiB；仅前 40 页、UTF-8 文本累计 262,144 字节；锁定 pypdf 在隔离子进程内解析，整体 timeout 内结束/回收，结构化输出最多 4 KiB。沿用 HTTP 5 MiB transport 上限，没有网络安装、账号、凭据、付费或 fallback。仅允许精确 HTTPS 官方 PDF locators，拒绝 query、fragment、凭据与其他 host；不执行 PDF 链接、JS、callback 或来源文本指令。公开输出仅有有限规范事实、安全 locator、hash/version refs 和计数，不含 raw payload、本地路径或原始异常。
 
-普通测试全部替换 source-family transport 并使用 kernel deny-network。它们证明真实生产 parser/normalizer、身份和时点失败边界，不证明 live 成功。全 BSE/三所完整名单、连续历史范围、完整总量与市场 workload、正式发布可用性仍未证明；最终冻结候选的完整三所筛选与盘中 E2E 保持 #98 原门禁，不由本有限事件模式代替。
+普通测试全部替换 source-family transport 并使用 kernel deny-network。它们证明真实生产 parser/normalizer、身份和时点失败边界，不证明 live 成功。全 BSE/三所完整名单、连续历史范围、完整总量与市场 workload、正式发布可用性仍未证明；Amendment C 已退出本版公共全市场筛选、排名、候选深研及当前会话全市场盘中工作流。本有限事件模块仅保留内部 source/identity 契约，不证明这些未提供的公共能力，也不新增相应的发布 E2E 门禁。
