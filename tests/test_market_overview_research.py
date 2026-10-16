@@ -230,12 +230,20 @@ class MarketOverviewResearchTests(unittest.TestCase):
         for document in (chinese, english, skill, contract):
             with self.subTest(document=document[:32]):
                 self.assertIn("market_overview_research", document)
-        self.assertIn("2 项实际核心、8 项标准增强和 5 项显式不支持能力", chinese)
-        self.assertIn(
-            "2 actual core capabilities, 8 standard enhancements, and 5 "
-            "explicitly unsupported capabilities",
-            english,
-        )
+        for token in (
+            "15 项固定能力",
+            "5 项 core",
+            "9 项 standard",
+            "market_wide_intraday",
+        ):
+            self.assertIn(token, chinese)
+        for token in (
+            "15 fixed capabilities",
+            "5 core",
+            "9 standard",
+            "market_wide_intraday",
+        ):
+            self.assertIn(token, english)
         self.assertIn("completion additionally requires empty subjects", skill)
         self.assertIn("Completion for this branch", contract)
         self.assertIn("requests/workflow-market-overview-research.json", examples_index)
