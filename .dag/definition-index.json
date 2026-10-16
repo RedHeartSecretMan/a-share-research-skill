@@ -2,7 +2,7 @@
   "inputs": [
     {
       "path": ".dag/definition-github-spec-0008.json",
-      "blob_oid": "61d474cfd9cc9eaedd94501874611dd6826f86a2"
+      "blob_oid": "7edd547972b2f36b0ee1c01182b00ab412186d21"
     },
     {
       "path": "docs/specs/0008-amendment-b-artifact-protocol.md",
@@ -22,7 +22,11 @@
     },
     {
       "path": "docs/specs/0008-amendment-c-free-anonymous-scope.md",
-      "blob_oid": "0c89f4f43499348d20f9d454428d1f26d0745a31"
+      "blob_oid": "c888bf902fb760eda4668916f2d9dbe2c1ed1e44"
+    },
+    {
+      "path": "docs/specs/0008-amendment-d-qualified-public-scope.md",
+      "blob_oid": "6051cc8f86bb99a3986fc3fe34b18286b4353853"
     },
     {
       "path": "docs/specs/0008-v0.4.0-market-foundation-and-screening.md",
