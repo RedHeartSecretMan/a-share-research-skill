@@ -31,6 +31,8 @@ from a_share_research.installation_health import (  # noqa: E402
 )
 from a_share_research.operation_release_matrix import (  # noqa: E402
     MARKET_FOUNDATION_OPERATION_APPLICATIONS,
+    INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
+    load_live_verification_exclusions,
     ReleasePlanSnapshot,
     build_operation_release_matrix,
     canonical_release_as_of,
@@ -1644,7 +1646,9 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
     """Require the public probe to close the reviewed release denominator."""
 
     snapshots, installation_loads, installation_health, live_probes = (
-        load_release_probe_evidence(report)
+        load_release_probe_evidence(
+            report, expected_exclusions=INTRADAY_LIVE_VERIFICATION_EXCLUSIONS
+        )
     )
     denominator = formal_producer_operation_ids(snapshots)
     applications = formal_operation_applications(snapshots)
@@ -1672,6 +1676,10 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
         installation_loads=installation_loads,
         installation_health=installation_health,
         live_probes=live_probes,
+        live_verification_exclusions=load_live_verification_exclusions(
+            report, expected_exclusions=INTRADAY_LIVE_VERIFICATION_EXCLUSIONS
+        ),
+        expected_exclusions=INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
         expected_internal_dependencies=RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
         qualification_fixtures=json.loads(
             (
@@ -1823,16 +1831,26 @@ def assemble_release_probe_evidence(
     *,
     candidate_sha: str,
     assembled_at: str,
+    live_verification_exclusions: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, object]:
     """Validate exact application truth before assembling an attempt union."""
 
     for attempt in attempts:
         _validate_attempt_contract(attempt)
-    return _assemble_release_probe_evidence(
+    report = _assemble_release_probe_evidence(
         attempts,
         candidate_sha=candidate_sha,
         assembled_at=assembled_at,
     )
+
+    if live_verification_exclusions:
+        report["live_verification_exclusions"] = [
+            deepcopy(dict(item)) for item in live_verification_exclusions
+        ]
+        load_release_probe_evidence(
+            report, expected_exclusions=INTRADAY_LIVE_VERIFICATION_EXCLUSIONS
+        )
+    return report
 
 
 def _write_atomic(path: Path, payload: bytes) -> None:

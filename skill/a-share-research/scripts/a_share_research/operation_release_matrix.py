@@ -27,6 +27,12 @@ from .research_result import (
 )
 
 OperationOwner = tuple[str, str]
+INTRADAY_LIVE_VERIFICATION_EXCLUSIONS: tuple[OperationOwner, ...] = (
+    ("intraday_market_snapshot", "tencent_intraday_snapshot@1"),
+    ("intraday_market_snapshot", "tongdaxin_intraday_snapshot@1"),
+)
+_INTRADAY_EXCLUSION_AUTHORITY = "docs/specs/0008-amendment-e-no-intraday-live-gate.md"
+
 _SAFE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@#-]{0,255}$")
 _CANONICAL_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 _CANONICAL_TIMESTAMP = re.compile(
@@ -241,6 +247,7 @@ class ReleasePlanSnapshot:
     verified_at: str | None = None
     attempt_digest: str | None = None
     request_as_of: str | None = None
+    evidence_kind: Literal["source_attempt", "offline_verification"] = "source_attempt"
 
 
 @dataclass(frozen=True)
@@ -287,6 +294,210 @@ class LiveProbeEvidence:
     candidate_sha: str | None = None
     request_profile: str | None = None
     attempt_digest: str | None = None
+
+
+@dataclass(frozen=True)
+class LiveVerificationExclusion:
+    """A sealed offline proof for one explicitly exempted application."""
+
+    capability_id: str
+    producer_operation_id: str
+    snapshot: ReleasePlanSnapshot
+    installation_load: InstallationLoadEvidence
+    payload: Mapping[str, object]
+
+
+def _exclusion_digest(payload: Mapping[str, object]) -> str:
+    return sha256(
+        json.dumps(
+            {
+                key: value
+                for key, value in payload.items()
+                if key != "offline_evidence_digest"
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def create_intraday_live_verification_exclusions(
+    *,
+    candidate_sha: str,
+    verified_at: str,
+    plan_snapshot: Mapping[str, object],
+    installation_loads: Sequence[Mapping[str, object]],
+    offline_contracts: Mapping[str, Mapping[str, object]],
+) -> tuple[dict[str, object], ...]:
+    """Seal a copied-installed offline capture separately from source attempts."""
+
+    expected_producers = {
+        producer for _, producer in INTRADAY_LIVE_VERIFICATION_EXCLUSIONS
+    }
+    if (
+        set(offline_contracts) != expected_producers
+        or len(installation_loads) != len(expected_producers)
+        or {item.get("producer_operation_id") for item in installation_loads}
+        != expected_producers
+    ):
+        raise ValueError("intraday offline evidence exceeds excluded applications")
+    records = []
+    for capability, producer in INTRADAY_LIVE_VERIFICATION_EXCLUSIONS:
+        matches = [
+            item
+            for item in installation_loads
+            if item.get("producer_operation_id") == producer
+        ]
+        if len(matches) != 1 or producer not in offline_contracts:
+            raise ValueError("intraday offline evidence is incomplete")
+        record: dict[str, object] = {
+            "capability_id": capability,
+            "producer_operation_id": producer,
+            "authority": _INTRADAY_EXCLUSION_AUTHORITY,
+            "conclusion": "not_live_verified_this_release",
+            "candidate_sha": candidate_sha,
+            "verified_at": verified_at,
+            "plan_snapshot": deepcopy(dict(plan_snapshot)),
+            "installation_load": deepcopy(dict(matches[0])),
+            "offline_contract": deepcopy(dict(offline_contracts[producer])),
+        }
+        record["offline_evidence_digest"] = _exclusion_digest(record)
+        records.append(record)
+    load_live_verification_exclusions(
+        {
+            "candidate_sha": candidate_sha,
+            "verified_at": verified_at,
+            "live_verification_exclusions": records,
+        },
+        expected_exclusions=INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
+    )
+    return tuple(records)
+
+
+def load_live_verification_exclusions(
+    payload: Mapping[str, object],
+    *,
+    expected_exclusions: Sequence[OperationOwner] = (),
+) -> tuple[LiveVerificationExclusion, ...]:
+    """Accept only Amendment E's exact two applications, with separate provenance."""
+
+    if "live_verification_exclusions" not in payload:
+        return ()
+    if tuple(expected_exclusions) != INTRADAY_LIVE_VERIFICATION_EXCLUSIONS:
+        raise ValueError("live verification exclusions are not authorized")
+    candidate = _text(payload.get("candidate_sha"), "exclusion candidate")
+    if _CANDIDATE_SHA.fullmatch(candidate) is None:
+        raise ValueError("exclusion candidate is invalid")
+    assembled = _verified_at(
+        _text(payload.get("verified_at"), "exclusion assembled time")
+    )
+    records = _sequence(
+        payload.get("live_verification_exclusions"), "live verification exclusions"
+    )
+    checked = []
+    pairs = []
+    for raw in records:
+        record = _mapping(raw, "live verification exclusion")
+        if set(record) != {
+            "capability_id",
+            "producer_operation_id",
+            "authority",
+            "conclusion",
+            "candidate_sha",
+            "verified_at",
+            "plan_snapshot",
+            "installation_load",
+            "offline_contract",
+            "offline_evidence_digest",
+        }:
+            raise ValueError("live verification exclusion is invalid")
+        pair = (
+            _text(record.get("capability_id"), "excluded capability"),
+            _text(record.get("producer_operation_id"), "excluded producer"),
+        )
+        evidence_time = _verified_at(
+            _text(record.get("verified_at"), "offline evidence time")
+        )
+        digest = _text(record.get("offline_evidence_digest"), "offline evidence digest")
+        if (
+            pair not in INTRADAY_LIVE_VERIFICATION_EXCLUSIONS
+            or record.get("candidate_sha") != candidate
+            or record.get("authority") != _INTRADAY_EXCLUSION_AUTHORITY
+            or record.get("conclusion") != "not_live_verified_this_release"
+            or not timedelta(0) <= assembled - evidence_time <= _MAX_LIVE_EVIDENCE_AGE
+            or digest != _exclusion_digest(record)
+        ):
+            raise ValueError("live verification exclusion provenance is invalid")
+        offline = _mapping(record.get("offline_contract"), "offline regression proof")
+        if (
+            set(offline) != {"selector", "result", "log_sha256"}
+            or offline.get("result") != "passed"
+            or _ATTEMPT_DIGEST.fullmatch(
+                _text(offline.get("log_sha256"), "offline log digest")
+            )
+            is None
+        ):
+            raise ValueError("offline regression proof is invalid")
+        _safe_release_reference(offline.get("selector"), "offline selector")
+        raw_snapshot = _mapping(record.get("plan_snapshot"), "offline snapshot")
+        if set(raw_snapshot) != {"request_profile", "request_as_of", "result"}:
+            raise ValueError("offline snapshot is invalid")
+        result = _mapping(raw_snapshot.get("result"), "offline public result")
+        _validate_sanitized_release_result(result)
+        snapshot = ReleasePlanSnapshot(
+            result=deepcopy(dict(result)),
+            request_profile=_safe_release_reference(
+                raw_snapshot.get("request_profile"), "offline profile"
+            ),
+            request_as_of=canonical_release_as_of(
+                raw_snapshot.get("request_as_of"), "offline as_of"
+            ),
+            candidate_sha=candidate,
+            verified_at=cast(str, record["verified_at"]),
+            attempt_digest=digest,
+            evidence_kind="offline_verification",
+        )
+        apps = set(formal_operation_applications((snapshot,)))
+        if pair not in apps or not apps <= set(INTRADAY_LIVE_VERIFICATION_EXCLUSIONS):
+            raise ValueError("offline snapshot exceeds excluded applications")
+        load = _mapping(record.get("installation_load"), "offline installation load")
+        if (
+            set(load) != {"producer_operation_id", "origin", "status", "selector"}
+            or load.get("producer_operation_id") != pair[1]
+            or load.get("origin") not in {"installation_health", "copied_install_plan"}
+            or load.get("status") != "complete"
+            or load.get("selector")
+            != (
+                "installation_health"
+                if load.get("origin") == "installation_health"
+                else snapshot.request_profile
+            )
+        ):
+            raise ValueError("offline installation load is invalid")
+        pairs.append(pair)
+        checked.append(
+            LiveVerificationExclusion(
+                capability_id=pair[0],
+                producer_operation_id=pair[1],
+                snapshot=snapshot,
+                installation_load=InstallationLoadEvidence(
+                    producer_operation_id=pair[1],
+                    origin=cast(
+                        Literal["installation_health", "copied_install_plan"],
+                        load["origin"],
+                    ),
+                    status="complete",
+                    selector=cast(str, load["selector"]),
+                ),
+                payload=deepcopy(dict(record)),
+            )
+        )
+    if len(pairs) != len(set(pairs)) or set(pairs) != set(
+        INTRADAY_LIVE_VERIFICATION_EXCLUSIONS
+    ):
+        raise ValueError("live verification exclusions do not match Amendment E")
+    return tuple(checked)
 
 
 @dataclass(frozen=True)
@@ -361,6 +572,8 @@ def formal_producer_operation_ids(
 
 def load_release_probe_evidence(
     payload: Mapping[str, object],
+    *,
+    expected_exclusions: Sequence[OperationOwner] = (),
 ) -> tuple[
     tuple[ReleasePlanSnapshot, ...],
     tuple[InstallationLoadEvidence, ...],
@@ -370,7 +583,7 @@ def load_release_probe_evidence(
     """Load one generated, sanitized release-probe evidence document."""
 
     if (
-        set(payload)
+        set(payload) - {"live_verification_exclusions"}
         != {
             "schema_version",
             "candidate_sha",
@@ -520,10 +733,25 @@ def load_release_probe_evidence(
     health = _validated_installation_health(
         _mapping(payload.get("installation_health"), "installation health")
     )
+    exclusions = load_live_verification_exclusions(
+        payload, expected_exclusions=expected_exclusions
+    )
+    for exclusion in exclusions:
+        snapshots.append(exclusion.snapshot)
+        if any(
+            item.producer_operation_id == exclusion.producer_operation_id
+            for item in installation_loads
+        ):
+            raise ValueError("offline installation load is duplicated")
+        installation_loads.append(exclusion.installation_load)
     denominator = set(formal_producer_operation_ids(snapshots))
+    required_apps = set(formal_operation_applications(snapshots)) - {
+        (item.capability_id, item.producer_operation_id) for item in exclusions
+    }
+    required_live = {producer for _, producer in required_apps}
     if {item.producer_operation_id for item in installation_loads} != denominator or {
         item.producer_operation_id for item in live_probes
-    } != denominator:
+    } != required_live:
         raise ValueError("release probe evidence does not close the denominator")
     application_profiles: dict[str, set[str]] = {}
     for release_snapshot in snapshots:
@@ -1045,6 +1273,8 @@ def build_operation_release_matrix(
     live_probes: Sequence[LiveProbeEvidence],
     qualification_fixtures: Mapping[str, object] | None = None,
     expected_internal_dependencies: Sequence[RuntimeDependency] = (),
+    live_verification_exclusions: Sequence[LiveVerificationExclusion] = (),
+    expected_exclusions: Sequence[OperationOwner] = (),
 ) -> OperationReleaseMatrix:
     """Build a closed matrix whose denominator comes only from public plans.
 
@@ -1054,6 +1284,29 @@ def build_operation_release_matrix(
 
     installation_health = _validated_installation_health(installation_health)
 
+    exclusions = tuple(live_verification_exclusions)
+    if exclusions:
+        exclusion_payload = {
+            "candidate_sha": exclusions[0].snapshot.candidate_sha,
+            "verified_at": max(cast(str, item.verified_at) for item in plan_snapshots),
+            "live_verification_exclusions": [dict(item.payload) for item in exclusions],
+        }
+        if exclusions != load_live_verification_exclusions(
+            exclusion_payload, expected_exclusions=expected_exclusions
+        ):
+            raise ValueError("typed live verification exclusions drifted")
+        if any(item.snapshot not in plan_snapshots for item in exclusions):
+            raise ValueError("offline exclusion snapshots are missing")
+    excluded_apps = {
+        (item.capability_id, item.producer_operation_id) for item in exclusions
+    }
+    exclusion_by_producer = {item.producer_operation_id: item for item in exclusions}
+    if any(
+        snapshot.evidence_kind != "source_attempt"
+        and snapshot not in [item.snapshot for item in exclusions]
+        for snapshot in plan_snapshots
+    ):
+        raise ValueError("unbound offline snapshot")
     producers: dict[str, dict[str, object]] = {}
     formal_applications: set[OperationOwner] = set()
     active_release_applications: dict[str, set[tuple[str, str, str, str]]] = {}
@@ -1082,8 +1335,9 @@ def build_operation_release_matrix(
                 raise ValueError("release plan snapshot provenance is invalid")
             _verified_at(verified_at)
             snapshot_candidate_shas.add(candidate_sha)
-            snapshot_attempt_digests.add(attempt_digest)
-            snapshot_verified_at.append(verified_at)
+            if snapshot.evidence_kind == "source_attempt":
+                snapshot_attempt_digests.add(attempt_digest)
+                snapshot_verified_at.append(verified_at)
         for plan, coverage, workflow_use in _release_plan_views(snapshot.result):
             validate_plan_operation_producer_authority(plan)
             obligations = _sequence(
@@ -1143,13 +1397,20 @@ def build_operation_release_matrix(
                     "evidence_uses": deepcopy(obligation.get("evidence_uses")),
                     "field_dispositions": deepcopy(list(fields)),
                     **(
+                        {"evidence_kind": "offline_verification"}
+                        if snapshot.evidence_kind == "offline_verification"
+                        else {}
+                    ),
+                    **(
                         {"workflow_use": deepcopy(dict(workflow_use))}
                         if workflow_use is not None
                         else {}
                     ),
                 }
-                if operation.get("execution_state") in {"succeeded", "failed"} and all(
-                    value is not None for value in snapshot_provenance
+                if (
+                    snapshot.evidence_kind == "source_attempt"
+                    and operation.get("execution_state") in {"succeeded", "failed"}
+                    and all(value is not None for value in snapshot_provenance)
                 ):
                     active_release_applications.setdefault(
                         producer_operation_id, set()
@@ -1226,7 +1487,10 @@ def build_operation_release_matrix(
         raise ValueError("qualification evidence does not close the denominator")
     if set(install_by_producer) != set(producers):
         raise ValueError("installation load evidence does not close the denominator")
-    if set(live_by_owner) != set(producers):
+    required_live = {
+        producer for capability, producer in formal_applications - excluded_apps
+    }
+    if set(live_by_owner) != required_live:
         raise ValueError("live probe evidence does not close the denominator")
     _validate_live_probe_application_truth(plan_snapshots, live_probes)
     provenance_fields = [
@@ -1343,25 +1607,38 @@ def build_operation_release_matrix(
         install = cast(
             InstallationLoadEvidence, install_by_producer[producer_operation_id]
         )
-        live = cast(LiveProbeEvidence, live_by_owner[producer_operation_id])
+        live = cast(LiveProbeEvidence | None, live_by_owner.get(producer_operation_id))
+        exclusion = exclusion_by_producer.get(producer_operation_id)
+        if exclusion is not None:
+            offline = _mapping(
+                exclusion.payload["offline_contract"], "offline contract"
+            )
+            if (
+                offline["selector"] != qualification.offline_contract_selector
+                or install != exclusion.installation_load
+            ):
+                raise ValueError(
+                    "offline exclusion qualification or installation drifted"
+                )
         _validate_qualification(qualification)
         if qualification.offline_contract_result != "passed":
             raise ValueError("offline contract evidence must pass")
-        if live.probe_status != "passed":
-            raise ValueError("live probe harness evidence must pass")
-        pending_dependency = qualification.disposition == "pending_dependency"
-        if pending_dependency and (
-            live.attempted or live.source_result != "unavailable"
-        ):
-            raise ValueError(
-                "pending qualification cannot claim attempted source evidence"
-            )
-        if not pending_dependency and not live.attempted:
-            raise ValueError("live probe source must be attempted")
-        _safe_release_reference(live.probe, "live probe")
-        if live.source_result not in _RELEASE_SOURCE_RESULTS:
-            raise ValueError("live probe source result is unsupported")
-        _verified_at(live.verified_at)
+        if live is not None:
+            if live.probe_status != "passed":
+                raise ValueError("live probe harness evidence must pass")
+            pending_dependency = qualification.disposition == "pending_dependency"
+            if pending_dependency and (
+                live.attempted or live.source_result != "unavailable"
+            ):
+                raise ValueError(
+                    "pending qualification cannot claim attempted source evidence"
+                )
+            if not pending_dependency and not live.attempted:
+                raise ValueError("live probe source must be attempted")
+            _safe_release_reference(live.probe, "live probe")
+            if live.source_result not in _RELEASE_SOURCE_RESULTS:
+                raise ValueError("live probe source result is unsupported")
+            _verified_at(live.verified_at)
         _safe_release_reference(install.selector, "installation selector")
         if install.status != "complete":
             raise ValueError("default-install load evidence is incomplete")
@@ -1382,16 +1659,24 @@ def build_operation_release_matrix(
             cast(list[dict[str, object]], facts["applications"]),
             key=_application_sort_key,
         )
-        if live.request_profile is not None and live.request_profile not in {
-            cast(str, item["request_profile"]) for item in applications
-        }:
+        if (
+            live is not None
+            and live.request_profile is not None
+            and live.request_profile
+            not in {cast(str, item["request_profile"]) for item in applications}
+        ):
             raise ValueError("live probe request profile is not a plan application")
-        if live.candidate_sha is not None and (
-            live.candidate_sha,
-            live.verified_at,
-            live.attempt_digest,
-            live.request_profile,
-        ) not in active_release_applications.get(producer_operation_id, set()):
+        if (
+            live is not None
+            and live.candidate_sha is not None
+            and (
+                live.candidate_sha,
+                live.verified_at,
+                live.attempt_digest,
+                live.request_profile,
+            )
+            not in active_release_applications.get(producer_operation_id, set())
+        ):
             raise ValueError("live probe is not bound to an active plan application")
         fields = sorted(
             {
@@ -1459,10 +1744,11 @@ def build_operation_release_matrix(
             ),
         }
         producer_is_active = any(
-            item.get("execution_state") in {"succeeded", "failed"}
+            item.get("evidence_kind") != "offline_verification"
+            and item.get("execution_state") in {"succeeded", "failed"}
             for item in applications
         )
-        if live.attempted != producer_is_active:
+        if (live.attempted if live is not None else False) != producer_is_active:
             raise ValueError(
                 "live probe attempted fact contradicts application execution"
             )
@@ -1474,7 +1760,8 @@ def build_operation_release_matrix(
                 sort_keys=True,
             ): cast(list[object], application["field_dispositions"])
             for application in applications
-            if application.get("execution_state") in {"succeeded", "failed"}
+            if application.get("evidence_kind") != "offline_verification"
+            and application.get("execution_state") in {"succeeded", "failed"}
         }
         active_field_denominator += sum(
             len(contract) for contract in active_contracts.values()
@@ -1520,24 +1807,35 @@ def build_operation_release_matrix(
                     if qualification.source_contract is not None
                     else {}
                 ),
-                "live_probe": {
-                    "probe": live.probe,
-                    "probe_status": live.probe_status,
-                    "attempted": live.attempted,
-                    "source_result": live.source_result,
-                    **(
-                        {
-                            "candidate_sha": live.candidate_sha,
-                            "request_profile": live.request_profile,
-                            "attempt_digest": live.attempt_digest,
-                        }
-                        if live.candidate_sha is not None
-                        and live.request_profile is not None
-                        and live.attempt_digest is not None
-                        else {}
-                    ),
-                },
-                "verified_at": live.verified_at,
+                **(
+                    {
+                        "live_probe": {
+                            "probe": live.probe,
+                            "probe_status": live.probe_status,
+                            "attempted": live.attempted,
+                            "source_result": live.source_result,
+                            **(
+                                {
+                                    "candidate_sha": live.candidate_sha,
+                                    "request_profile": live.request_profile,
+                                    "attempt_digest": live.attempt_digest,
+                                }
+                                if live.candidate_sha is not None
+                                and live.request_profile is not None
+                                and live.attempt_digest is not None
+                                else {}
+                            ),
+                        },
+                        "verified_at": live.verified_at,
+                    }
+                    if live is not None
+                    else {}
+                ),
+                **(
+                    {"live_verification_exclusion": deepcopy(dict(exclusion.payload))}
+                    if exclusion is not None
+                    else {}
+                ),
             }
         )
 
@@ -1573,6 +1871,25 @@ def build_operation_release_matrix(
                     )
                 }
                 if internal_dependency_facts
+                else {}
+            ),
+            **(
+                {
+                    "live_verification": {
+                        "formal_application_count": len(formal_applications),
+                        "required_application_count": len(
+                            formal_applications - excluded_apps
+                        ),
+                        "required_operation_count": len(required_live),
+                        "actual_attempted_operation_count": sum(
+                            item.attempted for item in live_probes
+                        ),
+                        "excluded_applications": [
+                            dict(item.payload) for item in exclusions
+                        ],
+                    }
+                }
+                if exclusions
                 else {}
             ),
             "denominator": {
@@ -1969,6 +2286,8 @@ def _validate_live_probe_application_truth(
     for live in live_probes:
         operations: list[Mapping[str, object]] = []
         for snapshot in snapshots:
+            if snapshot.evidence_kind != "source_attempt":
+                continue
             if live.request_profile is not None and (
                 snapshot.request_profile != live.request_profile
             ):

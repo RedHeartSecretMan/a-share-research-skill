@@ -23,6 +23,8 @@ from a_share_research.installation_health import (  # noqa: E402
 )
 from a_share_research.operation_release_matrix import (  # noqa: E402
     OperationQualificationEvidence,
+    INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
+    load_live_verification_exclusions,
     ReleasePlanSnapshot,
     build_operation_release_matrix,
     formal_operation_applications,
@@ -457,7 +459,12 @@ def render_matrix_bytes(
     if is_v030_release_evidence:
         release_payload = _load_v030_release_evidence(release_evidence_path)
     snapshots, installation_loads, installation_health, live_probes = (
-        load_release_probe_evidence(release_payload)
+        load_release_probe_evidence(
+            release_payload,
+            expected_exclusions=()
+            if is_v030_release_evidence
+            else INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
+        )
     )
     denominator = formal_producer_operation_ids(snapshots)
     qualification = load_operation_qualification_manifest(
@@ -473,6 +480,15 @@ def render_matrix_bytes(
         installation_loads=installation_loads,
         installation_health=installation_health,
         live_probes=live_probes,
+        live_verification_exclusions=load_live_verification_exclusions(
+            release_payload,
+            expected_exclusions=()
+            if is_v030_release_evidence
+            else INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
+        ),
+        expected_exclusions=()
+        if is_v030_release_evidence
+        else INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
         expected_internal_dependencies=(
             () if is_v030_release_evidence else RETAINED_INTERNAL_RUNTIME_DEPENDENCIES
         ),

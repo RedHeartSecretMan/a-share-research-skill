@@ -104,7 +104,72 @@ class CoreOperationMatrixGeneratorTests(unittest.TestCase):
             sum(item.source_contract is not None for item in qualification), 6
         )
 
-    def test_current_52_owner_evidence_uses_accepted_normalization_fixtures(
+    def test_retained_report_contracts_still_use_accepted_normalization_fixtures(
+        self,
+    ):
+        from tests.test_release_probe_core_operations import _synthetic_attempt
+
+        qualification_path = (
+            REPOSITORY_ROOT / "docs/research/v0.4.0-operation-qualification.json"
+        )
+        manifest = json.loads(qualification_path.read_text())
+        capabilities = {
+            item["producer_operation_id"]: tuple(item["capability_ids"])
+            for item in manifest["operations"]
+        }
+        # Test-only activation uses the accepted six contracts without changing
+        # historical qualification bytes or the current 46-owner inventory.
+        for item in manifest["operations"]:
+            if item["disposition"] == "pending_dependency":
+                item["disposition"] = "integrated"
+        attempted = {
+            item["producer_operation_id"]
+            for item in manifest["operations"]
+            if item["disposition"] != "pending_dependency"
+        }
+        attempt = _synthetic_attempt(
+            candidate_sha="a" * 40,
+            verified_at="2026-10-16T14:00:00+08:00",
+            attempted_producers=attempted,
+            capabilities_by_producer=capabilities,
+            producers=tuple(capabilities),
+        )
+        report = {
+            "schema_version": "1.0",
+            "candidate_sha": attempt["candidate_sha"],
+            "verified_at": attempt["verified_at"],
+            "attempt_digests": [attempt["attempt_digest"]],
+            "installation_health": attempt["installation_health"],
+            "installation_loads": attempt["installation_loads"],
+            "live_probes": attempt["probe_samples"],
+            "plan_snapshots": [
+                {
+                    **item,
+                    "candidate_sha": attempt["candidate_sha"],
+                    "verified_at": attempt["verified_at"],
+                    "attempt_digest": attempt["attempt_digest"],
+                }
+                for item in attempt["plan_snapshots"]
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            qualification_path = Path(temporary) / "retained-contracts.json"
+            qualification_path.write_text(json.dumps(manifest))
+            path = Path(temporary) / "synthetic-evidence.json"
+            path.write_text(json.dumps(report))
+            result = json.loads(
+                generator.render_matrix_bytes(
+                    qualification_path=qualification_path, release_evidence_path=path
+                )
+            )
+        self.assertEqual(result["denominator"]["operation_count"], 50)
+        reports = [item for item in result["operations"] if "source_contract" in item]
+        self.assertEqual(len(reports), 6)
+        self.assertTrue(
+            all(item["live_probe"]["attempted"] is True for item in reports)
+        )
+
+    def test_current_owner_evidence_preserves_complete_internal_installation_contract(
         self,
     ) -> None:
         from tests.test_release_probe_core_operations import (
@@ -164,7 +229,7 @@ class CoreOperationMatrixGeneratorTests(unittest.TestCase):
                 ):
                     release_probe._validate_release_report(changed)
 
-        self.assertEqual(matrix["denominator"]["operation_count"], 52)
+        self.assertEqual(matrix["denominator"]["operation_count"], 46)
         self.assertEqual(
             {item["producer_operation_id"] for item in matrix["operations"]},
             producers,
