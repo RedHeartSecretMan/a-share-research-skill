@@ -8,7 +8,11 @@ from copy import deepcopy
 from pathlib import Path
 
 from tests.test_generate_core_operation_release_matrix import generator
-from tests.test_release_probe_core_operations import _synthetic_attempt, release_probe
+from tests.test_release_probe_core_operations import (
+    _reseal_attempt,
+    _synthetic_attempt,
+    release_probe,
+)
 from a_share_research import operation_release_matrix as matrix
 
 CANDIDATE = "a" * 40
@@ -186,6 +190,126 @@ class ReleaseLiveApplicabilityTests(unittest.TestCase):
                     release_probe._validate_release_report(changed)
                 checked += 1
         self.assertGreater(checked, 1)
+
+    def test_current_mode_closes_applications_even_without_exclusion_records(self):
+        manifest = json.loads(release_probe.DEFAULT_QUALIFICATION.read_text())
+        capabilities = {
+            item["producer_operation_id"]: tuple(item["capability_ids"])
+            for item in manifest["operations"]
+        }
+        attempt = _synthetic_attempt(
+            candidate_sha=CANDIDATE,
+            verified_at=VERIFIED,
+            attempted_producers=set(capabilities),
+            capabilities_by_producer=capabilities,
+            producers=tuple(capabilities),
+        )
+        report = release_probe.assemble_release_probe_evidence(
+            (attempt,), candidate_sha=CANDIDATE, assembled_at=VERIFIED
+        )
+        self.assertNotIn("live_verification_exclusions", report)
+        snapshots, loads, health, probes = matrix.load_release_probe_evidence(
+            report, expected_exclusions=PAIRS
+        )
+        self.assertEqual(
+            len(matrix.attempted_source_operation_applications(snapshots)), 61
+        )
+        qualification = matrix.load_operation_qualification_manifest(
+            manifest,
+            expected_producer_operation_ids=matrix.formal_producer_operation_ids(
+                snapshots
+            ),
+        )
+        complete = matrix.build_operation_release_matrix(
+            plan_snapshots=snapshots,
+            qualification_evidence=qualification,
+            installation_loads=loads,
+            installation_health=health,
+            live_probes=probes,
+            expected_internal_dependencies=release_probe.RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
+            expected_exclusions=PAIRS,
+        ).to_dict()
+        self.assertEqual(complete["denominator"]["operation_count"], 46)
+        # An explicit but incomplete exemption list is not an authorization.
+        with self.assertRaises(ValueError):
+            matrix.load_release_probe_evidence(
+                {**report, "live_verification_exclusions": []},
+                expected_exclusions=PAIRS,
+            )
+        checked = 0
+        for owner, capability_ids in capabilities.items():
+            if len(capability_ids) < 2:
+                continue
+            for capability in capability_ids:
+                for state in (
+                    "not_requested",
+                    "skipped_policy",
+                    "skipped_research_dependency",
+                ):
+                    # The producer still executes in its sibling capability.
+                    missing = deepcopy(attempt)
+                    missing["plan_snapshots"][0]["result"]["coverage"][capability][
+                        "operations"
+                    ][owner].update(execution_state=state, state=state)
+                    changed = release_probe.assemble_release_probe_evidence(
+                        (_reseal_attempt(missing),),
+                        candidate_sha=CANDIDATE,
+                        assembled_at=VERIFIED,
+                    )
+                    # Generic callers retain their old producer-level contract.
+                    generic_snapshots, generic_loads, generic_health, generic_probes = (
+                        matrix.load_release_probe_evidence(changed)
+                    )
+                    self.assertEqual(
+                        len(
+                            matrix.attempted_source_operation_applications(
+                                generic_snapshots
+                            )
+                        ),
+                        60,
+                    )
+                    for explicit_empty in (False, True):
+                        scoped = (
+                            {**changed, "live_verification_exclusions": []}
+                            if explicit_empty
+                            else changed
+                        )
+                        with (
+                            self.subTest(
+                                seam="current evidence loader",
+                                owner=owner,
+                                capability=capability,
+                                state=state,
+                                explicit_empty=explicit_empty,
+                            ),
+                            self.assertRaises(ValueError),
+                        ):
+                            matrix.load_release_probe_evidence(
+                                scoped, expected_exclusions=PAIRS
+                            )
+                    with (
+                        self.subTest(
+                            seam="current matrix builder",
+                            owner=owner,
+                            capability=capability,
+                            state=state,
+                        ),
+                        self.assertRaisesRegex(
+                            ValueError, "required live applications"
+                        ),
+                    ):
+                        matrix.build_operation_release_matrix(
+                            plan_snapshots=generic_snapshots,
+                            qualification_evidence=qualification,
+                            installation_loads=generic_loads,
+                            installation_health=generic_health,
+                            live_probes=generic_probes,
+                            expected_internal_dependencies=release_probe.RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
+                            live_verification_exclusions=(),
+                            expected_exclusions=PAIRS,
+                        )
+                    checked += 1
+        self.assertGreater(checked, 3)
 
     def test_exclusion_contract_rejects_adjacent_invalid_records(self):
         report = report_with_exclusions()

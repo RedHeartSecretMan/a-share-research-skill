@@ -789,7 +789,7 @@ def load_release_probe_evidence(
     }
     required_live = {producer for _, producer in required_apps}
     if (
-        exclusions
+        expected_exclusions
         and set(attempted_source_operation_applications(snapshots)) != required_apps
     ):
         raise ValueError("required live applications do not close the plan")
@@ -1323,7 +1323,9 @@ def build_operation_release_matrix(
     """Build a closed matrix whose denominator comes only from public plans.
 
     Current release consumers supply the canonical retained internal dependency
-    contract. Generic and historical callers retain their own install contract.
+    contract and expected exclusion policy. That policy always requires exact
+    live application closure, including when no exclusions are exercised.
+    Generic and historical callers retain their own release contract.
     """
 
     installation_health = _validated_installation_health(installation_health)
@@ -1541,7 +1543,10 @@ def build_operation_release_matrix(
     attempted_applications = set(
         attempted_source_operation_applications(plan_snapshots)
     )
-    if exclusions and attempted_applications != formal_applications - excluded_apps:
+    if (
+        expected_exclusions
+        and attempted_applications != formal_applications - excluded_apps
+    ):
         raise ValueError("required live applications do not close the plan")
     if set(live_by_owner) != required_live:
         raise ValueError("live probe evidence does not close the denominator")

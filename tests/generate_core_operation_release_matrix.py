@@ -458,12 +458,13 @@ def render_matrix_bytes(
     is_v030_release_evidence = _has_v030_release_evidence_identity(release_payload)
     if is_v030_release_evidence:
         release_payload = _load_v030_release_evidence(release_evidence_path)
+    expected_exclusions = (
+        () if is_v030_release_evidence else INTRADAY_LIVE_VERIFICATION_EXCLUSIONS
+    )
     snapshots, installation_loads, installation_health, live_probes = (
         load_release_probe_evidence(
             release_payload,
-            expected_exclusions=()
-            if is_v030_release_evidence
-            else INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
+            expected_exclusions=expected_exclusions,
         )
     )
     denominator = formal_producer_operation_ids(snapshots)
@@ -482,13 +483,9 @@ def render_matrix_bytes(
         live_probes=live_probes,
         live_verification_exclusions=load_live_verification_exclusions(
             release_payload,
-            expected_exclusions=()
-            if is_v030_release_evidence
-            else INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
+            expected_exclusions=expected_exclusions,
         ),
-        expected_exclusions=()
-        if is_v030_release_evidence
-        else INTRADAY_LIVE_VERIFICATION_EXCLUSIONS,
+        expected_exclusions=expected_exclusions,
         expected_internal_dependencies=(
             () if is_v030_release_evidence else RETAINED_INTERNAL_RUNTIME_DEPENDENCIES
         ),
