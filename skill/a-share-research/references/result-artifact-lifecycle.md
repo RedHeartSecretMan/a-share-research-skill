@@ -86,13 +86,13 @@ preparation-abort 是明确的未提交状态，不是把自身窗口改称 unkn
 
 备份须在相关写入静止时配套保存 artifact 和受信状态；普通复制、旧状态恢复或位置/物理身份变化不构成有效重新绑定。v1 不提供自动迁移、无 anchor 升级、孤立原件清理或跨设备恢复。缺失/损坏时保留现场，可在新目标执行新的 create；不能从包导入可信原件。代码升级应保留 `.state`。分发和 clean-copy 排除 `.state`，不能携带其他运行的 authority；安装代码自包含并不表示 artifact 单独可移动恢复。
 
-#69 在公共 create/resume 编排开始新来源调用前使用同一受信根、验证 C 和归属；#117 继续解释 C 语义。#97 后续交付完整 CLI/E2E 的跨进程、丢 receipt、anchor 损坏/丢失及维护文档验收；本模块的 copied-install 回归不提前完成这些消费者义务。
+内部恢复消费者在开始新来源调用前使用同一受信根、验证 C 和归属；#117 继续解释 C 语义。#97 验证内部 Seam 的跨进程、丢 receipt、anchor 损坏/丢失及分发边界。原 #69 公共编排已退出，本模块的 copied-install 回归不构成公共筛选 CLI/E2E。
 
 ## 容量与持久化边界
 
 canonical UTF-8 checkpoint 的上限精确为 65,536 字节，包含完整 C。65,535 和 65,536 字节可接受；65,537 字节必须在有关修改前拒绝。每次写入预检未来 checkpoint。pending、prepared 和 cleanup 的物理身份记录位于有界 journal 及其受信原件，不外移 C 或完成逻辑事实，不会产生另一个更大的隐藏 checkpoint。
 
-#68/#69 必须在 artifact 开始写入前用固定计划声明完整 file-count envelope，包括三交易所分区及至多 20 个候选。`checkpoint_capacity()` 使用最长合法坐标、128 字节 schema token、真实最大 byte/record count、完整 C 及 JSON 标点计算最坏大小；identity 契约是每分量 64 位、固定 16 个十六进制字符。它返回固定开销、每条最大开销、pending/cleanup 布局及最坏总量。容量不足先调整合规 shard 方案或报告约束；不能提高上限、截断证券、丢弃 unranked 或取消已批准候选。
+内部调用者必须在 artifact 开始写入前用固定计划声明完整 file-count envelope；模块保留三交易所分区及至多 20 个候选的容量边界，供模块回归使用，不对外提供筛选工作流。`checkpoint_capacity()` 使用最长合法坐标、128 字节 schema token、真实最大 byte/record count、完整 C 及 JSON 标点计算最坏大小；identity 契约是每分量 64 位、固定 16 个十六进制字符。它返回固定开销、每条最大开销、pending/cleanup 布局及最坏总量。容量不足先调整合规 shard 方案或报告约束；不能提高上限、截断证券、丢弃 unranked 或取消已批准候选。
 
 受信记录上限为 4 MiB，每 artifact 保留一个 current record、最多一个同上限的未提交 pending record 和最多一个活动 quarantine（目录加至多三个文件）。原始事务及 published/claimed/closed 集合有 512 项硬上限；每个完成声明至少 175 字节，因此 64 KiB checkpoint 不可能容纳 375 个完成文件，实际合法历史加一次 finalize 小于 512。每个文件事务的固定字段、最长 schema 和 identities 的受信编码低于 8 KiB，creation 与唯一 finalize 原件分别受 64 KiB 编码约束；在最大合法工作量下原件和 closure 合计低于 4 MiB。每次 apply 前用完整旧历史、当前真实 identities 与未来 64 位最大 identities 预检含全部 closure 的实际 envelope，不能等 stage 写入后才发现不足。
 
