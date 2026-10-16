@@ -1216,7 +1216,7 @@ class SkillDistributionTests(unittest.TestCase):
     ) -> None:
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("Confirm the returned `task_type` and request scope", entry)
+        self.assertIn("Confirm the returned `plan.task_type` and request scope", entry)
         self.assertIn(
             "No absent result field or wider capability may be inferred", entry
         )
