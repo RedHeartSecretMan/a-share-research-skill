@@ -18,6 +18,7 @@ from dataclasses import replace
 from datetime import datetime
 from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
 from tests.skill_imports import add_skill_scripts_to_path
 
@@ -147,6 +148,29 @@ def bind_synthetic_document_versions(contracts, responses):
     )
 
 
+# The selected clause is retained first-party evidence from the BSE announcement
+# https://www.bse.cn/jygl_list/200028217.html (qualified original body SHA-256:
+# f15d8685e71e5686343600d68a7c8c8d11386bee54fc998b5638273c9ae1fbc4).
+# Its surrounding document remains synthetic, with its own rebound digest.
+BSE_QUALIFIED_DEFERMENT = (
+    "考虑到市场业务和技术整体准备情况，本规则第3.6.5条第二款和第三款、"
+    "第3.7.1条至第3.7.10条、第4.5.1条至第4.5.4条的具体施行时间，由本所另行通知。"
+    "在此之前，关于无价格涨跌幅限制股票大宗交易价格的有关安排，仍按照原规定执行。"
+)
+
+
+def qualified_bse_source_fixtures(statement=BSE_QUALIFIED_DEFERMENT):
+    contracts, responses = source_fixtures()
+    bse = contracts[2]
+    response = responses[bse.rule_uri]
+    original = "3.6.5第二三款、3.7.1至3.7.10及4.5.1至4.5.4的实施时间另行通知。"
+    assert original.encode() in response.body
+    responses[bse.rule_uri] = replace(
+        response, body=response.body.replace(original.encode(), statement.encode())
+    )
+    return bind_synthetic_document_versions(contracts, responses), responses
+
+
 class DocumentTransport:
     def __init__(self, responses):
         self.responses = dict(responses)
@@ -185,6 +209,139 @@ class MarketSessionSourceTests(unittest.TestCase):
         self.assertIsNone(proofs[1]["source_metadata"]["exact_first_available_at"])
         self.assertEqual(proofs[1]["available_at"], "2026-04-25T00:00:00+08:00")
         self.assertEqual(proofs[1]["source_metadata"]["publication_precision"], "day")
+
+    def test_full_qualified_bse_deferment_forms_three_exchange_context(self) -> None:
+        contracts, responses = qualified_bse_source_fixtures()
+        outcome = ProductionMarketSessionAdapter(
+            DocumentTransport(responses),
+            contracts,
+            clock=lambda: FIRST,
+            execution_clock=lambda: CHECKED,
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+        self.assertEqual(outcome.coverage, "complete", outcome.source_errors)
+        context = outcome.to_dict()["observations"][0]["payload"]["context"]
+        self.assertEqual(context["screen_date"], "2026-10-13")
+        self.assertEqual(
+            [proof["exchange"] for proof in context["calendar_proofs"]],
+            ["SSE", "SZSE", "BSE"],
+        )
+        self.assertEqual(
+            context["calendar_proofs"][2]["source_metadata"]["deferred_sections"],
+            ["3.6.5 paragraphs2-3", "3.7.1-3.7.10", "4.5.1-4.5.4"],
+        )
+
+    def test_qualified_bse_deferment_rejects_incomplete_or_ambiguous_scope(
+        self,
+    ) -> None:
+        for before, after in (
+            ("第二款和第三款", "第二款"),
+            ("第二款和第三款", "第一款和第三款"),
+            ("第二款和第三款", "第二款和第四款"),
+            ("第3.7.1条至第3.7.10条", "第3.7.2条至第3.7.10条"),
+            ("第3.7.1条至第3.7.10条", "第3.7.1条、第3.7.10条"),
+            ("第4.5.1条至第4.5.4条", "第4.5.1条至第4.5.3条"),
+            ("第4.5.1条至第4.5.4条", "第4.5.1条、第4.5.4条"),
+            ("的具体施行时间，由本所另行通知", "自2026年7月6日起施行"),
+            ("由本所另行通知", "是否由本所另行通知尚待确定"),
+            ("由本所另行通知", "不由本所另行通知"),
+            ("由本所另行通知", "由本所另行通知或立即施行"),
+        ):
+            with self.subTest(after=after):
+                contracts, responses = qualified_bse_source_fixtures(
+                    BSE_QUALIFIED_DEFERMENT.replace(before, after)
+                )
+                outcome = ProductionMarketSessionAdapter(
+                    DocumentTransport(responses),
+                    contracts,
+                    clock=lambda: FIRST,
+                    execution_clock=lambda: CHECKED,
+                ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                self.assertEqual(outcome.coverage, "partial")
+                self.assertEqual(
+                    [error["code"] for error in outcome.source_errors],
+                    ["calendar_rule_deferment_unproved"],
+                )
+                self.assertEqual(
+                    [
+                        item["payload"]["calendar_proof"]["exchange"]
+                        for item in outcome.to_dict()["observations"]
+                    ],
+                    ["SSE", "SZSE"],
+                )
+
+    def test_qualified_deferment_cannot_authorize_unknown_document_revision(
+        self,
+    ) -> None:
+        contracts, responses = qualified_bse_source_fixtures()
+        bse = contracts[2]
+        response = responses[bse.rule_uri]
+        responses[bse.rule_uri] = replace(
+            response,
+            body=response.body.replace(b"</body>", "修订。".encode() + b"</body>"),
+        )
+        outcome = ProductionMarketSessionAdapter(
+            DocumentTransport(responses),
+            contracts,
+            clock=lambda: FIRST,
+            execution_clock=lambda: CHECKED,
+        ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+        self.assertEqual(outcome.coverage, "partial")
+        self.assertEqual(
+            [error["code"] for error in outcome.source_errors],
+            ["calendar_rule_version_unproved"],
+        )
+        self.assertFalse(
+            any("context" in item["payload"] for item in outcome.observations)
+        )
+
+    def test_qualified_context_feeds_overview_and_all_four_production_index_parsers(
+        self,
+    ) -> None:
+        from a_share_research import market_overview_foundation as overview
+        from a_share_research.fixed_index_sources import ProductionFixedIndexAdapter
+        from tests.test_fixed_index_sources import IndexTransport
+
+        contracts, responses = qualified_bse_source_fixtures()
+        sessions = ProductionMarketSessionAdapter(
+            DocumentTransport(responses),
+            contracts,
+            clock=lambda: CHECKED,
+            execution_clock=lambda: CHECKED,
+        )
+
+        def indices(*, session_adapter, clock):
+            return ProductionFixedIndexAdapter(
+                IndexTransport(), session_adapter=session_adapter, clock=clock
+            )
+
+        with (
+            patch.object(
+                overview, "build_default_market_session_adapter", return_value=sessions
+            ),
+            patch.object(
+                overview, "build_default_fixed_index_adapter", side_effect=indices
+            ),
+        ):
+            foundation = overview.MarketOverviewFoundation(
+                {"as_of": "2026-10-14"}, CHECKED
+            )
+            session = foundation(
+                {"task_type": "overview_session", "as_of": "2026-10-14"}
+            ).to_dict()
+            result = foundation(
+                {"task_type": "overview_indices", "as_of": "2026-10-14"}
+            ).to_dict()
+        self.assertEqual(len(session["observations"]), 1)
+        self.assertEqual(session["source_errors"], [])
+        self.assertEqual(result["source_errors"], [], result["source_errors"])
+        rows = [
+            item["payload"]["payload"]["observation"] for item in result["observations"]
+        ]
+        self.assertEqual(
+            [row["canonical_id"] for row in rows],
+            ["SSE:000001", "SZSE:399001", "SZSE:399006", "BSE:899050"],
+        )
+        self.assertEqual([row["session_date"] for row in rows], ["2026-10-13"] * 4)
 
     def test_corrupt_deflate_is_partial_and_retains_unaffected_exchanges(self) -> None:
         contracts, responses = source_fixtures()
@@ -905,7 +1062,7 @@ class MarketSessionSourceTests(unittest.TestCase):
             fold_direct_task_research_result,
         )
 
-        contracts, responses = source_fixtures()
+        contracts, responses = qualified_bse_source_fixtures()
         adapter = ProductionMarketSessionAdapter(
             DocumentTransport(responses),
             contracts,
@@ -957,7 +1114,7 @@ class MarketSessionSourceTests(unittest.TestCase):
     def test_clean_install_default_factory_loads_contracts_and_real_parser_with_fake_transport(
         self,
     ) -> None:
-        contracts, responses = source_fixtures()
+        contracts, responses = qualified_bse_source_fixtures()
         request_material = {
             "contracts": [asdict(item) for item in contracts],
             "responses": {
