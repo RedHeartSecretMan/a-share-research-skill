@@ -41,7 +41,7 @@ The capability inventory is fixed:
 | `whole_market_margin` | standard | `supported` / `not_requested` | `whole_market_margin` |
 | `market_wide_intraday` | deep | `unsupported` / `unsupported` | none |
 
-The two core capabilities preserve per-industry-board change and up/down counts plus owner-local limit-pool totals, pages, empty proof, and partial proof. They do not establish deduplicated whole-A-share breadth. The eight standard enhancements reuse existing market-wide signal, capital-event, and flash operations.
+The retained `industry_board_breadth` and `limit_pools` capabilities preserve per-industry-board change and up/down counts plus owner-local limit-pool totals, pages, empty proof, and partial proof. They do not establish deduplicated whole-A-share breadth. The eight retained standard enhancements reuse existing market-wide signal, capital-event, and flash operations.
 
 The session owner freezes three-exchange calendar proof once. Turnover and margin use its common completed trading date and information cutoff; indices use the fixed four identities and the latest completed regular-auction session (historical requests keep the frozen completed basis). Exact totals require every applicable exchange and compatible units; a missing or ineligible partition retains its siblings and cannot form a complete total. A blocked session skips its dependent steps.
 
