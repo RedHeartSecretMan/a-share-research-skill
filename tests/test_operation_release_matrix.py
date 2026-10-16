@@ -1732,11 +1732,18 @@ class OperationReleaseMatrixTests(unittest.TestCase):
             ("installed_version", "0.9.5"),
             ("modules", ["unknown"]),
             ("operation_ids", ["unknown_internal@1"]),
+            ("operation_ids", []),
         ):
-            changed = deepcopy(inputs)
-            changed["installation_health"]["dependencies"][1][key] = value
-            with self.subTest(drift=key), self.assertRaises(ValueError):
-                build_operation_release_matrix(**changed)
+            for internal_index in (1, 2):
+                changed = deepcopy(inputs)
+                changed["installation_health"]["dependencies"][internal_index][key] = (
+                    value
+                )
+                with (
+                    self.subTest(drift=key, internal_index=internal_index),
+                    self.assertRaises(ValueError),
+                ):
+                    build_operation_release_matrix(**changed)
         duplicate = deepcopy(inputs)
         duplicate["installation_health"]["dependencies"].append(internal_facts[0])
         with self.assertRaises(ValueError):

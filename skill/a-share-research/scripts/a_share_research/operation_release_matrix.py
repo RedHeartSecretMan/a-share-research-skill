@@ -1284,12 +1284,15 @@ def build_operation_release_matrix(
     }
     for fact in dependencies:
         attributed_ids = set(cast(Sequence[str], fact["operation_ids"]))
-        if not attributed_ids - health_operation_ids:
-            continue
         expected = internal_dependencies.get(cast(str, fact["distribution"]))
+        if expected is None:
+            if attributed_ids - health_operation_ids:
+                raise ValueError(
+                    "internal installation dependency attribution is invalid"
+                )
+            continue
         if (
-            expected is None
-            or attributed_ids != set(expected.operation_ids)
+            attributed_ids != set(expected.operation_ids)
             or attributed_ids & (set(producers) | internal_operation_ids)
             or fact["required_version"] != expected.required_version
             or fact["installed_version"] != expected.required_version
