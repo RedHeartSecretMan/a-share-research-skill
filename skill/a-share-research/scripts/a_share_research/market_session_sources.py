@@ -634,7 +634,9 @@ def _validate_deferments(text: str, contract: MarketSessionSourceContract) -> No
         text,
     )
     if contract.exchange == "BSE":
-        if len(statements) != 1 or "实施时间另行通知" not in statements[0]:
+        if len(statements) != 1 or not statements[0].endswith(
+            ("实施时间另行通知", "具体施行时间，由本所另行通知")
+        ):
             raise CalendarSourceError("calendar_rule_deferment_unproved")
         statement = statements[0]
         clauses = re.findall(r"(?<![0-9.])[0-9]+\.[0-9]+\.[0-9]+(?![0-9.])", statement)
