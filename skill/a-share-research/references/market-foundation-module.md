@@ -3,7 +3,9 @@
 `market_foundation.py` 消费已接受的六 owner 资格，通过内部
 `MarketFoundationOperationAdapter.execute(OperationRequest, timeout)` 和
 `fold_market_foundation(...)` Interface 提供日报规范化与交易所分区折叠。
-该 Module 由 `market_overview_research@2.0` 组合消费。六个默认 owner 都具有有界 HTTP 获取与原始响应解析路径；
+该 Module 保留为内部软件依赖。Amendment D 已退出公共成交额与两融能力，
+`market_overview_research@2.0` 不再调用六个日报 owner，也不产生对应公共事实或发布来源义务。
+六个默认 owner 都具有有界 HTTP 获取与原始响应解析路径；
 尚未证明的来源语义会产生带实际尝试次数的明确状态，不形成合法 observation 或总计。
 
 `market-foundation-owner-qualification.json` 是已接受 #114 六条记录的精确内容副本。
@@ -18,7 +20,7 @@ cutoff、获取时间不早于发布时间；它不自行推导三交易所共�
 注入的 report transport 接收资格记录中的 selector、请求和 timeout，并通过已有
 `ProviderInvocation.call` 执行每次 leaf 请求。初次请求、分页、重试和 redirect 共同消耗
 资格规定的 request budget，同组串行、timeout 和 quiescence 由已有 `ProviderLanes` 拥有。
-同一次 workflow 的成交额与两融步骤保留同一组六个 owner；超时但尚未 quiescent 的
+同一次内部 composition 的成交额与两融步骤保留同一组六个 owner；超时但尚未 quiescent 的
 同来源占用不能通过重建装配或 lane 绕过，其他来源组仍可独立执行。
 默认 HTTP 路径复用 `UrlLibTransport` 的实际 leaf 计数；GET 和 POST 都传递 owner timeout。
 注入的 HTTP transport 必须是一次原子请求，不得隐藏重试。

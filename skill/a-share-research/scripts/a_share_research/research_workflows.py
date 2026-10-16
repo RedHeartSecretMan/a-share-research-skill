@@ -116,12 +116,14 @@ _MARKET_OVERVIEW_CAPABILITY_AUTHORITY = (
     _WorkflowCapabilityAuthority(
         "whole_market_turnover",
         "core",
-        ("whole_market_turnover",),
+        reason_code="free_anonymous_turnover_unproved",
+        gap_route="future_scope",
     ),
     _WorkflowCapabilityAuthority(
         "whole_market_margin",
         "standard",
-        ("whole_market_margin",),
+        reason_code="free_anonymous_margin_unproved",
+        gap_route="future_scope",
     ),
     _WorkflowCapabilityAuthority(
         "market_wide_intraday",
@@ -386,8 +388,6 @@ def _market_overview_child_specs(
         ),
         ("market_trading_session", "overview_session", None, {}, []),
         ("major_broad_indices", "overview_indices", None, {}, []),
-        ("whole_market_turnover", "overview_turnover", None, {}, []),
-        ("whole_market_margin", "overview_margin", None, {}, []),
     ]
 
 
@@ -1371,18 +1371,6 @@ def _market_overview_plan() -> list[dict[str, Any]]:
             "major_broad_indices",
             "overview_indices",
             criticality="core",
-            depends_on=["market_trading_session"],
-        ),
-        _plan_step(
-            "whole_market_turnover",
-            "overview_turnover",
-            criticality="core",
-            depends_on=["market_trading_session"],
-        ),
-        _plan_step(
-            "whole_market_margin",
-            "overview_margin",
-            criticality="standard_enrichment",
             depends_on=["market_trading_session"],
         ),
     ]

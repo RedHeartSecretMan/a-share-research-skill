@@ -37,17 +37,19 @@ The capability inventory is fixed:
 | `market_flash` | standard | `supported` / `not_requested` | `market_flash` |
 | `market_trading_session` | core | `supported` / `supported` | `market_trading_session` |
 | `major_broad_indices` | core | `supported` / `supported` | `major_broad_indices` |
-| `whole_market_turnover` | core | `supported` / `supported` | `whole_market_turnover` |
-| `whole_market_margin` | standard | `supported` / `not_requested` | `whole_market_margin` |
+| `whole_market_turnover` | core | `unsupported` / `unsupported` | none |
+| `whole_market_margin` | standard | `unsupported` / `unsupported` | none |
 | `market_wide_intraday` | deep | `unsupported` / `unsupported` | none |
 
 The retained `industry_board_breadth` and `limit_pools` capabilities preserve per-industry-board change and up/down counts plus owner-local limit-pool totals, pages, empty proof, and partial proof. They do not establish deduplicated whole-A-share breadth. The eight retained standard enhancements reuse existing market-wide signal, capital-event, and flash operations.
 
-The session owner freezes three-exchange calendar proof once. Turnover and margin use its common completed trading date and information cutoff; indices use the fixed four identities and the latest completed regular-auction session (historical requests keep the frozen completed basis). Exact totals require every applicable exchange and compatible units; a missing or ineligible partition retains its siblings and cannot form a complete total. A blocked session skips its dependent steps.
+The session owner freezes three-exchange calendar proof once. Indices use the fixed four identities and the latest completed regular-auction session (historical requests keep the frozen completed basis). A missing or ineligible index preserves independent observations; a blocked session skips its dependent index step. Fast executes four core capabilities; standard adds the eight original enhancements.
+
+`whole_market_turnover` and `whole_market_margin` retain stable unsupported slots with `reason_code: "free_anonymous_turnover_unproved"` and `"free_anonymous_margin_unproved"`, respectively, and `gap_route: "future_scope"`. Neither creates a step, operation obligation, observation, claim, calculation, or coverage. Their internal report Modules and strict source restrictions remain available for internal use; they do not establish a public whole-market value. Board, security, index, ETF, or two-exchange data cannot proxy either slot.
 
 `market_wide_intraday` has `reason_code: "free_anonymous_intraday_unproved"`, `gap_route: "future_scope"`, and no step, operation obligation, observation, claim, calculation, or coverage, including when explicitly requested. Never proxy it with one index, ranking, ETF, security-scoped owner, or five-level/tick path. Completion for this branch means empty subjects, a valid mode, exact 15-entry inventory, and every leaf-local failure or empty/partial state still visible.
 
-Current offline owner qualification is recorded in repository `docs/research/v0.4.0-overview-v2-operation-qualification.json` (52 producers). It activates the six unchanged accepted report contracts plus session and fixed indices; it does not establish live usability. The earlier pending qualification and v0.3.0 release artifacts remain historical evidence.
+Current offline owner qualification is recorded in repository `docs/research/v0.4.0-overview-v2-operation-qualification.json` (46 producers derived from actual released plans). It retains the original 44 public producers and adds session and fixed indices; the six internal report owners have no public execution or release obligation. Static qualification does not establish live usability. The earlier pending qualification and v0.3.0 release artifacts remain historical evidence.
 
 Runtime rejects `market_overview_research@1.0` and `market_screen_research` before any source call or artifact write. Accepted internal screening and artifact modules do not expose a public screening workflow.
 

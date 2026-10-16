@@ -3610,6 +3610,7 @@ def _validate_market_signal_domain_facts(
             )
     if actual != expected_claims:
         raise ValueError("market signal adoption does not match retained observations")
+    selected_observation_ids = {observation_id for observation_id, _ in expected_claims}
     capability = cast(dict[str, object], result["coverage"]).get(
         "market_signal_observations"
     )
@@ -3651,7 +3652,7 @@ def _validate_market_signal_domain_facts(
             observation_id
             for observation_id, source in signal_records.items()
             if source["signal_type"] == calculation_signal_type
-            and any(claimed_id == observation_id for claimed_id, _ in expected_claims)
+            and observation_id in selected_observation_ids
         ]
         if input_ids != expected_inputs:
             raise ValueError("market signal coverage calculation inputs are invalid")
@@ -3775,20 +3776,24 @@ def _validate_market_signal_domain_facts(
                     source_error_codes=public_error_codes,
                     request_limit=request_limit,
                 )
-            source_has_inputs = any(
-                source["source_operation"] == source_operation_id
-                and source["signal_type"] == calculation_signal_type
-                and observation_id in expected_inputs
-                for observation_id, source in signal_records.items()
-            )
+            # Source material describes retained acquisition evidence, including
+            # rows excluded by the request's selection limit or time window.
+            source_has_observations = bool(retained_owner_records)
             if (
-                (source_has_inputs and material_state == "observed_empty")
-                or (not source_has_inputs and material_state == "observed_nonempty")
+                (source_has_observations and material_state == "observed_empty")
+                or (
+                    not source_has_observations
+                    and material_state == "observed_nonempty"
+                )
                 or (
                     not public_error_codes
                     and operation_state in {"complete", "observed_empty"}
                     and material_state
-                    != ("observed_nonempty" if source_has_inputs else "observed_empty")
+                    != (
+                        "observed_nonempty"
+                        if source_has_observations
+                        else "observed_empty"
+                    )
                 )
                 or source_state != material_state
             ):
@@ -3862,6 +3867,7 @@ def _validate_market_signal_domain_facts(
             observation_id
             for observation_id, source in signal_records.items()
             if source.get("signal_type") == "limit_state"
+            and observation_id in selected_observation_ids
             and source.get("source_operation") == sentiment_operation_id
             and isinstance(source.get("dimensions"), dict)
             and cast(dict[str, object], source["dimensions"]).get("pool_state")
