@@ -45,6 +45,7 @@ class V040DistributionTests(unittest.TestCase):
                 ("fast", "2026-08-03", "complete"),
                 ("standard", "2026-08-01", "complete"),
                 ("standard", "2026-08-03", "missing_bse_index"),
+                ("standard", "2026-08-03", "missing_bse_session"),
             )
             for mode, as_of, scenario in cases:
                 with self.subTest(mode=mode, as_of=as_of, scenario=scenario):
@@ -115,7 +116,12 @@ class V040DistributionTests(unittest.TestCase):
                         if item["capability_id"] == "major_broad_indices"
                     ]
                     self.assertEqual(
-                        len(indices), 3 if scenario == "missing_bse_index" else 4
+                        len(indices),
+                        0
+                        if scenario == "missing_bse_session"
+                        else 3
+                        if scenario == "missing_bse_index"
+                        else 4,
                     )
                     self.assertTrue(
                         all(
@@ -125,9 +131,11 @@ class V040DistributionTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         {item["session_date"] for item in indices},
-                        {"2026-07-31" if as_of == "2026-08-01" else "2026-08-03"},
+                        set()
+                        if scenario == "missing_bse_session"
+                        else {"2026-07-31" if as_of == "2026-08-01" else "2026-08-03"},
                     )
-                    if scenario == "missing_bse_index":
+                    if scenario in {"missing_bse_index", "missing_bse_session"}:
                         self.assertTrue(result["source_errors"])
                     self.assertNotIn(str(ROOT), completed.stdout)
                     self.assertNotIn(str(installed), completed.stdout)
@@ -139,9 +147,14 @@ class V040DistributionTests(unittest.TestCase):
         self.assertIn("market_overview_research@2.0", entry)
         self.assertNotIn("market_overview_research@1.0", entry)
         self.assertIn("15-entry inventory", entry)
-        self.assertIn("market_wide_intraday", entry)
+        for capability in (
+            "whole_market_turnover",
+            "whole_market_margin",
+            "market_wide_intraday",
+        ):
+            self.assertIn(capability, entry)
         reference = (SKILL / "references" / "cli-contract.md").read_text()
-        self.assertIn("v0.4.0 candidate", reference)
+        self.assertIn("46 public producers", reference)
         self.assertIn("live attestation", reference)
         for relative in (
             "assets/requests/workflow-market-overview.json",
@@ -170,7 +183,9 @@ class V040DistributionTests(unittest.TestCase):
         example = (ROOT / "examples/market-overview-v2.md").read_text()
         for expected in (
             "15",
-            "14",
+            "12",
+            "free_anonymous_turnover_unproved",
+            "free_anonymous_margin_unproved",
             "free_anonymous_intraday_unproved",
             "SSE",
             "SZSE",

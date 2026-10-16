@@ -1,6 +1,6 @@
 # Market contracts
 
-Read this reference for `security_identity`, `market_trend`, `etf_market`, and `etf_options`. Every task uses one explicit China Standard Time research date and the common request envelope from [cli-contract.md](cli-contract.md).
+Read this reference for `security_identity`, `market_trend`, `etf_market`, and `etf_options`. Every task uses one explicit China Standard Time research date and the common request envelope from [cli-contract.md](cli-contract.md). Subject-free market overview uses [workflow-contracts.md](workflow-contracts.md); its unsupported whole-market turnover and margin slots do not withdraw the security-scoped price/amount or margin-material contracts.
 
 ## `security_identity`
 

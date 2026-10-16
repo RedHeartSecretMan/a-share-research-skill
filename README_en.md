@@ -71,13 +71,13 @@ Experimental sources may contribute observations and expose conflicts, but canno
 | Plan ID | Use | Key boundary |
 | --- | --- | --- |
 | `single_security_research` | Comprehensive single-security research | `standard` runs core and enrichments; `fast` guarantees identity and trend only; deepening is limited to `long_history` and `large_materials` |
-| `market_overview_research` | Subject-free market overview | 15 fixed capabilities: 5 core and 9 standard executable by applicability, with `market_wide_intraday` unsupported; preserves three-exchange partitions and four fixed indices |
+| `market_overview_research` | Subject-free market overview | 15 fixed capabilities: 4 core and 8 standard executable by applicability; whole-market turnover, margin, and intraday are unsupported; preserves three-exchange partitions and four fixed indices |
 | `single_security_valuation` | One-security valuation | Reuses `security_valuation` |
 | `valuation_comparison` | Same-basis multi-security comparison | Reuses `valuation_compare` and retains blocked members |
 | `theme_report_research` | Theme-report retrieval | Reuses `research_content` |
 | `new_security_research` | Systematic new-security review | Identity is the sole gate; other local failures do not stop independent siblings |
 
-`single_security_research` defaults `completeness_mode` to `standard`; `deep_extensions` accepts only `long_history` and `large_materials`. `market_overview_research@2.0` runs core only in `fast` and core plus standard in `standard`. It adds trading sessions, four indices, and completed-day three-exchange turnover and margin. Missing or inapplicable partitions retain their own evidence and cannot form complete whole-market totals. An explicit deep request for `market_wide_intraday` still returns `free_anonymous_intraday_unproved`, with no source obligation or coverage.
+`single_security_research` defaults `completeness_mode` to `standard`; `deep_extensions` accepts only `long_history` and `large_materials`. `market_overview_research@2.0` runs core only in `fast` and core plus standard in `standard`. It adds three-exchange trading sessions and four fixed indices; missing partitions retain local evidence. The `whole_market_turnover`, `whole_market_margin`, and `market_wide_intraday` slots are unsupported and create no source obligation, observation, claim, calculation, or coverage; deep requests remain explicit. Single-security turnover, margin materials, intraday snapshots, and completed-session replay retain their existing boundaries.
 
 ## Reading a result
 
@@ -101,7 +101,7 @@ The CLI owns evidence, deterministic calculation, and status. When a result is n
 
 > Use `$a-share-research` to run `single_security_research@1.0` in `standard` mode for Industrial Fulian. If one material source fails, continue every step that does not depend on it.
 
-> Use `$a-share-research` to run `market_overview_research@2.0`, preserving local states for three-exchange sessions, four indices, completed-day turnover and margin, and existing signals while disclosing unsupported whole-market intraday.
+> Use `$a-share-research` to run `market_overview_research@2.0`, preserving local states for three-exchange sessions, four indices, and existing signals while disclosing unsupported whole-market turnover, margin, and intraday.
 
 See [`examples/README.md`](examples/README.md) for a dated real run, Chinese request templates, and boundary guides. `real-runs/` preserves actual public CLI output; `requests/` contains editable inputs rather than live quotes or current conclusions.
 
@@ -113,7 +113,7 @@ See [`examples/README.md`](examples/README.md) for a dated real run, Chinese req
 - ETF options lack an authoritative complete contract total, full contract-unit definition, adjustment terms, and a qualified independent fallback; coverage and limitations remain visible.
 - External attribution in reports, news, F10, flows, themes, and heat retains its attributed-opinion or market-signal role and does not automatically become issuer fact.
 - Open-ended screening, continuous feeds, automated trading, position/leverage advice, project ratings, and price targets are unsupported.
-- Whole-market `market_wide_intraday` remains unsupported. Existing single-security `intraday_market_signal` and `intraday_replay` keep their versions and boundaries.
+- Whole-market `whole_market_turnover`, `whole_market_margin`, and `market_wide_intraday` remain unsupported. Existing single-security `intraday_market_signal` and `intraday_replay` keep their versions and boundaries.
 - Whole-market screening, ranking, candidate research, and their public result-artifact workflow are withdrawn from this version. `market_screen_research` is rejected before any source call or artifact write. Internal Universe, provider-lane, and Result Artifact modules do not constitute a public screening product.
 
 ## Docs and examples
@@ -123,7 +123,7 @@ See [`examples/README.md`](examples/README.md) for a dated real run, Chinese req
 - [`skill/a-share-research/SKILL.md`](skill/a-share-research/SKILL.md): concise routing used by the installed Agent.
 - [`skill/a-share-research/references/`](skill/a-share-research/references/): exact contracts split by task domain.
 - [`CONTEXT.md`](CONTEXT.md): domain language and product boundaries.
-- [`Spec 0008 Amendment C`](docs/specs/0008-amendment-c-free-anonymous-scope.md): v0.4.0 candidate anonymous scope and final acceptance.
+- [`Spec 0008 Amendment D`](docs/specs/0008-amendment-d-qualified-public-scope.md): v0.4.0 candidate anonymous scope and final acceptance.
 - [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md): historical v0.3.0 implementation and acceptance scope.
 
 ## Version and release evidence

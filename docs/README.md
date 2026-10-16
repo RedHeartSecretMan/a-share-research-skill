@@ -19,9 +19,10 @@
 
 - [`../CONTEXT.md`](../CONTEXT.md)：领域术语、边界和非目标。
 - [`specs/0007-implementation-amendment-a.md`](specs/0007-implementation-amendment-a.md)：v0.3.0 实施、DAG 与最终验收权威；状态为已交付。
-- [`specs/0008-amendment-c-free-anonymous-scope.md`](specs/0008-amendment-c-free-anonymous-scope.md)：当前 v0.4.0 免费匿名范围权威；市场总览 v2 保留四项基础能力，退出公共筛选与全市场盘中。
-- [`specs/0008-v0.4.0-market-foundation-and-screening.md`](specs/0008-v0.4.0-market-foundation-and-screening.md)：v0.4.0 原始规格，作为历史设计保留；与 Amendment C 冲突的筛选、结果包和全市场盘中范围已退出。
-- [`specs/0008-amendment-b-delivery-plan.md`](specs/0008-amendment-b-delivery-plan.md)：原 Amendment B 设计与来源/恢复约束；现行范围以 Amendment C 和已绑定定义为准。
+- [`specs/0008-amendment-d-qualified-public-scope.md`](specs/0008-amendment-d-qualified-public-scope.md)：当前 v0.4.0 免费匿名范围权威；市场总览 v2 保留 15 个槽位、12 项按层级和适用性执行的能力，退出全市场成交额、全市场两融、全市场盘中及公共筛选。
+- [`specs/0008-amendment-c-free-anonymous-scope.md`](specs/0008-amendment-c-free-anonymous-scope.md)：此前匿名范围修订；与 Amendment D 冲突的成交额／两融公开能力已退出。
+- [`specs/0008-v0.4.0-market-foundation-and-screening.md`](specs/0008-v0.4.0-market-foundation-and-screening.md)：v0.4.0 原始规格，作为历史设计保留；与 Amendment C/D 冲突的筛选、结果包、全市场成交额、全市场两融和全市场盘中范围已退出。
+- [`specs/0008-amendment-b-delivery-plan.md`](specs/0008-amendment-b-delivery-plan.md)：原 Amendment B 设计与来源/恢复约束；现行范围以 Amendment D 和已绑定定义为准。
 - [`adr/`](adr/)：架构决策。文件按四位编号加短横线主题命名；带 frontmatter 的 ADR 必须把 frontmatter 放在文件第一行。
 - [`research/README.md`](research/README.md)：当前发布证据、命令占位符和历史资料索引。
 - [`../skill/a-share-research/references/as-of-universe.md`](../skill/a-share-research/references/as-of-universe.md)：v0.4.0 内部 Universe Module 的已知与未知总量、局部记录和不可变投影契约。

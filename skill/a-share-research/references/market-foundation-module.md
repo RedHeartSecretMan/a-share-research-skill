@@ -3,7 +3,7 @@
 `market_foundation.py` 消费已接受的六 owner 资格，通过内部
 `MarketFoundationOperationAdapter.execute(OperationRequest, timeout)` 和
 `fold_market_foundation(...)` Interface 提供日报规范化与交易所分区折叠。
-该 Module 保留为内部软件依赖。Amendment D 已退出公共成交额与两融能力，
+该 Module 保留为内部软件依赖。Amendment D 已退出公共全市场成交额与全市场两融能力，
 `market_overview_research@2.0` 不再调用六个日报 owner，也不产生对应公共事实或发布来源义务。
 六个默认 owner 都具有有界 HTTP 获取与原始响应解析路径；
 尚未证明的来源语义会产生带实际尝试次数的明确状态，不形成合法 observation 或总计。
@@ -71,4 +71,4 @@ SSE、SZSE、BSE 成交额分区都是必需分母。只有三所分区日期、
 对响应成功具有必要性、充分性或因果关系。
 
 这些本地 parser、注入 transport 与安装副本测试证明实现和契约消费，不证明来源实际成功。
-普通测试保持离线；最终同候选 live capability 与 release attestation 仍由 V4-13 负责。
+普通测试保持离线；六个内部日报 owner 不属于本版公开来源分母。保留公共能力的最终同候选 live capability 与 release attestation 由 #98（V4-13）负责。

@@ -64,4 +64,4 @@ v0.0.1、v0.1.0、v0.1.1 和 v0.2.0 均已有对应标签与 GitHub Release。�
 | v0.1.1 | [发布审计](history/v0.1.1-release-audit-2026-08-03.md) |
 | v0.2.0 | [发布审计](history/v0.2.0-release-audit-2026-08-03.md) |
 
-历史文件中的测试数量、提交 SHA、来源状态和研究日期均属于其记录时点。阅读当前能力时，以根目录 README、安装产物中的 `SKILL.md` / `references/`、Spec 0008 Amendment C 与当前静态资格为准；v0.3.0 发布事实仍以 Spec 0007 Amendment A 和本目录的 v0.3.0 资料为准。
+历史文件中的测试数量、提交 SHA、来源状态和研究日期均属于其记录时点。阅读当前能力时，以根目录 README、安装产物中的 `SKILL.md` / `references/`、Spec 0008 Amendment D 与当前静态资格为准；v0.3.0 发布事实仍以 Spec 0007 Amendment A 和本目录的 v0.3.0 资料为准。

@@ -17,7 +17,7 @@ _Avoid_: 自动交易用户、代客投资对象
 _Avoid_: 个股诊断、荐股、股票预测
 
 **综合市场研究**:
-通过无证券主体的版本化 `market_overview_research@2.0` 组合 market/board scope 正式来源操作，对三所交易会话、四个固定宽基指数、完成日全市场成交额与两融、行业板块广度及既有市场增强形成可信研究结果；固定十五项清单中十四项按层级和适用性执行，全市场盘中明确不支持。缺失所保留局部证据，不以单只证券、ETF、单一指数或板块数据代理整体市场。
+通过无证券主体的版本化 `market_overview_research@2.0` 组合 market/board scope 正式来源操作，对三所交易会话、四个固定宽基指数、行业板块广度及既有市场增强形成可信研究结果；固定十五项清单中十二项按层级和适用性执行，分别为四项 core 与八项 standard；全市场成交额、全市场两融和全市场盘中三个槽位明确不支持。缺失所保留局部证据，不以单只证券、ETF、单一指数或板块数据代理整体市场。
 _Avoid_: 单一指数摘要、单一榜单摘要、证券代理市场、开放式选股、全市场证券排名
 
 **行业板块广度**:
@@ -43,7 +43,7 @@ _Avoid_: 恢复时重新计时、获取时间冒充公开时间、日期相同�
 _Avoid_: 行业板块家数之和、成功取数证券数代理全市场、上一筛选日分母
 
 **不支持市场能力**:
-`market_overview_research@2.0` 固定能力清单中明确标为 `unsupported` 的 `market_wide_intraday`；它保留稳定 ID、`free_anonymous_intraday_unproved` reason code 与 `future_scope` gap route，但不产生来源执行义务、coverage、观测、主张或计算。它不改变既有单证券盘中快照与分时复盘的支持范围。
+`market_overview_research@2.0` 固定能力清单中明确标为 `unsupported` 的全市场成交额 `whole_market_turnover`、全市场两融 `whole_market_margin` 和全市场盘中 `market_wide_intraday`；它们分别保留 `free_anonymous_turnover_unproved`、`free_anonymous_margin_unproved`、`free_anonymous_intraday_unproved` reason code 与 `future_scope` gap route，但不产生来源执行义务、coverage、观测、主张或计算。它们不改变既有单证券成交额、融资融券材料、盘中快照与分时复盘的支持范围。
 _Avoid_: 来源失败、未请求、虚构来源执行、证券或板块代理、候选端点
 
 **事实主张**:
@@ -143,7 +143,7 @@ _Avoid_: 开发 Ticket 单测、mock 探测、跨候选证据拼接、普通运�
 _Avoid_: 最终 release matrix、历史成功记录、provider raw response、失败诊断
 
 **同候选证据并集**:
-在一个有界新鲜度窗口内，对同一候选提交的多个发布探测 attempts 做 typed closure；只有 `succeeded` 或 `failed` 的 application 能贡献 attempted 证据，任何 `not_requested` 或 skipped 状态均不计入，且精确闭合当前实际发布计划的正式 operation 分母后才能生成最终发布证据和矩阵；v0.4.0 候选静态资格为 52 个 public producers，v0.3.0 的 44-owner 历史证明保持原样。
+在一个有界新鲜度窗口内，对同一候选提交的多个发布探测 attempts 做 typed closure；只有 `succeeded` 或 `failed` 的 application 能贡献 attempted 证据，任何 `not_requested` 或 skipped 状态均不计入，且精确闭合当前实际发布计划的正式 operation 分母后才能生成最终发布证据和矩阵；v0.4.0 候选静态资格为 46 个 public producers，六个日报 owner 只保留内部合同而不进入公开分母，v0.3.0 的 44-owner 历史证明保持原样。
 _Avoid_: 跨提交拼接、无界历史缓存、部分成功、一次调用必须同时触达全部来源
 
 **交叉核验**:

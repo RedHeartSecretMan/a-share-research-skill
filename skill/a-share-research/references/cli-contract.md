@@ -1,6 +1,6 @@
 # CLI contract
 
-Read this reference for installation, public invocation, process semantics, credentials, and the map to task-specific contracts. Artifact version: [`VERSION`](../VERSION). A v0.4.0 candidate is distinct from a published release; publication status and runtime/source availability claims require applicable frozen release evidence, including the required same-candidate live attestation. A version label, installation health or offline test does not establish those facts. The result envelope stays `schema_version: "1.0"`; only market overview changes to workflow version `2.0`, while the other workflows remain `1.0`.
+Read this reference for installation, public invocation, process semantics, credentials, and the map to task-specific contracts. Artifact version: [`VERSION`](../VERSION). Publication status and runtime/source availability claims require applicable frozen release evidence, including the required same-candidate live attestation. A version label, installation health or offline test does not establish those facts. The result envelope stays `schema_version: "1.0"`; only market overview changes to workflow version `2.0`, while the other workflows remain `1.0`.
 
 ## Installation
 
@@ -20,7 +20,7 @@ The installer creates a real, artifact-local `.runtime`, installs the platform-a
 
 Copy only the clean delivery tree: exclude `.runtime`, `.state`, tests, live evidence, bytecode, and machine-specific paths. Rebuild `.runtime` with the installer; never import another run’s artifact anchors.
 
-The default lock includes `mootdx==0.11.7` for released F10, `intraday_market_signal`, and `intraday_replay` operations. Generic upstream `pip check` does not replace formal operation health. Other interfaces exposed by that package are not implicit sources or fallbacks. The lock also loads `baostock==0.9.4` and `pypdf==6.10.2` for retained internal Universe adapters. Their internal attribution does not add public operations or publish screening. Installation health covers dependency and bundled-operation loads; it is not the public operation denominator. Current market-overview qualification has 52 public producers, whose copied plan loads are audited separately.
+The default lock includes `mootdx==0.11.7` for released F10, `intraday_market_signal`, and `intraday_replay` operations. Generic upstream `pip check` does not replace formal operation health. Other interfaces exposed by that package are not implicit sources or fallbacks. The lock also loads `baostock==0.9.4` and `pypdf==6.10.2` for retained internal Universe adapters. Their internal attribution does not add public operations or publish screening. Installation health covers dependency and bundled-operation loads; it is not the public operation denominator. Current market-overview qualification has 46 public producers, whose copied plan loads are audited separately.
 
 ## Public invocation
 
