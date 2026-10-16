@@ -23,7 +23,7 @@
 | [`v0.4.0-operation-release-matrix.md`](v0.4.0-operation-release-matrix.md) | 证据口径、未实时验证项和离线复验命令 | 人工维护 |
 | [`v0.4.0-release-audit-2026-10-17.md`](v0.4.0-release-audit-2026-10-17.md) | 实际来源身份、三所／四指数 E2E 与最终证明适用边界 | 人工维护，结论须有证据 |
 
-市场总览 v2 静态资格用于从实际公开计划闭合资格集合，本身不构成来源证明；最终证据和矩阵保留真实来源状态，也不代表 GitHub Release 已发布。
+两份静态资格用于按各自版本公开计划闭合资格集合，本身不构成 v0.4.0 发布或联网验证证明；最终证据和矩阵保留真实来源状态，也不代表 GitHub Release 已发布。
 
 `v0.3.0-*` JSON 证据是版本化发布产物；`v0.4.0-operation-qualification.json` 是开发期静态审阅权威，不是发布产物。两者都不是使用案例，也不得手工调整字段、计数或摘要。运行普通研究请求请从 [`examples/README.md`](../../examples/README.md) 选择请求文件。
 

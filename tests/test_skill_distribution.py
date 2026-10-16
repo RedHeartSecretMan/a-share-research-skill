@@ -1078,6 +1078,10 @@ class SkillDistributionTests(unittest.TestCase):
                 "v0.3.0-release-probe-evidence.json",
                 "v0.4.0-operation-qualification.json",
                 "v0.4.0-overview-v2-operation-qualification.json",
+                "v0.4.0-release-probe-evidence.json",
+                "v0.4.0-operation-release-matrix.json",
+                "v0.4.0-operation-release-matrix.md",
+                "v0.4.0-release-audit-2026-10-17.md",
             },
         )
 
