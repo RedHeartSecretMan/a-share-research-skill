@@ -864,6 +864,70 @@ class MarketSessionSourceTests(unittest.TestCase):
         )
         self.assertEqual(transport.calls, [])
 
+    def test_requalified_bse_identity_rejects_previous_frozen_context_without_IO(
+        self,
+    ) -> None:
+        contracts, responses = qualified_bse_source_fixtures()
+        original = (
+            ProductionMarketSessionAdapter(
+                DocumentTransport(responses),
+                contracts,
+                clock=lambda: FIRST,
+                execution_clock=lambda: CHECKED,
+            )
+            .execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+            .to_dict()["observations"][0]["payload"]["context"]
+        )
+        for changed_field in ("version", "rule_body_sha256"):
+            with self.subTest(changed_field=changed_field):
+                # Separate synthetic qualification: no production/live body is used.
+                revised_responses = dict(responses)
+                bse = contracts[2]
+                revised_contracts = contracts
+                if changed_field == "version":
+                    revised_contracts = contracts[:2] + (
+                        replace(bse, version="synthetic-requalified-bse-rule"),
+                    )
+                else:
+                    response = responses[bse.rule_uri]
+                    revised_responses[bse.rule_uri] = replace(
+                        response,
+                        body=response.body + b"<!--synthetic-requalified-body-->",
+                    )
+                    revised_contracts = bind_synthetic_document_versions(
+                        contracts, revised_responses
+                    )
+                fresh = ProductionMarketSessionAdapter(
+                    DocumentTransport(revised_responses),
+                    revised_contracts,
+                    clock=lambda: FIRST,
+                    execution_clock=lambda: CHECKED,
+                ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                self.assertEqual(fresh.coverage, "complete", fresh.source_errors)
+                transport = DocumentTransport({})
+                restored = ProductionMarketSessionAdapter(
+                    transport,
+                    revised_contracts,
+                    clock=lambda: CHECKED,
+                    execution_clock=lambda: CHECKED,
+                ).execute(
+                    MarketSessionOperationRequest(
+                        "2026-10-14", BINDINGS, original, original["digest"]
+                    ),
+                    5,
+                )
+                self.assertEqual(restored.coverage, "failed")
+                self.assertFalse(restored.observations)
+                self.assertEqual(
+                    [error["code"] for error in restored.source_errors],
+                    [
+                        "calendar_reference_unproved"
+                        if changed_field == "version"
+                        else "calendar_rule_version_unproved"
+                    ],
+                )
+                self.assertEqual(transport.calls, [])
+
     def test_new_bse_notice_version_cannot_reuse_old_publication_binding(self) -> None:
         contracts, responses = source_fixtures()
         bse = contracts[2]
@@ -1151,7 +1215,7 @@ adapter=source.build_default_market_session_adapter(Fake(),clock=lambda:datetime
 outcome=adapter.execute(MarketSessionOperationRequest('2026-10-14',ContextBindings('1'*64,'2'*64,'3'*64,'4'*64,'installed-source-fixture')),5)
 assert outcome.coverage=='complete',outcome.to_dict()['source_errors']
 context=outcome.to_dict()['observations'][0]['payload']['context']
-print(json.dumps({'screen_date':context['screen_date'],'exchanges':[p['exchange'] for p in context['calendar_proofs']],'documents':outcome.diagnostics['document_requests']},sort_keys=True))
+print(json.dumps({'screen_date':context['screen_date'],'exchanges':[p['exchange'] for p in context['calendar_proofs']],'bse_rule_version':context['calendar_proofs'][2]['version'],'documents':outcome.diagnostics['document_requests']},sort_keys=True))
 """
         with tempfile.TemporaryDirectory() as temporary:
             installed = Path(temporary) / "a-share-research"
@@ -1178,6 +1242,7 @@ print(json.dumps({'screen_date':context['screen_date'],'exchanges':[p['exchange'
                 {
                     "screen_date": "2026-10-13",
                     "exchanges": ["SSE", "SZSE", "BSE"],
+                    "bse_rule_version": "bse-a-share-calendar-rule-2026-v2",
                     "documents": 6,
                 },
             )
