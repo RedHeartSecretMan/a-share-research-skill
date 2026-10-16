@@ -333,6 +333,20 @@ _SEMANTIC_ATOM_ALIASES = tuple(
         key=lambda alias: (-len(alias[0]), alias[0]),
     )
 )
+_SENSITIVE_RULE_ATOMS = (
+    _SENSITIVE_SINGLE_ATOMS
+    | _QUALIFIABLE_WHOLE_ATOMS
+    | _SAFE_COMPOUND_WHOLE_LEXEMES
+    | frozenset(
+        atom
+        for compound in _SENSITIVE_COMPOUND_ATOMS
+        for participating_atoms in compound
+        for atom in participating_atoms
+    )
+)
+_SENSITIVE_RULE_LEXEMES = frozenset(
+    lexeme for lexeme, atom in _SEMANTIC_ATOM_ALIASES if atom in _SENSITIVE_RULE_ATOMS
+)
 _SEMANTIC_ATOM_ALIASES_BY_INITIAL = {
     initial: tuple(
         alias for alias in _SEMANTIC_ATOM_ALIASES if alias[0].startswith(initial)
@@ -997,6 +1011,10 @@ def _classify_semantic_key(value: str) -> _SemanticKeyClass:
     if plural_normalized in _SAFE_WHOLE_LEXEMES:
         return _SemanticKeyClass.SAFE_WHOLE_LEXEME
     if plural_normalized in _ORDINARY_WHOLE_LEXEMES:
+        return _SemanticKeyClass.ORDINARY_PUBLIC
+    # Every sensitive rule needs one of these atom lexemes. Keys with none
+    # cannot match, so avoid building overlapping qualifier-only atom runs.
+    if not any(lexeme in normalized for lexeme in _SENSITIVE_RULE_LEXEMES):
         return _SemanticKeyClass.ORDINARY_PUBLIC
     semantic_tokens = tuple(_mask_ordinary_semantic_lexemes(token) for token in tokens)
     atom_runs_by_token = {
