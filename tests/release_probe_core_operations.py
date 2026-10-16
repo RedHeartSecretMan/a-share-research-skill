@@ -26,6 +26,9 @@ if str(REPOSITORY_ROOT) not in sys.path:
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
+from a_share_research.installation_health import (  # noqa: E402
+    RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
+)
 from a_share_research.operation_release_matrix import (  # noqa: E402
     MARKET_FOUNDATION_OPERATION_APPLICATIONS,
     ReleasePlanSnapshot,
@@ -1669,6 +1672,7 @@ def _validate_release_report(report: Mapping[str, object]) -> None:
         installation_loads=installation_loads,
         installation_health=installation_health,
         live_probes=live_probes,
+        expected_internal_dependencies=RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
         qualification_fixtures=json.loads(
             (
                 SCRIPTS_ROOT.parent

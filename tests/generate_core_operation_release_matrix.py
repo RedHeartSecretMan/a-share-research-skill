@@ -18,6 +18,9 @@ SCRIPTS_ROOT = REPOSITORY_ROOT / "skill" / "a-share-research" / "scripts"
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
+from a_share_research.installation_health import (  # noqa: E402
+    RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
+)
 from a_share_research.operation_release_matrix import (  # noqa: E402
     OperationQualificationEvidence,
     ReleasePlanSnapshot,
@@ -470,6 +473,9 @@ def render_matrix_bytes(
         installation_loads=installation_loads,
         installation_health=installation_health,
         live_probes=live_probes,
+        expected_internal_dependencies=(
+            () if is_v030_release_evidence else RETAINED_INTERNAL_RUNTIME_DEPENDENCIES
+        ),
         qualification_fixtures=_json_object(
             SCRIPTS_ROOT.parent
             / "references"

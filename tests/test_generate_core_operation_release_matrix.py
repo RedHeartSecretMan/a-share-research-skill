@@ -128,6 +128,7 @@ class CoreOperationMatrixGeneratorTests(unittest.TestCase):
             candidate_sha="a" * 40,
             assembled_at="2026-10-16T14:00:00+08:00",
         )
+        release_probe._validate_release_report(report)
         with tempfile.TemporaryDirectory() as temporary:
             evidence_path = Path(temporary) / "final-evidence.json"
             evidence_path.write_text(json.dumps(report), encoding="utf-8")
@@ -137,6 +138,31 @@ class CoreOperationMatrixGeneratorTests(unittest.TestCase):
                     release_evidence_path=evidence_path,
                 )
             )
+
+            for omitted in ({"baostock"}, {"pypdf"}, {"baostock", "pypdf"}):
+                changed = deepcopy(report)
+                changed["installation_health"]["dependencies"] = [
+                    fact
+                    for fact in changed["installation_health"]["dependencies"]
+                    if fact["distribution"] not in omitted
+                ]
+                evidence_path.write_text(json.dumps(changed), encoding="utf-8")
+                with (
+                    self.subTest(omitted=sorted(omitted)),
+                    self.assertRaisesRegex(
+                        ValueError,
+                        "required internal installation dependencies are missing",
+                    ),
+                ):
+                    generator.render_matrix_bytes(
+                        qualification_path=qualification_path,
+                        release_evidence_path=evidence_path,
+                    )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "required internal installation dependencies are missing",
+                ):
+                    release_probe._validate_release_report(changed)
 
         self.assertEqual(matrix["denominator"]["operation_count"], 52)
         self.assertEqual(

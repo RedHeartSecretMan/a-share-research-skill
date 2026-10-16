@@ -128,7 +128,24 @@ def _complete_installation_health() -> dict[str, object]:
     return {
         "schema_version": "1.0",
         "status": "complete",
-        "dependencies": [],
+        "dependencies": [
+            {
+                "distribution": "baostock",
+                "required_version": "0.9.4",
+                "installed_version": "0.9.4",
+                "status": "complete",
+                "modules": ["baostock"],
+                "operation_ids": ["baostock_dated_roster_acquisition@1"],
+            },
+            {
+                "distribution": "pypdf",
+                "required_version": "6.10.2",
+                "installed_version": "6.10.2",
+                "status": "complete",
+                "modules": ["pypdf"],
+                "operation_ids": ["szse_formal_listing_material@1"],
+            },
+        ],
         "operations": [],
         "source_policy": {
             "source_accessibility": "not_checked",

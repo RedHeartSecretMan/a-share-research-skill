@@ -18,8 +18,8 @@ from .exact_normalization import (
     exact_scaled_sum,
 )
 from .installation_health import (
-    BAOSTOCK_RUNTIME_DEPENDENCY,
-    PYPDF_RUNTIME_DEPENDENCY,
+    RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
+    RuntimeDependency,
 )
 from .research_result import (
     validate_field_disposition_destination_contract,
@@ -1044,8 +1044,13 @@ def build_operation_release_matrix(
     installation_health: Mapping[str, object],
     live_probes: Sequence[LiveProbeEvidence],
     qualification_fixtures: Mapping[str, object] | None = None,
+    expected_internal_dependencies: Sequence[RuntimeDependency] = (),
 ) -> OperationReleaseMatrix:
-    """Build a closed matrix whose denominator comes only from public plans."""
+    """Build a closed matrix whose denominator comes only from public plans.
+
+    Current release consumers supply the canonical retained internal dependency
+    contract. Generic and historical callers retain their own install contract.
+    """
 
     installation_health = _validated_installation_health(installation_health)
 
@@ -1279,9 +1284,17 @@ def build_operation_release_matrix(
     internal_dependency_facts: list[dict[str, object]] = []
     internal_operation_ids: set[str] = set()
     internal_dependencies = {
-        item.distribution: item
-        for item in (BAOSTOCK_RUNTIME_DEPENDENCY, PYPDF_RUNTIME_DEPENDENCY)
+        item.distribution: item for item in RETAINED_INTERNAL_RUNTIME_DEPENDENCIES
     }
+    required_internal_operation_ids: set[str] = set()
+    for expected in expected_internal_dependencies:
+        if (
+            not isinstance(expected, RuntimeDependency)
+            or internal_dependencies.get(expected.distribution) != expected
+            or required_internal_operation_ids & set(expected.operation_ids)
+        ):
+            raise ValueError("expected internal installation dependency is invalid")
+        required_internal_operation_ids.update(expected.operation_ids)
     for fact in dependencies:
         attributed_ids = set(cast(Sequence[str], fact["operation_ids"]))
         expected = internal_dependencies.get(cast(str, fact["distribution"]))
@@ -1301,6 +1314,8 @@ def build_operation_release_matrix(
             raise ValueError("internal installation dependency attribution is invalid")
         internal_operation_ids.update(attributed_ids)
         internal_dependency_facts.append(deepcopy(dict(fact)))
+    if not required_internal_operation_ids <= internal_operation_ids:
+        raise ValueError("required internal installation dependencies are missing")
     dependency_operation_ids = {
         _text(operation_id, "dependency operation id")
         for item in dependencies

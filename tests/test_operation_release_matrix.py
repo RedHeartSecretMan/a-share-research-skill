@@ -1726,6 +1726,32 @@ class OperationReleaseMatrixTests(unittest.TestCase):
         self.assertEqual(matrix["denominator"]["operation_count"], 2)
         self.assertEqual(matrix["internal_dependency_attributions"], internal_facts)
         self.assertEqual(inputs["installation_health"], original)
+        from a_share_research.installation_health import (
+            RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
+        )
+
+        current_contract = {
+            **inputs,
+            "expected_internal_dependencies": RETAINED_INTERNAL_RUNTIME_DEPENDENCIES,
+        }
+        self.assertEqual(
+            build_operation_release_matrix(**current_contract).to_dict(), matrix
+        )
+        for omitted in ({"baostock"}, {"pypdf"}, {"baostock", "pypdf"}):
+            changed = deepcopy(current_contract)
+            changed["installation_health"]["dependencies"] = [
+                fact
+                for fact in changed["installation_health"]["dependencies"]
+                if fact["distribution"] not in omitted
+            ]
+            with (
+                self.subTest(omitted=sorted(omitted)),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "required internal installation dependencies are missing",
+                ),
+            ):
+                build_operation_release_matrix(**changed)
         for key, value in (
             ("distribution", "unknown"),
             ("required_version", "0.9.5"),
