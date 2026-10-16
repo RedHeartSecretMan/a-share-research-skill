@@ -793,7 +793,10 @@ def _plan_local_load_attempt(profile: str, verified_at: str) -> dict[str, object
     for snapshot in attempt["plan_snapshots"]:
         snapshot["request_profile"] = profile
     for load in attempt["installation_loads"]:
-        load["selector"] = profile
+        if load["producer_operation_id"] == "mootdx_f10@1":
+            load.update(origin="installation_health", selector="installation_health")
+        else:
+            load["selector"] = profile
     for sample in attempt["probe_samples"]:
         sample["request_profile"] = profile
     return _reseal_attempt(attempt)
@@ -1774,8 +1777,27 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             assembled_at="2026-08-12T10:01:00+08:00",
         )
         self.assertEqual(
-            {load["selector"] for load in report["installation_loads"]},
+            {
+                load["selector"]
+                for load in report["installation_loads"]
+                if load["origin"] == "copied_install_plan"
+            },
             {"identity-fast"},
+        )
+        self.assertEqual(
+            [
+                load
+                for load in report["installation_loads"]
+                if load["origin"] == "installation_health"
+            ],
+            [
+                {
+                    "producer_operation_id": "mootdx_f10@1",
+                    "origin": "installation_health",
+                    "status": "complete",
+                    "selector": "installation_health",
+                }
+            ],
         )
         self.assertEqual((first, second), original)
         reversed_report = release_probe.assemble_release_probe_evidence(
@@ -1810,7 +1832,43 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 if item["producer_operation_id"] == "cls_market_flash@1"
             )["selector"] = "other-owner-profile"
 
+        def health_selector(value, selector):
+            next(
+                item
+                for item in value["installation_loads"]
+                if item["producer_operation_id"] == "mootdx_f10@1"
+            )["selector"] = selector
+
         mutations = {
+            "health_selector_drift": lambda value: health_selector(
+                value, "zzzz-unowned-health-selector"
+            ),
+            "health_other_profile": lambda value: health_selector(
+                value, "identity-fast"
+            ),
+            "health_versioned_selector": lambda value: health_selector(
+                value, "installation_health@2"
+            ),
+            "health_empty_selector": lambda value: health_selector(value, ""),
+            "health_to_valid_plan_origin": lambda value: next(
+                item
+                for item in value["installation_loads"]
+                if item["producer_operation_id"] == "mootdx_f10@1"
+            ).update(origin="copied_install_plan", selector="identity-standard"),
+            "duplicate_health": lambda value: value["installation_loads"].append(
+                deepcopy(
+                    next(
+                        item
+                        for item in value["installation_loads"]
+                        if item["producer_operation_id"] == "mootdx_f10@1"
+                    )
+                )
+            ),
+            "health_missing_selector": lambda value: next(
+                item
+                for item in value["installation_loads"]
+                if item["producer_operation_id"] == "mootdx_f10@1"
+            ).pop("selector"),
             "unknown_selector": lambda value: value["installation_loads"][0].update(
                 selector="zzz-not-in-attempt"
             ),
@@ -1842,17 +1900,22 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             changed = deepcopy(second)
             mutate(changed)
             changed = _reseal_attempt(changed)
-            for seam in (
-                release_probe.validate_release_probe_attempt_inputs,
-                release_probe.assemble_release_probe_evidence,
-            ):
-                with self.subTest(mutation=name, seam=seam.__name__):
-                    with self.assertRaises(ValueError):
-                        seam(
-                            (first, changed),
-                            candidate_sha=_RC_CANDIDATE_SHA,
-                            assembled_at="2026-08-12T10:01:00+08:00",
-                        )
+            for order in ((first, changed), (changed, first)):
+                for seam in (
+                    release_probe.validate_release_probe_attempt_inputs,
+                    release_probe.assemble_release_probe_evidence,
+                ):
+                    with self.subTest(
+                        mutation=name,
+                        seam=seam.__name__,
+                        reversed_order=order[0] is changed,
+                    ):
+                        with self.assertRaises(ValueError):
+                            seam(
+                                order,
+                                candidate_sha=_RC_CANDIDATE_SHA,
+                                assembled_at="2026-08-12T10:01:00+08:00",
+                            )
 
     def test_main_rejects_prior_union_drift_before_any_public_process(self) -> None:
         producers = set(_reviewed_qualification_producers())

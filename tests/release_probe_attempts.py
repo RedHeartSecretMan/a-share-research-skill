@@ -373,7 +373,11 @@ def _joined_installation_loads(
             }
             previous = joined.get(owner)
             if previous is not None:
-                if any(previous[key] != fact[key] for key in ("origin", "status")):
+                # Only plan-owned selectors can vary between attempts. Health
+                # records retain the original full-row consistency contract.
+                if any(previous[key] != fact[key] for key in ("origin", "status")) or (
+                    load.origin == "installation_health" and previous != fact
+                ):
                     raise ValueError("release probe installation load drifted")
                 if cast(str, previous["selector"]) <= load.selector:
                     continue
