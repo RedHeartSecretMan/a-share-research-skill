@@ -16,6 +16,7 @@ from .fixed_index_observations import FixedIndexOperationRequest
 from .fixed_index_sources import build_default_fixed_index_adapter
 from .market_foundation import (
     OWNER_IDS,
+    MarketFoundationOperationAdapter,
     OperationRequest,
     build_default_market_foundation_operations,
     fold_market_foundation,
@@ -94,6 +95,9 @@ class MarketOverviewFoundation:
             ),
         )
         self._session: _FrozenSession | None = None
+        self._report_operations: tuple[MarketFoundationOperationAdapter, ...] | None = (
+            None
+        )
 
     def __call__(self, request: dict[str, Any]) -> UnifiedResearchResult:
         task_type = str(request["task_type"])
@@ -142,7 +146,9 @@ class MarketOverviewFoundation:
                     DirectTaskClaim(capability, capability, _keys(outcome), {})
                 )
         else:
-            operations = build_default_market_foundation_operations()
+            if self._report_operations is None:
+                self._report_operations = build_default_market_foundation_operations()
+            operations = self._report_operations
             suffix = (
                 "a_share_turnover@1"
                 if task_type == "overview_turnover"

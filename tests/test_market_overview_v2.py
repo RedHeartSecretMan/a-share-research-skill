@@ -460,3 +460,78 @@ class MarketOverviewV2Tests(unittest.TestCase):
                 item["kind"] == "whole_market_margin" for item in result["calculations"]
             )
         )
+
+    def test_poisoned_turnover_blocks_same_provider_margin_but_keeps_other_groups(
+        self,
+    ) -> None:
+        result, calls = self._timeout_result("poisoned_sse_turnover")
+        self.assertEqual(
+            sum(item["operation_id"] == "sse_a_share_turnover@1" for item in calls), 1
+        )
+        self.assertFalse(
+            any(item["operation_id"] == "sse_market_margin@1" for item in calls)
+        )
+        for owner in ("szse_market_margin@1", "bse_market_margin@1"):
+            self.assertEqual(sum(item["operation_id"] == owner for item in calls), 1)
+        margins = [
+            item
+            for item in result["observations"]
+            if item["capability_id"] == "whole_market_margin"
+        ]
+        self.assertEqual(
+            {item["operation_id"] for item in margins},
+            {"szse_market_margin@1", "bse_market_margin@1"},
+        )
+        operation = result["coverage"]["steps"]["whole_market_margin"]["leaf"][
+            "whole_market_margin"
+        ]["operations"]["sse_market_margin@1"]
+        self.assertEqual(operation["execution_state"], "skipped_policy")
+        self.assertFalse(operation["observation_ids"])
+        self.assertFalse(
+            any(
+                item["kind"] == "whole_market_margin" for item in result["calculations"]
+            )
+        )
+
+    def test_cooperative_timeout_releases_provider_for_margin_without_adopting_late_report(
+        self,
+    ) -> None:
+        result, calls = self._timeout_result("cancelled_sse_turnover")
+        cancelled = [
+            item
+            for item in calls
+            if item["operation_id"] == "sse-turnover-cancellation"
+        ]
+        self.assertEqual(
+            cancelled,
+            [{"operation_id": "sse-turnover-cancellation", "observed_cancelled": True}],
+        )
+        self.assertEqual(
+            sum(item["operation_id"] == "sse_market_margin@1" for item in calls), 1
+        )
+        self.assertFalse(
+            any(
+                item["operation_id"] == "sse_a_share_turnover@1"
+                for item in result["observations"]
+            )
+        )
+        margins = [
+            item
+            for item in result["observations"]
+            if item["capability_id"] == "whole_market_margin"
+        ]
+        self.assertEqual(len(margins), 3)
+        self.assertTrue(
+            any(
+                item["kind"] == "whole_market_margin" for item in result["calculations"]
+            )
+        )
+
+    def _timeout_result(self, scenario):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "calls.jsonl"
+            result = self._run(
+                environment={"ASR96_SCENARIO": scenario, "ASR96_CALLS": str(path)}
+            )
+            calls = [json.loads(line) for line in path.read_text().splitlines()]
+        return result, calls

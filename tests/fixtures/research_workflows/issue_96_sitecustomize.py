@@ -12,6 +12,7 @@ from datetime import datetime as _asr96_datetime
 from datetime import timedelta as _asr96_timedelta
 from pathlib import Path as _asr96_Path
 from zoneinfo import ZoneInfo as _asr96_ZoneInfo
+from threading import Event as _asr96_Event
 
 _asr96_sys.path.insert(0, str(_asr96_Path(_asr96_sys.argv[0]).resolve().parent))
 
@@ -72,7 +73,11 @@ _ASR96_SCENARIOS = {
     "empty_bse_margin",
     "partial_bse_margin",
     "partial_empty_bse_margin",
+    "poisoned_sse_turnover",
+    "cancelled_sse_turnover",
 }
+_ASR96_TURNOVER_RELEASE = _asr96_Event()
+
 if _ASR96_SCENARIO not in _ASR96_SCENARIOS:
     raise ValueError("Unknown Issue 96 fixture scenario.")
 
@@ -262,7 +267,7 @@ class _Asr96ReportTransport:
     def acquire(self, selector, request, timeout, invocation):
         del selector, timeout
 
-        def read_report():
+        def read_report(cancellation=None):
             _asr96_record(
                 self.owner,
                 report_date=request.report_date,
@@ -277,6 +282,21 @@ class _Asr96ReportTransport:
                     "source_response_unavailable",
                     "Synthetic missing report.",
                 )
+            if self.owner == "sse_a_share_turnover@1":
+                if _ASR96_SCENARIO == "poisoned_sse_turnover":
+                    _ASR96_TURNOVER_RELEASE.wait(5)
+                elif _ASR96_SCENARIO == "cancelled_sse_turnover":
+                    if cancellation is None:
+                        raise AssertionError(
+                            "Cancellation token missing at public provider call seam"
+                        )
+                    cancellation.wait(1)
+                    _asr96_record(
+                        "sse-turnover-cancellation",
+                        observed_cancelled=cancellation.is_cancelled,
+                    )
+            if self.owner == "bse_market_margin@1":
+                _ASR96_TURNOVER_RELEASE.set()
             exchange = self.owner.split("_", 1)[0].upper()
             turnover = "a_share_turnover" in self.owner
             if turnover:
@@ -388,16 +408,35 @@ class _Asr96ReportTransport:
                 else 1,
             }
 
+        if self.owner == "sse_a_share_turnover@1" and _ASR96_SCENARIO in {
+            "poisoned_sse_turnover",
+            "cancelled_sse_turnover",
+        }:
+
+            class CancellableReport:
+                def invoke(self, cancellation):
+                    return read_report(cancellation)
+
+            return invocation.call(CancellableReport())
         return invocation.call(_asr96_Invocation(read_report))
 
 
 def _asr96_build_foundation(*, transports=None, lanes=None):
     if transports is not None:
         raise ValueError("Issue 96 fixture supplies every owner transport.")
-    return _asr96_real_foundation_builder(
+    operations = _asr96_real_foundation_builder(
         transports={owner: _Asr96ReportTransport(owner) for owner in _asr96_OWNER_IDS},
         lanes=lanes,
     )
+    if _ASR96_SCENARIO in {"poisoned_sse_turnover", "cancelled_sse_turnover"}:
+        operation = next(
+            item for item in operations if item.operation_id == "sse_a_share_turnover@1"
+        )
+        execute = operation.execute
+        operation.execute = lambda request, timeout: execute(
+            request, min(timeout, 0.05)
+        )
+    return operations
 
 
 _asr96_module.build_default_market_session_adapter = _asr96_build_session
