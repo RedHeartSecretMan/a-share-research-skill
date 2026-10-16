@@ -205,7 +205,7 @@
         "4.5.1-4.5.4"
       ],
       "year": 2026,
-      "version": "bse-a-share-calendar-rule-2026-v1",
+      "version": "bse-a-share-calendar-rule-2026-v2",
       "calendar_publication_date": "2025-12-22",
       "rule_publication_date": "2026-04-24",
       "effective_from": "2026-07-06",
@@ -270,7 +270,7 @@
       "synthetic": false,
       "rule_document_number": "北证公告〔2026〕17号",
       "calendar_body_sha256": "1d6178157837f021dcb98c1206ee2f6f8cafcadbbb5b1cb0ac3637bbe82387ab",
-      "rule_body_sha256": "f15d8685e71e5686343600d68a7c8c8d11386bee54fc998b5638273c9ae1fbc4"
+      "rule_body_sha256": "cf89a37eb754baae0e303c4b9e6ff2fe2b328118aac1203d1de853d807983082"
     }
   ],
   "document_version_policy": "Every annual and rule response is bound to its independently qualified exact body digest; any changed bytes fail closed and require reviewed source-version qualification. Text parsers validate the named structure and semantics but do not grant authority to unknown revisions."

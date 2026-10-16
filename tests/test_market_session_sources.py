@@ -864,6 +864,70 @@ class MarketSessionSourceTests(unittest.TestCase):
         )
         self.assertEqual(transport.calls, [])
 
+    def test_requalified_bse_identity_rejects_previous_frozen_context_without_IO(
+        self,
+    ) -> None:
+        contracts, responses = qualified_bse_source_fixtures()
+        original = (
+            ProductionMarketSessionAdapter(
+                DocumentTransport(responses),
+                contracts,
+                clock=lambda: FIRST,
+                execution_clock=lambda: CHECKED,
+            )
+            .execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+            .to_dict()["observations"][0]["payload"]["context"]
+        )
+        for changed_field in ("version", "rule_body_sha256"):
+            with self.subTest(changed_field=changed_field):
+                # Separate synthetic qualification: no production/live body is used.
+                revised_responses = dict(responses)
+                bse = contracts[2]
+                revised_contracts = contracts
+                if changed_field == "version":
+                    revised_contracts = contracts[:2] + (
+                        replace(bse, version="synthetic-requalified-bse-rule"),
+                    )
+                else:
+                    response = responses[bse.rule_uri]
+                    revised_responses[bse.rule_uri] = replace(
+                        response,
+                        body=response.body + b"<!--synthetic-requalified-body-->",
+                    )
+                    revised_contracts = bind_synthetic_document_versions(
+                        contracts, revised_responses
+                    )
+                fresh = ProductionMarketSessionAdapter(
+                    DocumentTransport(revised_responses),
+                    revised_contracts,
+                    clock=lambda: FIRST,
+                    execution_clock=lambda: CHECKED,
+                ).execute(MarketSessionOperationRequest("2026-10-14", BINDINGS), 5)
+                self.assertEqual(fresh.coverage, "complete", fresh.source_errors)
+                transport = DocumentTransport({})
+                restored = ProductionMarketSessionAdapter(
+                    transport,
+                    revised_contracts,
+                    clock=lambda: CHECKED,
+                    execution_clock=lambda: CHECKED,
+                ).execute(
+                    MarketSessionOperationRequest(
+                        "2026-10-14", BINDINGS, original, original["digest"]
+                    ),
+                    5,
+                )
+                self.assertEqual(restored.coverage, "failed")
+                self.assertFalse(restored.observations)
+                self.assertEqual(
+                    [error["code"] for error in restored.source_errors],
+                    [
+                        "calendar_reference_unproved"
+                        if changed_field == "version"
+                        else "calendar_rule_version_unproved"
+                    ],
+                )
+                self.assertEqual(transport.calls, [])
+
     def test_new_bse_notice_version_cannot_reuse_old_publication_binding(self) -> None:
         contracts, responses = source_fixtures()
         bse = contracts[2]
@@ -1137,6 +1201,9 @@ material=json.load(sys.stdin)
 # Test-only synthetic body binding; the default source catalogue still loads.
 actual=source.load_market_session_source_contracts()
 assert [item.exchange for item in actual]==['SSE','SZSE','BSE']
+# Independent expected identity from reviewed BSE diagnostics; no live body fixture.
+assert actual[2].version=='bse-a-share-calendar-rule-2026-v2'
+assert actual[2].rule_body_sha256=='cf89a37eb754baae0e303c4b9e6ff2fe2b328118aac1203d1de853d807983082'
 for item in material['contracts']:
     for key in ('auction_times','completion_sections','deferred_sections'):
         item[key]=tuple(item[key])
