@@ -561,6 +561,45 @@ def formal_operation_applications(
     return tuple(sorted(applications))
 
 
+def attempted_source_operation_applications(
+    snapshots: Sequence[ReleasePlanSnapshot],
+) -> tuple[OperationOwner, ...]:
+    """Project actual source execution without borrowing offline fixture activity."""
+
+    attempted: set[OperationOwner] = set()
+    for snapshot in snapshots:
+        if snapshot.evidence_kind != "source_attempt":
+            continue
+        for plan, coverage, _ in _release_plan_views(snapshot.result):
+            for raw in _sequence(
+                plan.get("operation_obligations"), "release obligations"
+            ):
+                obligation = _mapping(raw, "release obligation")
+                if obligation.get("operation_kind") != "external_source":
+                    continue
+                capability, operation_id = _owner(obligation)
+                operation = _mapping(
+                    _mapping(
+                        _mapping(coverage.get(capability), "release capability").get(
+                            "operations"
+                        ),
+                        "release operations",
+                    ).get(operation_id),
+                    "release operation",
+                )
+                if operation.get("execution_state") in {"succeeded", "failed"}:
+                    attempted.add(
+                        (
+                            capability,
+                            _safe_release_reference(
+                                obligation.get("producer_operation_id"),
+                                "release producer",
+                            ),
+                        )
+                    )
+    return tuple(sorted(attempted))
+
+
 def formal_producer_operation_ids(
     plan_snapshots: Sequence[ReleasePlanSnapshot],
 ) -> tuple[str, ...]:
@@ -749,6 +788,11 @@ def load_release_probe_evidence(
         (item.capability_id, item.producer_operation_id) for item in exclusions
     }
     required_live = {producer for _, producer in required_apps}
+    if (
+        exclusions
+        and set(attempted_source_operation_applications(snapshots)) != required_apps
+    ):
+        raise ValueError("required live applications do not close the plan")
     if {item.producer_operation_id for item in installation_loads} != denominator or {
         item.producer_operation_id for item in live_probes
     } != required_live:
@@ -1487,9 +1531,12 @@ def build_operation_release_matrix(
         raise ValueError("qualification evidence does not close the denominator")
     if set(install_by_producer) != set(producers):
         raise ValueError("installation load evidence does not close the denominator")
-    required_live = {
-        producer for capability, producer in formal_applications - excluded_apps
-    }
+    required_live = {producer for _, producer in formal_applications - excluded_apps}
+    attempted_applications = set(
+        attempted_source_operation_applications(plan_snapshots)
+    )
+    if exclusions and attempted_applications != formal_applications - excluded_apps:
+        raise ValueError("required live applications do not close the plan")
     if set(live_by_owner) != required_live:
         raise ValueError("live probe evidence does not close the denominator")
     _validate_live_probe_application_truth(plan_snapshots, live_probes)
@@ -1881,6 +1928,9 @@ def build_operation_release_matrix(
                             formal_applications - excluded_apps
                         ),
                         "required_operation_count": len(required_live),
+                        "actual_attempted_application_count": len(
+                            attempted_applications
+                        ),
                         "actual_attempted_operation_count": sum(
                             item.attempted for item in live_probes
                         ),

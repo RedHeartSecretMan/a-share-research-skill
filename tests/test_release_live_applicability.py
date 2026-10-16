@@ -98,6 +98,7 @@ class ReleaseLiveApplicabilityTests(unittest.TestCase):
         self.assertEqual(applicability["required_operation_count"], 44)
         self.assertEqual(applicability["required_application_count"], 59)
         self.assertEqual(applicability["actual_attempted_operation_count"], 44)
+        self.assertEqual(applicability["actual_attempted_application_count"], 59)
         excluded = [
             item
             for item in result["operations"]
@@ -115,6 +116,30 @@ class ReleaseLiveApplicabilityTests(unittest.TestCase):
                 for item in excluded
             )
         )
+
+    def test_other_applications_do_not_inherit_exclusion(self):
+        report = report_with_exclusions()
+        coverage = report["plan_snapshots"][0]["result"]["coverage"]
+        capabilities_by_owner = {}
+        for capability, facts in coverage.items():
+            for owner in facts["operations"]:
+                capabilities_by_owner.setdefault(owner, []).append(capability)
+        checked = 0
+        for owner, capabilities in capabilities_by_owner.items():
+            if len(capabilities) < 2:
+                continue
+            for capability in capabilities:
+                changed = deepcopy(report)
+                changed["plan_snapshots"][0]["result"]["coverage"][capability][
+                    "operations"
+                ][owner].update(execution_state="not_requested", state="not_requested")
+                with (
+                    self.subTest(owner=owner, capability=capability),
+                    self.assertRaisesRegex(ValueError, "required live applications"),
+                ):
+                    release_probe._validate_release_report(changed)
+                checked += 1
+        self.assertGreater(checked, 1)
 
     def test_exclusion_contract_rejects_adjacent_invalid_records(self):
         report = report_with_exclusions()
