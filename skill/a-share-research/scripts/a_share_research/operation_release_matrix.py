@@ -1332,7 +1332,13 @@ def build_operation_release_matrix(
     if exclusions:
         exclusion_payload = {
             "candidate_sha": exclusions[0].snapshot.candidate_sha,
-            "verified_at": max(cast(str, item.verified_at) for item in plan_snapshots),
+            "verified_at": max(
+                (
+                    _text(item.verified_at, "release snapshot verified_at")
+                    for item in plan_snapshots
+                ),
+                key=_verified_at,
+            ),
             "live_verification_exclusions": [dict(item.payload) for item in exclusions],
         }
         if exclusions != load_live_verification_exclusions(

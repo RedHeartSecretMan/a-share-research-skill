@@ -19,6 +19,23 @@ PAIRS = (
 )
 
 
+def _reseal_offline_record(record: dict[str, object]) -> None:
+    # Adversarial fixtures independently reproduce canonical JSON sealing;
+    # they never call the production digest helper after mutating a record.
+    record["offline_evidence_digest"] = sha256(
+        json.dumps(
+            {
+                key: value
+                for key, value in record.items()
+                if key != "offline_evidence_digest"
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+
+
 def report_with_exclusions():
     manifest = json.loads(release_probe.DEFAULT_QUALIFICATION.read_text())
     capabilities = {
@@ -117,6 +134,35 @@ class ReleaseLiveApplicabilityTests(unittest.TestCase):
             )
         )
 
+    def test_aware_offline_evidence_uses_instants_across_utc_offsets(self):
+        for offline_time in (
+            "2026-10-16T22:00:00+08:00",
+            "2026-10-16T14:00:00+00:00",
+            "2026-10-16T02:00:00-12:00",
+            "2026-10-17T04:00:00+14:00",
+        ):
+            report = report_with_exclusions()
+            report["verified_at"] = "2026-10-16T15:00:00+00:00"
+            for record in report["live_verification_exclusions"]:
+                record["verified_at"] = offline_time
+                _reseal_offline_record(record)
+            with self.subTest(offline_time=offline_time):
+                matrix.load_release_probe_evidence(report, expected_exclusions=PAIRS)
+                release_probe._validate_release_report(report)
+
+        for invalid_time in (
+            "2026-10-16T16:00:00+00:00",
+            "2026-10-09T14:59:00+00:00",
+            "2026-10-16T14:00:00",
+        ):
+            report = report_with_exclusions()
+            report["verified_at"] = "2026-10-16T15:00:00+00:00"
+            for record in report["live_verification_exclusions"]:
+                record["verified_at"] = invalid_time
+                _reseal_offline_record(record)
+            with self.subTest(invalid_time=invalid_time), self.assertRaises(ValueError):
+                release_probe._validate_release_report(report)
+
     def test_other_applications_do_not_inherit_exclusion(self):
         report = report_with_exclusions()
         coverage = report["plan_snapshots"][0]["result"]["coverage"]
@@ -178,18 +224,7 @@ class ReleaseLiveApplicabilityTests(unittest.TestCase):
             changed = deepcopy(report)
             record = changed["live_verification_exclusions"][0]
             mutate(record)
-            record["offline_evidence_digest"] = sha256(
-                json.dumps(
-                    {
-                        key: value
-                        for key, value in record.items()
-                        if key != "offline_evidence_digest"
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
+            _reseal_offline_record(record)
             with self.subTest(name=name), self.assertRaises(ValueError):
                 matrix.load_release_probe_evidence(changed, expected_exclusions=PAIRS)
         for records in (
@@ -217,18 +252,7 @@ class ReleaseLiveApplicabilityTests(unittest.TestCase):
             "tests/test_other.py#wrong"
         )
         record = changed["live_verification_exclusions"][0]
-        record["offline_evidence_digest"] = sha256(
-            json.dumps(
-                {
-                    key: value
-                    for key, value in record.items()
-                    if key != "offline_evidence_digest"
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+        _reseal_offline_record(record)
         with self.assertRaisesRegex(
             ValueError, "qualification or installation drifted"
         ):
@@ -245,18 +269,7 @@ class ReleaseLiveApplicabilityTests(unittest.TestCase):
                     state="observed_empty",
                     query_complete=True,
                 )
-            record["offline_evidence_digest"] = sha256(
-                json.dumps(
-                    {
-                        key: value
-                        for key, value in record.items()
-                        if key != "offline_evidence_digest"
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
+            _reseal_offline_record(record)
         release_probe._validate_release_report(report)
         self.assertEqual(len(report["live_probes"]), 44)
         self.assertEqual(len(report["attempt_digests"]), 1)
@@ -264,18 +277,7 @@ class ReleaseLiveApplicabilityTests(unittest.TestCase):
         record = changed["live_verification_exclusions"][0]
         plan = record["plan_snapshot"]["result"]["plan"]
         plan["operation_obligations"][0]["capability_id"] = "intraday_replay"
-        record["offline_evidence_digest"] = sha256(
-            json.dumps(
-                {
-                    key: value
-                    for key, value in record.items()
-                    if key != "offline_evidence_digest"
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+        _reseal_offline_record(record)
         with self.assertRaises(ValueError):
             matrix.load_release_probe_evidence(changed, expected_exclusions=PAIRS)
 
