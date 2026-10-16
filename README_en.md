@@ -15,7 +15,7 @@
 
 `a-share-research-skill` is the repository name; the installed Skill is `$a-share-research`. It routes natural-language questions to a deterministic Python CLI and returns versioned JSON containing security identity, research time, source observations, calculation lineage, conflicts, coverage, and limitations. The Agent then presents that evidence as auditable research.
 
-This branch delivers the **v0.4.0 candidate**, with 12 narrow ResearchTask types, six fixed research plans, and one public `run --request` entry point. The copied artifact identifies its version in [`VERSION`](skill/a-share-research/VERSION). Market overview now uses `market_overview_research@2.0`. Candidate release remains pending #98 same-candidate anonymous live attestation; offline tests do not establish provider usability. The current stable release, GitHub Release, and tag remain v0.3.0.
+This branch delivers the **v0.4.0 candidate**, with 12 narrow ResearchTask types, six fixed research plans, and one public `run --request` entry point. The copied artifact identifies its version in [`VERSION`](skill/a-share-research/VERSION). Market overview now uses `market_overview_research@2.0`. Applicable anonymous-source proof for this candidate is recorded in the [#98 candidate audit](docs/research/v0.4.0-release-audit-2026-10-17.md); source failures and intraday applications without real-time verification remain explicit. The current stable release, GitHub Release, and tag remain v0.3.0.
 
 ## Quick start
 
