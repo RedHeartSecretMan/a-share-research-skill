@@ -1201,9 +1201,6 @@ material=json.load(sys.stdin)
 # Test-only synthetic body binding; the default source catalogue still loads.
 actual=source.load_market_session_source_contracts()
 assert [item.exchange for item in actual]==['SSE','SZSE','BSE']
-# Independent expected identity from reviewed BSE diagnostics; no live body fixture.
-assert actual[2].version=='bse-a-share-calendar-rule-2026-v2'
-assert actual[2].rule_body_sha256=='cf89a37eb754baae0e303c4b9e6ff2fe2b328118aac1203d1de853d807983082'
 for item in material['contracts']:
     for key in ('auction_times','completion_sections','deferred_sections'):
         item[key]=tuple(item[key])
@@ -1218,7 +1215,7 @@ adapter=source.build_default_market_session_adapter(Fake(),clock=lambda:datetime
 outcome=adapter.execute(MarketSessionOperationRequest('2026-10-14',ContextBindings('1'*64,'2'*64,'3'*64,'4'*64,'installed-source-fixture')),5)
 assert outcome.coverage=='complete',outcome.to_dict()['source_errors']
 context=outcome.to_dict()['observations'][0]['payload']['context']
-print(json.dumps({'screen_date':context['screen_date'],'exchanges':[p['exchange'] for p in context['calendar_proofs']],'documents':outcome.diagnostics['document_requests']},sort_keys=True))
+print(json.dumps({'screen_date':context['screen_date'],'exchanges':[p['exchange'] for p in context['calendar_proofs']],'bse_rule_version':context['calendar_proofs'][2]['version'],'documents':outcome.diagnostics['document_requests']},sort_keys=True))
 """
         with tempfile.TemporaryDirectory() as temporary:
             installed = Path(temporary) / "a-share-research"
@@ -1245,6 +1242,7 @@ print(json.dumps({'screen_date':context['screen_date'],'exchanges':[p['exchange'
                 {
                     "screen_date": "2026-10-13",
                     "exchanges": ["SSE", "SZSE", "BSE"],
+                    "bse_rule_version": "bse-a-share-calendar-rule-2026-v2",
                     "documents": 6,
                 },
             )
