@@ -87,7 +87,7 @@ The overall status has three values:
 - `limited`: the core question remains answerable, but non-critical gaps, conflicts, or source limits must be disclosed.
 - `blocked`: identity or critical evidence is insufficient, so no substantive conclusion is safe.
 
-Read `plan`, `records`, `coverage`, `source_errors`, `conflicts`, `limitations`, `claims`, `calculations`, and `briefs` together rather than relying on the top-level status alone. Source-result states—`complete`, `observed_empty`, `partial`, `credential_blocked`, and `unavailable`—have different meanings. A source failure is never rewritten as zero or “no records.”
+Read `plan`, `observations`, `coverage`, `source_errors`, `conflicts`, `limitations`, `claims`, `calculations`, and `briefs` together rather than relying on the top-level status alone. Source-result states—`complete`, `observed_empty`, `partial`, `credential_blocked`, and `unavailable`—have different meanings. A source failure is never rewritten as zero or “no records.”
 
 The CLI owns evidence, deterministic calculation, and status. When a result is not globally blocked and the question genuinely calls for interpretation, the Agent may add a clearly labelled research judgment, risks, invalidation conditions, and conditional triggers. Direct evidence questions such as identity lookup should not receive unsolicited opinions. The installed [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md) is authoritative.
 

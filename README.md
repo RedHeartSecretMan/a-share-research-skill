@@ -87,7 +87,7 @@ CLI 不接受自然语言，也不调用模型。`stdout` 只输出一个版本�
 - `limited`：核心问题仍可回答，但非关键缺口、冲突或来源限制必须披露。
 - `blocked`：身份或关键证据不足，不能形成实质结论。
 
-请同时查看 `plan`、`records`、`coverage`、`source_errors`、`conflicts`、`limitations`、`claims`、`calculations` 和 `briefs`，不要只读顶层状态。来源状态中的 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable` 含义不同；来源失败不能改写为零或“没有记录”。
+请同时查看 `plan`、`observations`、`coverage`、`source_errors`、`conflicts`、`limitations`、`claims`、`calculations` 和 `briefs`，不要只读顶层状态。来源状态中的 `complete`、`observed_empty`、`partial`、`credential_blocked` 和 `unavailable` 含义不同；来源失败不能改写为零或“没有记录”。
 
 CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻断且问题确实需要解释时给出明确标注的研究判断、风险、失效条件和条件触发位；身份查询等直接证据问题不附加无关观点。详细边界见安装产物中的 [`analysis-boundary.md`](skill/a-share-research/references/analysis-boundary.md)。
 

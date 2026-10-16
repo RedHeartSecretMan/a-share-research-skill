@@ -19,7 +19,7 @@ Route the user's question to the narrowest supported ResearchTask, run the bundl
    ```
 
    Add `--output <file>` only when the caller explicitly requests persistence. Exact installation, invocation, process, credential, and JSON semantics are in [cli-contract.md](references/cli-contract.md).
-5. Confirm the returned `task_type` and request scope answer the question. If the result is narrower, present only what it formed. No absent result field or wider capability may be inferred.
+5. Confirm the returned `plan.task_type` and request scope answer the question. If the result is narrower, present only what it formed. No absent result field or wider capability may be inferred.
 6. Lead with the direct answer and overall status. Name the canonical subject and research date; keep units and periods attached to values; place evidence locators near material claims; separate source facts, project calculations, attributed opinions, market signals, and Agent inference.
 
 Completion means: no `REPLACE_*` value remains; one valid JSON result was parsed from `stdout` or a nonzero protocol failure was reported separately; every requested supported field was addressed; every conflict, source error, limitation, blocked step, and unsupported capability that could change the answer remains visible; and no undocumented fact, metric, status, source success, or investment action was invented.
