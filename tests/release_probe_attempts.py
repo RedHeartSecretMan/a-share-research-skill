@@ -208,19 +208,7 @@ def assemble_release_probe_evidence(
     )
     digests = [cast(str, item["attempt_digest"]) for item in ordered]
     installation_health = ordered[-1]["installation_health"]
-    loads: dict[str, dict[str, object]] = {}
-    for attempt in ordered:
-        for raw_load in _sequence(
-            attempt["installation_loads"], "release installation loads"
-        ):
-            load = deepcopy(dict(_mapping(raw_load, "release installation load")))
-            owner = _reference(
-                load.get("producer_operation_id"), "installation producer"
-            )
-            previous = loads.get(owner)
-            if previous is not None and previous != load:
-                raise ValueError("release probe installation load drifted")
-            loads[owner] = load
+    loads = _joined_installation_loads(ordered)
     samples_by_owner: dict[str, list[dict[str, object]]] = {}
     for attempt in ordered:
         for raw_sample in cast(list[dict[str, object]], attempt["probe_samples"]):
@@ -311,7 +299,6 @@ def validate_release_probe_attempt_inputs(
         installation_health = ordered[-1]["installation_health"]
         if any(item["installation_health"] != installation_health for item in ordered):
             raise ValueError("release probe installation health drifted")
-    loads: dict[str, dict[str, object]] = {}
     plan_contracts: dict[tuple[str, ...], object] = {}
     facts_by_owner_time: dict[tuple[str, datetime], set[tuple[str, str, str, str]]] = {}
     for attempt in ordered:
@@ -320,17 +307,6 @@ def validate_release_probe_attempt_inputs(
             if previous_contract is not None and previous_contract != contract:
                 raise ValueError("release probe plan contract drifted")
             plan_contracts[key] = contract
-        for raw_load in _sequence(
-            attempt["installation_loads"], "release installation loads"
-        ):
-            load = deepcopy(dict(_mapping(raw_load, "release installation load")))
-            owner = _reference(
-                load.get("producer_operation_id"), "installation producer"
-            )
-            previous = loads.get(owner)
-            if previous is not None and previous != load:
-                raise ValueError("release probe installation load drifted")
-            loads[owner] = load
         for sample in cast(list[dict[str, object]], attempt["probe_samples"]):
             if sample["attempted"] is not True:
                 continue
@@ -346,7 +322,63 @@ def validate_release_probe_attempt_inputs(
             )
     if any(len(facts) != 1 for facts in facts_by_owner_time.values()):
         raise ValueError("release probe producer has conflicting live facts")
+    _joined_installation_loads(ordered)
     return tuple(ordered)
+
+
+def _joined_installation_loads(
+    attempts: Sequence[Mapping[str, object]],
+) -> dict[str, dict[str, object]]:
+    """Select an existing load only after each attempt proves its own ownership."""
+
+    from a_share_research.operation_release_matrix import load_release_probe_evidence
+
+    joined: dict[str, dict[str, object]] = {}
+    for attempt in attempts:
+        # The public evidence loader owns field, health and per-profile plan
+        # authority. Validate before choosing a representative: a valid earlier
+        # selector must never hide a forged selector in another attempt.
+        snapshots = [
+            {
+                **dict(_mapping(raw, "release plan snapshot")),
+                "candidate_sha": attempt["candidate_sha"],
+                "verified_at": attempt["verified_at"],
+                "attempt_digest": attempt["attempt_digest"],
+            }
+            for raw in _sequence(attempt["plan_snapshots"], "release plan snapshots")
+        ]
+        _, loads, _, _ = load_release_probe_evidence(
+            {
+                "schema_version": "1.0",
+                "candidate_sha": attempt["candidate_sha"],
+                "verified_at": attempt["verified_at"],
+                "attempt_digests": [attempt["attempt_digest"]],
+                "installation_health": attempt["installation_health"],
+                "plan_snapshots": snapshots,
+                "installation_loads": attempt["installation_loads"],
+                "live_probes": attempt["probe_samples"],
+            }
+        )
+        seen: set[str] = set()
+        for load in loads:
+            owner = load.producer_operation_id
+            if owner in seen:
+                raise ValueError("release probe installation load is duplicated")
+            seen.add(owner)
+            fact: dict[str, object] = {
+                "producer_operation_id": owner,
+                "origin": load.origin,
+                "status": load.status,
+                "selector": load.selector,
+            }
+            previous = joined.get(owner)
+            if previous is not None:
+                if any(previous[key] != fact[key] for key in ("origin", "status")):
+                    raise ValueError("release probe installation load drifted")
+                if cast(str, previous["selector"]) <= load.selector:
+                    continue
+            joined[owner] = fact
+    return joined
 
 
 def _attempt_plan_contracts(

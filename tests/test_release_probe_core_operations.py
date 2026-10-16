@@ -752,6 +752,53 @@ def _credential_source_error(producer_operation_id: str) -> dict[str, object]:
     )
 
 
+def _attempt_from_sanitized_snapshot(snapshot, samples, verified_at):
+    """Keep fixture loads and samples owned by this actual public plan."""
+
+    grouped = {}
+    profile = snapshot["request_profile"]
+    for sample in samples:
+        grouped.setdefault(sample["producer_operation_id"], []).append(
+            {**sample, "request_profile": profile}
+        )
+    return release_probe.create_release_probe_attempt(
+        candidate_sha=_RC_CANDIDATE_SHA,
+        verified_at=verified_at,
+        installation_health=_complete_installation_health(),
+        plan_snapshots=[snapshot],
+        installation_loads=[
+            {
+                "producer_operation_id": owner,
+                "origin": "copied_install_plan",
+                "status": "complete",
+                "selector": profile,
+            }
+            for owner in sorted(grouped)
+        ],
+        probe_samples=[
+            release_probe._attempt_probe_sample(
+                producer_operation_id=owner, values=grouped[owner]
+            )
+            for owner in sorted(grouped)
+        ],
+    )
+
+
+def _plan_local_load_attempt(profile: str, verified_at: str) -> dict[str, object]:
+    attempt = _reviewed_application_attempt(
+        candidate_sha=_RC_CANDIDATE_SHA,
+        verified_at=verified_at,
+        attempted_producers=set(release_probe._reviewed_producer_operation_ids()),
+    )
+    for snapshot in attempt["plan_snapshots"]:
+        snapshot["request_profile"] = profile
+    for load in attempt["installation_loads"]:
+        load["selector"] = profile
+    for sample in attempt["probe_samples"]:
+        sample["request_profile"] = profile
+    return _reseal_attempt(attempt)
+
+
 class CoreOperationReleaseProbeTests(unittest.TestCase):
     def test_etf_option_profile_uses_current_snapshot_boundary_at_public_cli(
         self,
@@ -1282,7 +1329,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 .research(signal_request(["monitoring_intersection"]))
                 .to_dict()
             )
-            snapshot, _ = release_probe.sanitize_public_result(
+            snapshot, samples = release_probe.sanitize_public_result(
                 request_profile="signals-market",
                 request_as_of="2026-08-02",
                 result=result,
@@ -1298,13 +1345,7 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 1,
                 {"plan": snapshot["result"]["plan"], "result": result},
             )
-            attempt = _synthetic_attempt(
-                candidate_sha=_RC_CANDIDATE_SHA,
-                verified_at=verified_at,
-                attempted_producers=set(_reviewed_qualification_producers()),
-            )
-            attempt["plan_snapshots"] = [snapshot]
-            return _reseal_attempt(attempt)
+            return _attempt_from_sanitized_snapshot(snapshot, samples, verified_at)
 
         first = dynamic_attempt(
             code="300058",
@@ -1449,19 +1490,13 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
                 valuation_fixtures=True,
                 fixture_research_now=f"{as_of}T18:30:00+08:00",
             )
-            snapshot, _ = release_probe.sanitize_public_result(
+            snapshot, samples = release_probe.sanitize_public_result(
                 request_profile=profile.name,
                 request_as_of=as_of,
                 result=result,
                 verified_at=verified_at,
             )
-            attempt = _synthetic_attempt(
-                candidate_sha=_RC_CANDIDATE_SHA,
-                verified_at=verified_at,
-                attempted_producers=set(_reviewed_qualification_producers()),
-            )
-            attempt["plan_snapshots"] = [snapshot]
-            return _reseal_attempt(attempt)
+            return _attempt_from_sanitized_snapshot(snapshot, samples, verified_at)
 
         first = workflow_attempt(
             as_of="2026-08-01",
@@ -1726,6 +1761,98 @@ class CoreOperationReleaseProbeTests(unittest.TestCase):
             public_process.assert_not_called()
             self.assertEqual(output.read_bytes(), _ORIGINAL_FINAL)
             self.assertFalse(attempt_output.exists())
+
+    def test_union_joins_valid_attempt_local_installation_selectors(self) -> None:
+        first = _plan_local_load_attempt("identity-fast", "2026-08-12T09:35:00+08:00")
+        second = _plan_local_load_attempt(
+            "identity-standard", "2026-08-12T10:00:00+08:00"
+        )
+        original = deepcopy((first, second))
+        report = release_probe.assemble_release_probe_evidence(
+            (first, second),
+            candidate_sha=_RC_CANDIDATE_SHA,
+            assembled_at="2026-08-12T10:01:00+08:00",
+        )
+        self.assertEqual(
+            {load["selector"] for load in report["installation_loads"]},
+            {"identity-fast"},
+        )
+        self.assertEqual((first, second), original)
+        reversed_report = release_probe.assemble_release_probe_evidence(
+            (second, first),
+            candidate_sha=_RC_CANDIDATE_SHA,
+            assembled_at="2026-08-12T10:01:00+08:00",
+        )
+        self.assertEqual(report, reversed_report)
+
+    def test_union_never_hides_invalid_attempt_local_installation_facts(self) -> None:
+        first = _plan_local_load_attempt("identity-fast", "2026-08-12T09:35:00+08:00")
+        second = _plan_local_load_attempt(
+            "identity-standard", "2026-08-12T10:00:00+08:00"
+        )
+
+        def wrong_owner_profile(value):
+            snapshot = deepcopy(value["plan_snapshots"][0])
+            snapshot["request_profile"] = "other-owner-profile"
+            result = snapshot["result"]
+            result["plan"]["operation_obligations"] = [
+                item
+                for item in result["plan"]["operation_obligations"]
+                if item["producer_operation_id"] != "cls_market_flash@1"
+            ]
+            result["coverage"]["research_content_materials"]["operations"].pop(
+                "cls_market_flash@1"
+            )
+            value["plan_snapshots"].append(snapshot)
+            next(
+                item
+                for item in value["installation_loads"]
+                if item["producer_operation_id"] == "cls_market_flash@1"
+            )["selector"] = "other-owner-profile"
+
+        mutations = {
+            "unknown_selector": lambda value: value["installation_loads"][0].update(
+                selector="zzz-not-in-attempt"
+            ),
+            "other_attempt_selector": lambda value: value["installation_loads"][
+                0
+            ].update(selector="identity-fast"),
+            "wrong_owner_in_local_profile": wrong_owner_profile,
+            "origin": lambda value: value["installation_loads"][0].update(
+                origin="installation_health"
+            ),
+            "status": lambda value: value["installation_loads"][0].update(
+                status="failed"
+            ),
+            "unknown_owner": lambda value: value["installation_loads"][0].update(
+                producer_operation_id="unknown@1"
+            ),
+            "extra_field": lambda value: value["installation_loads"][0].update(
+                unexpected=True
+            ),
+            "duplicate": lambda value: value["installation_loads"].append(
+                deepcopy(value["installation_loads"][0])
+            ),
+            "missing": lambda value: value["installation_loads"].pop(),
+            "dependency_version": lambda value: value["installation_health"][
+                "dependencies"
+            ][0].update(installed_version="999.0"),
+        }
+        for name, mutate in mutations.items():
+            changed = deepcopy(second)
+            mutate(changed)
+            changed = _reseal_attempt(changed)
+            for seam in (
+                release_probe.validate_release_probe_attempt_inputs,
+                release_probe.assemble_release_probe_evidence,
+            ):
+                with self.subTest(mutation=name, seam=seam.__name__):
+                    with self.assertRaises(ValueError):
+                        seam(
+                            (first, changed),
+                            candidate_sha=_RC_CANDIDATE_SHA,
+                            assembled_at="2026-08-12T10:01:00+08:00",
+                        )
 
     def test_main_rejects_prior_union_drift_before_any_public_process(self) -> None:
         producers = set(_reviewed_qualification_producers())
