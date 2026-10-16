@@ -1287,14 +1287,15 @@ def build_operation_release_matrix(
         item.distribution: item for item in RETAINED_INTERNAL_RUNTIME_DEPENDENCIES
     }
     required_internal_operation_ids: set[str] = set()
-    for expected in expected_internal_dependencies:
+    for required_dependency in expected_internal_dependencies:
         if (
-            not isinstance(expected, RuntimeDependency)
-            or internal_dependencies.get(expected.distribution) != expected
-            or required_internal_operation_ids & set(expected.operation_ids)
+            not isinstance(required_dependency, RuntimeDependency)
+            or internal_dependencies.get(required_dependency.distribution)
+            != required_dependency
+            or required_internal_operation_ids & set(required_dependency.operation_ids)
         ):
             raise ValueError("expected internal installation dependency is invalid")
-        required_internal_operation_ids.update(expected.operation_ids)
+        required_internal_operation_ids.update(required_dependency.operation_ids)
     for fact in dependencies:
         attributed_ids = set(cast(Sequence[str], fact["operation_ids"]))
         expected = internal_dependencies.get(cast(str, fact["distribution"]))
