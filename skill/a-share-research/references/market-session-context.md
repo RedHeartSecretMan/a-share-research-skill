@@ -38,7 +38,7 @@ Historical C is independent of today's calendar coverage. Proved historical C ma
 
 Resume receives saved plain JSON and the expected original context digest from #108's validated commitment. #108 owns request/producer/plan/manifest/partition/ownership validation; #117 owns calendar and time semantics. Restoration validates bindings, the original clock/cutoff, registered references, calendar dates/rules and full context reconstruction before any new-source path. It performs no document acquisition. Updating a local digest cannot authorize a changed cutoff, screen date, calendar reference or calendar day.
 
-The restored C and original document retrieval times remain fixed; the operation verification time is actual. The original phase descriptor is explicitly not a current phase on later restoration. #120/#69 consume the original cutoff and remain responsible for financial/material availability and version lineage; #108/#69 control write-once partitions and rankings.
+The restored C and original document retrieval times remain fixed; the operation verification time is actual. The original phase descriptor is explicitly not a current phase on later restoration. Internal consumers retain the original cutoff and remain responsible for evidence availability and version lineage; #108 controls write-once artifact partitions. The former #120/#69 public screening consumers are withdrawn from v0.4.0 under Amendment C.
 
 ## Validation and source evidence
 

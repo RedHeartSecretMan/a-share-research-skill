@@ -1,12 +1,12 @@
 # 文档索引
 
-本仓库以 **v0.3.0** 为当前稳定版本。根目录 README 面向使用者，安装产物中的 `SKILL.md` / `references/` 面向 Agent，`specs/`、`adr/` 和 `research/` 面向维护者。先按目的选择入口，不必从头阅读全部历史文件。
+本分支是 **v0.4.0 候选**，待 #98 最终同候选匿名 live attestation；**v0.3.0** 仍是当前稳定发布。根目录 README 面向使用者，安装产物中的 `SKILL.md` / `references/` 面向 Agent，`specs/`、`adr/` 和 `research/` 面向维护者。先按目的选择入口，不必从头阅读全部历史文件。
 
 ## 使用者
 
 - [`../README.md`](../README.md)：中文产品说明、安装、能力边界和快速开始。
 - [`../README_en.md`](../README_en.md)：英文产品说明。
-- [`../examples/README.md`](../examples/README.md)：v0.3.0 真实运行案例、中文请求模板与边界说明。
+- [`../examples/README.md`](../examples/README.md)：带日期的历史真实运行、v0.4.0 候选中文请求模板与边界说明。
 - [`../skill/a-share-research/references/cli-contract.md`](../skill/a-share-research/references/cli-contract.md)：唯一公共命令、进程语义和参考文件路由。
 
 ## Agent
@@ -19,8 +19,9 @@
 
 - [`../CONTEXT.md`](../CONTEXT.md)：领域术语、边界和非目标。
 - [`specs/0007-implementation-amendment-a.md`](specs/0007-implementation-amendment-a.md)：v0.3.0 实施、DAG 与最终验收权威；状态为已交付。
-- [`specs/0008-v0.4.0-market-foundation-and-screening.md`](specs/0008-v0.4.0-market-foundation-and-screening.md)：已批准的 v0.4.0 综合市场基础、全 A 股筛选与结果包规格；原始 Ticket DAG 的后续修订以正式 Tracker 和已绑定定义为准，不改变当前 v0.3.0 稳定能力。
-- [`specs/0008-amendment-b-delivery-plan.md`](specs/0008-amendment-b-delivery-plan.md)：补齐生产来源、冻结研究上下文、候选映射和恢复协议的已批准修订；B1–B3 已应用到 Tracker，新增任务为 #121–#123，完整定义由回读快照与索引绑定。
+- [`specs/0008-amendment-c-free-anonymous-scope.md`](specs/0008-amendment-c-free-anonymous-scope.md)：当前 v0.4.0 免费匿名范围权威；市场总览 v2 保留四项基础能力，退出公共筛选与全市场盘中。
+- [`specs/0008-v0.4.0-market-foundation-and-screening.md`](specs/0008-v0.4.0-market-foundation-and-screening.md)：v0.4.0 原始规格，作为历史设计保留；与 Amendment C 冲突的筛选、结果包和全市场盘中范围已退出。
+- [`specs/0008-amendment-b-delivery-plan.md`](specs/0008-amendment-b-delivery-plan.md)：原 Amendment B 设计与来源/恢复约束；现行范围以 Amendment C 和已绑定定义为准。
 - [`adr/`](adr/)：架构决策。文件按四位编号加短横线主题命名；带 frontmatter 的 ADR 必须把 frontmatter 放在文件第一行。
 - [`research/README.md`](research/README.md)：当前发布证据、命令占位符和历史资料索引。
 - [`../skill/a-share-research/references/as-of-universe.md`](../skill/a-share-research/references/as-of-universe.md)：v0.4.0 内部 Universe Module 的已知与未知总量、局部记录和不可变投影契约。
@@ -28,7 +29,8 @@
 
 ## 版本规则
 
-- 当前发布资料采用 `v0.3.0-<主题>.<扩展名>`；只有现场审计需要追加 `-YYYY-MM-DD`。
+- 当前候选安装版本记录在 [`../skill/a-share-research/VERSION`](../skill/a-share-research/VERSION)；不得把候选版本写成已发布或 live 成功。
+- 稳定发布资料采用 `v0.3.0-<主题>.<扩展名>`；v0.4.0 静态资格不覆盖或改写历史证明。
 - v0.0.1–v0.2.0 的研究记录位于 [`research/history/`](research/history/)，保留其原始日期、候选提交和当时结论。
 - 历史 Spec 和 ADR 不因新版本发布而重写；若当前状态发生变化，在文件状态区追加交付说明，并保留批准时语境。
 - 机器生成的 JSON evidence/matrix 不手工编辑；其人类解释放在相邻 Markdown 文档。

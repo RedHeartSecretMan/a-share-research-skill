@@ -744,7 +744,7 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("narrowest supported task", metadata)
         self.assertIn("evidence-backed results and limitations", metadata)
 
-    def test_installation_uses_the_v030_release_tag(self) -> None:
+    def test_installation_separates_v040_candidate_from_v030_release(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
@@ -758,6 +758,10 @@ class SkillDistributionTests(unittest.TestCase):
                 )
                 self.assertIn("releases/tag/v0.3.0", readme)
                 self.assertIn("Release: v0.3.0", readme)
+                self.assertIn("v0.4.0", readme)
+                self.assertIn("market_overview_research@2.0", readme)
+                self.assertIn("VERSION", readme)
+                self.assertNotIn("market_overview_research@1.0", readme)
                 self.assertNotIn("--branch main --single-branch", readme)
 
         chinese_readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
@@ -871,7 +875,7 @@ class SkillDistributionTests(unittest.TestCase):
         first_nonblank = next(
             line for line in examples_readme.splitlines() if line.strip()
         )
-        self.assertEqual(first_nonblank, "# v0.3.0 中文案例与请求模板")
+        self.assertEqual(first_nonblank, "# v0.4.0 候选中文案例与请求模板")
         self.assertIn("[盘中行情快照](intraday-snapshot.md)", examples_readme)
         self.assertIn(
             "[`intraday-market-snapshot.json`](requests/intraday-market-snapshot.json)",

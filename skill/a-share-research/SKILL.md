@@ -40,11 +40,11 @@ Completion means: no `REPLACE_*` value remains; one valid JSON result was parsed
 | Capital or company events | [`capital_events`](assets/requests/capital-events.json) | [research-contracts.md](references/research-contracts.md) |
 | Themes or market signals | [`market_signals`](assets/requests/market-signals.json) | [research-contracts.md](references/research-contracts.md) |
 | General one-security review | [`single_security_research@1.0`](assets/requests/workflow-single-security-research.json) | [workflow-contracts.md](references/workflow-contracts.md) |
-| Subject-free market overview | [`market_overview_research@1.0`](assets/requests/workflow-market-overview.json) | [workflow-contracts.md](references/workflow-contracts.md) |
+| Subject-free market overview | [`market_overview_research@2.0`](assets/requests/workflow-market-overview.json) | [workflow-contracts.md](references/workflow-contracts.md) |
 | Fixed valuation, comparison, report, or new-security plan | `research_workflow` | [workflow-contracts.md](references/workflow-contracts.md) |
 | Explicit cross-request evidence reuse | supported task plus `source_policy.evidence_store` | [persistence-contract.md](references/persistence-contract.md) |
 
-Use a documented narrow task for an explicit valuation, announcement, material class, capital event, or signal. A workflow never accepts caller-defined steps, a DAG, or a nested workflow. `single_security_research` adds no five-level order-book or tick endpoint. For `market_overview_research`, completion additionally requires empty subjects, a valid `standard` or `fast` mode, and all five unsupported v0.3.0 capabilities preserved without proxying them.
+Use a documented narrow task for an explicit valuation, announcement, material class, capital event, or signal. A workflow never accepts caller-defined steps, a DAG, or a nested workflow. `single_security_research` adds no five-level order-book or tick endpoint. For `market_overview_research`, completion additionally requires empty subjects, a valid `standard` or `fast` mode, an exact 15-entry inventory, all requested applicable capabilities addressed, and unsupported `market_wide_intraday` preserved without proxying it. Existing single-security intraday tasks remain separate. The v0.4.0 artifact version is in `VERSION`; live attestation remains pending until release evidence closes.
 
 ## Guardrails
 

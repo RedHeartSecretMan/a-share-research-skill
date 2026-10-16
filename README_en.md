@@ -15,13 +15,13 @@
 
 `a-share-research-skill` is the repository name; the installed Skill is `$a-share-research`. It routes natural-language questions to a deterministic Python CLI and returns versioned JSON containing security identity, research time, source observations, calculation lineage, conflicts, coverage, and limitations. The Agent then presents that evidence as auditable research.
 
-The current stable release is **v0.3.0**. It provides 12 narrow ResearchTask types, six fixed research plans, and one public `run --request` entry point. The existing GitHub Release and tag remain fixed to the v0.3.0 release tree.
+This branch delivers the **v0.4.0 candidate**, with 12 narrow ResearchTask types, six fixed research plans, and one public `run --request` entry point. The copied artifact identifies its version in [`VERSION`](skill/a-share-research/VERSION). Market overview now uses `market_overview_research@2.0`. Candidate release remains pending #98 same-candidate anonymous live attestation; offline tests do not establish provider usability. The current stable release, GitHub Release, and tag remain v0.3.0.
 
 ## Quick start
 
 ### 1. Get and install
 
-After cloning the repository, copy the complete `skill/a-share-research/` directory into a Skills location supported by your Agent; that copied directory is `<skill-root>`. Discovery and activation paths differ by Agent, so follow the relevant platform documentation. If the target already exists, inspect it and perform an intentional upgrade; do not overwrite unknown files.
+The command below installs released v0.3.0. To verify this branch candidate, replace clone’s `--branch v0.3.0` with `--branch codex/v0.4.0-dag` and record the actual candidate commit; a branch name is not release evidence. After cloning the repository, copy the complete `skill/a-share-research/` directory into a Skills location supported by your Agent; that copied directory is `<skill-root>`. Discovery and activation paths differ by Agent, so follow the relevant platform documentation. If the target already exists, inspect it and perform an intentional upgrade; do not overwrite unknown files.
 
 ```text
 git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
@@ -34,7 +34,7 @@ You may instead copy the complete [`skill/a-share-research`](skill/a-share-resea
 
 ### 2. Run a request
 
-Repository templates are frozen to the v0.3.0 release date. Copy a template first. For “current,” “today,” or intraday tasks, replace `as_of` with the actual China Standard Time date.
+Templates on this branch use the candidate contract; existing narrow tasks retain their dated examples, while market overview uses `@2.0`. Copy a template first. For “current,” “today,” or intraday tasks, replace `as_of` with the actual China Standard Time date.
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run \
@@ -51,7 +51,7 @@ The CLI accepts structured JSON, not natural language, and does not invoke a mod
 
 ## What it does
 
-| Research question | Direct task | v0.3.0 boundary |
+| Research question | Direct task | v0.4.0 candidate boundary |
 | --- | --- | --- |
 | Security identity | `security_identity` | Names, abbreviations, and bare codes are clues; ambiguity or exchange conflict fails closed |
 | Price trend | `market_trend` | 2–250 completed sessions, unadjusted or forward-adjusted, preserving dual-source OHLCV and conflicts |
@@ -71,13 +71,13 @@ Experimental sources may contribute observations and expose conflicts, but canno
 | Plan ID | Use | Key boundary |
 | --- | --- | --- |
 | `single_security_research` | Comprehensive single-security research | `standard` runs core and enrichments; `fast` guarantees identity and trend only; deepening is limited to `long_history` and `large_materials` |
-| `market_overview_research` | Subject-free market overview | 2 actual core capabilities, 8 standard enhancements, and 5 explicitly unsupported capabilities; no security or single-index proxy for gaps |
+| `market_overview_research` | Subject-free market overview | 15 fixed capabilities: 5 core and 9 standard executable by applicability, with `market_wide_intraday` unsupported; preserves three-exchange partitions and four fixed indices |
 | `single_security_valuation` | One-security valuation | Reuses `security_valuation` |
 | `valuation_comparison` | Same-basis multi-security comparison | Reuses `valuation_compare` and retains blocked members |
 | `theme_report_research` | Theme-report retrieval | Reuses `research_content` |
 | `new_security_research` | Systematic new-security review | Identity is the sole gate; other local failures do not stop independent siblings |
 
-`single_security_research` defaults `completeness_mode` to `standard`; `deep_extensions` accepts only `long_history` and `large_materials`. `market_overview_research` preserves five v0.3.0 gaps—`market_trading_session`, `major_broad_indices`, `whole_market_turnover`, `whole_market_margin`, and `market_wide_intraday`—without fabricating observations, claims, or calculations.
+`single_security_research` defaults `completeness_mode` to `standard`; `deep_extensions` accepts only `long_history` and `large_materials`. `market_overview_research@2.0` runs core only in `fast` and core plus standard in `standard`. It adds trading sessions, four indices, and completed-day three-exchange turnover and margin. Missing or inapplicable partitions retain their own evidence and cannot form complete whole-market totals. An explicit deep request for `market_wide_intraday` still returns `free_anonymous_intraday_unproved`, with no source obligation or coverage.
 
 ## Reading a result
 
@@ -101,19 +101,20 @@ The CLI owns evidence, deterministic calculation, and status. When a result is n
 
 > Use `$a-share-research` to run `single_security_research@1.0` in `standard` mode for Industrial Fulian. If one material source fails, continue every step that does not depend on it.
 
-> Use `$a-share-research` to run `market_overview_research@1.0` for today, preserving local states for industry boards, limit pools, themes, flows, and flashes while listing every unsupported v0.3.0 market capability.
+> Use `$a-share-research` to run `market_overview_research@2.0`, preserving local states for three-exchange sessions, four indices, completed-day turnover and margin, and existing signals while disclosing unsupported whole-market intraday.
 
 See [`examples/README.md`](examples/README.md) for a dated real run, Chinese request templates, and boundary guides. `real-runs/` preserves actual public CLI output; `requests/` contains editable inputs rather than live quotes or current conclusions.
 
 ## Boundaries
 
-- Network identity and price paths cover SSE/SZSE only; BSE never falls back to another market.
+- Single-security network identity and price tasks still cover SSE/SZSE only. Market foundations use separate SSE/SZSE/BSE partitions; missing BSE never falls back to another market.
 - Valuation must prove security-class scope. Unknown A/H, A/B, or other multi-class scope blocks issuer-wide valuation.
 - A current intraday snapshot is not a trading-grade feed, minute stream, five-level book, or tick source. `intraday_replay` covers completed sessions only.
 - ETF options lack an authoritative complete contract total, full contract-unit definition, adjustment terms, and a qualified independent fallback; coverage and limitations remain visible.
 - External attribution in reports, news, F10, flows, themes, and heat retains its attributed-opinion or market-signal role and does not automatically become issuer fact.
 - Open-ended screening, continuous feeds, automated trading, position/leverage advice, project ratings, and price targets are unsupported.
-- `market_overview_research` does not support trading-session data, major broad indices, whole-market turnover, whole-market margin, or market-wide intraday microstructure; those require a future specification.
+- Whole-market `market_wide_intraday` remains unsupported. Existing single-security `intraday_market_signal` and `intraday_replay` keep their versions and boundaries.
+- Whole-market screening, ranking, candidate research, and their public result-artifact workflow are withdrawn from this version. `market_screen_research` is rejected before any source call or artifact write. Internal Universe, provider-lane, and Result Artifact modules do not constitute a public screening product.
 
 ## Docs and examples
 
@@ -122,7 +123,8 @@ See [`examples/README.md`](examples/README.md) for a dated real run, Chinese req
 - [`skill/a-share-research/SKILL.md`](skill/a-share-research/SKILL.md): concise routing used by the installed Agent.
 - [`skill/a-share-research/references/`](skill/a-share-research/references/): exact contracts split by task domain.
 - [`CONTEXT.md`](CONTEXT.md): domain language and product boundaries.
-- [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md): authoritative v0.3.0 implementation and acceptance scope.
+- [`Spec 0008 Amendment C`](docs/specs/0008-amendment-c-free-anonymous-scope.md): v0.4.0 candidate anonymous scope and final acceptance.
+- [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md): historical v0.3.0 implementation and acceptance scope.
 
 ## Version and release evidence
 
@@ -140,7 +142,7 @@ Default tests are fully offline. Live probes are explicit maintainer diagnostics
 
 ```text
 <python> -m unittest discover -s tests -p "test_*.py"
-ruff check .
+ruff check --isolated --no-cache --select E4,E7,E9,F .
 ruff format --check .
 mypy --strict skill/a-share-research/scripts
 <python> /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research

@@ -15,13 +15,13 @@
 
 `a-share-research-skill` 是项目仓库名，可安装的 Skill 名为 `$a-share-research`。它把自然语言问题路由到确定性 Python CLI，以版本化 JSON 返回证券身份、研究时点、来源观测、计算谱系、冲突、覆盖和限制，再由 Agent 形成可核验的中文研究材料。
 
-当前稳定版本是 **v0.3.0**。它提供 12 类窄 ResearchTask、6 个固定研究方案和唯一公共入口 `run --request`；现有 GitHub Release 与标签均固定在 v0.3.0 发布树上。
+本分支交付 **v0.4.0 候选**，提供 12 类窄 ResearchTask、6 个固定研究方案和唯一公共入口 `run --request`；安装副本的版本见 [`VERSION`](skill/a-share-research/VERSION)。市场总览升级为 `market_overview_research@2.0`。候选仍待 #98 的同候选匿名 live attestation，离线测试不证明来源可用。当前稳定发布、GitHub Release 与标签仍为 v0.3.0。
 
 ## 快速开始
 
 ### 1. 获取并安装
 
-克隆仓库后，把完整的 `skill/a-share-research/` 目录复制到所用 Agent 支持的 Skills 目录；复制后的目录就是 `<skill-root>`。不同 Agent 的发现路径和启用方式可能不同，应以对应平台文档为准。如果目标目录已存在，请先检查内容并有意识地升级，不要直接覆盖未知文件。
+以下命令安装已发布的 v0.3.0。验证本分支候选时，将 clone 的 `--branch v0.3.0` 替换为 `--branch codex/v0.4.0-dag`，并记录实际候选提交；分支名称不构成发布证明。克隆仓库后，把完整的 `skill/a-share-research/` 目录复制到所用 Agent 支持的 Skills 目录；复制后的目录就是 `<skill-root>`。不同 Agent 的发现路径和启用方式可能不同，应以对应平台文档为准。如果目标目录已存在，请先检查内容并有意识地升级，不要直接覆盖未知文件。
 
 ```text
 git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
@@ -34,7 +34,7 @@ git clone --depth 1 --branch v0.3.0 --single-branch https://github.com/RedHeartS
 
 ### 2. 运行一个请求
 
-仓库中的请求模板已固定到 v0.3.0 发布日期。先复制模板；凡是“当前”“今天”或盘中任务，都要把 `as_of` 改成实际的北京时间日期。
+本分支模板使用当前候选契约，旧窄任务保留原始示例日期；市场总览模板使用 `@2.0`。先复制模板；凡是“当前”“今天”或盘中任务，都要把 `as_of` 改成实际的北京时间日期。
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run \
@@ -51,7 +51,7 @@ CLI 不接受自然语言，也不调用模型。`stdout` 只输出一个版本�
 
 ## 它能做什么
 
-| 研究问题 | 直接任务 | v0.3.0 边界 |
+| 研究问题 | 直接任务 | v0.4.0 候选边界 |
 | --- | --- | --- |
 | 证券身份 | `security_identity` | 名称、简称和裸代码只是线索；歧义或交易所冲突失败关闭 |
 | 行情走势 | `market_trend` | 2–250 个完整交易日，未复权或前复权，保留双源 OHLCV 与冲突 |
@@ -71,13 +71,13 @@ CLI 不接受自然语言，也不调用模型。`stdout` 只输出一个版本�
 | 方案 ID | 用途 | 关键边界 |
 | --- | --- | --- |
 | `single_security_research` | 综合单标的研究 | `standard` 执行核心与增强；`fast` 只保证身份和走势；仅支持 `long_history`、`large_materials` 深化 |
-| `market_overview_research` | 无标的综合市场研究 | 2 项实际核心、8 项标准增强和 5 项显式不支持能力；不以单证券或单指数代理缺口 |
+| `market_overview_research` | 无标的综合市场研究 | 15 项固定能力：5 项 core、9 项 standard 可按适用性执行，`market_wide_intraday` 为 unsupported；保留三所分区与四个固定指数 |
 | `single_security_valuation` | 单票估值 | 复用 `security_valuation` |
 | `valuation_comparison` | 多票同口径比较 | 复用 `valuation_compare`，不丢弃受阻标的 |
 | `theme_report_research` | 主题研报检索 | 复用 `research_content` |
 | `new_security_research` | 新标的系统研究 | 身份是唯一门禁，其他局部失败不停止独立同级步骤 |
 
-`single_security_research` 的 `completeness_mode` 默认为 `standard`；`deep_extensions` 只接受 `long_history` 和 `large_materials`。`market_overview_research` 固定保留 `market_trading_session`、`major_broad_indices`、`whole_market_turnover`、`whole_market_margin` 和 `market_wide_intraday` 五项 v0.3.0 缺口，不伪造 observation、claim 或 calculation。
+`single_security_research` 的 `completeness_mode` 默认为 `standard`；`deep_extensions` 只接受 `long_history` 和 `large_materials`。`market_overview_research@2.0` 的 `fast` 仅执行 core，`standard` 执行 core 与 standard。新增交易会话、四指数、完成日三所成交额与两融；缺失或不适用分区保留各自证据，不形成完整全市场合计。显式 deep 请求 `market_wide_intraday` 仍返回 `free_anonymous_intraday_unproved`，不产生来源义务或 coverage。
 
 ## 如何读取结果
 
@@ -101,19 +101,20 @@ CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻�
 
 > 使用 `$a-share-research`，以 `single_security_research@1.0` 的 `standard` 模式完成工业富联综合研究；一个材料来源失败时继续不依赖它的步骤。
 
-> 使用 `$a-share-research`，以 `market_overview_research@1.0` 研究今天的市场，保留行业板块、涨跌停池、题材、资金和快讯的局部状态，并明确列出 v0.3.0 不支持的市场能力。
+> 使用 `$a-share-research`，以 `market_overview_research@2.0` 研究市场，保留三所会话、四指数、完成日成交额与两融、既有市场信号的局部状态，并明确全市场盘中尚不支持。
 
 真实运行案例、中文请求模板与边界说明见 [`examples/README.md`](examples/README.md)。其中 `real-runs/` 保存带日期的实际公共 CLI 结果；`requests/` 是可编辑请求，不是实时行情或当前研究结论。
 
 ## 能力边界
 
-- 身份与行情网络路径只覆盖 SSE/SZSE；BSE 不会回退到其他市场。
+- 单标的身份与行情任务的网络路径仍只覆盖 SSE/SZSE；市场基础使用 SSE/SZSE/BSE 各自分区，BSE 缺失不会回退到其他市场。
 - 估值必须证明证券类别范围；A/H、A/B 或其他多类别范围不明时阻断发行主体级估值。
 - 当前盘中快照不是交易级行情、分钟流、五档盘口或逐笔数据；`intraday_replay` 只复盘已完成交易日。
 - ETF 期权没有权威完整合约总数、完整合约单位定义、调整条款或合格独立 fallback，必须保留 coverage 和限制。
 - 研报、新闻、F10、资金流、题材和热度中的外部归因保持署名观点或市场信号角色，不自动升级为公司事实。
 - 当前不支持开放式选股、持续行情、自动交易、仓位/杠杆建议、项目评级或目标价。
-- `market_overview_research` 不支持交易会话、主要宽基指数、全市场成交额、全市场两融和全市场盘中微观结构；这些属于未来规格。
+- 全市场盘中 `market_wide_intraday` 不支持；既有单证券 `intraday_market_signal` 和 `intraday_replay` 保持原版本与边界。
+- 本版退出全市场筛选、排名、候选深研及其公共结果包工作流；`market_screen_research` 在任何来源调用或 artifact 写入前拒绝。内部 Universe、provider lane 与 Result Artifact 模块不构成公共筛选产品。
 
 ## 文档与案例
 
@@ -122,7 +123,8 @@ CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻�
 - [`skill/a-share-research/SKILL.md`](skill/a-share-research/SKILL.md)：安装后 Agent 使用的简洁路由。
 - [`skill/a-share-research/references/`](skill/a-share-research/references/)：按任务域拆分的精确契约。
 - [`CONTEXT.md`](CONTEXT.md)：领域术语与产品边界。
-- [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md)：v0.3.0 实施与验收权威。
+- [`Spec 0008 Amendment C`](docs/specs/0008-amendment-c-free-anonymous-scope.md)：v0.4.0 候选的免费匿名范围与最终验收。
+- [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md)：v0.3.0 历史实施与验收权威。
 
 ## 版本与发布证据
 
@@ -140,7 +142,7 @@ v0.3.0 已于 2026-08-18 发布。发布审计记录代码提交、annotated tag
 
 ```text
 <python> -m unittest discover -s tests -p "test_*.py"
-ruff check .
+ruff check --isolated --no-cache --select E4,E7,E9,F .
 ruff format --check .
 mypy --strict skill/a-share-research/scripts
 <python> /path/to/skill-creator/scripts/quick_validate.py skill/a-share-research

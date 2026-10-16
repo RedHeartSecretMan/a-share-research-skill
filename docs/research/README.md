@@ -12,7 +12,7 @@
 | [`v0.3.0-operation-release-matrix.json`](v0.3.0-operation-release-matrix.json) | 由资格清单和联网证据派生的发布矩阵 | 只由生成器写入 |
 | [`v0.3.0-operation-release-matrix.md`](v0.3.0-operation-release-matrix.md) | 证据口径、解释边界和维护者复验命令 | 人工维护 |
 
-## v0.4.0 DAG 开发资料
+## v0.4.0 候选资料（待 #98 live attestation）
 
 | 文件 | 用途 | 修改方式 |
 | --- | --- | --- |
@@ -64,4 +64,4 @@ v0.0.1、v0.1.0、v0.1.1 和 v0.2.0 均已有对应标签与 GitHub Release。�
 | v0.1.1 | [发布审计](history/v0.1.1-release-audit-2026-08-03.md) |
 | v0.2.0 | [发布审计](history/v0.2.0-release-audit-2026-08-03.md) |
 
-历史文件中的测试数量、提交 SHA、来源状态和研究日期均属于其记录时点。阅读当前能力时，以根目录 README、安装产物中的 `SKILL.md` / `references/`、Spec 0007 Amendment A 和本目录的 v0.3.0 资料为准。
+历史文件中的测试数量、提交 SHA、来源状态和研究日期均属于其记录时点。阅读当前能力时，以根目录 README、安装产物中的 `SKILL.md` / `references/`、Spec 0008 Amendment C 与当前静态资格为准；v0.3.0 发布事实仍以 Spec 0007 Amendment A 和本目录的 v0.3.0 资料为准。

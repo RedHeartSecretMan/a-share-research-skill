@@ -17,14 +17,14 @@ _Avoid_: 自动交易用户、代客投资对象
 _Avoid_: 个股诊断、荐股、股票预测
 
 **综合市场研究**:
-通过无证券主体的版本化 `market_overview_research@1.0` 组合现有 market/board scope 正式来源操作，对行业板块广度、涨跌停池和标准市场增强形成可信研究结果，并在同一固定能力清单中诚实披露 v0.3.0 不支持的市场基础能力；它不以单只证券、ETF、单一指数或板块数据代理整体市场。
+通过无证券主体的版本化 `market_overview_research@2.0` 组合 market/board scope 正式来源操作，对三所交易会话、四个固定宽基指数、完成日全市场成交额与两融、行业板块广度及既有市场增强形成可信研究结果；固定十五项清单中十四项按层级和适用性执行，全市场盘中明确不支持。缺失所保留局部证据，不以单只证券、ETF、单一指数或板块数据代理整体市场。
 _Avoid_: 单一指数摘要、单一榜单摘要、证券代理市场、开放式选股、全市场证券排名
 
 **行业板块广度**:
 同一来源口径下逐个行业板块的涨跌、上涨数和下跌数观测；它保留板块粒度，不能称为全 A 股去重上涨、下跌或平盘证券家数。
 _Avoid_: 全市场涨跌家数、全 A 股广度、板块证券去重汇总
 
-以下四个术语用于 v0.4.0 已批准设计，不表示相关能力已发布。
+以下四个术语保留内部模块与历史设计的精确语义。Amendment C 已退出本版公共筛选、排名、候选深研与全市场盘中；模块存在不表示这些工作流已发布。
 
 **预期证券池**:
 由指定有效日期的 SSE、SZSE、BSE 适用名录及身份依据共同证明的 A 股研究分母；缺少后续数据的证券仍属于该分母，清单不完整时不能宣称已覆盖全 A 股。筛选的完成交易日证券池与盘中当前会话证券池分别按各自日期确定。
@@ -43,7 +43,7 @@ _Avoid_: 恢复时重新计时、获取时间冒充公开时间、日期相同�
 _Avoid_: 行业板块家数之和、成功取数证券数代理全市场、上一筛选日分母
 
 **不支持市场能力**:
-`market_overview_research@1.0` 固定能力清单中因 v0.3.0 的 A-08a 44-owner 分母没有合格 market-wide owner 而明确标为 `unsupported` 的能力；当前固定为 `market_trading_session`、`major_broad_indices`、`whole_market_turnover`、`whole_market_margin` 和 `market_wide_intraday`，各自保留稳定 ID、reason code 与 v0.4.0 gap route，但不产生来源执行义务、coverage、观测、主张或计算。
+`market_overview_research@2.0` 固定能力清单中明确标为 `unsupported` 的 `market_wide_intraday`；它保留稳定 ID、`free_anonymous_intraday_unproved` reason code 与 `future_scope` gap route，但不产生来源执行义务、coverage、观测、主张或计算。它不改变既有单证券盘中快照与分时复盘的支持范围。
 _Avoid_: 来源失败、未请求、虚构来源执行、证券或板块代理、候选端点
 
 **事实主张**:
@@ -143,7 +143,7 @@ _Avoid_: 开发 Ticket 单测、mock 探测、跨候选证据拼接、普通运�
 _Avoid_: 最终 release matrix、历史成功记录、provider raw response、失败诊断
 
 **同候选证据并集**:
-在一个有界新鲜度窗口内，对同一候选提交的多个发布探测 attempts 做 typed closure；只有 `succeeded` 或 `failed` 的 application 能贡献 attempted 证据，任何 `not_requested` 或 skipped 状态均不计入，且精确闭合当前 44-owner 分母后才能生成最终发布证据和矩阵。
+在一个有界新鲜度窗口内，对同一候选提交的多个发布探测 attempts 做 typed closure；只有 `succeeded` 或 `failed` 的 application 能贡献 attempted 证据，任何 `not_requested` 或 skipped 状态均不计入，且精确闭合当前实际发布计划的正式 operation 分母后才能生成最终发布证据和矩阵；v0.4.0 候选静态资格为 52 个 public producers，v0.3.0 的 44-owner 历史证明保持原样。
 _Avoid_: 跨提交拼接、无界历史缓存、部分成功、一次调用必须同时触达全部来源
 
 **交叉核验**:

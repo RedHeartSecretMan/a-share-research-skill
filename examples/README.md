@@ -1,8 +1,8 @@
-# v0.3.0 中文案例与请求模板
+# v0.4.0 候选中文案例与请求模板
 
-本目录提供 1 份真实运行案例、43 份版本化请求和 6 篇呈现或边界说明，覆盖全部 12 类 ResearchTask。案例标题、问题和解释均使用中文；JSON 中的 `task_type`、字段名和枚举值属于 v0.3.0 公共协议，必须保留原始英文标识，不能翻译后提交给 CLI。
+本目录提供 1 份真实运行案例、43 份版本化请求和 7 篇呈现或边界说明，覆盖全部 12 类 ResearchTask。案例标题、问题和解释均使用中文；JSON 中的 `task_type`、字段名和枚举值属于版本化公共协议，必须保留原始英文标识，不能翻译后提交给 CLI。
 
-`requests/` 中的文件是**请求模板**，不是保存的 live 结果。固定日期用于复现 v0.3.0 请求口径，不代表“当前行情”。`real-runs/` 保存明确日期、请求、完整结果和人类解释；它是实际公共 CLI 输出的不可变快照，同样不代表阅读时的当前市场。其余 Markdown 是组合指南、契约说明或明确标注的离线夹具案例。
+`requests/` 中的文件是**请求模板**，不是保存的 live 结果。旧窄任务固定日期保留 v0.3.0 请求口径，总览模板使用 v0.4.0 的 `@2.0`，不代表“当前行情”。`real-runs/` 保存明确日期、请求、完整结果和人类解释；它是实际公共 CLI 输出的不可变快照，同样不代表阅读时的当前市场。其余 Markdown 是组合指南、契约说明或明确标注的离线夹具案例。
 
 ## 真实运行案例
 
@@ -35,6 +35,7 @@
 
 | 文档 | 适用范围 | 文档性质 |
 | --- | --- | --- |
+| [市场总览 v2](market-overview-v2.md) | SSE/SZSE/BSE 市场基础 | 候选阅读指南，离线夹具数字不构成 live 证明 |
 | [蓝色光标多证据交叉](bluefocus.md) | `SZSE:300058` | 组合与呈现指南，不保存运行结果 |
 | [工业富联综合研究](industrial-fulian.md) | `SSE:601138` | 固定方案阅读指南，不保存运行结果 |
 | [盘中行情快照](intraday-snapshot.md) | `SSE:600519` | 请求和会话边界，不保存行情数字 |
@@ -53,7 +54,7 @@
 | 工业富联新标的八步研究 | [`workflow-industrial-fulian-new-security.json`](requests/workflow-industrial-fulian-new-security.json) |
 | 综合市场研究 | [`workflow-market-overview-research.json`](requests/workflow-market-overview-research.json) |
 
-综合单标的方案的 `standard` 模式尝试身份、20 个完整交易日走势和全部标准增强；`fast` 只执行身份与走势。综合市场方案固定声明 15 项能力，其中 5 项在 v0.3.0 明确为不支持，不会伪造来源。调用者不能提交自定义步骤或依赖图。
+综合单标的方案的 `standard` 模式尝试身份、20 个完整交易日走势和全部标准增强；`fast` 只执行身份与走势。综合市场方案 `market_overview_research@2.0` 固定声明 15 项能力，其中 14 项按层级和适用性执行，`market_wide_intraday` 明确为 unsupported。`fast` 只执行 5 项 core，`standard` 加入 9 项 standard；显式 deep 盘中请求仍为 unsupported。候选待 #98 最终匿名 live attestation。调用者不能提交自定义步骤或依赖图。
 
 ## 身份、行情与估值窄任务（5）
 

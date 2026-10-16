@@ -1,12 +1,12 @@
 # Result Artifact 内部生命周期
 
-本文说明 v0.4.0 的内部持久化 Interface，供排名和候选 workflow 消费；它不表示筛选 workflow 已发布。唯一外部入口仍是 `entrypoint.py run --request`，`--output` 继续只保存与 stdout 相同的统一结果。实现见 [result_artifact.py](../scripts/a_share_research/result_artifact.py)。
+本文说明 v0.4.0 的内部持久化 Interface，保留模块级恢复与防篡改契约；Amendment C 已退出本版公共筛选、排名、候选深研及其结果包工作流，本文不提供可运行的公共筛选入口。唯一外部入口仍是 `entrypoint.py run --request`，`--output` 继续只保存与 stdout 相同的统一结果。实现见 [result_artifact.py](../scripts/a_share_research/result_artifact.py)。
 
 ## 调用与冻结研究上下文
 
 `ResultArtifact.create(path, identity, initial_context=prepared)` 独占创建。`identity` 绑定请求语义、producer、plan、operation manifest 的精确字节。调用者须已从请求语义中移除整个 artifact 传输配置；绝对路径及 `create`/`resume` 不进入公共元数据。
 
-冻结研究上下文 C 必须在 create 的初始提交点前持久化。#117 负责 C 的日期、时刻和日历证据语义，#69 把已验证的单条 context 记录交给 #115 的正式工厂。例如，使用实际首分区的合法坐标作 canonical 内容载体：
+冻结研究上下文 C 必须在 create 的初始提交点前持久化。#117 负责 C 的日期、时刻和日历证据语义，内部消费者把已验证的单条 context 记录交给 #115 的正式工厂；原 #69 公共消费者已退出本次版本。例如，使用实际首分区的合法坐标作 canonical 内容载体：
 
 ```python
 prepared_context = prepare_completed_partition(
