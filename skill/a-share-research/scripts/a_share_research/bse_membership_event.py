@@ -257,7 +257,11 @@ def _decode_material(
     finally:
         if process is not None:
             if process.poll() is None:
-                process.kill()
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            # Keep the owning lane until native exit, even after failed kill.
             process.wait()
             if process.stdin is not None:
                 process.stdin.close()

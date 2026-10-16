@@ -263,6 +263,41 @@ class BseMembershipEventTests(unittest.TestCase):
             if sys.argv[3]=='early_cutoff':frozen=datetime.fromisoformat('2026-10-16T06:40:00+08:00')
             day={'before_day':'2025-10-08','after_day':'2025-10-10','today':'2026-10-16'}.get(sys.argv[3],'2025-10-09')
             budget=3 if sys.argv[3]=='budget' else 4
+            if sys.argv[3]=='native_timeout':
+                import subprocess,threading
+                from a_share_research.universe_sources import create_default_universe_adapters
+                original_popen=subprocess.Popen
+                children=[];wait_finished=threading.Event()
+                class TerminationFailure:
+                    waits=0
+                    def __init__(self,args,**kwargs):
+                        driver="import runpy,sys,time;time.sleep(0.5);sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')"
+                        self.process=original_popen([args[0],'-I','-c',driver,*args[2:]],**kwargs)
+                        children.append(self.process)
+                    def __getattr__(self,name):return getattr(self.process,name)
+                    def communicate(self,*args,**kwargs):return self.process.communicate(*args,**kwargs)
+                    def poll(self):return self.process.poll()
+                    def kill(self):raise OSError('/private/native-kill-secret')
+                    def wait(self):
+                        TerminationFailure.waits+=1
+                        try:return self.process.wait()
+                        finally:wait_finished.set()
+                subprocess.Popen=TerminationFailure
+                owners=create_default_universe_adapters(research_now=frozen,lanes=lanes,policies=CurrentSourcePolicies(*(ProviderLanePolicy(4,0.15,call_timeout_seconds=0.02) for _ in range(3))),transports=CurrentSourceTransports(Disabled(),Disabled(),Disabled()),bse_membership_event=target,bse_material_transport=docs,bse_mapping_transport=mapping)
+                request=UniverseRequest(day,frozen.isoformat())
+                owner=owners.exchange_list_adapters[2]
+                try:
+                    owner.acquire(request,0.15);first=owner.last_acquisition
+                    owner.acquire(request,0.15);second=owner.last_acquisition
+                    reaped=wait_finished.wait(3)
+                    value={'first':first.to_public_dict(),'second':second.to_public_dict(),'first_quiescence':first.lane_results[-1].quiescence.state,'second_lane_failure':second.lane_results[-1].failure_code,'native_waits':TerminationFailure.waits,'native_children':len(children),'all_reaped':reaped and all(p.poll() is not None for p in children),'fixture_calls':{'documents':docs.calls,'mapping':mapping.calls}}
+                finally:
+                    for process in children:
+                        if process.poll() is None:
+                            try:process.kill()
+                            except OSError:pass
+                        process.wait(timeout=3)
+                print(json.dumps(value,ensure_ascii=False));sys.exit(0)
             if sys.argv[3] in ('identity','identity_mismatch','identity_empty','identity_missing'):
                 from a_share_research.universe_sources import create_default_universe_adapters
                 from a_share_research.universe_input import prepare_exchange_list_outcome,prepare_identity_outcome
@@ -507,6 +542,25 @@ class BseMembershipEventTests(unittest.TestCase):
         self.assertEqual(len(source["attempts"]), 4)
         self.assertEqual(value["fixture_calls"], {"documents": 6, "mapping": 1})
         self.assertIn("actual_attempt_budget_exhausted", source["limitation_codes"])
+
+    def test_failed_native_pdf_termination_retains_lane_until_real_decoder_is_reaped(
+        self,
+    ) -> None:
+        value = self.run_event_case("native_timeout")
+        self.assertEqual(value["first_quiescence"], "poisoned")
+        self.assertEqual(value["second_lane_failure"], "provider_lane_poisoned")
+        self.assertEqual(value["native_waits"], 1)
+        self.assertEqual(value["native_children"], 1)
+        self.assertTrue(value["all_reaped"])
+        self.assertEqual(value["fixture_calls"], {"documents": 4, "mapping": 2})
+        self.assertEqual(value["first"]["records"], [])
+        self.assertEqual(value["second"]["records"], [])
+        self.assertIn(
+            "material_source_unavailable", value["second"]["limitation_codes"]
+        )
+        self.assertEqual(len(value["first"]["attempts"]), 2)
+        self.assertEqual(len(value["second"]["attempts"]), 1)
+        self.assertNotIn("native-kill-secret", json.dumps(value))
 
 
 if __name__ == "__main__":
