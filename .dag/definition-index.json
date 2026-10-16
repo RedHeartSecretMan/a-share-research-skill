@@ -2,7 +2,7 @@
   "inputs": [
     {
       "path": ".dag/definition-github-spec-0008.json",
-      "blob_oid": "7edd547972b2f36b0ee1c01182b00ab412186d21"
+      "blob_oid": "b69019cd4b3a769122196c80b5ecc0d7d90d2f70"
     },
     {
       "path": "docs/specs/0008-amendment-b-artifact-protocol.md",
@@ -26,7 +26,11 @@
     },
     {
       "path": "docs/specs/0008-amendment-d-qualified-public-scope.md",
-      "blob_oid": "6051cc8f86bb99a3986fc3fe34b18286b4353853"
+      "blob_oid": "ee3f6b8e99cd76ef60687d18a13573475c9290c9"
+    },
+    {
+      "path": "docs/specs/0008-amendment-e-no-intraday-live-gate.md",
+      "blob_oid": "69a306c601450aabbac2da3acb30370c23500608"
     },
     {
       "path": "docs/specs/0008-v0.4.0-market-foundation-and-screening.md",

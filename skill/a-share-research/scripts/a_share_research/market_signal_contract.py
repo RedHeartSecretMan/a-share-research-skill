@@ -104,15 +104,18 @@ class MarketSignalCoverageAuthority:
             else None
         )
         truncated = bool(
-            (
-                isinstance(provider_total, int)
-                and self.page_semantics in {"single_page", "complete_pagination"}
-                and provider_total > observation_count
-            )
-            or (
-                isinstance(collected_count, int)
-                and not isinstance(collected_count, bool)
-                and collected_count > observation_count
+            observation_count == request_limit
+            and (
+                (
+                    isinstance(provider_total, int)
+                    and self.page_semantics in {"single_page", "complete_pagination"}
+                    and provider_total > observation_count
+                )
+                or (
+                    isinstance(collected_count, int)
+                    and not isinstance(collected_count, bool)
+                    and collected_count > observation_count
+                )
             )
         )
         material: dict[str, object] = {
@@ -206,6 +209,8 @@ class MarketSignalCoverageAuthority:
             or any(not isinstance(item, str) or not item for item in errors)
             or isinstance(observation_count, bool)
             or observation_count < 0
+            or isinstance(retained_count, bool)
+            or not isinstance(retained_count, int)
             or retained_count != observation_count
             or not isinstance(truncated, bool)
             or (
@@ -345,6 +350,12 @@ class MarketSignalCoverageAuthority:
                 raise ValueError("market signal pool coverage retention is invalid")
             if (provider_total > observation_count) != (state == "partial"):
                 raise ValueError("market signal pool coverage retention is invalid")
+        # A count gap can be schema loss or source partiality. Only a filled
+        # request limit proves that the retained prefix was request-truncated.
+        if expected_truncated and observation_count != request_limit:
+            if not errors and state != "partial":
+                raise ValueError("market signal pool coverage retention is invalid")
+            expected_truncated = False
         if truncated != expected_truncated or (
             truncated and (request_limit is None or observation_count != request_limit)
         ):
