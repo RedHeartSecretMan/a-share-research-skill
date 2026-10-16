@@ -1,5 +1,7 @@
 # Spec 0008 Amendment B：补齐生产链路与恢复契约
 
+> 当前 v0.4.0 范围以 [Amendment C](0008-amendment-c-free-anonymous-scope.md) 为准：移出无法由免费匿名来源支持的筛选与全市场盘中功能。下文保留历史批准语境。
+
 ## 状态与适用范围
 
 **B1–B3 推荐方案已批准并应用到 GitHub Tracker；完整任务定义与原生依赖由回读快照和定义索引绑定。**

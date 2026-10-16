@@ -1,28 +1,32 @@
 {
   "inputs": [
     {
-      "blob_oid": "9aac3756287d8453a00f49f35faa7b9abeef6f29",
-      "path": ".dag/definition-github-spec-0008.json"
+      "path": ".dag/definition-github-spec-0008.json",
+      "blob_oid": "45df75ebd3856dc363b986f65a07e97d682e19a8"
     },
     {
-      "blob_oid": "b7f458cb37a556849a268ff388c2a3a3b7471f73",
-      "path": "docs/specs/0008-amendment-b-artifact-protocol.md"
+      "path": "docs/specs/0008-amendment-b-artifact-protocol.md",
+      "blob_oid": "b7f458cb37a556849a268ff388c2a3a3b7471f73"
     },
     {
-      "blob_oid": "f380c8cded1c125d73371ac7137f381fdb326e1b",
-      "path": "docs/specs/0008-amendment-b-delivery-plan.md"
+      "path": "docs/specs/0008-amendment-b-delivery-plan.md",
+      "blob_oid": "cb7fbc9764c4e92186471bfac91e7e3de404fa6e"
     },
     {
-      "blob_oid": "7d4ddf94a064db5a5b5a9be9d1e8e443deb0759a",
-      "path": "docs/specs/0008-amendment-b-source-time.md"
+      "path": "docs/specs/0008-amendment-b-source-time.md",
+      "blob_oid": "7d4ddf94a064db5a5b5a9be9d1e8e443deb0759a"
     },
     {
-      "blob_oid": "b26092ba5bd9ed656163fb93266f8a03ea2eacb7",
-      "path": "docs/specs/0008-amendment-b-tickets.md"
+      "path": "docs/specs/0008-amendment-b-tickets.md",
+      "blob_oid": "b26092ba5bd9ed656163fb93266f8a03ea2eacb7"
     },
     {
-      "blob_oid": "c40c8a83b9399d9384c314ff0153641e92607139",
-      "path": "docs/specs/0008-v0.4.0-market-foundation-and-screening.md"
+      "path": "docs/specs/0008-amendment-c-free-anonymous-scope.md",
+      "blob_oid": "1f4967a67f3ac80f968258093d2bb87d9922663f"
+    },
+    {
+      "path": "docs/specs/0008-v0.4.0-market-foundation-and-screening.md",
+      "blob_oid": "7815a890449a0ff741626019bcf9fee3ea9a25f3"
     }
   ],
   "schema_version": 1
