@@ -42,6 +42,14 @@ from a_share_research.source_throttle import SerialRequestGate  # noqa: E402
 
 class FixedMootdxF10Client:
     def F10(self, *, symbol: str, name: str) -> str:  # noqa: N802
+        if SCENARIO.startswith("f10_"):
+            if SCENARIO == "f10_exception" or (
+                SCENARIO in {"f10_distinct", "f10_mixed"} and name == "公司概况"
+            ):
+                raise RuntimeError("offline synthetic F10 failure")
+            if SCENARIO in {"f10_empty", "f10_distinct"}:
+                return ""
+            return "工业富联公司概况公开聚合文本"
         if symbol != "601138" or name != "公司概况":
             raise AssertionError("unexpected fixed Mootdx F10 request")
         return "工业富联公司概况公开聚合文本"
@@ -192,6 +200,36 @@ class FormalContentTransport:
                 if parsed.path.endswith("queryKeyboardInfo")
                 else "cninfo_questions_300058.json"
             )
+            if SCENARIO.startswith("qa_") and fixture.startswith("cninfo_questions"):
+                payload = json.loads(
+                    (
+                        FIXTURES / "research_content" / "communications" / fixture
+                    ).read_text()
+                )
+                template = payload["rows"][1]
+                count = 1 if SCENARIO == "qa_one" else 2
+                payload["rows"] = [
+                    {
+                        **template,
+                        "indexId": f"OFFLINE-Q-{index}",
+                        "stockCode": "601138",
+                        "companyShortName": "工业富联",
+                        "attachedAuthor": "工业富联",
+                        "attachedPubDate": None,
+                    }
+                    for index in range(count)
+                ]
+                if SCENARIO == "qa_mixed":
+                    payload["rows"].append(
+                        {
+                            **payload["rows"][0],
+                            "indexId": "OFFLINE-Q-valid",
+                            "attachedId": None,
+                            "attachedContent": None,
+                        }
+                    )
+                payload["total"] = len(payload["rows"])
+                return _json_response(payload)
             return _file_response(
                 FIXTURES / "research_content" / "communications" / fixture,
                 replacements={

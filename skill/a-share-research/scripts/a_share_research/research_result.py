@@ -7639,11 +7639,18 @@ def fold_direct_task_research_result(
                 **({"details": error["details"]} if "details" in error else {}),
             }
             error_id = stable_result_id("source-error", error_payload)
-            source_errors.append({"id": error_id, **error_payload})
-            source_error_ids_by_owner.setdefault(owner, []).append(error_id)
+            owner_error_ids = source_error_ids_by_owner.setdefault(owner, [])
+            # Private source context can project to the same public error identity.
+            if error_id not in owner_error_ids:
+                source_errors.append({"id": error_id, **error_payload})
+            owner_error_ids.append(error_id)
         operation_coverage[owner] = outcome.to_coverage_dict(
             observation_ids=observation_ids_by_owner.get(owner, ()),
             source_error_ids=source_error_ids_by_owner.get(owner, ()),
+        )
+        # Check every original failure's ownership before publishing unique references.
+        operation_coverage[owner]["source_error_ids"] = list(
+            dict.fromkeys(source_error_ids_by_owner.get(owner, ()))
         )
 
     def resolve_keys(keys: Sequence[str]) -> list[str]:

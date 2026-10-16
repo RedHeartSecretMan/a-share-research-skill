@@ -33,6 +33,12 @@ Source roles describe use, not a global provider ranking:
 
 Preserve applicable conflicting values as separate evidence. Explain the conflict and downgrade the affected result; do not average or silently choose a convenient value.
 
+## Source errors
+
+Within one operation, equivalent public source errors appear once, in first-occurrence order, with one operation-local reference. Error identity includes the capability, operation, exact code, message and any supported public details. Private category or question context does not create a new public error identity. Distinct public payloads and producers remain distinct.
+
+Each applicable workflow leaf retains its own references. Canonical error counts do not replace execution facts or retained source diagnostic counts; a failed or partial source remains failed or partial after equivalent errors are folded.
+
 ## Status
 
 Overall research status:
