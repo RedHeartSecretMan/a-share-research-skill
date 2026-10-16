@@ -1,6 +1,6 @@
 # CLI contract
 
-Read this reference for installation, public invocation, process semantics, credentials, and the map to task-specific contracts. Artifact version: [`VERSION`](../VERSION). Publication status and runtime/source availability claims require applicable frozen release evidence, including the required same-candidate live attestation. A version label, installation health or offline test does not establish those facts. The result envelope stays `schema_version: "1.0"`; only market overview changes to workflow version `2.0`, while the other workflows remain `1.0`.
+Read this reference for installation, public invocation, process semantics, credentials, and the map to task-specific contracts. Artifact version: [`VERSION`](../VERSION). Publication status and runtime/source availability claims require applicable frozen release evidence, including any required same-candidate live attestation for applicable operations. A version label, installation health or offline test does not establish those facts. The result envelope stays `schema_version: "1.0"`; only market overview changes to workflow version `2.0`, while the other workflows remain `1.0`.
 
 ## Installation
 

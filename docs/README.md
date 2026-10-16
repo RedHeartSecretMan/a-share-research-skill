@@ -28,6 +28,8 @@
 - [`../skill/a-share-research/references/as-of-universe.md`](../skill/a-share-research/references/as-of-universe.md)：v0.4.0 内部 Universe Module 的已知与未知总量、局部记录和不可变投影契约。
 - [`agents/`](agents/)：Issue tracker、triage 和领域文档规则。
 
+当前交付的验证适用范围见 [`specs/0008-amendment-e-no-intraday-live-gate.md`](specs/0008-amendment-e-no-intraday-live-gate.md)：单证券盘中功能保留，具备安装与离线回归要求，本次未实时验证；完整公开 owner 清单仍保留两项盘中 owner。
+
 ## 版本规则
 
 - 当前候选安装版本记录在 [`../skill/a-share-research/VERSION`](../skill/a-share-research/VERSION)；不得把候选版本写成已发布或 live 成功。

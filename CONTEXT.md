@@ -135,7 +135,7 @@ _Avoid_: 正式来源操作、来源端点、独立 Adapter
 _Avoid_: 最终 release matrix、生产准入、历史探测成功、候选端点 registry
 
 **发布 attestation**:
-在全部生产变更完成后，对一个冻结 clean candidate 通过 copied-installed 公共入口形成的发布证明；只有同候选、新鲜、脱敏且实际 attempted 的 evidence union 精确闭合正式 operation 分母时才完成。
+在全部生产变更完成后，对一个冻结 clean candidate 通过 copied-installed 公共入口形成的发布证明；必须保留完整正式 operation 清单，并以同候选、新鲜、脱敏且实际 attempted 的 evidence union 精确闭合本次适用的来源验证集合；已授权的实时验证豁免另列安装与离线证据及未实时验证事实，不计为 attempted 或来源成功。
 _Avoid_: 开发 Ticket 单测、mock 探测、跨候选证据拼接、普通运行日志
 
 **发布探测 attempt**:
@@ -143,7 +143,7 @@ _Avoid_: 开发 Ticket 单测、mock 探测、跨候选证据拼接、普通运�
 _Avoid_: 最终 release matrix、历史成功记录、provider raw response、失败诊断
 
 **同候选证据并集**:
-在一个有界新鲜度窗口内，对同一候选提交的多个发布探测 attempts 做 typed closure；只有 `succeeded` 或 `failed` 的 application 能贡献 attempted 证据，任何 `not_requested` 或 skipped 状态均不计入，且精确闭合当前实际发布计划的正式 operation 分母后才能生成最终发布证据和矩阵；v0.4.0 候选静态资格为 46 个 public producers，六个日报 owner 只保留内部合同而不进入公开分母，v0.3.0 的 44-owner 历史证明保持原样。
+在一个有界新鲜度窗口内，对同一候选提交的多个发布探测 attempts 做 typed closure；只有 `succeeded` 或 `failed` 的 application 能贡献 attempted 证据，任何 `not_requested` 或 skipped 状态均不计入，且精确闭合当前实际发布计划中本次适用的来源验证集合后才能生成最终发布证据和矩阵；授权豁免项仍保留在完整公开清单中，另列安装、离线和未实时验证事实；v0.4.0 候选静态资格为 46 个 public producers，六个日报 owner 只保留内部合同而不进入公开分母，v0.3.0 的 44-owner 历史证明保持原样。
 _Avoid_: 跨提交拼接、无界历史缓存、部分成功、一次调用必须同时触达全部来源
 
 **交叉核验**:

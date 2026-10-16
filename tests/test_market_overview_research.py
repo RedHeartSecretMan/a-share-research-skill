@@ -232,20 +232,20 @@ class MarketOverviewResearchTests(unittest.TestCase):
                 self.assertIn("market_overview_research", document)
         for token in (
             "15 项固定能力",
-            "5 项 core",
-            "9 项 standard",
+            "4 项 core",
+            "8 项 standard",
             "market_wide_intraday",
         ):
             self.assertIn(token, chinese)
         for token in (
             "15 fixed capabilities",
-            "5 core",
-            "9 standard",
+            "4 core",
+            "8 standard",
             "market_wide_intraday",
         ):
             self.assertIn(token, english)
         self.assertIn("completion additionally requires empty subjects", skill)
-        self.assertIn("Completion for this branch", contract)
+        self.assertIn("Completion requires", contract)
         self.assertIn("requests/workflow-market-overview-research.json", examples_index)
         for capability_id in (
             "industry_board_breadth",

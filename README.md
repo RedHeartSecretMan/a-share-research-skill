@@ -109,7 +109,7 @@ CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻�
 
 - 单标的身份与行情任务的网络路径仍只覆盖 SSE/SZSE；市场基础使用 SSE/SZSE/BSE 各自分区，BSE 缺失不会回退到其他市场。
 - 估值必须证明证券类别范围；A/H、A/B 或其他多类别范围不明时阻断发行主体级估值。
-- 当前盘中快照不是交易级行情、分钟流、五档盘口或逐笔数据；`intraday_replay` 只复盘已完成交易日。
+- 当前盘中快照不是交易级行情、分钟流、五档盘口或逐笔数据；`intraday_replay` 只复盘已完成交易日。本次 v0.4.0 交付保留单证券盘中功能、安装与离线回归，未进行盘中实时验证；安装成功或离线通过不证明实时来源可用。
 - ETF 期权没有权威完整合约总数、完整合约单位定义、调整条款或合格独立 fallback，必须保留 coverage 和限制。
 - 研报、新闻、F10、资金流、题材和热度中的外部归因保持署名观点或市场信号角色，不自动升级为公司事实。
 - 当前不支持开放式选股、持续行情、自动交易、仓位/杠杆建议、项目评级或目标价。
@@ -123,7 +123,8 @@ CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻�
 - [`skill/a-share-research/SKILL.md`](skill/a-share-research/SKILL.md)：安装后 Agent 使用的简洁路由。
 - [`skill/a-share-research/references/`](skill/a-share-research/references/)：按任务域拆分的精确契约。
 - [`CONTEXT.md`](CONTEXT.md)：领域术语与产品边界。
-- [`Spec 0008 Amendment D`](docs/specs/0008-amendment-d-qualified-public-scope.md)：v0.4.0 候选的免费匿名范围与最终验收。
+- [`Spec 0008 Amendment D`](docs/specs/0008-amendment-d-qualified-public-scope.md)：v0.4.0 候选的免费匿名范围。
+- [`Spec 0008 Amendment E`](docs/specs/0008-amendment-e-no-intraday-live-gate.md)：本次交付的实时验证适用范围。
 - [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md)：v0.3.0 历史实施与验收权威。
 
 ## 版本与发布证据

@@ -109,7 +109,7 @@ See [`examples/README.md`](examples/README.md) for a dated real run, Chinese req
 
 - Single-security network identity and price tasks still cover SSE/SZSE only. Market foundations use separate SSE/SZSE/BSE partitions; missing BSE never falls back to another market.
 - Valuation must prove security-class scope. Unknown A/H, A/B, or other multi-class scope blocks issuer-wide valuation.
-- A current intraday snapshot is not a trading-grade feed, minute stream, five-level book, or tick source. `intraday_replay` covers completed sessions only.
+- A current intraday snapshot is not a trading-grade feed, minute stream, five-level book, or tick source. `intraday_replay` covers completed sessions only. This v0.4.0 delivery retains single-security intraday functionality, installation checks, and offline regression, without real-time intraday verification; installation or offline success does not establish live source usability.
 - ETF options lack an authoritative complete contract total, full contract-unit definition, adjustment terms, and a qualified independent fallback; coverage and limitations remain visible.
 - External attribution in reports, news, F10, flows, themes, and heat retains its attributed-opinion or market-signal role and does not automatically become issuer fact.
 - Open-ended screening, continuous feeds, automated trading, position/leverage advice, project ratings, and price targets are unsupported.
@@ -123,7 +123,8 @@ See [`examples/README.md`](examples/README.md) for a dated real run, Chinese req
 - [`skill/a-share-research/SKILL.md`](skill/a-share-research/SKILL.md): concise routing used by the installed Agent.
 - [`skill/a-share-research/references/`](skill/a-share-research/references/): exact contracts split by task domain.
 - [`CONTEXT.md`](CONTEXT.md): domain language and product boundaries.
-- [`Spec 0008 Amendment D`](docs/specs/0008-amendment-d-qualified-public-scope.md): v0.4.0 candidate anonymous scope and final acceptance.
+- [`Spec 0008 Amendment D`](docs/specs/0008-amendment-d-qualified-public-scope.md): v0.4.0 candidate anonymous scope.
+- [`Spec 0008 Amendment E`](docs/specs/0008-amendment-e-no-intraday-live-gate.md): real-time verification applicability for this delivery.
 - [`Spec 0007 Amendment A`](docs/specs/0007-implementation-amendment-a.md): historical v0.3.0 implementation and acceptance scope.
 
 ## Version and release evidence
