@@ -44,7 +44,7 @@ class V040DistributionTests(unittest.TestCase):
                 ("standard", "2026-08-03", "complete"),
                 ("fast", "2026-08-03", "complete"),
                 ("standard", "2026-08-01", "complete"),
-                ("standard", "2026-08-03", "missing_bse_turnover"),
+                ("standard", "2026-08-03", "missing_bse_index"),
             )
             for mode, as_of, scenario in cases:
                 with self.subTest(mode=mode, as_of=as_of, scenario=scenario):
@@ -93,33 +93,42 @@ class V040DistributionTests(unittest.TestCase):
                         ]
                     }
                     self.assertEqual(len(inventory), 15)
-                    self.assertEqual(
-                        inventory["market_wide_intraday"]["state"], "unsupported"
-                    )
-                    self.assertEqual(
-                        inventory["whole_market_margin"]["state"],
-                        "not_requested" if mode == "fast" else "supported",
-                    )
-                    totals = [
-                        item
-                        for item in result["calculations"]
-                        if item["kind"] == "whole_market_turnover"
+                    for capability in (
+                        "whole_market_turnover",
+                        "whole_market_margin",
+                        "market_wide_intraday",
+                    ):
+                        self.assertEqual(inventory[capability]["state"], "unsupported")
+                        self.assertEqual(inventory[capability]["step_ids"], [])
+                        self.assertNotIn(capability, result["coverage"]["steps"])
+                        self.assertFalse(
+                            any(
+                                item.get("kind", item.get("capability_id"))
+                                == capability
+                                for field in ("observations", "claims", "calculations")
+                                for item in result[field]
+                            )
+                        )
+                    indices = [
+                        item["payload"]["payload"]["observation"]
+                        for item in result["observations"]
+                        if item["capability_id"] == "major_broad_indices"
                     ]
-                    if scenario == "missing_bse_turnover":
-                        self.assertEqual(totals, [])
-                        self.assertEqual(
-                            sum(
-                                item["capability_id"] == "whole_market_turnover"
-                                for item in result["observations"]
-                            ),
-                            2,
+                    self.assertEqual(
+                        len(indices), 3 if scenario == "missing_bse_index" else 4
+                    )
+                    self.assertTrue(
+                        all(
+                            item["price_semantics"] == "completed_close"
+                            for item in indices
                         )
-                    else:
-                        self.assertEqual(totals[0]["payload"]["value"], "6750005000")
-                        self.assertEqual(
-                            totals[0]["payload"]["report_date"],
-                            "2026-07-31" if as_of == "2026-08-01" else "2026-08-03",
-                        )
+                    )
+                    self.assertEqual(
+                        {item["session_date"] for item in indices},
+                        {"2026-07-31" if as_of == "2026-08-01" else "2026-08-03"},
+                    )
+                    if scenario == "missing_bse_index":
+                        self.assertTrue(result["source_errors"])
                     self.assertNotIn(str(ROOT), completed.stdout)
                     self.assertNotIn(str(installed), completed.stdout)
                     self.assertFalse((installed / ".state").exists())
