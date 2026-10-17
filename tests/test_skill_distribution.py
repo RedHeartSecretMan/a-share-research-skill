@@ -744,12 +744,12 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("narrowest supported task", metadata)
         self.assertIn("evidence-backed results and limitations", metadata)
 
-    def test_installation_separates_v040_candidate_from_v030_release(self) -> None:
+    def test_installation_pins_the_v040_release(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
-                    "git clone --depth 1 --branch v0.3.0 --single-branch ",
+                    "git clone --depth 1 --branch v0.4.0 --single-branch ",
                     readme,
                 )
                 self.assertIn(
@@ -757,7 +757,10 @@ class SkillDistributionTests(unittest.TestCase):
                     readme,
                 )
                 self.assertIn("releases/tag/v0.3.0", readme)
-                self.assertIn("Release: v0.3.0", readme)
+                self.assertIn("Release: v0.4.0", readme)
+                self.assertIn("releases/tag/v0.4.0", readme)
+                self.assertIn("v0.4.0-release-audit-2026-10-17.md", readme)
+                self.assertNotIn("--branch v0.3.0 --single-branch", readme)
                 self.assertIn("v0.4.0", readme)
                 self.assertIn("market_overview_research@2.0", readme)
                 self.assertIn("VERSION", readme)
@@ -875,7 +878,7 @@ class SkillDistributionTests(unittest.TestCase):
         first_nonblank = next(
             line for line in examples_readme.splitlines() if line.strip()
         )
-        self.assertEqual(first_nonblank, "# v0.4.0 候选中文案例与请求模板")
+        self.assertEqual(first_nonblank, "# v0.4.0 中文案例与请求模板")
         self.assertIn("[盘中行情快照](intraday-snapshot.md)", examples_readme)
         self.assertIn(
             "[`intraday-market-snapshot.json`](requests/intraday-market-snapshot.json)",

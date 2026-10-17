@@ -1,12 +1,12 @@
 # 文档索引
 
-本分支是 **v0.4.0 候选**，待 #98 最终同候选匿名 live attestation；**v0.3.0** 仍是当前稳定发布。根目录 README 面向使用者，安装产物中的 `SKILL.md` / `references/` 面向 Agent，`specs/`、`adr/` 和 `research/` 面向维护者。先按目的选择入口，不必从头阅读全部历史文件。
+当前发布版本为 **v0.4.0**，来源证明与验证豁免见[发布资料索引](research/README.md)。根目录 README 面向使用者，安装产物中的 `SKILL.md` / `references/` 面向 Agent，`specs/`、`adr/` 和 `research/` 面向维护者。先按目的选择入口，不必从头阅读全部历史文件。
 
 ## 使用者
 
 - [`../README.md`](../README.md)：中文产品说明、安装、能力边界和快速开始。
 - [`../README_en.md`](../README_en.md)：英文产品说明。
-- [`../examples/README.md`](../examples/README.md)：带日期的历史真实运行、v0.4.0 候选中文请求模板与边界说明。
+- [`../examples/README.md`](../examples/README.md)：带日期的历史真实运行、v0.4.0 中文请求模板与边界说明。
 - [`../skill/a-share-research/references/cli-contract.md`](../skill/a-share-research/references/cli-contract.md)：唯一公共命令、进程语义和参考文件路由。
 
 ## Agent
@@ -32,8 +32,8 @@
 
 ## 版本规则
 
-- 当前候选安装版本记录在 [`../skill/a-share-research/VERSION`](../skill/a-share-research/VERSION)；不得把候选版本写成已发布或 live 成功。
-- 稳定发布资料采用 `v0.3.0-<主题>.<扩展名>`；v0.4.0 静态资格不覆盖或改写历史证明。
+- 当前安装版本记录在 [`../skill/a-share-research/VERSION`](../skill/a-share-research/VERSION)；安装版本、正式发布和来源可用性分别核验。
+- 当前发布资料采用 `v0.4.0-<主题>.<扩展名>`；v0.3.0 证明保持原始字节与位置，静态资格不覆盖或改写历史证明。
 - v0.0.1–v0.2.0 的研究记录位于 [`research/history/`](research/history/)，保留其原始日期、候选提交和当时结论。
 - 历史 Spec 和 ADR 不因新版本发布而重写；若当前状态发生变化，在文件状态区追加交付说明，并保留批准时语境。
 - 机器生成的 JSON evidence/matrix 不手工编辑；其人类解释放在相邻 Markdown 文档。

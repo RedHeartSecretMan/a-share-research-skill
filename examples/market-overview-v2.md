@@ -1,6 +1,6 @@
 # 市场总览 v2：三所基础、层级与缺失边界
 
-这是 v0.4.0 候选的公共请求阅读指南。以下数字仅来自确定性离线夹具，不是实际行情或 live attestation；最终同候选匿名发布证明由 #98 完成。原有 v0.3.0 真实运行记录保持其日期与身份。
+这是 v0.4.0 的公共请求阅读指南。以下数字仅来自确定性离线夹具，不是实际行情或 live attestation；本版实际来源证明见[来源验证审计](../docs/research/v0.4.0-release-audit-2026-10-17.md)。原有 v0.3.0 真实运行记录保持其日期与身份。
 
 从仓库根目录运行 [`workflow-market-overview-research.json`](requests/workflow-market-overview-research.json)：
 
@@ -8,7 +8,7 @@
 <python> skill/a-share-research/scripts/entrypoint.py run --request examples/requests/workflow-market-overview-research.json
 ```
 
-安装副本使用 `assets/requests/workflow-market-overview.json`；替换所有 `REPLACE_*`，使用 `subjects: []`、`schema_version: "1.0"`、`market_overview_research@2.0`。`@1.0` 不再运行，其他已发布方案仍为 `@1.0`。所有来源授权字段保持显式，当前候选验证只使用免费匿名来源。
+安装副本使用 `assets/requests/workflow-market-overview.json`；替换所有 `REPLACE_*`，使用 `subjects: []`、`schema_version: "1.0"`、`market_overview_research@2.0`。`@1.0` 不再运行，其他已发布方案仍为 `@1.0`。所有来源授权字段保持显式，本版来源验证只使用免费匿名来源。
 
 ## 如何阅读
 

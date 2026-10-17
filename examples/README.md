@@ -1,4 +1,4 @@
-# v0.4.0 候选中文案例与请求模板
+# v0.4.0 中文案例与请求模板
 
 本目录提供 1 份真实运行案例、43 份版本化请求和 7 篇呈现或边界说明，覆盖全部 12 类 ResearchTask。案例标题、问题和解释均使用中文；JSON 中的 `task_type`、字段名和枚举值属于版本化公共协议，必须保留原始英文标识，不能翻译后提交给 CLI。
 
@@ -35,7 +35,7 @@
 
 | 文档 | 适用范围 | 文档性质 |
 | --- | --- | --- |
-| [市场总览 v2](market-overview-v2.md) | SSE/SZSE/BSE 市场基础 | 候选阅读指南，离线夹具数字不构成 live 证明 |
+| [市场总览 v2](market-overview-v2.md) | SSE/SZSE/BSE 市场基础 | 公开请求阅读指南，离线夹具数字不构成 live 证明 |
 | [蓝色光标多证据交叉](bluefocus.md) | `SZSE:300058` | 组合与呈现指南，不保存运行结果 |
 | [工业富联综合研究](industrial-fulian.md) | `SSE:601138` | 固定方案阅读指南，不保存运行结果 |
 | [盘中行情快照](intraday-snapshot.md) | `SSE:600519` | 请求和会话边界，不保存行情数字 |
@@ -54,7 +54,7 @@
 | 工业富联新标的八步研究 | [`workflow-industrial-fulian-new-security.json`](requests/workflow-industrial-fulian-new-security.json) |
 | 综合市场研究 | [`workflow-market-overview-research.json`](requests/workflow-market-overview-research.json) |
 
-综合单标的方案的 `standard` 模式尝试身份、20 个完整交易日走势和全部标准增强；`fast` 只执行身份与走势。综合市场方案 `market_overview_research@2.0` 固定声明 15 项能力，其中 12 项按层级和适用性执行；全市场成交额、全市场两融和全市场盘中三个槽位明确为 unsupported。`fast` 只执行 4 项 core，`standard` 加入原有 8 项 standard；显式 deep 全市场盘中请求仍为 unsupported。原有单证券成交额、融资融券材料、盘中和复盘保持原边界。候选待 #98 最终匿名 live attestation。调用者不能提交自定义步骤或依赖图。
+综合单标的方案的 `standard` 模式尝试身份、20 个完整交易日走势和全部标准增强；`fast` 只执行身份与走势。综合市场方案 `market_overview_research@2.0` 固定声明 15 项能力，其中 12 项按层级和适用性执行；全市场成交额、全市场两融和全市场盘中三个槽位明确为 unsupported。`fast` 只执行 4 项 core，`standard` 加入原有 8 项 standard；显式 deep 全市场盘中请求仍为 unsupported。原有单证券成交额、融资融券材料、盘中和复盘保持原边界。本版来源验证与实时验证豁免见[来源验证审计](../docs/research/v0.4.0-release-audit-2026-10-17.md)。调用者不能提交自定义步骤或依赖图。
 
 ## 身份、行情与估值窄任务（5）
 
