@@ -552,6 +552,7 @@ def _contract_fact(item: OptionContractQuote) -> dict[str, object]:
         "contract_month": item.contract_month,
         "expiry_date": item.expiry_date,
         "series": item.series,
+        "adjustment": item.adjustment,
     }
 
 
@@ -906,6 +907,7 @@ def _selected_option_result(
                     "expiry_mode": query.expiry_mode,
                     "expiry_date": query.expiry_date,
                     "quote_mode": query.quote_mode,
+                    "adjustment": query.adjustment,
                 },
                 "session": {
                     "trading_date": batch.session.trading_date,
@@ -925,6 +927,7 @@ def _selected_option_result(
                         {item.contract_month for item in selected}
                     ),
                     "series": sorted({item.series for item in selected}),
+                    "adjustments": sorted({item.adjustment for item in selected}),
                     "contract_count": len(selected),
                     "listing_evidence_ids": [
                         _observation_key(item) for item in (*months, *listings)
@@ -1266,7 +1269,9 @@ def build_etf_options_result(
             ),
         )
     expiry_contracts = [
-        item for item in batch.contracts if item.expiry_date == expiry_date
+        item
+        for item in batch.contracts
+        if item.expiry_date == expiry_date and item.adjustment == query.adjustment
     ]
     incomplete_pairs = _incomplete_pair_keys(expiry_contracts)
     if incomplete_pairs:
@@ -1282,8 +1287,7 @@ def build_etf_options_result(
                 ),
             ),
         )
-    standard = [item for item in expiry_contracts if item.series == "M"]
-    pairs = _contract_pairs(standard)
+    pairs = _contract_pairs(expiry_contracts)
     reference_price = _decimal(batch.session.reference_price, "reference price")
     distances = {strike: abs(strike - reference_price) for strike in pairs}
     if not distances:
@@ -1295,7 +1299,10 @@ def build_etf_options_result(
             limitations=(
                 DirectTaskLimitation(
                     "atm_not_identifiable",
-                    "No complete standard call-put pair can establish an ATM strike.",
+                    (
+                        "No complete "
+                        f"{query.adjustment} call-put pair can establish an ATM strike."
+                    ),
                 ),
             ),
         )
@@ -1389,6 +1396,13 @@ def _normalize_query(request: dict[str, Any]) -> OptionQuery:
         raise ValueError(
             "etf_options parameters.quote_mode must be latest or latest_completed"
         )
+    adjustment = parameters.get("adjustment", "standard")
+    if adjustment not in {"standard", "adjusted"}:
+        raise ValueError(
+            "etf_options parameters.adjustment must be standard or adjusted"
+        )
+    if view == "atm" and adjustment != "standard":
+        raise ValueError("etf_options atm view requires standard adjustment")
     expiry = parameters.get("expiry")
     if not isinstance(expiry, dict) or expiry.get("mode") not in {
         "nearest_unexpired",
@@ -1413,6 +1427,7 @@ def _normalize_query(request: dict[str, Any]) -> OptionQuery:
         expiry_mode=expiry_mode,
         expiry_date=expiry_date,
         quote_mode=quote_mode,
+        adjustment=adjustment,
     )
 
 
@@ -1422,7 +1437,11 @@ def _select_expiry(
     observed_on = _date(query.observed_on, "observation date")
     if query.expiry_mode == "exact":
         assert query.expiry_date is not None
-        available = {item.expiry_date for item in contracts}
+        available = {
+            item.expiry_date
+            for item in contracts
+            if item.adjustment == query.adjustment
+        }
         return (
             query.expiry_date
             if _date(query.expiry_date, "expiry date") >= observed_on
@@ -1433,7 +1452,8 @@ def _select_expiry(
         {
             item.expiry_date
             for item in contracts
-            if _date(item.expiry_date, "expiry date") >= observed_on
+            if item.adjustment == query.adjustment
+            and _date(item.expiry_date, "expiry date") >= observed_on
         }
     )
     return candidates[0] if candidates else None

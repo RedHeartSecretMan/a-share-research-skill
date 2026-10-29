@@ -44,6 +44,7 @@ _EXCHANGES = ("BSE", "SSE", "SZSE")
 _COVERAGE_KEYS = frozenset(
     {"acquired", "expected", "failed", "ranked", "resolved", "unranked", "unsupported"}
 )
+_COVERAGE_KEYS_WITH_EXCLUDED = _COVERAGE_KEYS | {"excluded"}
 _FIXED_DIRECTORIES = tuple(
     sorted(
         {
@@ -359,13 +360,11 @@ def _coverage(value: object) -> dict[str, dict[str, int]]:
         counts = value[exchange]
         if (
             not isinstance(counts, Mapping)
-            or set(counts) != _COVERAGE_KEYS
+            or set(counts) not in {_COVERAGE_KEYS, _COVERAGE_KEYS_WITH_EXCLUDED}
             or any(type(n) is not int or n < 0 for n in counts.values())
         ):
             raise ValueError("result artifact coverage is invalid")
-        result[exchange] = {
-            key: cast(int, counts[key]) for key in sorted(_COVERAGE_KEYS)
-        }
+        result[exchange] = {key: cast(int, counts[key]) for key in sorted(counts)}
     return result
 
 

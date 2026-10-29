@@ -1,6 +1,15 @@
 # 研究与发布资料
 
-本目录以 v0.4.0 为当前发布版本，其资料采用 `v0.4.0-<主题>.<扩展名>` 命名，需要时间锚点的审计文件追加 `-YYYY-MM-DD`。v0.3.0 的历史证据保持原始字节与路径。v0.4.0 来源审计中的候选与发布状态描述记录了正式发布前的冻结时刻；当前发布状态以对应 GitHub Release 和标签为准。带日期的历史现场记录采用 `v<版本>-<主题>-YYYY-MM-DD.md`，并集中放在 [`history/`](history/) 中。仓库级阅读顺序见 [`../README.md`](../README.md)。
+本目录以 v0.4.1 为当前发布候选版本。v0.4.1 发布 P0 核心能力，并将 screening P1 明确延期为 unsupported；不把未完成的来源资格或公共启用门禁写成完成。已发布资料采用 `v<版本>-<主题>.<扩展名>` 命名，需要时间锚点的审计文件追加 `-YYYY-MM-DD`。v0.3.0 和 v0.4.0 的历史证据保持原始字节与路径。来源审计中的候选与发布状态描述记录了各自冻结时刻；当前发布状态以对应 GitHub Release 和标签为准。带日期的历史现场记录采用 `v<版本>-<主题>-YYYY-MM-DD.md`，并集中放在 [`history/`](history/) 中。仓库级阅读顺序见 [`../README.md`](../README.md)。
+
+## v0.4.1 计划资料
+
+| 文件 | 用途 | 当前状态 |
+|---|---|---|
+| [`../specs/0009-v0.4.1-two-dimensional-capability-scope.md`](../specs/0009-v0.4.1-two-dimensional-capability-scope.md) | 资产类别 × 研究场景的正式范围、状态、优先级和验收边界 | v0.4.1 P0 发布范围与 screening 延期边界 |
+| [`v0.4.1-capability-matrix.md`](v0.4.1-capability-matrix.md) | 能力、task/workflow、`retain / refactor / defer` 和 P0–P3 验收证据 | 人工维护；screening 明确 deferred/unsupported |
+| [`../specs/0009-v0.4.1-implementation-tickets.md`](../specs/0009-v0.4.1-implementation-tickets.md) | S41-01 至 S41-12 任务、依赖、交付物和验收义务 | 计划清单；不等于 GitHub Issue 状态 |
+| [`v0.4.1-readiness-2026-10-29.md`](v0.4.1-readiness-2026-10-29.md) | P0 发布 readback、screening 延期边界和剩余 provenance | 当前发布候选证据 |
 
 ## v0.3.0 历史发布资料
 
@@ -27,7 +36,7 @@
 
 `v0.3.0-*` 与本版 evidence/matrix JSON 均为版本化证明产物；`v0.4.0-operation-qualification.json` 是开发期静态审阅权威，不是发布产物。两者都不是使用案例，也不得手工调整字段、计数或摘要。运行普通研究请求请从 [`examples/README.md`](../../examples/README.md) 选择请求文件。
 
-当前正式 GitHub Release 为 [`v0.4.0`](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.0)。发布提交与 annotated tag 对象由标签确定；冻结运行时候选、来源日期和验证豁免保留在来源审计中，不能用发布提交替换来源证明的原始 SHA。
+当前正式 GitHub Release 目标为 [`v0.4.1`](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.1)，其 P0 范围与 screening 延期边界见 [`v0.4.1-readiness-2026-10-29.md`](v0.4.1-readiness-2026-10-29.md)。发布提交与 annotated tag 对象由标签确定；冻结运行时候选、来源日期和验证豁免保留在来源审计中，不能用发布提交替换来源证明的原始 SHA。
 
 ## 命令约定
 

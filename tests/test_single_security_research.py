@@ -345,6 +345,40 @@ class SingleSecurityResearchPublicSeamTests(unittest.TestCase):
         )
         self.assertTrue(all(coverage[step_id]["leaf"] for step_id in expected_steps))
 
+    def test_unknown_issuer_class_scope_blocks_only_workflow_valuation(self) -> None:
+        request = single_security_request()
+        request["subjects"] = [{"clue": "工业富联"}]
+
+        result = invoke_copied_installed(request)
+
+        steps = {
+            item["step_id"]: item
+            for item in result["task_views"]["research_workflow"]["steps"]
+        }
+        self.assertEqual(result["status"], "limited")
+        self.assertIn(steps["market_trend"]["state"], {"supported", "limited"})
+        self.assertEqual(steps["valuation"]["state"], "blocked")
+        valuation_limitations = {
+            item["code"]
+            for item in result["limitations"]
+            if item["id"] in steps["valuation"]["workflow_limitation_ids"]
+            or item["id"] in steps["valuation"]["limitation_ids"]
+        }
+        self.assertIn(
+            "issuer_security_class_scope_not_established", valuation_limitations
+        )
+        self.assertTrue(
+            all(
+                steps[step_id]["state"] in {"supported", "limited"}
+                for step_id in (
+                    "materials",
+                    "capital_activity",
+                    "lockup_events",
+                    "market_context",
+                )
+            )
+        )
+
     def test_standard_success_exercises_formal_subject_owners(self) -> None:
         result = invoke_copied_installed(single_security_request())
 

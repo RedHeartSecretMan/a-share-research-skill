@@ -1,0 +1,1382 @@
+{
+  "schema_version": 1,
+  "definition_kind": "github_issue_dag_snapshot",
+  "source": {
+    "system": "github",
+    "repository": "a-share-research-skill",
+    "captured_at": "2026-10-27 15:40:34 UTC",
+    "parent_spec_issue": 125,
+    "source_items": [
+      {
+        "issue_number": 125,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/125",
+        "updated_at": "2026-10-27T14:52:33Z"
+      },
+      {
+        "issue_number": 126,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126",
+        "updated_at": "2026-10-27T15:02:04Z"
+      },
+      {
+        "issue_number": 127,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/127",
+        "updated_at": "2026-10-27T15:02:31Z"
+      },
+      {
+        "issue_number": 128,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/128",
+        "updated_at": "2026-10-27T15:02:42Z"
+      },
+      {
+        "issue_number": 129,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/129",
+        "updated_at": "2026-10-27T15:02:51Z"
+      },
+      {
+        "issue_number": 130,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/130",
+        "updated_at": "2026-10-27T15:03:03Z"
+      },
+      {
+        "issue_number": 131,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/131",
+        "updated_at": "2026-10-27T15:04:13Z"
+      },
+      {
+        "issue_number": 132,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/132",
+        "updated_at": "2026-10-27T15:04:34Z"
+      },
+      {
+        "issue_number": 133,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/133",
+        "updated_at": "2026-10-27T15:04:57Z"
+      },
+      {
+        "issue_number": 134,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/134",
+        "updated_at": "2026-10-27T15:05:18Z"
+      },
+      {
+        "issue_number": 135,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/135",
+        "updated_at": "2026-10-27T15:05:41Z"
+      },
+      {
+        "issue_number": 136,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/136",
+        "updated_at": "2026-10-27T15:06:01Z"
+      },
+      {
+        "issue_number": 137,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/137",
+        "updated_at": "2026-10-27T15:06:23Z"
+      },
+      {
+        "issue_number": 138,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/138",
+        "updated_at": "2026-10-27T15:07:36Z"
+      },
+      {
+        "issue_number": 139,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/139",
+        "updated_at": "2026-10-28T13:42:05Z"
+      },
+      {
+        "issue_number": 140,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/140",
+        "updated_at": "2026-10-28T13:42:07Z"
+      }
+    ],
+    "project": "RedHeartSecretMan/a-share-research-skill"
+  },
+  "governing_spec": {
+    "issue_number": 125,
+    "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/125",
+    "title": "v0.4.1 资产类别与研究场景收敛 Spec",
+    "body": "## Problem Statement\n\n当前项目已经形成一套 evidence-first 的 A 股研究运行时，但不同资产类别和研究场景共用一张能力清单，导致三个问题：\n\n1. 股票、ETF、ETF 期权、指数与市场聚合被放在同一层级，用户难以判断一个入口到底研究什么资产；\n2. `market_overview_research@2.0` 的市场状态报告与 `market_screen_research@1.0` 的候选股票筛选被混淆，结果目标、数据分母和持久化要求不同；\n3. 当前 v0.4.1 计划文档的优先级、状态和任务依赖还存在冲突，P0 任务被 P1/P2 阻塞，筛选的 Universe 分区、排名契约和发布证据边界也不够可执行。\n\n项目需要一份正式的 v0.4.1 规格，把资产类别和研究场景分开建模，保留仍有产品价值的能力，明确正在重构的能力和延期资产类别，并给出可独立验收的任务链。\n\n## Solution\n\nv0.4.1 采用“资产类别 × 研究场景”的二维能力模型，并补充两个不改变二维主模型的元数据：\n\n- `scope`：`subject_scoped`、`market_wide`、`cross_cutting`，用于表达同一 task 在证券级和市场级的不同用途；\n- `capability_kind`：`public`、`internal`、`policy`、`planned`、`deferred`，用于区分当前 registry、内部实现、稳定拒绝规则和未来占位能力。\n\n每项能力同时记录：\n\n- `asset_class`：`a_share_equity`、`etf`、`etf_option`、`index`、`market_aggregate`、`bond`、`fund` 或 `other_derivative`；\n- `research_scene`：身份与范围、行情观察、估值基本面、材料事件、市场信号、筛选排名、workflow 编排或 evidence/result；\n- `implementation_status`：`retain`、`refactor` 或 `defer`；\n- `public_state`：`supported`、`blocked` 或 `deferred`；\n- `priority`：P0、P1、P2 或 P3。\n\n产品范围按以下方式收敛：\n\n- A 股普通股票的身份、行情、估值、材料、事件和单标的研究为 P0；单证券公共入口当前覆盖 SSE/SZSE，BSE 的时点化分母属于市场基础和筛选链，BSE 单证券支持必须另行验收；\n- `market_overview_research@2.0` 为 P0，负责交易会话、四个固定指数、行业/涨跌停信号和市场增强，不生成证券候选排名；\n- ETF 基础行情为独立的 P0 资产域，不进入 A 股股票筛选分母；\n- ETF 期权和盘中/分时复盘为 P2 实验扩展，保留真实的限制、失败和未实时验证状态；\n- `market_screen_research@1.0` 为 P1 重构产品链，保留三所 A 股股票 Universe、因子、确定性排序、候选深研和 Result Artifact 产品意图，但在 source qualification、分母对账、排名、artifact 恢复和同候选发布证据完成前保持 `public_state=blocked`；\n- 债券、一般基金、股票期权、期货、权证和开放式选股为 P3 deferred scope，不产生公共 source execution、coverage、observation 或 claim。\n\nP0、P1 和 P2 使用分离的依赖与验收门禁：P0 不能硬依赖 P1/P2；P1/P2 以独立 readiness 和 status readback 汇报。所有公共结果继续使用现有 `run --request`、`schema_version: \"1.0\"`、`--output` 和统一结果信封。\n\n## User Stories\n\n1. As an A-share research user, I want to resolve one stock to a canonical exchange and code, so that all later research refers to the same security.\n2. As an A-share research user, I want to inspect an unadjusted or forward-adjusted trading trend, so that the period, adjustment basis and source conflicts remain visible.\n3. As an A-share research user, I want to calculate a valuation only after the issuer's security-class scope is proven, so that multiple share classes are not silently merged.\n4. As an A-share research user, I want to compare two to ten A shares on the same basis, so that blocked or non-computable rows are retained rather than removed.\n5. As an A-share research user, I want to retrieve research reports, announcements, F10 materials, news and investor questions, so that attributed opinions remain distinct from verified company facts.\n6. As an A-share research user, I want to inspect capital events such as fund flow, block trades, margin materials, lockups, shareholder counts and dividends, so that each event keeps its source and applicable time window.\n7. As an A-share research user, I want one fixed single-security workflow, so that identity, trend, valuation, materials and events can run as independent siblings with visible partial failure.\n8. As a research user, I want specialized valuation, valuation-comparison, theme-report and new-security workflows to remain compatible, so that focused tasks do not require manually rebuilding their leaf requests.\n9. As a market researcher, I want a market overview with no security subject, so that the result describes the market instead of pretending to rank every security.\n10. As a market researcher, I want the overview to preserve the exact fifteen-capability inventory, so that supported, not-requested, unsupported and source-failed states cannot be confused.\n11. As a market researcher, I want trading-session evidence and four fixed broad indices, so that index observations are tied to a completed and applicable market session.\n12. As a market researcher, I want industry breadth, limit pools, rotation, heat, focus monitoring, abnormal movement, market capital signals and flashes, so that market-wide signals remain separate from subject-scoped signals.\n13. As a market researcher, I want unsupported whole-market turnover, whole-market margin and market-wide intraday slots to remain explicit, so that a board, ETF, index or single stock never proxies the whole market.\n14. As an ETF researcher, I want ETF identity, price, change, volume and amount with explicit units, so that ETF observations are not treated as ordinary-stock observations.\n15. As a screening user, I want the screening universe to contain only RMB ordinary A shares proven for the selected completed date, so that ETF, fund, bond, index and option assets cannot enter the stock denominator.\n16. As a screening user, I want expected, excluded, resolved, acquired, ranked, unranked, failed and unsupported partitions to reconcile per exchange, so that missing data never disappears from the denominator.\n17. As a screening user, I want fixed factor IDs, formulas, weights, percentile rules, Decimal precision, tie handling and sorting keys, so that the same request produces the same ranking.\n18. As a screening user, I want missing or conflicted factor inputs to produce stable unranked reasons, so that missingness is not converted into a favorable score.\n19. As a screening user, I want a bounded candidate limit and deterministic candidate order, so that deep research cost is controlled and candidate failure does not rewrite the ranking result.\n20. As a screening user, I want candidate research to reuse the single-security workflow without changing its frozen information cutoff, so that screening and deep research share the same evidence boundary.\n21. As a screening user, I want large screening results to be written only to an explicit caller-owned artifact directory, so that ordinary requests do not create hidden persistence.\n22. As a screening user, I want create, resume and finalize to be fail-closed under tampering, residue and manifest mismatch, so that an interrupted result cannot be mistaken for a complete result.\n23. As an ETF-option researcher, I want contract month, expiration, strike, call/put, standard/adjusted type and quote session to remain explicit, so that incompatible contracts are not combined.\n24. As an intraday researcher, I want current-session snapshots separated from completed-session replay, so that a stale or historical observation cannot be presented as current.\n25. As a maintainer, I want public capabilities separated from internal, policy and planned placeholders, so that code presence does not become a false support claim.\n26. As a maintainer, I want P0 core readiness independent from P1 screening and P2 extension readiness, so that an unfinished optional capability cannot block a valid core release.\n27. As a maintainer, I want source qualification, owner contracts, same-candidate evidence closure and release matrices for screening before public enablement, so that offline fixtures cannot be mistaken for release proof.\n28. As an Agent, I want routing tables to expose asset class, research scene, scope and public state, so that I can select the narrowest valid workflow without reading historical specifications.\n29. As a maintainer, I want bond, general-fund and other-derivative requests to remain explicitly deferred, so that unsupported future products are not inferred from stock or ETF fields.\n30. As a release maintainer, I want historical specifications, ADRs, evidence and release artifacts to remain immutable, so that v0.4.1 cleanup does not destroy prior proof.\n\n## Implementation Decisions\n\n- Keep one public seam: the existing deterministic `run --request` entry point and its versioned JSON result envelope.\n- Model the product with two axes: `asset_class` and `research_scene`. Add `scope` as a qualifier for cross-scope tasks rather than creating a third taxonomy axis.\n- Use separate `implementation_status`, `public_state`, `capability_kind` and `priority` fields. Do not overload `refactor` to mean `blocked` or `deferred`.\n- Treat P0 as the core release gate: shared contract, A-share core, market overview, ETF base market data, current documentation and core/installed validation.\n- Treat P1 as an independent target chain: screening Universe, factor acquisition, deterministic ranking, candidate research and Result Artifact. Screening remains blocked until its complete evidence contract is accepted.\n- Treat P2 as non-blocking extensions: ETF options, current intraday snapshots and completed-session replay. Their installation, offline behavior and failure boundaries remain testable, but live proof is not silently upgraded.\n- Treat P3 as deferred product scope: bonds, general funds, non-ETF options, futures, warrants, open-ended screening and investment actions.\n- Keep BSE in the market-foundation and screening asset scope. Do not claim BSE single-security support until a separate identity and public-entry acceptance exists.\n- Split `market_signals` and `capital_events` by `scope` where subject-scoped and market-wide operations have different request contracts. A task name alone is not a sufficient asset/scope classification.\n- Mark synthetic policy rows, internal modules and future placeholders with their `capability_kind`; only public registry entries may be described as current public capabilities.\n- Make screening acceptance depend on the single-security core because bounded candidate research reuses that workflow. If candidate research is removed from the screening chain, it must become a separate deferred task rather than an implicit dependency.\n- Replace one monolithic final gate with P0 readiness, P1 screening readiness and P2 extension readiness. The final release record includes all three status readbacks but only P0 is a hard core-release dependency.\n- Use the existing source-operation seam and the highest public workflow seam for tests. Source qualification, provider owner contracts, same-candidate evidence closure and release matrices are required before screening public enablement.\n- Preserve the existing rejection of `market_screen_research` and legacy market-overview versions until the screening readiness gate passes. The workflow ID is not currently in the registered public workflow set.\n- Preserve `supported / limited / blocked`, coverage, conflicts, source errors, unsupported reason codes, explicit evidence reuse rules and no-silent-source-switch behavior.\n- Use the repository's uv-managed Python 3.14 environment for development and validation while retaining the public runtime's Python 3.12+ compatibility contract.\n\n## Testing Decisions\n\n- Tests must cross the highest practical seam and assert observable behavior: request acceptance/rejection, result envelope, status fields, source/error/coverage projection, artifact receipts and installed-copy behavior.\n- Do not use the existence of an internal module, a fixture, a static qualification file or a passing parser unit test as proof of public support or live source usability.\n- The P0 profile covers shared result contracts, A-share identity/trend/valuation/content/events, single-security workflow, market overview inventory and ETF base market data.\n- The installed profile copies the Skill, checks installation health and exercises representative public requests through the public entry point.\n- The P1 screening profile covers three-exchange universe partition reconciliation, asset exclusion, cutoff semantics, factor qualification, deterministic ranking, candidate failure isolation and artifact create/resume/finalize.\n- The P2 extension profile covers ETF option contract identity, empty/partial/unknown outcomes, current-session versus completed-session semantics and intraday coverage boundaries.\n- The release profile covers source qualification, owner contracts, same-candidate evidence closure, release matrix derivation and clean-candidate readback.\n- The live profile is explicit and opt-in. Its results must retain actual attempted/source-result state and must not rewrite offline or installation evidence as live success.\n- Shared fixtures belong in a support layer; tests must not import helpers from other `test_*` modules.\n- The core gate and extension gates must be independently runnable, so P2 failures cannot hide or block a valid P0 conclusion.\n\n## Out of Scope\n\n- Implementing or publishing code changes as part of this specification issue.\n- Rewriting or deleting historical v0.3.0/v0.4.0 specifications, ADRs, release evidence, tags or releases.\n- Adding bonds, general funds, stock options, futures, warrants or open-ended screening.\n- Treating ETF, an index, an industry board or a single security as a proxy for a whole-market value.\n- Adding continuous market feeds, order books, ticks, automatic trading, position sizing, leverage, target prices or investment action recommendations.\n- Raising the public runtime minimum from Python 3.12+ to Python 3.14.\n- Treating static qualification, copied installation, mock responses or one live probe as complete public source proof.\n- Creating one hard dependency chain in which P1/P2 implementation is required for P0 core release.\n\n## Further Notes\n\nThe current planning documents are a starting point and require the status, scope, capability-kind, dependency and partition corrections above before implementation begins. The project should update the current capability matrix and task list first, then create implementation tasks from the accepted P0/P1/P2 gates.\n\nThe canonical product distinction is:\n\n- `market_overview_research@2.0` describes market state and fixed market capabilities;\n- `market_screen_research@1.0` produces a bounded, evidence-backed candidate stock set;\n- `single_security_research@1.0` explains one canonical A share and its evidence;\n- ETF, ETF options and intraday research remain separate asset-class contracts.\n",
+    "acceptance_obligations": [
+      {
+        "id": "US-01",
+        "source_section": "User Stories",
+        "source_text": "As an A-share research user, I want to resolve one stock to a canonical exchange and code, so that all later research refers to the same security.",
+        "owners": [
+          "S41-02"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-02",
+        "source_section": "User Stories",
+        "source_text": "As an A-share research user, I want to inspect an unadjusted or forward-adjusted trading trend, so that the period, adjustment basis and source conflicts remain visible.",
+        "owners": [
+          "S41-02"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-03",
+        "source_section": "User Stories",
+        "source_text": "As an A-share research user, I want to calculate a valuation only after the issuer's security-class scope is proven, so that multiple share classes are not silently merged.",
+        "owners": [
+          "S41-02"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-04",
+        "source_section": "User Stories",
+        "source_text": "As an A-share research user, I want to compare two to ten A shares on the same basis, so that blocked or non-computable rows are retained rather than removed.",
+        "owners": [
+          "S41-02"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-05",
+        "source_section": "User Stories",
+        "source_text": "As an A-share research user, I want to retrieve research reports, announcements, F10 materials, news and investor questions, so that attributed opinions remain distinct from verified company facts.",
+        "owners": [
+          "S41-02"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-06",
+        "source_section": "User Stories",
+        "source_text": "As an A-share research user, I want to inspect capital events such as fund flow, block trades, margin materials, lockups, shareholder counts and dividends, so that each event keeps its source and applicable time window.",
+        "owners": [
+          "S41-02"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-07",
+        "source_section": "User Stories",
+        "source_text": "As an A-share research user, I want one fixed single-security workflow, so that identity, trend, valuation, materials and events can run as independent siblings with visible partial failure.",
+        "owners": [
+          "S41-02"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-08",
+        "source_section": "User Stories",
+        "source_text": "As a research user, I want specialized valuation, valuation-comparison, theme-report and new-security workflows to remain compatible, so that focused tasks do not require manually rebuilding their leaf requests.",
+        "owners": [
+          "S41-02"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-09",
+        "source_section": "User Stories",
+        "source_text": "As a market researcher, I want a market overview with no security subject, so that the result describes the market instead of pretending to rank every security.",
+        "owners": [
+          "S41-03"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-10",
+        "source_section": "User Stories",
+        "source_text": "As a market researcher, I want the overview to preserve the exact fifteen-capability inventory, so that supported, not-requested, unsupported and source-failed states cannot be confused.",
+        "owners": [
+          "S41-03"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-11",
+        "source_section": "User Stories",
+        "source_text": "As a market researcher, I want trading-session evidence and four fixed broad indices, so that index observations are tied to a completed and applicable market session.",
+        "owners": [
+          "S41-03"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-12",
+        "source_section": "User Stories",
+        "source_text": "As a market researcher, I want industry breadth, limit pools, rotation, heat, focus monitoring, abnormal movement, market capital signals and flashes, so that market-wide signals remain separate from subject-scoped signals.",
+        "owners": [
+          "S41-03"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-13",
+        "source_section": "User Stories",
+        "source_text": "As a market researcher, I want unsupported whole-market turnover, whole-market margin and market-wide intraday slots to remain explicit, so that a board, ETF, index or single stock never proxies the whole market.",
+        "owners": [
+          "S41-03"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-14",
+        "source_section": "User Stories",
+        "source_text": "As an ETF researcher, I want ETF identity, price, change, volume and amount with explicit units, so that ETF observations are not treated as ordinary-stock observations.",
+        "owners": [
+          "S41-04"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-15",
+        "source_section": "User Stories",
+        "source_text": "As a screening user, I want the screening universe to contain only RMB ordinary A shares proven for the selected completed date, so that ETF, fund, bond, index and option assets cannot enter the stock denominator.",
+        "owners": [
+          "S41-05"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-16",
+        "source_section": "User Stories",
+        "source_text": "As a screening user, I want expected, excluded, resolved, acquired, ranked, unranked, failed and unsupported partitions to reconcile per exchange, so that missing data never disappears from the denominator.",
+        "owners": [
+          "S41-05"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-17",
+        "source_section": "User Stories",
+        "source_text": "As a screening user, I want fixed factor IDs, formulas, weights, percentile rules, Decimal precision, tie handling and sorting keys, so that the same request produces the same ranking.",
+        "owners": [
+          "S41-05"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-18",
+        "source_section": "User Stories",
+        "source_text": "As a screening user, I want missing or conflicted factor inputs to produce stable unranked reasons, so that missingness is not converted into a favorable score.",
+        "owners": [
+          "S41-05"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-19",
+        "source_section": "User Stories",
+        "source_text": "As a screening user, I want a bounded candidate limit and deterministic candidate order, so that deep research cost is controlled and candidate failure does not rewrite the ranking result.",
+        "owners": [
+          "S41-06"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-20",
+        "source_section": "User Stories",
+        "source_text": "As a screening user, I want candidate research to reuse the single-security workflow without changing its frozen information cutoff, so that screening and deep research share the same evidence boundary.",
+        "owners": [
+          "S41-06"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-21",
+        "source_section": "User Stories",
+        "source_text": "As a screening user, I want large screening results to be written only to an explicit caller-owned artifact directory, so that ordinary requests do not create hidden persistence.",
+        "owners": [
+          "S41-07"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-22",
+        "source_section": "User Stories",
+        "source_text": "As a screening user, I want create, resume and finalize to be fail-closed under tampering, residue and manifest mismatch, so that an interrupted result cannot be mistaken for a complete result.",
+        "owners": [
+          "S41-07"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-23",
+        "source_section": "User Stories",
+        "source_text": "As an ETF-option researcher, I want contract month, expiration, strike, call/put, standard/adjusted type and quote session to remain explicit, so that incompatible contracts are not combined.",
+        "owners": [
+          "S41-09"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-24",
+        "source_section": "User Stories",
+        "source_text": "As an intraday researcher, I want current-session snapshots separated from completed-session replay, so that a stale or historical observation cannot be presented as current.",
+        "owners": [
+          "S41-10"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-25",
+        "source_section": "User Stories",
+        "source_text": "As a maintainer, I want public capabilities separated from internal, policy and planned placeholders, so that code presence does not become a false support claim.",
+        "owners": [
+          "S41-01"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-26",
+        "source_section": "User Stories",
+        "source_text": "As a maintainer, I want P0 core readiness independent from P1 screening and P2 extension readiness, so that an unfinished optional capability cannot block a valid core release.",
+        "owners": [
+          "S41-11"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-27",
+        "source_section": "User Stories",
+        "source_text": "As a maintainer, I want source qualification, owner contracts, same-candidate evidence closure and release matrices for screening before public enablement, so that offline fixtures cannot be mistaken for release proof.",
+        "owners": [
+          "S41-08"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-28",
+        "source_section": "User Stories",
+        "source_text": "As an Agent, I want routing tables to expose asset class, research scene, scope and public state, so that I can select the narrowest valid workflow without reading historical specifications.",
+        "owners": [
+          "S41-12"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-29",
+        "source_section": "User Stories",
+        "source_text": "As a maintainer, I want bond, general-fund and other-derivative requests to remain explicitly deferred, so that unsupported future products are not inferred from stock or ETF fields.",
+        "owners": [
+          "S41-12"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "US-30",
+        "source_section": "User Stories",
+        "source_text": "As a release maintainer, I want historical specifications, ADRs, evidence and release artifacts to remain immutable, so that v0.4.1 cleanup does not destroy prior proof.",
+        "owners": [
+          "S41-13"
+        ],
+        "obligation_type": "acceptance"
+      },
+      {
+        "id": "ID-01",
+        "source_section": "Implementation Decisions",
+        "source_text": "Keep one public seam: the existing deterministic `run --request` entry point and its versioned JSON result envelope.",
+        "owners": [
+          "S41-01",
+          "S41-12"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-02",
+        "source_section": "Implementation Decisions",
+        "source_text": "Model the product with two axes: `asset_class` and `research_scene`. Add `scope` as a qualifier for cross-scope tasks rather than creating a third taxonomy axis.",
+        "owners": [
+          "S41-01",
+          "S41-12"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-03",
+        "source_section": "Implementation Decisions",
+        "source_text": "Use separate `implementation_status`, `public_state`, `capability_kind` and `priority` fields. Do not overload `refactor` to mean `blocked` or `deferred`.",
+        "owners": [
+          "S41-01",
+          "S41-12"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-04",
+        "source_section": "Implementation Decisions",
+        "source_text": "Treat P0 as the core release gate: shared contract, A-share core, market overview, ETF base market data, current documentation and core/installed validation.",
+        "owners": [
+          "S41-11",
+          "S41-13"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-05",
+        "source_section": "Implementation Decisions",
+        "source_text": "Treat P1 as an independent target chain: screening Universe, factor acquisition, deterministic ranking, candidate research and Result Artifact. Screening remains blocked until its complete evidence contract is accepted.",
+        "owners": [
+          "S41-05",
+          "S41-06",
+          "S41-07",
+          "S41-08"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-06",
+        "source_section": "Implementation Decisions",
+        "source_text": "Treat P2 as non-blocking extensions: ETF options, current intraday snapshots and completed-session replay. Their installation, offline behavior and failure boundaries remain testable, but live proof is not silently upgraded.",
+        "owners": [
+          "S41-09",
+          "S41-10"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-07",
+        "source_section": "Implementation Decisions",
+        "source_text": "Treat P3 as deferred product scope: bonds, general funds, non-ETF options, futures, warrants, open-ended screening and investment actions.",
+        "owners": [
+          "S41-12"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-08",
+        "source_section": "Implementation Decisions",
+        "source_text": "Keep BSE in the market-foundation and screening asset scope. Do not claim BSE single-security support until a separate identity and public-entry acceptance exists.",
+        "owners": [
+          "S41-05"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-09",
+        "source_section": "Implementation Decisions",
+        "source_text": "Split `market_signals` and `capital_events` by `scope` where subject-scoped and market-wide operations have different request contracts. A task name alone is not a sufficient asset/scope classification.",
+        "owners": [
+          "S41-01",
+          "S41-05"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-10",
+        "source_section": "Implementation Decisions",
+        "source_text": "Mark synthetic policy rows, internal modules and future placeholders with their `capability_kind`; only public registry entries may be described as current public capabilities.",
+        "owners": [
+          "S41-01",
+          "S41-12"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-11",
+        "source_section": "Implementation Decisions",
+        "source_text": "Make screening acceptance depend on the single-security core because bounded candidate research reuses that workflow. If candidate research is removed from the screening chain, it must become a separate deferred task rather than an implicit dependency.",
+        "owners": [
+          "S41-06"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-12",
+        "source_section": "Implementation Decisions",
+        "source_text": "Replace one monolithic final gate with P0 readiness, P1 screening readiness and P2 extension readiness. The final release record includes all three status readbacks but only P0 is a hard core-release dependency.",
+        "owners": [
+          "S41-11",
+          "S41-13"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-13",
+        "source_section": "Implementation Decisions",
+        "source_text": "Use the existing source-operation seam and the highest public workflow seam for tests. Source qualification, provider owner contracts, same-candidate evidence closure and release matrices are required before screening public enablement.",
+        "owners": [
+          "S41-08",
+          "S41-11"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-14",
+        "source_section": "Implementation Decisions",
+        "source_text": "Preserve the existing rejection of `market_screen_research` and legacy market-overview versions until the screening readiness gate passes. The workflow ID is not currently in the registered public workflow set.",
+        "owners": [
+          "S41-08",
+          "S41-13"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-15",
+        "source_section": "Implementation Decisions",
+        "source_text": "Preserve `supported / limited / blocked`, coverage, conflicts, source errors, unsupported reason codes, explicit evidence reuse rules and no-silent-source-switch behavior.",
+        "owners": [
+          "S41-02",
+          "S41-03"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "ID-16",
+        "source_section": "Implementation Decisions",
+        "source_text": "Use the repository's uv-managed Python 3.14 environment for development and validation while retaining the public runtime's Python 3.12+ compatibility contract.",
+        "owners": [
+          "S41-02",
+          "S41-03"
+        ],
+        "obligation_type": "implementation_constraint"
+      },
+      {
+        "id": "TD-01",
+        "source_section": "Testing Decisions",
+        "source_text": "Tests must cross the highest practical seam and assert observable behavior: request acceptance/rejection, result envelope, status fields, source/error/coverage projection, artifact receipts and installed-copy behavior.",
+        "owners": [
+          "S41-11"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-02",
+        "source_section": "Testing Decisions",
+        "source_text": "Do not use the existence of an internal module, a fixture, a static qualification file or a passing parser unit test as proof of public support or live source usability.",
+        "owners": [
+          "S41-11",
+          "S41-13"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-03",
+        "source_section": "Testing Decisions",
+        "source_text": "The P0 profile covers shared result contracts, A-share identity/trend/valuation/content/events, single-security workflow, market overview inventory and ETF base market data.",
+        "owners": [
+          "S41-11"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-04",
+        "source_section": "Testing Decisions",
+        "source_text": "The installed profile copies the Skill, checks installation health and exercises representative public requests through the public entry point.",
+        "owners": [
+          "S41-11"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-05",
+        "source_section": "Testing Decisions",
+        "source_text": "The P1 screening profile covers three-exchange universe partition reconciliation, asset exclusion, cutoff semantics, factor qualification, deterministic ranking, candidate failure isolation and artifact create/resume/finalize.",
+        "owners": [
+          "S41-05",
+          "S41-06",
+          "S41-07"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-06",
+        "source_section": "Testing Decisions",
+        "source_text": "The P2 extension profile covers ETF option contract identity, empty/partial/unknown outcomes, current-session versus completed-session semantics and intraday coverage boundaries.",
+        "owners": [
+          "S41-09",
+          "S41-10"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-07",
+        "source_section": "Testing Decisions",
+        "source_text": "The release profile covers source qualification, owner contracts, same-candidate evidence closure, release matrix derivation and clean-candidate readback.",
+        "owners": [
+          "S41-08",
+          "S41-13"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-08",
+        "source_section": "Testing Decisions",
+        "source_text": "The live profile is explicit and opt-in. Its results must retain actual attempted/source-result state and must not rewrite offline or installation evidence as live success.",
+        "owners": [
+          "S41-09",
+          "S41-10",
+          "S41-13"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-09",
+        "source_section": "Testing Decisions",
+        "source_text": "Shared fixtures belong in a support layer; tests must not import helpers from other `test_*` modules.",
+        "owners": [
+          "S41-11"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "TD-10",
+        "source_section": "Testing Decisions",
+        "source_text": "The core gate and extension gates must be independently runnable, so P2 failures cannot hide or block a valid P0 conclusion.",
+        "owners": [
+          "S41-11",
+          "S41-13"
+        ],
+        "obligation_type": "testing_constraint"
+      },
+      {
+        "id": "OOS-01",
+        "source_section": "Out of Scope",
+        "source_text": "Implementing or publishing code changes as part of this specification issue.",
+        "owners": [
+          "S41-12",
+          "S41-13"
+        ],
+        "obligation_type": "scope_boundary"
+      },
+      {
+        "id": "OOS-02",
+        "source_section": "Out of Scope",
+        "source_text": "Rewriting or deleting historical v0.3.0/v0.4.0 specifications, ADRs, release evidence, tags or releases.",
+        "owners": [
+          "S41-12",
+          "S41-13"
+        ],
+        "obligation_type": "scope_boundary"
+      },
+      {
+        "id": "OOS-03",
+        "source_section": "Out of Scope",
+        "source_text": "Adding bonds, general funds, stock options, futures, warrants or open-ended screening.",
+        "owners": [
+          "S41-12",
+          "S41-13"
+        ],
+        "obligation_type": "scope_boundary"
+      },
+      {
+        "id": "OOS-04",
+        "source_section": "Out of Scope",
+        "source_text": "Treating ETF, an index, an industry board or a single security as a proxy for a whole-market value.",
+        "owners": [
+          "S41-12",
+          "S41-13"
+        ],
+        "obligation_type": "scope_boundary"
+      },
+      {
+        "id": "OOS-05",
+        "source_section": "Out of Scope",
+        "source_text": "Adding continuous market feeds, order books, ticks, automatic trading, position sizing, leverage, target prices or investment action recommendations.",
+        "owners": [
+          "S41-12",
+          "S41-13"
+        ],
+        "obligation_type": "scope_boundary"
+      },
+      {
+        "id": "OOS-06",
+        "source_section": "Out of Scope",
+        "source_text": "Raising the public runtime minimum from Python 3.12+ to Python 3.14.",
+        "owners": [
+          "S41-12",
+          "S41-13"
+        ],
+        "obligation_type": "scope_boundary"
+      },
+      {
+        "id": "OOS-07",
+        "source_section": "Out of Scope",
+        "source_text": "Treating static qualification, copied installation, mock responses or one live probe as complete public source proof.",
+        "owners": [
+          "S41-12",
+          "S41-13"
+        ],
+        "obligation_type": "scope_boundary"
+      },
+      {
+        "id": "OOS-08",
+        "source_section": "Out of Scope",
+        "source_text": "Creating one hard dependency chain in which P1/P2 implementation is required for P0 core release.",
+        "owners": [
+          "S41-12",
+          "S41-13"
+        ],
+        "obligation_type": "scope_boundary"
+      }
+    ]
+  },
+  "tickets": [
+    {
+      "issue_number": 126,
+      "logical_id": "S41-01",
+      "title": "S41-01 二维能力元数据与兼容状态",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 126,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126",
+        "created_at": "2026-10-27T15:02:04Z",
+        "updated_at": "2026-10-27T15:02:04Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nIntroduce shared capability metadata so every public, internal, policy and planned capability is classified by asset class, research scene, scope and public state without changing existing request or result behavior.\n\n## Acceptance criteria\n\n- [ ] Current public tasks and workflows have explicit asset class, research scene, scope, capability kind, implementation status, public state and priority.\n- [ ] Subject-scoped, market-wide and cross-cutting uses are represented without renaming public IDs.\n- [ ] Existing `run --request`, `schema_version: \"1.0\"`, result envelope and rejection behavior remain unchanged.\n- [ ] Synthetic policy rows and deferred asset classes are distinguished from registered public capabilities.\n",
+      "acceptance_obligations": [
+        "Current public tasks and workflows have explicit asset class, research scene, scope, capability kind, implementation status, public state and priority.",
+        "Subject-scoped, market-wide and cross-cutting uses are represented without renaming public IDs.",
+        "Existing `run --request`, `schema_version: \"1.0\"`, result envelope and rejection behavior remain unchanged.",
+        "Synthetic policy rows and deferred asset classes are distinguished from registered public capabilities."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": []
+    },
+    {
+      "issue_number": 127,
+      "logical_id": "S41-02",
+      "title": "S41-02 P0 单标的股票主路径",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 127,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/127",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/127",
+        "created_at": "2026-10-27T15:02:31Z",
+        "updated_at": "2026-10-27T15:02:31Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver the P0 A-share single-security path from canonical identity through trend, valuation, materials, capital events and the fixed single-security workflow.\n\n## Acceptance criteria\n\n- [ ] Identity, trend, valuation, content and capital-event requests preserve current public semantics.\n- [ ] Valuation blocks when issuer security-class scope is not proven.\n- [ ] Partial, blocked, conflicting and unavailable sibling steps remain visible.\n- [ ] `single_security_research@1.0` has an installed-copy end-to-end smoke path, with the four specialized workflows explicitly covered or marked as compatibility aliases.\n",
+      "acceptance_obligations": [
+        "Identity, trend, valuation, content and capital-event requests preserve current public semantics.",
+        "Valuation blocks when issuer security-class scope is not proven.",
+        "Partial, blocked, conflicting and unavailable sibling steps remain visible.",
+        "`single_security_research@1.0` has an installed-copy end-to-end smoke path, with the four specialized workflows explicitly covered or marked as compatibility aliases."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 126,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126"
+        }
+      ]
+    },
+    {
+      "issue_number": 128,
+      "logical_id": "S41-03",
+      "title": "S41-03 P0 市场总览主路径",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 128,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/128",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/128",
+        "created_at": "2026-10-27T15:02:42Z",
+        "updated_at": "2026-10-27T15:02:42Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver the P0 `market_overview_research@2.0` path as a market-state report, separate from stock screening, with fixed inventory, market session, four indices and market signals.\n\n## Acceptance criteria\n\n- [ ] The exact fifteen-entry inventory is returned with observable statuses.\n- [ ] Fast executes four core capabilities; standard adds eight standard capabilities.\n- [ ] The three whole-market unsupported slots have no source step or proxy observation.\n- [ ] The workflow never produces security ranking or candidate selection.\n",
+      "acceptance_obligations": [
+        "The exact fifteen-entry inventory is returned with observable statuses.",
+        "Fast executes four core capabilities; standard adds eight standard capabilities.",
+        "The three whole-market unsupported slots have no source step or proxy observation.",
+        "The workflow never produces security ranking or candidate selection."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 126,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126"
+        }
+      ]
+    },
+    {
+      "issue_number": 129,
+      "logical_id": "S41-04",
+      "title": "S41-04 P0 ETF 行情独立资产域",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 129,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/129",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/129",
+        "created_at": "2026-10-27T15:02:51Z",
+        "updated_at": "2026-10-27T15:02:51Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver ETF base market data as an independent P0 asset-class path, separate from ordinary A-share identity and stock screening.\n\n## Acceptance criteria\n\n- [ ] A supported SSE ETF request resolves and reports its asset class explicitly.\n- [ ] Price, change, volume and amount retain source units and conversion decisions.\n- [ ] ETF data cannot enter the A-share screening denominator or proxy a whole-market value.\n- [ ] ETF source failure, empty proof and partial evidence remain distinguishable in an installed-copy smoke path.\n",
+      "acceptance_obligations": [
+        "A supported SSE ETF request resolves and reports its asset class explicitly.",
+        "Price, change, volume and amount retain source units and conversion decisions.",
+        "ETF data cannot enter the A-share screening denominator or proxy a whole-market value.",
+        "ETF source failure, empty proof and partial evidence remain distinguishable in an installed-copy smoke path."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 126,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126"
+        }
+      ]
+    },
+    {
+      "issue_number": 130,
+      "logical_id": "S41-05",
+      "title": "S41-05 P1 A 股筛选与确定性排名",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 130,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/130",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/130",
+        "created_at": "2026-10-27T15:03:03Z",
+        "updated_at": "2026-10-27T15:03:03Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver the P1 fast screening path for `market_screen_research@1.0`: a completed-date A-share ordinary-stock denominator, explicit asset exclusion, factor qualification and deterministic ranking. Public enablement remains blocked until the later evidence gate.\n\n## Acceptance criteria\n\n- [ ] Only proven RMB ordinary shares from SSE, SZSE and BSE enter the selected-date denominator; ETF, fund, bond, index and option assets are excluded.\n- [ ] Per-exchange expected, excluded, resolved, acquired, ranked, unranked, failed and unsupported partitions reconcile.\n- [ ] Information cutoff, screen date and availability time are explicit.\n- [ ] Factor IDs, formulas, weights, percentile algorithm, Decimal precision, tie handling and sort keys are frozen and deterministic.\n- [ ] Missing or conflicted inputs produce stable unranked reasons; public state remains blocked.\n",
+      "acceptance_obligations": [
+        "Only proven RMB ordinary shares from SSE, SZSE and BSE enter the selected-date denominator; ETF, fund, bond, index and option assets are excluded.",
+        "Per-exchange expected, excluded, resolved, acquired, ranked, unranked, failed and unsupported partitions reconcile.",
+        "Information cutoff, screen date and availability time are explicit.",
+        "Factor IDs, formulas, weights, percentile algorithm, Decimal precision, tie handling and sort keys are frozen and deterministic.",
+        "Missing or conflicted inputs produce stable unranked reasons; public state remains blocked."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 126,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126"
+        }
+      ]
+    },
+    {
+      "issue_number": 131,
+      "logical_id": "S41-06",
+      "title": "S41-06 P1 筛选候选深研",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 131,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/131",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/131",
+        "created_at": "2026-10-27T15:04:13Z",
+        "updated_at": "2026-10-27T15:04:13Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver bounded candidate deep research after deterministic screening, reusing the P0 single-security workflow under the same frozen information cutoff.\n\n## Acceptance criteria\n\n- [ ] Standard mode selects candidates using stable ranking order and an explicit bounded limit.\n- [ ] Each candidate reuses the accepted single-security path without changing the cutoff or screen date.\n- [ ] A candidate failure does not rewrite Universe, factors, ranking or other candidates.\n- [ ] Candidate summaries retain evidence references, limitations and workflow lineage.\n",
+      "acceptance_obligations": [
+        "Standard mode selects candidates using stable ranking order and an explicit bounded limit.",
+        "Each candidate reuses the accepted single-security path without changing the cutoff or screen date.",
+        "A candidate failure does not rewrite Universe, factors, ranking or other candidates.",
+        "Candidate summaries retain evidence references, limitations and workflow lineage."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 127,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/127"
+        },
+        {
+          "issue_number": 130,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/130"
+        }
+      ]
+    },
+    {
+      "issue_number": 132,
+      "logical_id": "S41-07",
+      "title": "S41-07 P1 Screening Result Artifact",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 132,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/132",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/132",
+        "created_at": "2026-10-27T15:04:34Z",
+        "updated_at": "2026-10-27T15:04:34Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver the screening Result Artifact lifecycle for completed ranking and candidate results, including caller-owned persistence, recovery and tamper detection.\n\n## Acceptance criteria\n\n- [ ] Create, resume and finalize use an explicit caller-owned artifact location.\n- [ ] Pre-apply validation failure makes zero physical changes.\n- [ ] Manifest-last, journal, digest, residue and external-tamper checks fail closed.\n- [ ] Equivalent resume returns the same deterministic receipt without leaking credentials or provider raw payloads.\n",
+      "acceptance_obligations": [
+        "Create, resume and finalize use an explicit caller-owned artifact location.",
+        "Pre-apply validation failure makes zero physical changes.",
+        "Manifest-last, journal, digest, residue and external-tamper checks fail closed.",
+        "Equivalent resume returns the same deterministic receipt without leaking credentials or provider raw payloads."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 130,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/130"
+        },
+        {
+          "issue_number": 131,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/131"
+        }
+      ]
+    },
+    {
+      "issue_number": 134,
+      "logical_id": "S41-09",
+      "title": "S41-09 P2 ETF 期权扩展",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 134,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/134",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/134",
+        "created_at": "2026-10-27T15:05:18Z",
+        "updated_at": "2026-10-27T15:05:18Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver the P2 ETF-options extension as an isolated experimental path with explicit contract identity and quote limitations.\n\n## Acceptance criteria\n\n- [ ] Contract month, expiration, strike, call/put direction and standard/adjusted type remain explicit.\n- [ ] Quote session, units, empty proof, unknown total, partial result and source failure are distinguishable.\n- [ ] Standard and adjusted contracts are never combined.\n- [ ] The extension is independently testable and cannot block P0.\n",
+      "acceptance_obligations": [
+        "Contract month, expiration, strike, call/put direction and standard/adjusted type remain explicit.",
+        "Quote session, units, empty proof, unknown total, partial result and source failure are distinguishable.",
+        "Standard and adjusted contracts are never combined.",
+        "The extension is independently testable and cannot block P0."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 126,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126"
+        }
+      ]
+    },
+    {
+      "issue_number": 135,
+      "logical_id": "S41-10",
+      "title": "S41-10 P2 盘中与分时复盘扩展",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 135,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/135",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/135",
+        "created_at": "2026-10-27T15:05:41Z",
+        "updated_at": "2026-10-27T15:05:41Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver the P2 intraday extension with separate current-session snapshot and completed-session replay paths, including coverage and session boundaries.\n\n## Acceptance criteria\n\n- [ ] Current-session snapshots cannot be presented as completed-session or historical closing data.\n- [ ] Replay requires an explicit completed trading date and preserves minute coverage and session stages.\n- [ ] Missing minutes, no-trade intervals, suspension and unavailable sources remain distinguishable.\n- [ ] Installation, offline and omitted-live evidence boundaries remain explicit and cannot block P0.\n",
+      "acceptance_obligations": [
+        "Current-session snapshots cannot be presented as completed-session or historical closing data.",
+        "Replay requires an explicit completed trading date and preserves minute coverage and session stages.",
+        "Missing minutes, no-trade intervals, suspension and unavailable sources remain distinguishable.",
+        "Installation, offline and omitted-live evidence boundaries remain explicit and cannot block P0."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 126,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126"
+        }
+      ]
+    },
+    {
+      "issue_number": 136,
+      "logical_id": "S41-11",
+      "title": "S41-11 P0 核心与复制安装验证路径",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 136,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/136",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/136",
+        "created_at": "2026-10-27T15:06:01Z",
+        "updated_at": "2026-10-27T15:06:01Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nDeliver independently runnable P0 core and installed validation profiles for the accepted stock, market-overview and ETF paths, using the highest public seam.\n\n## Acceptance criteria\n\n- [ ] Core validation covers shared result contracts, A-share core tasks, single-security workflow, market overview inventory and ETF base market data.\n- [ ] Installed validation copies the Skill, checks installation health and invokes representative public requests.\n- [ ] P1 screening and P2 extension profiles are not hard dependencies of P0.\n- [ ] Shared fixtures are independent of other `test_*` modules and evidence levels remain distinguishable.\n",
+      "acceptance_obligations": [
+        "Core validation covers shared result contracts, A-share core tasks, single-security workflow, market overview inventory and ETF base market data.",
+        "Installed validation copies the Skill, checks installation health and invokes representative public requests.",
+        "P1 screening and P2 extension profiles are not hard dependencies of P0.",
+        "Shared fixtures are independent of other `test_*` modules and evidence levels remain distinguishable."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 127,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/127"
+        },
+        {
+          "issue_number": 128,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/128"
+        },
+        {
+          "issue_number": 129,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/129"
+        }
+      ]
+    },
+    {
+      "issue_number": 137,
+      "logical_id": "S41-12",
+      "title": "S41-12 当前 UX、路由和能力文档",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 137,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/137",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/137",
+        "created_at": "2026-10-27T15:06:23Z",
+        "updated_at": "2026-10-27T15:06:23Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nPublish current routing and capability documentation for the two-dimensional model, while showing screening and extension public states accurately.\n\n## Acceptance criteria\n\n- [ ] Routing exposes asset class, research scene, scope and public state for each main entry.\n- [ ] Single-security, market-overview and ETF paths are directly discoverable.\n- [ ] Screening is shown as P1 refactor with `public_state=blocked` until its evidence gate passes.\n- [ ] ETF options, intraday/replay and deferred asset classes are separated from P0 claims; historical evidence remains immutable.\n",
+      "acceptance_obligations": [
+        "Routing exposes asset class, research scene, scope and public state for each main entry.",
+        "Single-security, market-overview and ETF paths are directly discoverable.",
+        "Screening is shown as P1 refactor with `public_state=blocked` until its evidence gate passes.",
+        "ETF options, intraday/replay and deferred asset classes are separated from P0 claims; historical evidence remains immutable."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 126,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/126"
+        },
+        {
+          "issue_number": 127,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/127"
+        },
+        {
+          "issue_number": 128,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/128"
+        },
+        {
+          "issue_number": 129,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/129"
+        }
+      ]
+    },
+    {
+      "issue_number": 138,
+      "logical_id": "S41-13",
+      "title": "S41-13 P0 发布准备与多层状态回读",
+      "source": {
+        "system": "github",
+        "repository": "a-share-research-skill",
+        "issue_number": 138,
+        "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/138",
+        "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/138",
+        "created_at": "2026-10-27T15:07:36Z",
+        "updated_at": "2026-10-27T15:07:36Z"
+      },
+      "body": "## Parent\n\n#125\n\n## What to build\n\nFreeze a clean P0 candidate, verify the core release gate and publish a layered readiness record that reports P1 screening and P2 extension states without making them hard dependencies of P0.\n\n## Acceptance criteria\n\n- [ ] P0 stock, market-overview, ETF, core-profile and current-document gates pass on one clean candidate.\n- [ ] P1 screening readiness is reported from actual evidence, registry and artifact readback.\n- [ ] P2 extension readiness is reported with installation, offline and live-verification boundaries.\n- [ ] Public runtime compatibility remains Python 3.12+ while development uses uv-managed Python 3.14; historical evidence is unchanged.\n",
+      "acceptance_obligations": [
+        "P0 stock, market-overview, ETF, core-profile and current-document gates pass on one clean candidate.",
+        "P1 screening readiness is reported from actual evidence, registry and artifact readback.",
+        "P2 extension readiness is reported with installation, offline and live-verification boundaries.",
+        "Public runtime compatibility remains Python 3.12+ while development uses uv-managed Python 3.14; historical evidence is unchanged."
+      ],
+      "parent_issue_number": 125,
+      "hard_dependencies": [
+        {
+          "issue_number": 127,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/127"
+        },
+        {
+          "issue_number": 128,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/128"
+        },
+        {
+          "issue_number": 129,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/129"
+        },
+        {
+          "issue_number": 136,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/136"
+        },
+        {
+          "issue_number": 137,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/137"
+        }
+      ]
+    }
+  ],
+  "hard_dependencies": [
+    {
+      "dependent_issue_number": 126,
+      "blocked_by_issue_numbers": []
+    },
+    {
+      "dependent_issue_number": 127,
+      "blocked_by_issue_numbers": [
+        126
+      ]
+    },
+    {
+      "dependent_issue_number": 128,
+      "blocked_by_issue_numbers": [
+        126
+      ]
+    },
+    {
+      "dependent_issue_number": 129,
+      "blocked_by_issue_numbers": [
+        126
+      ]
+    },
+    {
+      "dependent_issue_number": 130,
+      "blocked_by_issue_numbers": [
+        126
+      ]
+    },
+    {
+      "dependent_issue_number": 131,
+      "blocked_by_issue_numbers": [
+        127,
+        130
+      ]
+    },
+    {
+      "dependent_issue_number": 132,
+      "blocked_by_issue_numbers": [
+        130,
+        131
+      ]
+    },
+    {
+      "dependent_issue_number": 134,
+      "blocked_by_issue_numbers": [
+        126
+      ]
+    },
+    {
+      "dependent_issue_number": 135,
+      "blocked_by_issue_numbers": [
+        126
+      ]
+    },
+    {
+      "dependent_issue_number": 136,
+      "blocked_by_issue_numbers": [
+        127,
+        128,
+        129
+      ]
+    },
+    {
+      "dependent_issue_number": 137,
+      "blocked_by_issue_numbers": [
+        126,
+        127,
+        128,
+        129
+      ]
+    },
+    {
+      "dependent_issue_number": 138,
+      "blocked_by_issue_numbers": [
+        127,
+        128,
+        129,
+        136,
+        137
+      ]
+    }
+  ],
+  "excluded_transient_state": [
+    "agents",
+    "assignees",
+    "claims",
+    "issue_state",
+    "liveness",
+    "pending_integration_transitions",
+    "run_receipts",
+    "ticket_acceptance_results",
+    "triage_labels",
+    "workspaces"
+  ],
+  "graph_audit": {
+    "ticket_count": 12,
+    "unique_issue_numbers": true,
+    "parent_issue_number": 125,
+    "acyclic": true,
+    "edge_count": 22,
+    "mapping_source": "Live GitHub readback of #125/#133/#139/#140 plus approved DAG Revision",
+    "revision_scope": "P0 release with screening deferred/unsupported"
+  },
+  "obligation_coverage": {
+    "total": 64,
+    "by_section": {
+      "User Stories": 30,
+      "Implementation Decisions": 16,
+      "Testing Decisions": 10,
+      "Out of Scope": 8
+    },
+    "unowned_ids": [],
+    "owner_ids": [
+      "S41-01",
+      "S41-02",
+      "S41-03",
+      "S41-04",
+      "S41-05",
+      "S41-06",
+      "S41-07",
+      "S41-08",
+      "S41-09",
+      "S41-10",
+      "S41-11",
+      "S41-12",
+      "S41-13"
+    ],
+    "deferred_owner_ids": [
+      "S41-08",
+      "S41-14",
+      "S41-15"
+    ],
+    "deferred_issue_numbers": [
+      133,
+      139,
+      140
+    ]
+  },
+  "graph_revision": {
+    "revision_id": "screening-deferred-v041",
+    "approved_at": "2026-10-29",
+    "authority": "explicit user instruction in coordinating task",
+    "reason": "screening source qualification and batch factor permissions are unavailable without additional external data/permissions; defer public screening for v0.4.1",
+    "removed_effective_tickets": [
+      133,
+      139,
+      140
+    ],
+    "deferred_tickets": [
+      133,
+      139,
+      140
+    ],
+    "preserved_ticket_provenance": [
+      {
+        "issue_number": 133,
+        "logical_id": "S41-08",
+        "title": "S41-08 P1 Screening 公共启用资格",
+        "source": {
+          "system": "github",
+          "repository": "a-share-research-skill",
+          "issue_number": 133,
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/133",
+          "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/133",
+          "created_at": "2026-10-27T15:04:57Z",
+          "updated_at": "2026-10-27T15:04:57Z"
+        },
+        "body": "## Parent\n\n#125\n\n## What to build\n\nComplete the P1 public-enablement gate for market screening. Enable the workflow only after source qualification, owner contracts, same-candidate evidence closure and release readback are complete.\n\n## Acceptance criteria\n\n- [ ] Every release-critical screening operation has a qualified owner contract covering scope, fields, time, units, failures, credentials, limits and permissions.\n- [ ] Qualification is derived from the actual public plan, not unused modules or fixtures.\n- [ ] Same-candidate evidence closes the applicable producer/application set without stale or cross-candidate reuse.\n- [ ] Registry and release-matrix readback agree; until then the workflow remains rejected before source or artifact I/O.\n",
+        "acceptance_obligations": [
+          "Every release-critical screening operation has a qualified owner contract covering scope, fields, time, units, failures, credentials, limits and permissions.",
+          "Qualification is derived from the actual public plan, not unused modules or fixtures.",
+          "Same-candidate evidence closes the applicable producer/application set without stale or cross-candidate reuse.",
+          "Registry and release-matrix readback agree; until then the workflow remains rejected before source or artifact I/O."
+        ],
+        "parent_issue_number": 125,
+        "hard_dependencies": [
+          {
+            "issue_number": 132,
+            "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/132"
+          },
+          {
+            "issue_number": 139,
+            "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/139"
+          },
+          {
+            "issue_number": 140,
+            "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/140"
+          }
+        ],
+        "revision_note": "S41-08 remains externally blocked until replacement Universe and factor qualification Tickets #139/#140 plus existing artifact prerequisite are accepted."
+      },
+      {
+        "issue_number": 139,
+        "logical_id": "S41-14",
+        "title": "S41-14 V4-06 replacement: qualified three-exchange Universe production owners",
+        "source": {
+          "system": "github",
+          "project": "RedHeartSecretMan/a-share-research-skill",
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/139",
+          "created_at": "2026-10-28T13:42:05Z",
+          "updated_at": "2026-10-28T13:42:05Z",
+          "repository": "a-share-research-skill",
+          "issue_number": 139,
+          "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/139"
+        },
+        "body": "## Parent\n\n#125\n\n## Graph role\n\nReplacement qualification Ticket for the v0.4.1 screening gate. It preserves historical V4-06/#94, V4-06R1A/#109 and V4-06R1B/#110 provenance; those historical identities are not reopened or silently reused.\n\n## Objective\n\nProduce the qualified production-owner evidence required for a three-exchange as-of A-share Universe used by screening.\n\n## Scope\n\n- SSE, SZSE and BSE are independent required partitions.\n- Bind `screen_date`, `information_cutoff`, effective/available/retrieved times and source locators.\n- Prove A-share category, canonical identity, listing intervals, identifier changes, pagination and total-count closure.\n- Preserve expected/resolved/failed/excluded/unranked states and fail closed on missing BSE, count drift, duplicate/cross-exchange identity, category contamination or unproven historical status.\n- Provide owner contracts, production-shaped parser/adapter evidence, bounded request/retry budgets, credential/permission scope and copied-installed adapter evidence.\n- Do not claim full-A-share completeness from a current snapshot or offline fixture.\n\n## Acceptance criteria\n\n- [ ] Each exchange has a qualified owner contract with fields, time semantics, units, source-result states, limits, permissions and failure behavior.\n- [ ] Historical and current source probes produce redacted evidence with exact candidate, dates, attempts, page/total closure and BSE coverage.\n- [ ] The prepared Universe output closes expected = resolved + failed per exchange and preserves excluded/unranked reasons.\n- [ ] A complete full-A-share conclusion is impossible when any exchange is unavailable or unproven.\n- [ ] Focused tests, copied-install adapter tests, full applicable gates, Ruff, strict mypy and fresh Standards/Spec review pass.\n- [ ] Evidence is suitable for consumption by the factor-owner Ticket and S41-08/#133; it does not itself enable the public screening workflow.\n\n## Blocked by\n\nNone. This Ticket must consume the already accepted Universe Module/prepared-snapshot seam and V4-F evidence when available.\n\n## External boundary\n\nReal source availability, credentials, permission and historical range are required. Static qualification and fixtures do not satisfy the production-owner evidence.\n",
+        "acceptance_obligations": [
+          "Each exchange has a qualified owner contract with fields, time semantics, units, source-result states, limits, permissions and failure behavior.",
+          "Historical and current source probes produce redacted evidence with exact candidate, dates, attempts, page/total closure and BSE coverage.",
+          "The prepared Universe output closes expected = resolved + failed per exchange and preserves excluded/unranked reasons.",
+          "A complete full-A-share conclusion is impossible when any exchange is unavailable or unproven.",
+          "Focused tests, copied-install adapter tests, full applicable gates, Ruff, strict mypy and fresh Standards/Spec review pass.",
+          "Evidence is suitable for consumption by the factor-owner Ticket and S41-08/#133; it does not itself enable the public screening workflow."
+        ],
+        "parent_issue_number": 125,
+        "hard_dependencies": [],
+        "accepted_direct_inputs": [
+          {
+            "issue_number": 110,
+            "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/110",
+            "role": "accepted Universe Module/prepared snapshot"
+          }
+        ],
+        "historical_replacements": [
+          94,
+          109,
+          110
+        ],
+        "external_boundary": "Real source availability, credentials, permission and historical range are required. Static qualification and fixtures do not satisfy the production-owner evidence."
+      },
+      {
+        "issue_number": 140,
+        "logical_id": "S41-15",
+        "title": "S41-15 V4-07 replacement: qualified bounded batch factor owners",
+        "source": {
+          "system": "github",
+          "project": "RedHeartSecretMan/a-share-research-skill",
+          "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/140",
+          "created_at": "2026-10-28T13:42:07Z",
+          "updated_at": "2026-10-28T13:42:07Z",
+          "repository": "a-share-research-skill",
+          "issue_number": 140,
+          "display_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/140"
+        },
+        "body": "## Parent\n\n#125\n\n## Graph role\n\nReplacement qualification Ticket for the v0.4.1 screening gate. It preserves historical V4-07/#95 and V4-07R1B/#120 provenance; those historical identities are not reopened or silently reused.\n\n## Blocked by\n\nThe replacement three-exchange Universe qualification Ticket created for this revision.\n\n## Objective\n\nProduce qualified bounded batch factor owners for the fixed screening plan: PE-TTM, PB-MRQ, parent-attributable profit/equity and 20-session turnover.\n\n## Scope\n\n- Align every factor by canonical security, `screen_date` and `information_cutoff`.\n- Enforce publication availability/PIT semantics and report versions/corrections.\n- Define units, field ownership, source-result states, factor-local unranked reasons, finite page/request budgets, provider concurrency and shared throttling.\n- Prevent unbounded per-security fallback.\n- Preserve partial failures without deleting other securities.\n- Provide production owner contracts, capability/registry entries, qualification evidence and copied-installed batch-adapter evidence.\n- Do not enable `market_screen_research` directly.\n\n## Acceptance criteria\n\n- [ ] Every required factor has a named qualified producer owner and complete field/time/unit/failure/permission contract.\n- [ ] Batch acquisition uses bounded plans and reports actual attempts, retries, throttling and missing ranges.\n- [ ] Financial facts cannot look ahead of `information_cutoff`; turnover uses the correct completed sessions.\n- [ ] Factor-local failures remain unranked and do not change the expected denominator.\n- [ ] Focused temporal/budget/concurrency/partial tests, copied-install adapter tests, full applicable gates, Ruff, strict mypy and fresh Standards/Spec review pass.\n- [ ] The resulting qualification evidence closes the replacement Universe input and is consumable by S41-08/#133 without changing public state prematurely.\n\n## External boundary\n\nReal provider/source availability, credentials, permissions and historical coverage are required. Offline fixtures prove only implementation behavior.\n",
+        "acceptance_obligations": [
+          "Every required factor has a named qualified producer owner and complete field/time/unit/failure/permission contract.",
+          "Batch acquisition uses bounded plans and reports actual attempts, retries, throttling and missing ranges.",
+          "Financial facts cannot look ahead of `information_cutoff`; turnover uses the correct completed sessions.",
+          "Factor-local failures remain unranked and do not change the expected denominator.",
+          "Focused temporal/budget/concurrency/partial tests, copied-install adapter tests, full applicable gates, Ruff, strict mypy and fresh Standards/Spec review pass.",
+          "The resulting qualification evidence closes the replacement Universe input and is consumable by S41-08/#133 without changing public state prematurely."
+        ],
+        "parent_issue_number": 125,
+        "hard_dependencies": [
+          {
+            "issue_number": 139,
+            "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/139"
+          }
+        ],
+        "accepted_direct_inputs": [
+          {
+            "issue_number": 139,
+            "issue_url": "https://github.com/RedHeartSecretMan/a-share-research-skill/issues/139",
+            "role": "replacement Universe qualification output"
+          }
+        ],
+        "historical_replacements": [
+          95,
+          120
+        ],
+        "external_boundary": "Real provider/source availability, credentials, permissions and historical coverage are required. Offline fixtures prove only implementation behavior."
+      }
+    ],
+    "preserved_historical_tickets": [
+      95,
+      120,
+      94,
+      109,
+      110
+    ],
+    "public_state_change": "market_screen_research is unsupported/deferred and remains rejected before source/artifact I/O",
+    "release_gate": "P0 core only; P1 screening no longer blocks release"
+  },
+  "revision_selected_inputs": {
+    "new_issue_numbers": [
+      139,
+      140
+    ],
+    "historical_not_planned_preserved": [
+      95,
+      120
+    ],
+    "current_blocker_issue": 133
+  }
+}

@@ -21,6 +21,7 @@ OPTION_ANALYTIC_NAMES = frozenset(
         "theoretical_value",
     }
 )
+OPTION_SERIES_ADJUSTMENTS = {"M": "standard", "A": "adjusted"}
 _ValueT = TypeVar("_ValueT")
 
 
@@ -61,6 +62,7 @@ class OptionQuery:
     expiry_mode: str
     expiry_date: str | None
     quote_mode: str
+    adjustment: str = "standard"
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,15 @@ class OptionContractQuote:
         object.__setattr__(self, "security", _freeze_mapping(self.security))
         object.__setattr__(self, "analytics", _freeze_mapping(self.analytics))
         object.__setattr__(self, "limitations", tuple(self.limitations))
+
+    @property
+    def adjustment(self) -> str:
+        """Public adjustment identity for the provider's M/A series code."""
+
+        try:
+            return OPTION_SERIES_ADJUSTMENTS[self.series]
+        except KeyError as error:
+            raise ValueError("ETF-option contract series is invalid") from error
 
 
 @dataclass(frozen=True)

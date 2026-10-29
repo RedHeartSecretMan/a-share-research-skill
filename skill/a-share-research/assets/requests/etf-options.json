@@ -6,6 +6,7 @@
   "window": null,
   "parameters": {
     "view": "REPLACE_atm_OR_chain",
+    "adjustment": "REPLACE_standard_OR_adjusted",
     "expiry": {"mode": "nearest_unexpired"},
     "quote_mode": "REPLACE_latest_OR_latest_completed"
   },

@@ -459,6 +459,10 @@ def _single_security_child_specs(
     subject = cast(list[Mapping[str, object]], request["subjects"])[0]
     as_of = date.fromisoformat(cast(str, request["as_of"]))
     deep_extensions = cast(list[str], inputs.get("deep_extensions", []))
+    valuation_subject: dict[str, object] = {"clue": canonical_clue}
+    class_count = subject.get("issuer_security_class_count")
+    if class_count is not None:
+        valuation_subject["issuer_security_class_count"] = class_count
     return [
         (
             "market_trend",
@@ -472,14 +476,7 @@ def _single_security_child_specs(
             "security_valuation",
             None,
             {"target_pe": inputs["target_pe"]},
-            [
-                {
-                    "clue": canonical_clue,
-                    "issuer_security_class_count": subject[
-                        "issuer_security_class_count"
-                    ],
-                }
-            ],
+            [valuation_subject],
         ),
         (
             "materials",

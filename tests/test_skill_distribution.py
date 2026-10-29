@@ -744,12 +744,12 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("narrowest supported task", metadata)
         self.assertIn("evidence-backed results and limitations", metadata)
 
-    def test_installation_pins_the_v040_release(self) -> None:
+    def test_installation_pins_the_v041_release(self) -> None:
         for readme_name in ("README.md", "README_en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
-                    "git clone --depth 1 --branch v0.4.0 --single-branch ",
+                    "git clone --depth 1 --branch v0.4.1 --single-branch ",
                     readme,
                 )
                 self.assertIn(
@@ -757,9 +757,9 @@ class SkillDistributionTests(unittest.TestCase):
                     readme,
                 )
                 self.assertIn("releases/tag/v0.3.0", readme)
-                self.assertIn("Release: v0.4.0", readme)
-                self.assertIn("releases/tag/v0.4.0", readme)
-                self.assertIn("v0.4.0-release-audit-2026-10-17.md", readme)
+                self.assertIn("Release: v0.4.1", readme)
+                self.assertIn("releases/tag/v0.4.1", readme)
+                self.assertIn("v0.4.1-readiness-2026-10-29.md", readme)
                 self.assertNotIn("--branch v0.3.0 --single-branch", readme)
                 self.assertIn("v0.4.0", readme)
                 self.assertIn("market_overview_research@2.0", readme)
@@ -1085,6 +1085,9 @@ class SkillDistributionTests(unittest.TestCase):
                 "v0.4.0-operation-release-matrix.json",
                 "v0.4.0-operation-release-matrix.md",
                 "v0.4.0-release-audit-2026-10-17.md",
+                "v0.4.1-capability-matrix.md",
+                "v0.4.1-readiness-2026-10-28.md",
+                "v0.4.1-readiness-2026-10-29.md",
             },
         )
 

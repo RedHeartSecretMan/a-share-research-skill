@@ -168,6 +168,10 @@ class IntradayReplayTracerCliTests(unittest.TestCase):
     def test_experimental_replay_is_versioned_sorted_and_chart_ready(self) -> None:
         result = self.scenario("daily_agreement")
         facts = self.claim(result)
+        self.assertEqual(facts["boundary"]["kind"], "completed_session_replay")
+        self.assertTrue(facts["boundary"]["requires_completed_trading_date"])
+        self.assertFalse(facts["boundary"]["current_session_snapshot"])
+        self.assertEqual(facts["boundary"]["observed_date"], "2026-08-03")
         starts = [item["interval_start"] for item in facts["records"]]
         self.assertEqual(starts, sorted(starts))
         self.assertTrue(

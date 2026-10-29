@@ -29,10 +29,13 @@ Supported underlying clues are `510050`, `510300`, `510500`, and `588000`. Use o
 Parameters:
 
 - `view`: `atm` or `chain`.
+- `adjustment`: `standard` or `adjusted`; defaults to `standard`.
 - `expiry`: `{"mode":"nearest_unexpired"}` or `{"mode":"exact","date":"YYYY-MM-DD"}`.
 - `quote_mode`: `latest` or `latest_completed`.
 
-`atm` returns every equally near standard `M` call-put pair in the source-observed set. `chain` returns the selected expiry's bounded standard `M` and adjusted `A` series without merging them. `latest_completed` requires a completed session; `latest` may use an intraday quote.
+`atm` returns every equally near standard `M` call-put pair in the source-observed set. `chain` returns one selected expiry and adjustment family without merging standard `M` and adjusted `A` contracts. `latest_completed` requires a completed session; `latest` may use an intraday quote.
+
+Each result selects one adjustment family. `chain` defaults to standard `M`; set `adjustment` to `adjusted` to request the adjusted `A` family. An `atm` request must use standard adjustment.
 
 Provider-reported Delta, Gamma, Theta, Vega, and IV are source observations, not local BSM or exchange calculations. Current coverage is `partial`: there is no authoritative contract total, complete contract-unit definition, adjustment terms, or qualified independent fallback. Preserve quote state, bid/ask/last, volume, open interest, units, source time, `M`/`A` identity, and every limitation.
 

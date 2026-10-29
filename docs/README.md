@@ -1,6 +1,14 @@
 # 文档索引
 
-当前发布版本为 **v0.4.0**，来源证明与验证豁免见[发布资料索引](research/README.md)。根目录 README 面向使用者，安装产物中的 `SKILL.md` / `references/` 面向 Agent，`specs/`、`adr/` 和 `research/` 面向维护者。先按目的选择入口，不必从头阅读全部历史文件。
+当前发布候选版本为 **v0.4.1**；该版本交付 P0 核心能力，并将 screening P1 明确延期为 unsupported。来源证明与验证豁免见[发布资料索引](research/README.md)。根目录 README 面向使用者，安装产物中的 `SKILL.md` / `references/` 面向 Agent，`specs/`、`adr/` 和 `research/` 面向维护者。先按目的选择入口，不必从头阅读全部历史文件。
+
+## v0.4.1 当前计划
+
+- [`specs/0009-v0.4.1-two-dimensional-capability-scope.md`](specs/0009-v0.4.1-two-dimensional-capability-scope.md)：按“资产类别 × 研究场景”定义股票、ETF、ETF 期权、指数/市场聚合、市场筛选和延期资产类别的范围、状态与发布门禁；当前只完成文档计划，不表示实现或发布完成。
+- [`research/v0.4.1-capability-matrix.md`](research/v0.4.1-capability-matrix.md)：当前能力、task/workflow、`retain / refactor / defer` 状态、P0–P3 优先级和验收证据。
+- [`specs/0009-v0.4.1-implementation-tickets.md`](specs/0009-v0.4.1-implementation-tickets.md)：S41-01 至 S41-12 实施任务、硬依赖、交付物和验收义务；不等于 GitHub Issue 状态。
+
+本文档集不授权修改代码、测试实现、GitHub Issue、tag、Release 或外部来源状态。
 
 ## 使用者
 
@@ -18,6 +26,9 @@
 ## 维护者
 
 - [`../CONTEXT.md`](../CONTEXT.md)：领域术语、边界和非目标。
+- [`specs/0009-v0.4.1-two-dimensional-capability-scope.md`](specs/0009-v0.4.1-two-dimensional-capability-scope.md)：v0.4.1 计划中的资产类别 × 研究场景范围与验收门禁。
+- [`research/v0.4.1-capability-matrix.md`](research/v0.4.1-capability-matrix.md)：v0.4.1 当前能力矩阵。
+- [`specs/0009-v0.4.1-implementation-tickets.md`](specs/0009-v0.4.1-implementation-tickets.md)：v0.4.1 实施任务清单。
 - [`specs/0007-implementation-amendment-a.md`](specs/0007-implementation-amendment-a.md)：v0.3.0 实施、DAG 与最终验收权威；状态为已交付。
 - [`specs/0008-amendment-d-qualified-public-scope.md`](specs/0008-amendment-d-qualified-public-scope.md)：当前 v0.4.0 免费匿名范围权威；市场总览 v2 保留 15 个槽位、12 项按层级和适用性执行的能力，退出全市场成交额、全市场两融、全市场盘中及公共筛选。
 - [`specs/0008-amendment-c-free-anonymous-scope.md`](specs/0008-amendment-c-free-anonymous-scope.md)：此前匿名范围修订；与 Amendment D 冲突的成交额／两融公开能力已退出。

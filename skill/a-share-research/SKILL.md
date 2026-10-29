@@ -54,3 +54,4 @@ Use a documented narrow task for an explicit valuation, announcement, material c
 - Never infer a trend, cause, target, rating, or buy/sell action from one intraday snapshot.
 - `intraday_replay` contains deterministic historical facts and calculations. Only an explicit future-judgment request may proceed to evidence-constrained next trading day / next 5 trading days scenarios under [analysis-boundary.md](references/analysis-boundary.md), separating continuation, range, reversal, upside, downside, invalidation, and uncertainty.
 - Never expose credentials, headers, provider raw payloads, private paths, or server details. Never invent a metric status or field absent from the CLI JSON.
+- Tushare is an optional credentialed source. Its environment-variable setup and redacted capability probe are documented in [tushare-optional.md](references/tushare-optional.md); it is never required by the free baseline or public screening.

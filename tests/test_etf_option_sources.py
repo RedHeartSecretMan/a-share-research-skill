@@ -795,6 +795,7 @@ class SinaEtfOptionSnapshotTests(unittest.TestCase):
         self.assertEqual(batch.source_errors, ())
         call = next(item for item in batch.contracts if item.option_type == "call")
         self.assertEqual(call.series, "A")
+        self.assertEqual(call.adjustment, "adjusted")
         self.assertEqual(call.strike, "6.3850")
         self.assertEqual(call.expiry_date, "2026-09-23")
 

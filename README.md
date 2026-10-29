@@ -6,25 +6,25 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
-[![Release: v0.4.0](https://img.shields.io/badge/release-v0.4.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.0)
+[![Release: v0.4.1](https://img.shields.io/badge/release-v0.4.1-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[English](README_en.md) · [快速开始](#快速开始) · [能力](#它能做什么) · [中文案例](examples/README.md) · [文档](docs/README.md) · [v0.4.0 来源验证审计](docs/research/v0.4.0-release-audit-2026-10-17.md)
+[English](README_en.md) · [快速开始](#快速开始) · [能力](#它能做什么) · [中文案例](examples/README.md) · [文档](docs/README.md) · [v0.4.1 发布准备回读](docs/research/v0.4.1-readiness-2026-10-29.md)
 
 </div>
 
 `a-share-research-skill` 是项目仓库名，可安装的 Skill 名为 `$a-share-research`。它把自然语言问题路由到确定性 Python CLI，以版本化 JSON 返回证券身份、研究时点、来源观测、计算谱系、冲突、覆盖和限制，再由 Agent 形成可核验的中文研究材料。
 
-本版本为 **v0.4.0**，提供 12 类窄 ResearchTask、6 个固定研究方案和唯一公共入口 `run --request`；安装副本的版本见 [`VERSION`](skill/a-share-research/VERSION)。市场总览升级为 `market_overview_research@2.0`。本版的适用匿名来源证明见 [来源验证审计](docs/research/v0.4.0-release-audit-2026-10-17.md)；来源失败和本次未实时验证的盘中应用仍明确保留。正式版本见 [GitHub Release v0.4.0](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.0)。
+本版本为 **v0.4.1**，提供 12 类窄 ResearchTask、6 个固定研究方案和唯一公共入口 `run --request`；安装副本的版本见 [`VERSION`](skill/a-share-research/VERSION)。市场总览使用 `market_overview_research@2.0`。本版发布 P0 核心能力，并将全市场 screening 明确延期为 unsupported；screening 请求在 source/artifact I/O 前拒绝。正式发布范围与证据见 [v0.4.1 发布准备回读](docs/research/v0.4.1-readiness-2026-10-29.md)。
 
 ## 快速开始
 
 ### 1. 获取并安装
 
-以下命令从固定的 `v0.4.0` 标签安装。克隆仓库后，把完整的 `skill/a-share-research/` 目录复制到所用 Agent 支持的 Skills 目录；复制后的目录就是 `<skill-root>`。不同 Agent 的发现路径和启用方式可能不同，应以对应平台文档为准。如果目标目录已存在，请先检查内容并有意识地升级，不要直接覆盖未知文件。
+以下命令从固定的 `v0.4.1` 标签安装。克隆仓库后，把完整的 `skill/a-share-research/` 目录复制到所用 Agent 支持的 Skills 目录；复制后的目录就是 `<skill-root>`。不同 Agent 的发现路径和启用方式可能不同，应以对应平台文档为准。如果目标目录已存在，请先检查内容并有意识地升级，不要直接覆盖未知文件。
 
 ```text
-git clone --depth 1 --branch v0.4.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.4.1 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 <python> <skill-root>/scripts/install.py
 ```
 
@@ -34,7 +34,7 @@ git clone --depth 1 --branch v0.4.0 --single-branch https://github.com/RedHeartS
 
 ### 2. 运行一个请求
 
-本版模板使用 v0.4.0 契约，旧窄任务保留原始示例日期；市场总览模板使用 `@2.0`。先复制模板；凡是“当前”“今天”或盘中任务，都要把 `as_of` 改成实际的北京时间日期。
+本版模板使用 v0.4.1 契约，旧窄任务保留原始示例日期；市场总览模板使用 `@2.0`。先复制模板；凡是“当前”“今天”或盘中任务，都要把 `as_of` 改成实际的北京时间日期。
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run \
@@ -51,7 +51,7 @@ CLI 不接受自然语言，也不调用模型。`stdout` 只输出一个版本�
 
 ## 它能做什么
 
-| 研究问题 | 直接任务 | v0.4.0 能力边界 |
+| 研究问题 | 直接任务 | v0.4.1 能力边界 |
 | --- | --- | --- |
 | 证券身份 | `security_identity` | 名称、简称和裸代码只是线索；歧义或交易所冲突失败关闭 |
 | 行情走势 | `market_trend` | 2–250 个完整交易日，未复权或前复权，保留双源 OHLCV 与冲突 |
@@ -129,11 +129,11 @@ CLI 负责证据、确定性计算和状态。Agent 可以在结果未整体阻�
 
 ## 版本与发布证据
 
-v0.4.0 发布于 2026-10-17。来源验证审计保留冻结运行时提交及当时的验证结论；正式发布提交与 annotated tag 由 GitHub Release 对应的标签确定。来源覆盖包含真实失败与两项盘中实时验证豁免，不能解释为所有来源当前可用。大型 JSON 证据保留在研究文档目录。
+v0.4.1 发布于 2026-10-29。P0 核心范围已发布，screening P1 明确延期为 unsupported；来源覆盖包含真实失败与未完成的 screening 资格，不能解释为所有来源当前可用。大型 JSON 证据保留在研究文档目录。
 
-- [GitHub Release v0.4.0](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.0)
+- [GitHub Release v0.4.1](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.1)
+- [v0.4.1 发布准备回读](docs/research/v0.4.1-readiness-2026-10-29.md)
 - [v0.4.0 来源验证审计](docs/research/v0.4.0-release-audit-2026-10-17.md)
-- [v0.4.0 矩阵口径与复验](docs/research/v0.4.0-operation-release-matrix.md)
 
 v0.3.0 的历史发布事实与证据继续保留：
 

@@ -774,7 +774,12 @@ def _validate_existing_workflow_shape(
     subjects = request["subjects"]
     as_of = cast(str, request["as_of"])
     if contract._shape is _WorkflowShape.SINGLE_SECURITY_RESEARCH:
-        _require_subject_count(subjects, minimum=1, maximum=1)
+        _require_subject_count(
+            subjects,
+            minimum=1,
+            maximum=1,
+            allow_unknown_security_class_scope=True,
+        )
         allowed_inputs = {"target_pe", "completeness_mode", "deep_extensions"}
         if "target_pe" not in inputs or not set(inputs).issubset(allowed_inputs):
             raise ValueError(
@@ -897,25 +902,47 @@ def _require_inputs(inputs: Mapping[str, object], fields: set[str]) -> None:
         raise ValueError("research_workflow inputs do not match the workflow contract")
 
 
-def _require_subject_count(subjects: object, *, minimum: int, maximum: int) -> None:
+def _require_subject_count(
+    subjects: object,
+    *,
+    minimum: int,
+    maximum: int,
+    allow_unknown_security_class_scope: bool = False,
+) -> None:
     if not isinstance(subjects, list) or not minimum <= len(subjects) <= maximum:
         raise ValueError(
             "research_workflow subjects do not match the workflow contract"
         )
     for subject in subjects:
-        _require_workflow_subject(subject)
+        _require_workflow_subject(
+            subject,
+            allow_unknown_security_class_scope=allow_unknown_security_class_scope,
+        )
 
 
-def _require_workflow_subject(subject: object) -> None:
-    if not isinstance(subject, Mapping) or set(subject) != {
-        "clue",
-        "issuer_security_class_count",
-    }:
+def _require_workflow_subject(
+    subject: object,
+    *,
+    allow_unknown_security_class_scope: bool = False,
+) -> None:
+    if not isinstance(subject, Mapping):
+        raise ValueError("workflow subject contains unknown fields")
+    subject_keys = set(subject)
+    if allow_unknown_security_class_scope:
+        valid_key_sets: tuple[set[str], ...] = (
+            {"clue"},
+            {"clue", "issuer_security_class_count"},
+        )
+    else:
+        valid_key_sets = ({"clue", "issuer_security_class_count"},)
+    if subject_keys not in valid_key_sets:
         raise ValueError("workflow subject contains unknown fields")
     clue = subject.get("clue")
     class_count = subject.get("issuer_security_class_count")
     if not isinstance(clue, str) or not clue.strip():
         raise ValueError("workflow subject requires a non-empty clue")
+    if allow_unknown_security_class_scope and class_count is None:
+        return
     if (
         not isinstance(class_count, int)
         or isinstance(class_count, bool)

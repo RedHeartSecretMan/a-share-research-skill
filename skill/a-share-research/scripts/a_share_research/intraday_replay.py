@@ -2093,6 +2093,12 @@ def _build_direct_result(
         *summary_unavailable_fields,
     ]
     replay_facts: dict[str, object] = {
+        "boundary": {
+            "kind": "completed_session_replay",
+            "requires_completed_trading_date": True,
+            "current_session_snapshot": False,
+            "observed_date": query.replay_date.isoformat(),
+        },
         "subjects": [
             {
                 "security": {

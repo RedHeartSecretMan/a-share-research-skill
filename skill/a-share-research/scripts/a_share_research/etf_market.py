@@ -133,6 +133,12 @@ class EtfSnapshotObservation:
                     "volume": "shares",
                     "amount": "CNY",
                 },
+                "normalization": {
+                    "price": "none",
+                    "change_rate": "none",
+                    "volume": "none",
+                    "amount": "none",
+                },
             },
             "basis": "sse_etf_market_snapshot",
             "observation": {
@@ -438,6 +444,41 @@ _ETF_OPERATION_CONTRACTS: dict[str, tuple[str, str, tuple[FieldDisposition, ...]
 }
 
 
+_ETF_UNIT_PROVENANCE: dict[str, Any] = {
+    "price": {
+        "source_unit": "CNY/share",
+        "normalized_unit": "CNY/share",
+        "conversion": "none",
+    },
+    "change_rate": {
+        "source_unit": "percent",
+        "normalized_unit": "percent",
+        "conversion": "none",
+    },
+    "volume": {
+        "primary": {
+            "source_unit": "shares",
+            "normalized_unit": "shares",
+            "conversion": "none",
+        },
+        "cross_check": {
+            "source_unit": "hands",
+            "normalized_unit": "shares",
+            "conversion": {
+                "formula": "hands * 100 = shares",
+                "lot_size": "100",
+                "rounding": "exact_integer",
+            },
+        },
+    },
+    "amount": {
+        "source_unit": "CNY",
+        "normalized_unit": "CNY",
+        "conversion": "none",
+    },
+}
+
+
 def _etf_outcome(
     operation_id: str,
     *,
@@ -548,12 +589,26 @@ def build_etf_market_result(
         fallback_observations = []
         outcomes.append(_etf_outcome("tencent_daily_line@1", error=error))
     else:
+        fallback_evidence = []
+        for item in fallback_observations:
+            evidence = item.to_bar_evidence()
+            observed_value = cast(dict[str, Any], evidence["observed_value"])
+            observed_value["normalization"] = {
+                "volume": {
+                    "source_unit": "hands",
+                    "normalized_unit": "shares",
+                    "conversion": {
+                        "formula": "hands * 100 = shares",
+                        "lot_size": "100",
+                        "rounding": "exact_integer",
+                    },
+                }
+            }
+            fallback_evidence.append(evidence)
         outcomes.append(
             _etf_outcome(
                 "tencent_daily_line@1",
-                observations=tuple(
-                    item.to_bar_evidence() for item in fallback_observations
-                ),
+                observations=tuple(fallback_evidence),
             )
         )
     if snapshot is None or snapshot.observed_at.date() > research_date:
@@ -624,8 +679,10 @@ def build_etf_market_result(
                 evidence_use="etf_market",
                 observation_keys=quote_keys,
                 payload={
+                    "asset_class": "etf",
                     "subjects": [subject],
                     "research": {"retrieved_at": research_now.isoformat()},
+                    "unit_provenance": _ETF_UNIT_PROVENANCE,
                     "quote": quote,
                 },
             )
@@ -808,7 +865,7 @@ def _blocked(
                         if outcome.operation_id == "sse_etf_list@1"
                         and isinstance(observation.get("id"), str)
                     ),
-                    payload={"subjects": [subject]},
+                    payload={"asset_class": "etf", "subjects": [subject]},
                 )
             ]
             if subject is not None

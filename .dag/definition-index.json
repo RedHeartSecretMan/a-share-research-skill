@@ -1,44 +1,8 @@
 {
   "inputs": [
     {
-      "path": ".dag/definition-github-spec-0008.json",
-      "blob_oid": "a245effd87da79f68ba29ed08197d5ca1cc91600"
-    },
-    {
-      "path": "docs/specs/0008-amendment-b-artifact-protocol.md",
-      "blob_oid": "b7f458cb37a556849a268ff388c2a3a3b7471f73"
-    },
-    {
-      "path": "docs/specs/0008-amendment-b-delivery-plan.md",
-      "blob_oid": "cb7fbc9764c4e92186471bfac91e7e3de404fa6e"
-    },
-    {
-      "path": "docs/specs/0008-amendment-b-source-time.md",
-      "blob_oid": "7d4ddf94a064db5a5b5a9be9d1e8e443deb0759a"
-    },
-    {
-      "path": "docs/specs/0008-amendment-b-tickets.md",
-      "blob_oid": "b26092ba5bd9ed656163fb93266f8a03ea2eacb7"
-    },
-    {
-      "path": "docs/specs/0008-amendment-c-free-anonymous-scope.md",
-      "blob_oid": "c888bf902fb760eda4668916f2d9dbe2c1ed1e44"
-    },
-    {
-      "path": "docs/specs/0008-amendment-d-qualified-public-scope.md",
-      "blob_oid": "ee3f6b8e99cd76ef60687d18a13573475c9290c9"
-    },
-    {
-      "path": "docs/specs/0008-amendment-e-no-intraday-live-gate.md",
-      "blob_oid": "44fb3ac770adf5986b08a8105eb4403422bec7ff"
-    },
-    {
-      "path": "docs/specs/0008-amendment-f-content-error-folding.md",
-      "blob_oid": "7b2932bb8580ce84dea24e0071ea072e60324137"
-    },
-    {
-      "path": "docs/specs/0008-v0.4.0-market-foundation-and-screening.md",
-      "blob_oid": "7815a890449a0ff741626019bcf9fee3ea9a25f3"
+      "path": ".dag/definition-github-spec-0009.json",
+      "blob_oid": "c637f9f40123346e0cc89b96619a7f99a91dfe9e"
     }
   ],
   "schema_version": 1

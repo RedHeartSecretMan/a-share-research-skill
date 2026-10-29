@@ -5884,10 +5884,14 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
         _decimal_fact(strike.get("value"))
         month = iso_date(contract.get("contract_month"), month=True)
         expiry = iso_date(contract.get("expiry_date"))
+        adjustment_by_series = {"M": "standard", "A": "adjusted"}
+        series = contract.get("series")
         if (
             expiry[:7] != month
             or contract.get("option_type") not in {"call", "put"}
-            or contract.get("series") not in {"M", "A"}
+            or not isinstance(series, str)
+            or series not in adjustment_by_series
+            or contract.get("adjustment") != adjustment_by_series[series]
         ):
             raise ValueError("ETF-option domain facts contain an invalid contract")
         return contract
@@ -6073,6 +6077,7 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
         request.get("view") not in {"atm", "chain"}
         or request.get("expiry_mode") not in {"nearest_unexpired", "exact"}
         or request.get("quote_mode") not in {"latest", "latest_completed"}
+        or request.get("adjustment") not in {"standard", "adjusted"}
         or not isinstance(contracts, list)
         or not contracts
         or not isinstance(t_quote, dict)
@@ -6199,11 +6204,15 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
     expiry_dates = {item.get("expiry_date") for item in contract_facts}
     months = sorted({str(item.get("contract_month")) for item in contract_facts})
     series = sorted({str(item.get("series")) for item in contract_facts})
+    adjustments = sorted({str(item.get("adjustment")) for item in contract_facts})
     if (
         len(expiry_dates) != 1
         or contract_set.get("expiry_date") != next(iter(expiry_dates))
         or contract_set.get("contract_months") != months
         or contract_set.get("series") != series
+        or contract_set.get("adjustments") != adjustments
+        or len(adjustments) != 1
+        or request.get("adjustment") != adjustments[0]
         or contract_set.get("contract_count") != len(contract_facts)
     ):
         raise ValueError("ETF-option domain facts contradict the selected contracts")
@@ -6253,8 +6262,9 @@ def _validate_etf_option_domain_facts(result: Mapping[str, object]) -> None:
 
     grouped: dict[Decimal, set[str]] = {}
     strike_text: dict[Decimal, str] = {}
+    expected_series = "M" if request.get("adjustment") == "standard" else "A"
     for item in contract_facts:
-        if item.get("series") != "M":
+        if item.get("series") != expected_series:
             continue
         strike = _nested_mapping(item, "strike")
         value = _decimal_fact(strike.get("value"))
@@ -6668,7 +6678,7 @@ def _validate_market_domain_facts(result: Mapping[str, object]) -> None:
 
 def _validate_etf_domain_facts(result: Mapping[str, object]) -> None:
     _require_absent_evidence_storage_plan(result, domain="ETF")
-    from .etf_market import _ETF_OPERATION_CONTRACTS
+    from .etf_market import _ETF_OPERATION_CONTRACTS, _ETF_UNIT_PROVENANCE
 
     _require_known_operation_capability(
         result,
@@ -6700,7 +6710,13 @@ def _validate_etf_domain_facts(result: Mapping[str, object]) -> None:
     payload = _nested_mapping(claim, "payload")
     quote = payload.get("quote")
     subjects = payload.get("subjects")
-    if not isinstance(quote, dict) or not isinstance(subjects, list) or not subjects:
+    if (
+        payload.get("asset_class") != "etf"
+        or payload.get("unit_provenance") != _ETF_UNIT_PROVENANCE
+        or not isinstance(quote, dict)
+        or not isinstance(subjects, list)
+        or not subjects
+    ):
         raise ValueError("ETF domain facts are incomplete")
     snapshot_records = _owned_observations(
         result, operation_suffix="sse_etf_snapshot@1"
@@ -6713,6 +6729,22 @@ def _validate_etf_domain_facts(result: Mapping[str, object]) -> None:
         raise ValueError("ETF domain facts lack owned observations")
     snapshot_payload = _record_payload(snapshot_records[0])
     snapshot_values = _nested_mapping(snapshot_payload, "observed_value", "value")
+    snapshot_units = _nested_mapping(snapshot_payload, "observed_value", "unit")
+    snapshot_normalization = _nested_mapping(
+        snapshot_payload, "observed_value", "normalization"
+    )
+    if snapshot_units != {
+        "price": "CNY/share",
+        "change_rate": "percent",
+        "volume": "shares",
+        "amount": "CNY",
+    } or snapshot_normalization != {
+        "price": "none",
+        "change_rate": "none",
+        "volume": "none",
+        "amount": "none",
+    }:
+        raise ValueError("ETF domain facts lack source unit provenance")
     snapshot_observation = _nested_mapping(snapshot_payload, "observation")
     tencent = next(
         (
@@ -6728,6 +6760,21 @@ def _validate_etf_domain_facts(result: Mapping[str, object]) -> None:
     tencent_values = _nested_mapping(
         _record_payload(tencent), "observed_value", "value"
     )
+    tencent_normalization = _nested_mapping(
+        _record_payload(tencent), "observed_value", "normalization"
+    )
+    if tencent_normalization != {
+        "volume": {
+            "source_unit": "hands",
+            "normalized_unit": "shares",
+            "conversion": {
+                "formula": "hands * 100 = shares",
+                "lot_size": "100",
+                "rounding": "exact_integer",
+            },
+        }
+    }:
+        raise ValueError("ETF domain facts lack volume conversion provenance")
     scalar_fields = {
         "open": "open",
         "high": "high",

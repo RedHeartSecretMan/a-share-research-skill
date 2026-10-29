@@ -82,6 +82,10 @@ class FixtureTransport:
             payload = json.loads(body)
             payload["data"]["sh510050"]["day"][0][2] = "3.032"
             body = json.dumps(payload, ensure_ascii=False).encode()
+        if "sh510050" in url and scenario == "etf_empty_proof":
+            payload = json.loads(body)
+            payload["data"]["sh510050"]["day"] = []
+            body = json.dumps(payload, ensure_ascii=False).encode()
         if "sz300058" in url and scenario in {
             "corporate_action",
             "missing_session",

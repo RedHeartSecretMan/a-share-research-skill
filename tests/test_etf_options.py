@@ -298,18 +298,45 @@ class EtfOptionsContractTests(unittest.TestCase):
         result = build_etf_options_result(request, [operation])
 
         self.assertEqual(result["status"], "limited")
-        self.assertEqual(len(selection_payload(result)["contracts"]), 4)
+        self.assertEqual(len(selection_payload(result)["contracts"]), 2)
         self.assertEqual(
             [
                 item["contract"]["series"]
                 for item in selection_payload(result)["contracts"]
             ],
-            ["M", "M", "A", "A"],
+            ["M", "M"],
         )
-        self.assertEqual(len(selection_payload(result)["t_quote"]["rows"]), 2)
+        self.assertEqual(len(selection_payload(result)["t_quote"]["rows"]), 1)
         self.assertEqual(
             [item["series"] for item in selection_payload(result)["t_quote"]["rows"]],
-            ["A", "M"],
+            ["M"],
+        )
+        self.assertEqual(
+            [
+                item["contract"]["adjustment"]
+                for item in selection_payload(result)["contracts"]
+            ],
+            ["standard", "standard"],
+        )
+        self.assertEqual(
+            selection_payload(result)["contract_set"]["adjustments"],
+            ["standard"],
+        )
+        adjusted_request = option_request()
+        adjusted_request["parameters"]["view"] = "chain"
+        adjusted_request["parameters"]["adjustment"] = "adjusted"
+        adjusted = build_etf_options_result(adjusted_request, [operation])
+        self.assertEqual(adjusted["status"], "limited")
+        self.assertEqual(
+            selection_payload(adjusted)["contract_set"]["adjustments"],
+            ["adjusted"],
+        )
+        self.assertEqual(
+            {
+                item["contract"]["adjustment"]
+                for item in selection_payload(adjusted)["contracts"]
+            },
+            {"adjusted"},
         )
         self.assertTrue(
             all(

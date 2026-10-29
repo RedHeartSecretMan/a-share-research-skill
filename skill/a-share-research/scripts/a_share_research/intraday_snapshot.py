@@ -198,6 +198,12 @@ def build_intraday_snapshot_result(
     if result_session == "midday_break":
         observation_times["observation_boundary"] = "morning_last_compatible_pair"
     snapshot_facts: dict[str, Any] = {
+        "boundary": {
+            "kind": "current_session_snapshot",
+            "as_of_policy": "current_china_trading_date",
+            "completed_session_replay": False,
+            "historical_closing_data": False,
+        },
         "subject": {
             "security": {
                 "exchange": query.exchange,

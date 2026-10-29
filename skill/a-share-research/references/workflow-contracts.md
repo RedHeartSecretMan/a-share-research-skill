@@ -62,4 +62,12 @@ Template: [`../assets/requests/workflow-market-overview.json`](../assets/request
 - `theme_report_research`: no subject; inputs contain `query`, `published_from`, `published_to`, `limit`, and `verify_documents`.
 - `new_security_research`: one subject; inputs contain `target_pe`, explicit `report_window`, `market_window`, `lockup_window`, `fund_flow_period`, `limit`, and `verify_documents`. Its fixed path covers identity, reports/consensus, valuation, provider board membership, stock flow, dragon-tiger, future lockup, and margin trading.
 
+These four specialized plans are compatibility aliases over the existing leaf task
+interface: `single_security_valuation` wraps `security_valuation`,
+`valuation_comparison` wraps `valuation_compare`, `theme_report_research` wraps
+`research_content`, and `new_security_research` composes the documented leaf
+tasks. Their request and result semantics remain independently covered by the
+workflow CLI tests; the copied-installed end-to-end smoke is anchored on the
+canonical `single_security_research@1.0` path.
+
 Use repository examples for these four specialized plan shapes; do not synthesize optional keys from memory.

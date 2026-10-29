@@ -333,6 +333,43 @@ class EtfMarketProcessTests(unittest.TestCase):
 
         self.assertEqual(result["plan"]["task_type"], "etf_market")
         self.assertEqual(result["status"], "limited")
+        self.assertEqual(payload["asset_class"], "etf")
+        self.assertEqual(
+            payload["unit_provenance"],
+            {
+                "price": {
+                    "source_unit": "CNY/share",
+                    "normalized_unit": "CNY/share",
+                    "conversion": "none",
+                },
+                "change_rate": {
+                    "source_unit": "percent",
+                    "normalized_unit": "percent",
+                    "conversion": "none",
+                },
+                "volume": {
+                    "primary": {
+                        "source_unit": "shares",
+                        "normalized_unit": "shares",
+                        "conversion": "none",
+                    },
+                    "cross_check": {
+                        "source_unit": "hands",
+                        "normalized_unit": "shares",
+                        "conversion": {
+                            "formula": "hands * 100 = shares",
+                            "lot_size": "100",
+                            "rounding": "exact_integer",
+                        },
+                    },
+                },
+                "amount": {
+                    "source_unit": "CNY",
+                    "normalized_unit": "CNY",
+                    "conversion": "none",
+                },
+            },
+        )
         self.assertEqual(
             payload["subjects"],
             [

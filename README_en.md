@@ -6,25 +6,25 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Public API: run --request](https://img.shields.io/badge/public%20API-run%20--request-0F766E)](skill/a-share-research/references/cli-contract.md)
-[![Release: v0.4.0](https://img.shields.io/badge/release-v0.4.0-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.0)
+[![Release: v0.4.1](https://img.shields.io/badge/release-v0.4.1-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[中文](README.md) · [Quick start](#quick-start) · [Capabilities](#what-it-does) · [Chinese examples](examples/README.md) · [Docs](docs/README.md) · [v0.4.0 source-verification audit](docs/research/v0.4.0-release-audit-2026-10-17.md)
+[中文](README.md) · [Quick start](#quick-start) · [Capabilities](#what-it-does) · [Chinese examples](examples/README.md) · [Docs](docs/README.md) · [v0.4.1 readiness readback](docs/research/v0.4.1-readiness-2026-10-29.md)
 
 </div>
 
 `a-share-research-skill` is the repository name; the installed Skill is `$a-share-research`. It routes natural-language questions to a deterministic Python CLI and returns versioned JSON containing security identity, research time, source observations, calculation lineage, conflicts, coverage, and limitations. The Agent then presents that evidence as auditable research.
 
-This is **v0.4.0**, with 12 narrow ResearchTask types, six fixed research plans, and one public `run --request` entry point. The copied artifact identifies its version in [`VERSION`](skill/a-share-research/VERSION). Market overview now uses `market_overview_research@2.0`. Applicable anonymous-source proof is recorded in the [source-verification audit](docs/research/v0.4.0-release-audit-2026-10-17.md); source failures and intraday applications without real-time verification remain explicit. The published version is available in [GitHub Release v0.4.0](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.0).
+This is **v0.4.1**, with 12 narrow ResearchTask types, six fixed research plans, and one public `run --request` entry point. The copied artifact identifies its version in [`VERSION`](skill/a-share-research/VERSION). Market overview uses `market_overview_research@2.0`. This release delivers the P0 core scope and defers whole-market screening as unsupported; screening requests are rejected before source or artifact I/O. See the [v0.4.1 readiness readback](docs/research/v0.4.1-readiness-2026-10-29.md).
 
 ## Quick start
 
 ### 1. Get and install
 
-The command below installs from the fixed `v0.4.0` tag. After cloning the repository, copy the complete `skill/a-share-research/` directory into a Skills location supported by your Agent; that copied directory is `<skill-root>`. Discovery and activation paths differ by Agent, so follow the relevant platform documentation. If the target already exists, inspect it and perform an intentional upgrade; do not overwrite unknown files.
+The command below installs from the fixed `v0.4.1` tag. After cloning the repository, copy the complete `skill/a-share-research/` directory into a Skills location supported by your Agent; that copied directory is `<skill-root>`. Discovery and activation paths differ by Agent, so follow the relevant platform documentation. If the target already exists, inspect it and perform an intentional upgrade; do not overwrite unknown files.
 
 ```text
-git clone --depth 1 --branch v0.4.0 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
+git clone --depth 1 --branch v0.4.1 --single-branch https://github.com/RedHeartSecretMan/a-share-research-skill.git
 <python> <skill-root>/scripts/install.py
 ```
 
@@ -34,7 +34,7 @@ You may instead copy the complete [`skill/a-share-research`](skill/a-share-resea
 
 ### 2. Run a request
 
-Templates use the v0.4.0 contract; existing narrow tasks retain their dated examples, while market overview uses `@2.0`. Copy a template first. For “current,” “today,” or intraday tasks, replace `as_of` with the actual China Standard Time date.
+Templates use the v0.4.1 contract; existing narrow tasks retain their dated examples, while market overview uses `@2.0`. Copy a template first. For “current,” “today,” or intraday tasks, replace `as_of` with the actual China Standard Time date.
 
 ```text
 <python> skill/a-share-research/scripts/entrypoint.py run \
@@ -51,7 +51,7 @@ The CLI accepts structured JSON, not natural language, and does not invoke a mod
 
 ## What it does
 
-| Research question | Direct task | v0.4.0 capability boundary |
+| Research question | Direct task | v0.4.1 capability boundary |
 | --- | --- | --- |
 | Security identity | `security_identity` | Names, abbreviations, and bare codes are clues; ambiguity or exchange conflict fails closed |
 | Price trend | `market_trend` | 2–250 completed sessions, unadjusted or forward-adjusted, preserving dual-source OHLCV and conflicts |
@@ -129,11 +129,11 @@ See [`examples/README.md`](examples/README.md) for a dated real run, Chinese req
 
 ## Version and release evidence
 
-v0.4.0 was released on 2026-10-17. The source-verification audit preserves the frozen runtime commit and its original findings; the tag associated with the GitHub Release identifies the published commit and annotated tag object. Coverage includes real source failures and two intraday live-verification exclusions, so it is not a claim that every provider is currently usable. Large JSON evidence stays under the research documentation directory.
+v0.4.1 was released on 2026-10-29. The P0 core scope is published, while P1 screening is explicitly deferred as unsupported. Source coverage includes real failures and incomplete screening qualification; it is not a claim that every provider is currently usable. Large JSON evidence stays under the research documentation directory.
 
-- [GitHub Release v0.4.0](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.0)
+- [GitHub Release v0.4.1](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.1)
+- [v0.4.1 readiness readback](docs/research/v0.4.1-readiness-2026-10-29.md)
 - [v0.4.0 source-verification audit](docs/research/v0.4.0-release-audit-2026-10-17.md)
-- [v0.4.0 matrix methodology and verification](docs/research/v0.4.0-operation-release-matrix.md)
 
 Historical v0.3.0 release facts and evidence remain available:
 

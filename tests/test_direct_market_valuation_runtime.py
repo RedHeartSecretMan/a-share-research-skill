@@ -2218,6 +2218,43 @@ class DirectResultInvariantTests(unittest.TestCase):
         self.assertEqual(result["plan"]["task_type"], "etf_market")
         self.assertTrue(result["observations"])
         self.assertTrue(result["claims"])
+        claim = next(
+            item for item in result["claims"] if item["kind"] == "etf_market_quote"
+        )
+        self.assertEqual(claim["payload"]["asset_class"], "etf")
+        self.assertEqual(
+            claim["payload"]["unit_provenance"]["volume"]["cross_check"]["conversion"],
+            {
+                "formula": "hands * 100 = shares",
+                "lot_size": "100",
+                "rounding": "exact_integer",
+            },
+        )
+        snapshot_observation = next(
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "sse_etf_snapshot@1"
+        )
+        self.assertEqual(
+            snapshot_observation["payload"]["observed_value"]["normalization"],
+            {
+                "price": "none",
+                "change_rate": "none",
+                "volume": "none",
+                "amount": "none",
+            },
+        )
+        tencent_observation = next(
+            item
+            for item in result["observations"]
+            if item["operation_id"] == "tencent_daily_line@1"
+        )
+        self.assertEqual(
+            tencent_observation["payload"]["observed_value"]["normalization"]["volume"][
+                "source_unit"
+            ],
+            "hands",
+        )
         operations = result["coverage"]["etf_market_quote"]["operations"]
         snapshot = operations["sse_etf_snapshot@1"]
         disposition_fields = {item["field"] for item in snapshot["field_dispositions"]}
@@ -2365,6 +2402,78 @@ class DirectResultInvariantTests(unittest.TestCase):
             operations["tencent_daily_line@1"]["source_error_ids"],
             [result["source_errors"][0]["id"]],
         )
+
+    def test_copied_installed_etf_source_failure_is_distinct_from_partial_evidence(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "etf_market",
+            "subjects": [{"clue": "510050"}],
+            "as_of": date.today().isoformat(),
+            "window": None,
+            "parameters": {},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": False,
+            },
+        }
+
+        result = invoke_copied_installed(
+            request,
+            market_fixtures=True,
+            fail_url_contains="commonSoaQuery.do",
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["source_errors"][0]["code"], "upstream_http_error")
+        self.assertEqual(
+            result["coverage"]["etf_market_quote"]["operations"]["sse_etf_list@1"][
+                "state"
+            ],
+            "failed",
+        )
+        self.assertEqual(
+            result["coverage"]["etf_market_quote"]["operations"]["sse_etf_snapshot@1"][
+                "state"
+            ],
+            "skipped_research_dependency",
+        )
+        self.assertEqual(len(result["observations"]), 0)
+
+    def test_copied_installed_etf_empty_proof_is_distinct_from_source_failure(
+        self,
+    ) -> None:
+        request = {
+            "schema_version": "1.0",
+            "task_type": "etf_market",
+            "subjects": [{"clue": "510050"}],
+            "as_of": date.today().isoformat(),
+            "window": None,
+            "parameters": {},
+            "source_policy": {
+                "allow_experimental": True,
+                "allow_credentials": False,
+                "allow_fallback": False,
+            },
+        }
+
+        result = invoke_copied_installed(
+            request,
+            market_fixtures=True,
+            fixture_scenario="etf_empty_proof",
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["source_errors"][0]["code"], "empty_observation")
+        self.assertEqual(
+            result["coverage"]["etf_market_quote"]["operations"][
+                "tencent_daily_line@1"
+            ]["state"],
+            "failed",
+        )
+        self.assertEqual(len(result["observations"]), 2)
 
     def test_valuation_partial_failure_retains_completed_inputs(self) -> None:
         request = {

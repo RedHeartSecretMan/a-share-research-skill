@@ -6,6 +6,8 @@ Keep a current-session snapshot, a completed-session minute series, a determinis
 
 Use exactly one canonical SSE/SZSE A-share subject, the current China Standard Time trading date, `window: null`, empty `parameters`, and `source_policy.allow_experimental: true`. This is one research-grade snapshot, not a minute stream, continuous feed, order book, tick source, or trading signal.
 
+The successful claim carries `boundary.kind: "current_session_snapshot"`, with `completed_session_replay: false` and `historical_closing_data: false`. Its `as_of` is the current China Standard Time date; a historical date, a completed-session replay request, or a post-close request is blocked rather than re-labelled as a closing snapshot.
+
 The released operation uses default-installed `mootdx==0.11.7` and a Tencent cross-check. Preserve trading session, price type, each source observation time, latest/open/high/low, previous-close semantics, cumulative volume and amount, units, field lineage, conflicts, and limitations. A source or installation failure does not trigger a fallback. A valid `limited` or `blocked` result still exits zero.
 
 For v0.4.0, `tencent_intraday_snapshot@1` and `tongdaxin_intraday_snapshot@1` retain their interfaces, installation/load checks, offline behavior, and failure boundaries. This delivery does not perform real-time intraday verification. Do not treat an installation, synthetic regression, or historical probe as current-candidate live success, and do not interpret missing real-time verification as withdrawn functionality.
@@ -15,6 +17,8 @@ Template: [`../assets/requests/intraday-market-signal.json`](../assets/requests/
 ## `intraday_replay`
 
 Use exactly one canonical SSE/SZSE A-share and one explicit completed trading date. Set `window.observed_from` and `window.observed_to` to that same date, and enable experimental sources. The default-installed `mootdx==0.11.7` operation returns normalized minute rows, exchange-session stages, coverage, a daily-boundary cross-check, and a recomputable summary.
+
+The successful claim carries `boundary.kind: "completed_session_replay"`, records the explicit `observed_date`, and sets `current_session_snapshot: false`. The date must be completed at the research boundary; current-day data before the session ends, a future date, or an unverified calendar date is blocked. Minute coverage and auction/session stages remain in the `coverage`, `records`, and `auction_results` fields.
 
 One operation must form the complete minute series on one adjustment and timestamp basis; another operation checks security identity, trading date, daily OHLC, close, total volume, and amount. Never splice minute fields across sources. A daily-boundary conflict blocks the replay conclusion. Missing auction semantics, timestamps, calendar, price, volume, or amount remain explicit. The operation stays experimental and can never make the result `supported` by itself.
 
