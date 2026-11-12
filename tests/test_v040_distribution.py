@@ -171,7 +171,7 @@ class V040DistributionTests(unittest.TestCase):
 
     def test_current_entry_docs_preserve_scope_and_historical_evidence(self) -> None:
         chinese = (ROOT / "README.md").read_text()
-        english = (ROOT / "README_en.md").read_text()
+        english = (ROOT / "README.en.md").read_text()
         for document in (chinese, english):
             self.assertIn("market_overview_research@2.0", document)
             self.assertIn("market_wide_intraday", document)

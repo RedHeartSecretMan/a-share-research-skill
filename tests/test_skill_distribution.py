@@ -728,7 +728,7 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertTrue(Path(scripts, "entrypoint.py").is_file())
         self.assertFalse(Path(scripts, "a_share_research.py").exists())
 
-        for readme_name in ("README.md", "README_en.md"):
+        for readme_name in ("README.md", "README.en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn("skill/a-share-research", readme)
@@ -745,7 +745,7 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("evidence-backed results and limitations", metadata)
 
     def test_installation_pins_the_v041_release(self) -> None:
-        for readme_name in ("README.md", "README_en.md"):
+        for readme_name in ("README.md", "README.en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(
@@ -768,7 +768,7 @@ class SkillDistributionTests(unittest.TestCase):
                 self.assertNotIn("--branch main --single-branch", readme)
 
         chinese_readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
-        english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
+        english_readme = Path(REPOSITORY_ROOT, "README.en.md").read_text(
             encoding="utf-8"
         )
         for readme in (chinese_readme, english_readme):
@@ -822,7 +822,7 @@ class SkillDistributionTests(unittest.TestCase):
         ):
             self.assertIn(required, audit)
 
-        for readme_name in ("README.md", "README_en.md"):
+        for readme_name in ("README.md", "README.en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn("v0.3.0-release-audit-2026-08-18.md", readme)
@@ -836,14 +836,14 @@ class SkillDistributionTests(unittest.TestCase):
         )
         self.assertNotIn(
             "does not mean “the source returned data successfully”",
-            Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8"),
+            Path(REPOSITORY_ROOT, "README.en.md").read_text(encoding="utf-8"),
         )
 
     def test_release_entry_docs_keep_bilingual_structure_and_valid_local_links(
         self,
     ) -> None:
         chinese_path = Path(REPOSITORY_ROOT, "README.md")
-        english_path = Path(REPOSITORY_ROOT, "README_en.md")
+        english_path = Path(REPOSITORY_ROOT, "README.en.md")
         chinese = chinese_path.read_text(encoding="utf-8")
         english = english_path.read_text(encoding="utf-8")
         heading_pattern = re.compile(r"^(#{2,3}) ", re.MULTILINE)
@@ -1058,7 +1058,7 @@ class SkillDistributionTests(unittest.TestCase):
             audit.read_text(encoding="utf-8").startswith("# v0.2.0 发布审计")
         )
 
-        for readme_name in ("README.md", "README_en.md"):
+        for readme_name in ("README.md", "README.en.md"):
             with self.subTest(readme=readme_name):
                 readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
                 self.assertIn(audit_relative_path, readme)
@@ -1168,7 +1168,7 @@ class SkillDistributionTests(unittest.TestCase):
         self,
     ) -> None:
         readme = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
-        english_readme = Path(REPOSITORY_ROOT, "README_en.md").read_text(
+        english_readme = Path(REPOSITORY_ROOT, "README.en.md").read_text(
             encoding="utf-8"
         )
         self.assertIn("analysis-boundary.md", readme)
@@ -1212,7 +1212,7 @@ class SkillDistributionTests(unittest.TestCase):
 
     def test_readmes_present_presets_outside_the_capability_table(self) -> None:
         chinese = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
-        english = Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8")
+        english = Path(REPOSITORY_ROOT, "README.en.md").read_text(encoding="utf-8")
 
         self.assertIn("### 预置研究方案", chinese)
         self.assertIn("### Preset research plans", english)
@@ -1429,7 +1429,7 @@ class SkillDistributionTests(unittest.TestCase):
         self,
     ) -> None:
         chinese = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
-        english = Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8")
+        english = Path(REPOSITORY_ROOT, "README.en.md").read_text(encoding="utf-8")
         entry = Path(SKILL_ROOT, "SKILL.md").read_text(encoding="utf-8")
         cli_contract = Path(SKILL_ROOT, "references", "cli-contract.md").read_text(
             encoding="utf-8"
@@ -1470,7 +1470,7 @@ class SkillDistributionTests(unittest.TestCase):
     def test_installation_docs_default_locked_dependency_and_separate_health(
         self,
     ) -> None:
-        for readme_name in ("README.md", "README_en.md"):
+        for readme_name in ("README.md", "README.en.md"):
             readme = Path(REPOSITORY_ROOT, readme_name).read_text(encoding="utf-8")
             with self.subTest(readme=readme_name):
                 self.assertIn("requirements.lock", readme)
@@ -1494,7 +1494,7 @@ class SkillDistributionTests(unittest.TestCase):
         self.assertIn("upstream `pip check`", cli_contract)
 
         chinese = Path(REPOSITORY_ROOT, "README.md").read_text(encoding="utf-8")
-        english = Path(REPOSITORY_ROOT, "README_en.md").read_text(encoding="utf-8")
+        english = Path(REPOSITORY_ROOT, "README.en.md").read_text(encoding="utf-8")
         for readme in (chinese, english):
             self.assertIn("installation_incomplete", readme)
             self.assertNotIn("optional `mootdx` dependency", readme)

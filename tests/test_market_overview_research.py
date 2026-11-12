@@ -218,7 +218,7 @@ class MarketOverviewResearchTests(unittest.TestCase):
         self,
     ) -> None:
         chinese = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        english = (REPOSITORY_ROOT / "README_en.md").read_text(encoding="utf-8")
+        english = (REPOSITORY_ROOT / "README.en.md").read_text(encoding="utf-8")
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         contract = (SKILL_ROOT / "references" / "workflow-contracts.md").read_text(
             encoding="utf-8"
