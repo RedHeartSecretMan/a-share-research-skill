@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.1 — 2026-10-29
+
+- 交付 v0.4.1 P0 核心范围：二维能力路由与共享的 evidence／result 契约、A 股单证券研究路径、`market_overview_research@2.0` 固定能力清单与全市场 `unsupported` 槽位、ETF 基础行情，以及 core／installed 两套安装与分发的验证边界。
+- 新增可选、由环境驱动的 Tushare 能力探测；未配置时不改变默认来源，来源不可用仍失败关闭。
+- `market_screen_research` 在 source／artifact I/O 之前拒绝；公共全市场筛选在本版明确延期，不随本版提供。
+- Universe、factor、ranking、candidate-research 与 Result Artifact 模块保留为证据谱系，不构成公共筛选能力。
+- 延期工单 #133、#139、#140 作为历史 provenance 保留，并标记为本版本不计划交付。
+- 发布验证：P0／installed 配置 77 项测试通过，Ruff check／format、mypy 1.17.1（97 个源文件）、compileall、Skill 校验与 DAG Definition Index 校验通过。
+
 ## v0.4.0 — 2026-10-17
 
 - 市场总览升级为 `market_overview_research@2.0`，新增 SSE、SZSE、BSE 交易会话证据与上证指数、深证成指、创业板指、北证 50 四个固定指数的完成日观测。
