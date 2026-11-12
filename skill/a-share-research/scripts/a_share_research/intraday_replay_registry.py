@@ -186,7 +186,7 @@ def build_default_intraday_replay_operations(
     """Build the candidate minute operation and separate daily operation."""
 
     if client_factory is None:
-        from mootdx.quotes import Quotes  # type: ignore[import-not-found]
+        from mootdx.quotes import Quotes  # type: ignore[import-not-found, import-untyped]
 
         client_factory = Quotes.factory
     return (
