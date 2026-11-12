@@ -13,7 +13,7 @@
 ## 使用者
 
 - [`../README.md`](../README.md)：中文产品说明、安装、能力边界和快速开始。
-- [`../README_en.md`](../README_en.md)：英文产品说明。
+- [`../README.en.md`](../README.en.md)：英文产品说明。
 - [`../examples/README.md`](../examples/README.md)：带日期的历史真实运行、v0.4.0 中文请求模板与边界说明。
 - [`../skill/a-share-research/references/cli-contract.md`](../skill/a-share-research/references/cli-contract.md)：唯一公共命令、进程语义和参考文件路由。
 

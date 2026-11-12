@@ -9,7 +9,7 @@
 [![Release: v0.4.1](https://img.shields.io/badge/release-v0.4.1-0F766E)](https://github.com/RedHeartSecretMan/a-share-research-skill/releases/tag/v0.4.1)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-[中文](README.md) · [Quick start](#quick-start) · [Capabilities](#what-it-does) · [Chinese examples](examples/README.md) · [Docs](docs/README.md) · [v0.4.1 readiness readback](docs/research/v0.4.1-readiness-2026-10-29.md)
+[简体中文](README.md) · [Quick start](#quick-start) · [Capabilities](#what-it-does) · [Chinese examples](examples/README.md) · [Docs](docs/README.md) · [v0.4.1 readiness readback](docs/research/v0.4.1-readiness-2026-10-29.md)
 
 </div>
 
