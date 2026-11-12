@@ -44,7 +44,7 @@ jobs:
           # A handful of provider-lane tests assert tight timing budgets; on a loaded
           # shared runner they fail intermittently. Re-run only the failures once
           # instead of paying for a full second pass.
-          ids=$(sed -nE 's/^(FAIL|ERROR): [^ ]+ \(([^)]+)\)/\2/p' unit.log | sort -u | tr '\n' ' ')
+          ids=$(sed -nE 's/^(FAIL|ERROR): [^ ]+ \(([^)]+)\)/\2/p' unit.log | sort -u | sed 's/^/tests./' | tr '\n' ' ')
           if [ -z "$ids" ]; then
             exit "$status"
           fi

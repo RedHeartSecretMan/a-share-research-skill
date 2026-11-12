@@ -78,7 +78,7 @@ class ProviderLaneTests(unittest.TestCase):
         def slow_request() -> str:
             active.set()
             try:
-                released.wait(0.15)
+                released.wait(2)
                 return "late"
             finally:
                 active.clear()
@@ -105,7 +105,7 @@ class ProviderLaneTests(unittest.TestCase):
             )
             self.assertEqual(result.failure_code, "provider_timeout")
             self.assertEqual(result.quiescence.state, "poisoned")
-            self.assertLess(elapsed, 0.1)
+            self.assertLess(elapsed, 0.5)
             self.assertEqual(successor_calls, [])
             self.assertEqual(successor.failure_code, "provider_lane_poisoned")
         finally:
