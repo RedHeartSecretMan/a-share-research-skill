@@ -12,7 +12,7 @@ def build_default_intraday_operations(
 ) -> tuple[IntradaySourceOperation, ...]:
     """Build the required TongdaXin baseline and Tencent cross-check pair."""
 
-    from mootdx.quotes import Quotes  # type: ignore[import-not-found, import-untyped]
+    from mootdx.quotes import Quotes  # type: ignore
 
     return (
         TongdaxinIntradayOperation(Quotes.factory),
