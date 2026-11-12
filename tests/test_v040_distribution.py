@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -142,7 +143,10 @@ class V040DistributionTests(unittest.TestCase):
                     self.assertFalse((installed / ".state").exists())
 
     def test_copied_version_and_routes_describe_retained_candidate(self) -> None:
-        self.assertEqual((SKILL / "VERSION").read_text().strip(), "0.4.0")
+        changelog = (ROOT / "CHANGELOG.md").read_text()
+        latest = re.search(r"^## v(\d+\.\d+\.\d+)", changelog, re.M)
+        self.assertIsNotNone(latest)
+        self.assertEqual((SKILL / "VERSION").read_text().strip(), latest.group(1))
         entry = (SKILL / "SKILL.md").read_text()
         self.assertIn("market_overview_research@2.0", entry)
         self.assertNotIn("market_overview_research@1.0", entry)
