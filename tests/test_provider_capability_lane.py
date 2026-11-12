@@ -71,7 +71,7 @@ class ProviderCapabilityLaneTests(unittest.TestCase):
             operations=build_default_identity_operations(UrlLibTransport()),
         )
         operation = compiled.operations[0]
-        plan = CapabilityExecutionPlan("1.0", "standard", (operation,), 0.1)
+        plan = CapabilityExecutionPlan("1.0", "standard", (operation,), 0.5)
         release = Event()
         calls: list[str] = []
         owner = (operation.obligation.capability_id, operation.obligation.operation_id)
